@@ -1,12 +1,10 @@
+import 'dart:async';
 import 'package:hive_flutter/hive_flutter.dart'; 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
-
-// ── OpenIM ────────────────────────────────────────────────────────────────────
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:path_provider/path_provider.dart';
-// ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:wrytte/ui/auth/auth_entry_screen.dart';
 import 'package:wrytte/ui/auth/email_verification_page.dart';
@@ -33,26 +31,37 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 const _systemBarColor = Colors.transparent;
 
 const _openImApiAddr = 'http://34.63.32.143:10002';
-const _openImWsAddr  = 'ws://34.63.32.143:10001';
+const _openImWsAddr  = 'ws://34.63.32.143:10001/msg_gateway';
+
+
+final Completer<bool> _openImReadyCompleter = Completer<bool>();
+Future<bool> get openImReady => _openImReadyCompleter.future;
+
+
+void _completeOpenImReady(bool value) {
+  if (!_openImReadyCompleter.isCompleted) {
+    _openImReadyCompleter.complete(value);
+  }
+}
+
+
+void apkLog(String tag, String message) {
+  print('[$tag] $message');
+}
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
   await Hive.initFlutter();
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // ── Disable Firestore offline persistence ─────────────────────────────────
   FirebaseFirestore.instance.settings = const Settings(
     persistenceEnabled: false,
   );
 
-  // ── Initialise OpenIM SDK ──────────────────────────────────────────────────
-  // fire-and-forget — does not block runApp()
-   _initOpenIM();
-  
-  // ──────────────────────────────────────────────────────────────────────────
+  //_initOpenIM();
+  unawaited(_initOpenIM());  // still non-blocking, but now internally handles completion correctly
 
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
@@ -72,39 +81,79 @@ Future<void> main() async {
   runApp(const WrytteApp());
 }
 
-// ── OpenIM SDK boot ────────────────────────────────────────────────────────────
 Future<void> _initOpenIM() async {
-  final dir = await getApplicationDocumentsDirectory();
+  try {
+    final dir = await getApplicationDocumentsDirectory();
+    apkLog('OpenIM', 'INIT START');
+    apkLog('OpenIM', 'API=$_openImApiAddr');
+    apkLog('OpenIM', 'WS=$_openImWsAddr');
 
-  final success = await OpenIM.iMManager.initSDK(
-    platformID: IMPlatform.android,
-    apiAddr: _openImApiAddr,
-    wsAddr: _openImWsAddr,
-    dataDir: dir.path,
-    logLevel: 6,
-    listener: OnConnectListener(
-      onConnectSuccess: () {
-        debugPrint('[OpenIM] Connected');
-      },
-      onConnecting: () {
-        debugPrint('[OpenIM] Connecting...');
-      },
-      onConnectFailed: (int? code, String? msg) {
-        debugPrint('[OpenIM] Connection failed — $code: $msg');
-      },
-      onKickedOffline: () {
-        debugPrint('[OpenIM] Kicked offline');
-      },
-      onUserTokenExpired: () {
-        debugPrint('[OpenIM] Token expired');
-      },
-    ),
-  );
 
-  debugPrint('[OpenIM] SDK init: ${success ? "OK" : "FAILED — check server address"}');
+    final success = await OpenIM.iMManager.initSDK(
+      platformID: IMPlatform.android,
+      apiAddr: _openImApiAddr,
+      wsAddr: _openImWsAddr,
+      dataDir: dir.path,
+      logLevel: 6,
+      listener: OnConnectListener(
+        onConnecting: () {
+          apkLog('OpenIM', 'onConnecting');
+        },
+
+        onConnectSuccess: () {
+          apkLog('OpenIM', 'onConnectSuccess');
+        },
+
+        onConnectFailed: (code, msg) {
+          apkLog('OpenIM', 'onConnectFailed code=$code msg=$msg');
+        },
+
+        /*
+
+        onConnectSuccess: () {
+          apkLog('OpenIM', 'onConnectSuccess');
+          if (!_openImReadyCompleter.isCompleted) {
+            _openImReadyCompleter.complete(true);
+          }
+        },
+        onConnectFailed: (code, msg) {
+          apkLog('OpenIM', 'onConnectFailed code=$code msg=$msg');
+          if (!_openImReadyCompleter.isCompleted) {
+            _openImReadyCompleter.complete(false);
+          }
+        },
+
+        */
+
+
+        onKickedOffline:    () {},
+        onUserTokenExpired: () {},
+      ),
+    );
+
+    apkLog('OpenIM', 'initSDK result=$success');
+
+    _completeOpenImReady(success == true);
+
+    } catch (e) {
+      apkLog('OpenIM', 'Critical initSDK error: $e');
+
+      _completeOpenImReady(false);
+    }
+
+    /*
+
+    apkLog('OpenIM', 'initSDK result=$success');
+
+  } catch (e) {
+    apkLog('OpenIM', 'Critical initSDK error: $e');
+    _completeOpenImReady(false);
+
+  }
+  */
+
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
 class WrytteApp extends StatelessWidget {
   const WrytteApp({super.key});
 
@@ -164,11 +213,8 @@ class WrytteApp extends StatelessWidget {
           );
         },
 
-        //'/add_profile':
-            //(context) => const ThemeWrapper(child: AddProfilePage()),
-
         '/add_profile':
-           (context) => const ThemeWrapper(child: AddProfilePage(isNewUser: true)),
+            (context) => const ThemeWrapper(child: AddProfilePage(isNewUser: true)),
 
         '/home': (context) => const ThemeWrapper(child: AuthWrapper()),
 
@@ -179,18 +225,6 @@ class WrytteApp extends StatelessWidget {
   }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  AuthWrapper
-//
-//  FIX: Previously checked FirebaseAuth.instance.currentUser to decide
-//  whether to show HomeScreen or AuthEntryScreen. Since the app now uses
-//  OpenIM + FlutterSecureStorage for auth (not Firebase phone auth),
-//  firebaseUser was always null on relaunch → always showed signup screen.
-//
-//  Now checks AuthService.instance.getCurrentUser() (secure storage) instead.
-//  This is async so we show a brief black splash while reading storage
-//  (~50ms on device — imperceptible to the user).
-// ══════════════════════════════════════════════════════════════════════════════
 class AuthWrapper extends StatefulWidget {
   const AuthWrapper({super.key});
 
@@ -199,9 +233,9 @@ class AuthWrapper extends StatefulWidget {
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
-  bool _checking = true;   // true while reading secure storage
+  bool _checking = true;
   bool _isLoggedIn = false;
-  bool _needsProfile = false; 
+  bool _needsProfile = false;
   String? _currentUserId;
 
   final CallListenerService _callListener = CallListenerService();
@@ -212,12 +246,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
     super.initState();
     _checkSession();
   }
-
-  // ---------------------------------------------------------------------------
-  //  Read the persisted session from FlutterSecureStorage.
-  //  Takes ~50ms on device. Shows a plain black screen while waiting,
-  //  which is indistinguishable from the native splash.
-  // ---------------------------------------------------------------------------
 
   Future<void> _checkSession() async {
     try {
@@ -231,7 +259,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
           nickname: user?.username ?? userId,
         );
 
-        // ✅ Check if user has set a real name
         final doc = await FirebaseFirestore.instance
             .collection('users')
             .doc(userId)
@@ -247,7 +274,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
           setState(() {
             _isLoggedIn = loggedIn;
             _currentUserId = userId;
-            _needsProfile = needsProfile; // ← new field
+            _needsProfile = needsProfile;
             _checking = false;
           });
         }
@@ -287,8 +314,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
     String nickname = '',
     String faceUrl  = '',
   }) async {
-    // Re-connect OpenIM SDK using the saved imToken before ChatService starts
-    // listening/fetching, otherwise conversations can initialize while logged out.
     try {
       final imToken = await AuthService.instance.getOpenImToken();
       await AuthService.instance.loginToOpenIM(
@@ -315,22 +340,20 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 
   @override
-    Widget build(BuildContext context) {
-      if (_checking) {
-        return const Scaffold(
-          backgroundColor: Color(0xFF08090B),
-          body: SizedBox.shrink(),
-        );
-      }
+  Widget build(BuildContext context) {
+    if (_checking) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF08090B),
+        body: SizedBox.shrink(),
+      );
+    }
 
-      if (!_isLoggedIn) return const AuthEntryScreen();
+    if (!_isLoggedIn) return const AuthEntryScreen();
 
-      // ✅ Send to profile page if name is missing or is a phone number
-      if (_needsProfile) {
-        return const AddProfilePage(isNewUser: false);
-      }
+    if (_needsProfile) {
+      return const AddProfilePage(isNewUser: false);
+    }
 
     return HomeScreen(currentUserId: _currentUserId!);
- }
+  }
 }
-

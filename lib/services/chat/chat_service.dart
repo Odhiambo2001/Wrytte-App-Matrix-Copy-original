@@ -1,3 +1,4 @@
+// lib/services/chat/chat_service.dart
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_openim_sdk/flutter_openim_sdk.dart'
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class ChatService {
   ChatService._internal();
@@ -34,46 +36,82 @@ class ChatService {
       _conversationsController.stream;
 
   String? _currentUserId;
-  bool    _initialized = false;
-  bool    _isConnected = false;
+  bool    _initialized  = false;
+  bool    _isConnected  = false;
+  bool    get isConnected => _isConnected;
   Future<void>? _connectFuture;
+
+  final Set<String> _registeredUsers = {};
 
   String? get currentUserId => _currentUserId;
 
   final Map<String, ChatConversation>  _conversationsMap = {};
   final Map<String, List<ChatMessage>> _messagesCache    = {};
 
+  // OpenIM returns login status as int:
+  // 1 = logged out, 2 = logging in, 3 = logged in
+  static const int _kLoginStatusLoggedIn = 3;
+
   Future<void> connect() async {
-    if (_initialized && _isConnected) return;
-    if (_connectFuture != null) return _connectFuture!;
+    apkLog('CS.connect', 'called  initialized=$_initialized  '
+        'isConnected=$_isConnected  connectFutureNull=${_connectFuture == null}');
+
+    if (_isConnected) return;
+    if (_connectFuture != null) {
+      await _connectFuture;
+      return;
+    }
 
     _connectFuture = _connect();
     try {
       await _connectFuture;
     } finally {
       _connectFuture = null;
+      apkLog('CS.connect', 'connect() finished  isConnected=$_isConnected');
+    }
+
+    if (!_isConnected) {
+      throw Exception('ChatService: connect() completed but isConnected=false');
     }
   }
 
   Future<void> _connect() async {
+    apkLog('CS._connect', 'start');
     try {
+      apkLog('CS._connect', '[1] calling getCurrentUser()');
       final user = await _authService.getCurrentUser();
-      _currentUserId = user?.userId ?? OpenIM.iMManager.userID;
+
+      _currentUserId = user?.userId;
+
+      String openImUserIdSafe;
+      try {
+        openImUserIdSafe = OpenIM.iMManager.userID;
+      } catch (_) {
+        openImUserIdSafe = '<not-initialised>';
+      }
+      apkLog('CS._connect', '[1] currentUserId="$_currentUserId"  '
+          'OpenIMuserID="$openImUserIdSafe"');
 
       if (_currentUserId == null || _currentUserId!.isEmpty) {
+        apkLog('CS._connect', '[1] no authenticated user — aborting');
         _errorController.add('User not authenticated');
-        return;
+        throw Exception('CS._connect: no authenticated user in secure storage');
       }
 
+      apkLog('CS._connect', '[2] calling _ensureOpenImLoggedIn '
+          'userId=$_currentUserId');
       await _ensureOpenImLoggedIn(
         userId: _currentUserId!,
         nickname: user?.username ?? _currentUserId!,
       );
+      apkLog('CS._connect', '[2] _ensureOpenImLoggedIn returned');
 
+      apkLog('CS._connect', '[3] registering message listener');
       OpenIM.iMManager.messageManager.setAdvancedMsgListener(
         OnAdvancedMsgListener(
           onRecvNewMessage: (Message msg) {
-            debugPrint('[ChatService] New message: ${msg.clientMsgID}');
+            apkLog('CS.onRecvNewMessage',
+                'clientMsgID=${msg.clientMsgID}');
             final chatMsg = _toChat(msg);
             if (chatMsg != null) {
               _cacheMessage(chatMsg);
@@ -109,68 +147,189 @@ class ChatService {
         ),
       );
 
+      apkLog('CS._connect', '[4] registering conversation listener');
       await OpenIM.iMManager.conversationManager.setConversationListener(
         OnConversationListener(
           onConversationChanged: (List<ConversationInfo> list) {
-            debugPrint('[ChatService] Conversations changed: ${list.length}');
+            apkLog('CS.convListener',
+                'onConversationChanged count=${list.length}');
             _mergeOpenImConversations(list);
           },
           onNewConversation: (List<ConversationInfo> list) {
-            debugPrint('[ChatService] New conversations: ${list.length}');
+            apkLog('CS.convListener',
+                'onNewConversation count=${list.length}');
             _mergeOpenImConversations(list);
           },
           onSyncServerStart: (_) =>
-              debugPrint('[ChatService] OpenIM sync started'),
+              apkLog('CS.convListener', 'onSyncServerStart'),
           onSyncServerFinish: (_) {
-            debugPrint('[ChatService] OpenIM sync finished - refreshing');
+            apkLog('CS.convListener', 'onSyncServerFinish — refreshing');
             fetchConversations();
           },
           onSyncServerFailed: (_) =>
-              debugPrint('[ChatService] OpenIM sync failed'),
+              apkLog('CS.convListener', 'onSyncServerFailed'),
           onTotalUnreadMessageCountChanged: (int count) =>
-              debugPrint('[ChatService] Total unread: $count'),
+              apkLog('CS.convListener', 'unread=$count'),
         ),
       );
 
       _isConnected = true;
       _initialized = true;
       _connectionController.add(true);
-      debugPrint('[ChatService] Connected (OpenIM SDK)');
+      apkLog('CS._connect', '[5] connected  isConnected=$_isConnected');
 
+      apkLog('CS._connect', '[6] fetchConversations()');
       await fetchConversations();
-    } catch (e) {
-      debugPrint('[ChatService] connect() error: $e');
+      apkLog('CS._connect', '[6] fetchConversations() done');
+
+    } catch (e, st) {
+      apkLog('CS._connect', 'EXCEPTION: $e');
+      apkLog('CS._connect',
+          'stacktrace: ${st.toString().split('\n').take(6).join(' | ')}');
+      _isConnected = false;
       _errorController.add('Connection failed: $e');
       _connectionController.add(false);
+      rethrow;
+    }
+  }
+
+  Future<void> _waitForConnection() async {
+    apkLog('CS._wait', 'start  isConnected=$_isConnected  '
+        'connectFutureNull=${_connectFuture == null}');
+
+    if (_isConnected) {
+      apkLog('CS._wait', 'already connected');
+      return;
+    }
+
+    if (_connectFuture != null) {
+      apkLog('CS._wait', 'piggybacking on existing connectFuture (timeout 15s)');
+      try {
+        await _connectFuture!.timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {
+            apkLog('CS._wait', 'TIMEOUT waiting for existing connectFuture');
+            throw TimeoutException(
+              'Timed out waiting for existing connect() to finish',
+            );
+          },
+        );
+        apkLog('CS._wait', 'piggyback done  isConnected=$_isConnected');
+        return;
+      } catch (e) {
+        apkLog('CS._wait', 'piggyback threw: $e');
+        rethrow;
+      }
+    }
+
+    apkLog('CS._wait', 'no connect in progress — calling connect() (timeout 15s)');
+    try {
+      await connect().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          apkLog('CS._wait', 'TIMEOUT in connect()');
+          throw TimeoutException(
+            'Timed out waiting for ChatService to connect',
+          );
+        },
+      );
+      apkLog('CS._wait', 'connect() done  isConnected=$_isConnected');
+    } catch (e) {
+      apkLog('CS._wait', 'connect() threw: $e');
+      rethrow;
     }
   }
 
   Future<ChatMessage> sendMessage(ChatMessage message) async {
- 
-    // If not connected, wait up to 10s for connection to complete
+    apkLog('CS.send', 'receiverId="${message.receiverId}"  '
+        'isConnected=$_isConnected');
+
     if (!_isConnected) {
-      debugPrint('[ChatService] Not connected — waiting for connection...');
-      try {
-        await connectionStream
-            .firstWhere((connected) => connected == true)
-            .timeout(const Duration(seconds: 10));
-      } catch (_) {
-        throw Exception('ChatService not connected — timed out waiting');
-      }
+      apkLog('CS.send', 'not connected — calling _waitForConnection');
+      await _waitForConnection();
+      apkLog('CS.send', 'after wait  isConnected=$_isConnected');
+    }
+
+    if (!_isConnected) {
+      apkLog('CS.send', 'still not connected after waiting — THROWING');
+      throw Exception('ChatService not connected after waiting');
     }
 
     try {
-      // Strip non-numeric characters so recvID is valid for OpenIM.
-      // OpenIM rejects userIDs with '+' or other non-alphanumeric characters.
       final openImReceiverId = _toOpenImUserId(message.receiverId);
+      apkLog('CS.send', 'rawReceiverId="${message.receiverId}"  '
+          'openImId="$openImReceiverId"  '
+          'sender="$_currentUserId"  '
+          'OpenIMuser="${_safeOpenImUserId()}"');
 
-      await _authService.ensureOpenImUserExists(
-        userId: openImReceiverId,
-        nickname: message.receiverId,
-      );
+      if (openImReceiverId.isEmpty) {
+        apkLog('CS.send',
+            'openImReceiverId is EMPTY after stripping — '
+            'original was "${message.receiverId}". '
+            'This will cause a 20s timeout.');
+      }
+      if (openImReceiverId != message.receiverId) {
+        apkLog('CS.send',
+            'ID was transformed: "${message.receiverId}" '
+            'to "$openImReceiverId" — verify server stores this exact ID');
+      }
+      if (_currentUserId != _safeOpenImUserId()) {
+        apkLog('CS.send',
+            'MISMATCH: _currentUserId="$_currentUserId" vs '
+            'OpenIM.iMManager.userID="${_safeOpenImUserId()}" — '
+            'possible ghost login');
+      }
 
+      // getLoginStatus() returns int?  (1=logout, 2=logging, 3=logged)
+      try {
+        final int? loginStatus = await OpenIM.iMManager
+            .getLoginStatus()
+            .timeout(const Duration(seconds: 3));
+        apkLog('CS.send', 'OpenIM loginStatus=$loginStatus  (3=logged)');
+        if (loginStatus != _kLoginStatusLoggedIn) {
+          apkLog('CS.send',
+              'OpenIM is NOT fully logged in (status=$loginStatus)  '
+              'sendMessage may hang.');
+        }
+      } catch (e) {
+        apkLog('CS.send', 'getLoginStatus() threw: $e');
+      }
+
+      if (!_registeredUsers.contains(openImReceiverId)) {
+        apkLog('CS.send',
+            'registering receiver "$openImReceiverId" on backend...');
+        final t0 = DateTime.now();
+        try {
+          await _authService.ensureOpenImUserExists(
+            userId: openImReceiverId,
+            nickname: message.receiverId,
+          );
+          final ms = DateTime.now().difference(t0).inMilliseconds;
+          _registeredUsers.add(openImReceiverId);
+          apkLog('CS.send', 'receiver registered in ${ms}ms');
+        } catch (e) {
+          final ms = DateTime.now().difference(t0).inMilliseconds;
+          apkLog('CS.send',
+              'ensureOpenImUserExists threw after ${ms}ms: $e '
+              '(continuing anyway)');
+          _registeredUsers.add(openImReceiverId);
+        }
+      } else {
+        apkLog('CS.send',
+            'receiver "$openImReceiverId" already registered — skipping');
+      }
+
+      apkLog('CS.send', 'calling createTextMessage...');
+      final t1 = DateTime.now();
       final openImMsg = await OpenIM.iMManager.messageManager
           .createTextMessage(text: message.content);
+      apkLog('CS.send',
+          'createTextMessage done in '
+          '${DateTime.now().difference(t1).inMilliseconds}ms  '
+          'clientMsgID=${openImMsg.clientMsgID}');
+
+      apkLog('CS.send', 'calling OpenIM.sendMessage to "$openImReceiverId"...');
+      final t2 = DateTime.now();
 
       await OpenIM.iMManager.messageManager.sendMessage(
         message: openImMsg,
@@ -182,12 +341,15 @@ class ChatService {
         ),
       );
 
-     
+      apkLog('CS.send',
+          'sendMessage ACKed in '
+          '${DateTime.now().difference(t2).inMilliseconds}ms');
+
+      final convId = _deriveConvId(_currentUserId ?? '', openImReceiverId);
       final sent = ChatMessage(
         id: openImMsg.clientMsgID ??
             DateTime.now().millisecondsSinceEpoch.toString(),
-        //conversationId: openImMsg.conversationID ?? '',
-        conversationId: _deriveConvId(_currentUserId ?? '', openImReceiverId),
+        conversationId: convId,
         senderId: _currentUserId ?? '',
         receiverId: openImReceiverId,
         content: message.content,
@@ -198,49 +360,12 @@ class ChatService {
       _cacheMessage(sent);
       _messageController.add(sent);
       return sent;
-    } catch (e) {
-      //debugPrint('[ChatService] sendMessage error: $e');
-      debugPrint('SEND ERROR FULL: $e');
-      debugPrint('[ChatService] sendMessage error FULL:');
-      debugPrint(e.toString());
+    } catch (e, st) {
+      apkLog('CS.send', 'ERROR: $e');
+      apkLog('CS.send',
+          'trace: ${st.toString().split('\n').take(4).join(' | ')}');
       _errorController.add('Failed to send: $e');
       rethrow;
-    }
-  }
-
-  Future<void> _ensureOpenImLoggedIn({
-    required String userId,
-    required String nickname,
-  }) async {
-    try {
-      final status = await OpenIM.iMManager
-          .getLoginStatus()
-          .timeout(const Duration(seconds: 3));
-
-      if (status == LoginStatus.logged && OpenIM.iMManager.userID == userId) {
-        return;
-      }
-    } catch (e) {
-      debugPrint('[ChatService] getLoginStatus before connect failed: $e');
-    }
-
-    final token = await _authService.getOpenImToken();
-    if (token == null || token.isEmpty) {
-      debugPrint('[ChatService] No OpenIM token available for $userId');
-      return;
-    }
-
-    await _authService.loginToOpenIM(
-      userId: userId,
-      nickname: nickname,
-      imToken: token,
-    );
-
-    final status = await OpenIM.iMManager
-        .getLoginStatus()
-        .timeout(const Duration(seconds: 5));
-    if (status != LoginStatus.logged || OpenIM.iMManager.userID != userId) {
-      throw Exception('OpenIM login did not complete (status=$status)');
     }
   }
 
@@ -250,30 +375,54 @@ class ChatService {
     required int durationSeconds,
     String senderName = 'New voice message',
   }) async {
-    if (!_isConnected) throw Exception('ChatService not connected');
+    apkLog('CS.sendVoice',
+        'receiverID="$receiverID"  duration=${durationSeconds}s');
+
+    if (!_isConnected) {
+      apkLog('CS.sendVoice', 'not connected — calling _waitForConnection');
+      await _waitForConnection();
+    }
+
+    if (!_isConnected) {
+      throw Exception('ChatService not connected after waiting');
+    }
 
     try {
       final openImReceiverId = _toOpenImUserId(receiverID);
 
-      await _authService.ensureOpenImUserExists(
-        userId: openImReceiverId,
-        nickname: receiverID,
-      );
+      if (!_registeredUsers.contains(openImReceiverId)) {
+        apkLog('CS.sendVoice',
+            'registering receiver "$openImReceiverId" on backend...');
+        try {
+          await _authService.ensureOpenImUserExists(
+            userId: openImReceiverId,
+            nickname: receiverID,
+          );
+          _registeredUsers.add(openImReceiverId);
+          apkLog('CS.sendVoice', 'receiver registered');
+        } catch (e) {
+          apkLog('CS.sendVoice',
+              'ensureOpenImUserExists threw: $e (continuing anyway)');
+          _registeredUsers.add(openImReceiverId);
+        }
+      } else {
+        apkLog('CS.sendVoice',
+            'receiver "$openImReceiverId" already registered — skipping');
+      }
 
-      debugPrint('STEP 1 createTextMessage');
-
+      apkLog('CS.sendVoice', 'creating sound message...');
       final openImMsg = await OpenIM.iMManager.messageManager
           .createSoundMessageFromFullPath(
             soundPath: filePath,
             duration: durationSeconds,
           );
-      debugPrint('STEP 2 message created: ${openImMsg.clientMsgID}');
+      apkLog('CS.sendVoice',
+          'sound message created: ${openImMsg.clientMsgID}');
+      apkLog('CS.sendVoice',
+          'logged-in user: ${_safeOpenImUserId()}  '
+          'target user: $openImReceiverId');
 
-      debugPrint('STEP 3 sending...');
-      debugPrint('LOGGED USER: ${OpenIM.iMManager.userID}');
-      debugPrint('TARGET USER: $openImReceiverId');
-
-      //await OpenIM.iMManager.messageManager.sendMessage(
+      final t0 = DateTime.now();
       final result = await OpenIM.iMManager.messageManager.sendMessage(
         message: openImMsg,
         userID: openImReceiverId,
@@ -283,10 +432,11 @@ class ChatService {
           iOSBadgeCount: true,
         ),
       );
-      debugPrint('STEP 4 send result: $result');
+      apkLog('CS.sendVoice',
+          'send result: $result  '
+          'in ${DateTime.now().difference(t0).inMilliseconds}ms');
 
       final convId = _deriveConvId(_currentUserId ?? '', openImReceiverId);
-
       final local = ChatMessage(
         id: openImMsg.clientMsgID ??
             DateTime.now().millisecondsSinceEpoch.toString(),
@@ -303,11 +453,122 @@ class ChatService {
 
       _cacheMessage(local);
       _messageController.add(local);
-      debugPrint('[ChatService] Voice note sent (${durationSeconds}s)');
-    } catch (e) {
-      debugPrint('[ChatService] sendVoiceMessage error: $e');
+      apkLog('CS.sendVoice', 'voice note sent (${durationSeconds}s)');
+    } catch (e, st) {
+      apkLog('CS.sendVoice', 'ERROR: $e');
+      apkLog('CS.sendVoice',
+          'trace: ${st.toString().split('\n').take(4).join(' | ')}');
       _errorController.add('Failed to send voice message: $e');
       rethrow;
+    }
+  }
+
+  Future<void> _ensureOpenImLoggedIn({
+    required String userId,
+    required String nickname,
+  }) async {
+    apkLog('CS._ensureLogin', 'checking login for "$userId"');
+
+    String openImUserIdSafe;
+    try {
+      openImUserIdSafe = OpenIM.iMManager.userID;
+    } catch (_) {
+      openImUserIdSafe = '';
+    }
+
+    if (openImUserIdSafe.isNotEmpty) {
+      try {
+        // getLoginStatus() returns int?  (1=logout, 2=logging, 3=logged)
+        final int? status = await OpenIM.iMManager
+            .getLoginStatus()
+            .timeout(const Duration(seconds: 3));
+        apkLog('CS._ensureLogin',
+            'getLoginStatus=$status  OpenIM.userID="$openImUserIdSafe"');
+
+        if (status == _kLoginStatusLoggedIn &&
+            openImUserIdSafe == userId) {
+          apkLog('CS._ensureLogin', 'already logged in as $userId');
+          return;
+        }
+        apkLog('CS._ensureLogin',
+            'not logged in or wrong user — '
+            'status=$status  OpenIM.userID="$openImUserIdSafe"  '
+            'expected="$userId"');
+      } catch (e) {
+        apkLog('CS._ensureLogin', 'getLoginStatus threw: $e');
+      }
+    } else {
+      apkLog('CS._ensureLogin',
+          'OpenIM not initialised yet — skipping getLoginStatus check');
+    }
+
+    apkLog('CS._ensureLogin', 'fetching OpenIM token...');
+    final t0    = DateTime.now();
+    final token = await _authService.getOpenImToken();
+    apkLog('CS._ensureLogin',
+        'getOpenImToken done in '
+        '${DateTime.now().difference(t0).inMilliseconds}ms  '
+        'tokenNull=${token == null}  tokenEmpty=${token?.isEmpty}');
+
+    if (token == null || token.isEmpty) {
+      apkLog('CS._ensureLogin', 'no token — cannot login');
+      _errorController.add('No OpenIM token — cannot connect chat');
+      throw Exception('_ensureOpenImLoggedIn: no OpenIM token in storage');
+    }
+
+    apkLog('CS._ensureLogin', 'calling loginToOpenIM for "$userId"...');
+    final t1 = DateTime.now();
+    try {
+      await _authService.loginToOpenIM(
+        userId:   userId,
+        nickname: nickname,
+        imToken:  token,
+      );
+      apkLog('CS._ensureLogin',
+          'loginToOpenIM returned in '
+          '${DateTime.now().difference(t1).inMilliseconds}ms');
+    } catch (e) {
+      apkLog('CS._ensureLogin', 'loginToOpenIM threw: $e');
+      rethrow;
+    }
+
+    // Poll for login completion instead of a single hard timeout.
+    // The SDK fires an async internal handshake after login() returns,
+    // so a single check races and loses.
+    apkLog('CS._ensureLogin', 'polling post-login status (up to 10s)...');
+    int? finalStatus;
+    for (var i = 0; i < 10; i++) {
+      await Future.delayed(const Duration(seconds: 1));
+      try {
+        finalStatus = await OpenIM.iMManager
+            .getLoginStatus()
+            .timeout(const Duration(seconds: 2));
+        apkLog('CS._ensureLogin',
+            'poll[$i] status=$finalStatus  '
+            'OpenIM.userID="${_safeOpenImUserId()}"');
+        if (finalStatus == _kLoginStatusLoggedIn) break;
+      } catch (e) {
+        apkLog('CS._ensureLogin', 'poll[$i] threw: $e — retrying');
+      }
+    }
+
+    if (finalStatus != _kLoginStatusLoggedIn) {
+      apkLog('CS._ensureLogin',
+          'login did not complete after polling: status=$finalStatus');
+      throw Exception(
+          'OpenIM login did not complete after polling '
+          '(status=$finalStatus)');
+    }
+    apkLog('CS._ensureLogin',
+        'login complete for "$userId"  '
+        'OpenIM.userID="${_safeOpenImUserId()}"');
+  }
+
+  String _safeOpenImUserId() {
+    try {
+      return OpenIM.iMManager.userID;
+    } catch (_) {
+      return '<not-initialised>';
     }
   }
 
@@ -334,11 +595,11 @@ class ChatService {
         }
       }
 
-      debugPrint('[ChatService] fetchMessageHistory: ${messages.length} '
-          'messages for conv $conversationID');
+      apkLog('CS.fetchHistory',
+          '${messages.length} msgs for conv $conversationID');
       return messages;
     } catch (e) {
-      debugPrint('[ChatService] fetchMessageHistory error: $e');
+      apkLog('CS.fetchHistory', 'ERROR: $e');
       return [];
     }
   }
@@ -348,12 +609,10 @@ class ChatService {
       final List<ConversationInfo> convs = await OpenIM
           .iMManager.conversationManager
           .getConversationListSplit(offset: offset, count: count);
-
-      debugPrint('[ChatService] Loaded ${convs.length} conversations from '
-          'OpenIM local cache');
+      apkLog('CS.fetchConvs', '${convs.length} conversations loaded');
       _mergeOpenImConversations(convs);
     } catch (e) {
-      debugPrint('[ChatService] fetchConversations error: $e');
+      apkLog('CS.fetchConvs', 'ERROR: $e');
     }
   }
 
@@ -361,14 +620,13 @@ class ChatService {
     try {
       await OpenIM.iMManager.conversationManager
           .markConversationMessageAsRead(conversationID: conversationId);
-
       if (_conversationsMap.containsKey(conversationId)) {
         _conversationsMap[conversationId] =
             _conversationsMap[conversationId]!.copyWith(unreadCount: 0);
         _emitConversations();
       }
     } catch (e) {
-      debugPrint('[ChatService] markConversationAsRead error: $e');
+      apkLog('CS.markRead', 'ERROR: $e');
     }
   }
 
@@ -388,42 +646,27 @@ class ChatService {
           );
       return info.conversationID;
     } catch (e) {
-      debugPrint('[ChatService] getOpenImConversationId error: $e');
+      apkLog('CS.getConvId', 'ERROR: $e');
       return null;
     }
   }
-
-
-  //Before
-  /*
-
-  Future<void> disconnect() async {
-    if (!_isConnected) return;
-    _isConnected = false;
-    _initialized = false;
-    _connectionController.add(false);
-    debugPrint('[ChatService] Disconnected');
-  }
-
-  */
-
 
   Future<void> disconnect() async {
     if (!_isConnected) return;
     await reset();
   }
 
-  /// Clears all in-memory state so a new user can connect cleanly.
-  /// Called on logout before OpenIM logout wipes the local SQLite DB.
   Future<void> reset() async {
-    _isConnected = false;
-    _initialized = false;
+    apkLog('CS.reset', 'resetting ChatService');
+    _isConnected   = false;
+    _initialized   = false;
     _connectFuture = null;
     _currentUserId = null;
     _conversationsMap.clear();
     _messagesCache.clear();
+    _registeredUsers.clear();
     _connectionController.add(false);
-    debugPrint('[ChatService] Reset - ready for new user');
+    apkLog('CS.reset', 'reset done');
   }
 
   void dispose() {
@@ -438,13 +681,9 @@ class ChatService {
     final senderId   = msg.sendID ?? '';
     final receiverId = msg.recvID ?? '';
     final msgId      = msg.clientMsgID ?? msg.serverMsgID ?? '';
-
     if (senderId.isEmpty || msgId.isEmpty) return null;
 
-    //final convId = _deriveConvId(senderId, receiverId);
-    //final convId = msg.conversationID ?? '';
     final convId = _deriveConvId(senderId, receiverId);
-
     final timestamp = msg.sendTime != null
         ? DateTime.fromMillisecondsSinceEpoch(msg.sendTime!)
         : DateTime.now();
@@ -491,9 +730,7 @@ class ChatService {
           lastMsgContent = 'Voice message';
         } else {
           final text = latestMsg.textElem?.content;
-          if (text != null && text.isNotEmpty) {
-            lastMsgContent = text;
-          }
+          if (text != null && text.isNotEmpty) lastMsgContent = text;
         }
       }
     } catch (_) {}
@@ -522,23 +759,18 @@ class ChatService {
 
   void _cacheMessage(ChatMessage message) {
     final convId = message.conversationId;
-
     if (_conversationsMap.containsKey(convId)) {
       _conversationsMap[convId] =
           _conversationsMap[convId]!.updateWithMessage(
-            message,
-            _currentUserId ?? '',
-          );
+            message, _currentUserId ?? '');
     } else {
       _conversationsMap[convId] =
           ChatConversation.fromMessage(message, _currentUserId ?? '');
     }
-
     _messagesCache.putIfAbsent(convId, () => []);
     if (!_messagesCache[convId]!.any((m) => m.id == message.id)) {
       _messagesCache[convId]!.add(message);
     }
-
     _emitConversations();
   }
 
@@ -548,22 +780,13 @@ class ChatService {
     _conversationsController.add(sorted);
   }
 
-  // OpenIM single-chat conversationID format: si_{smaller}_{larger}
   String _deriveConvId(String id1, String id2) {
     final ids = [id1, id2]..sort();
     return 'si_${ids[0]}_${ids[1]}';
   }
 
-  // Strips non-numeric characters from a phone-number-based userID so it
-  // is accepted by the OpenIM server, which rejects '+' and other symbols.
-  /*
   String _toOpenImUserId(String id) {
     return id.replaceAll(RegExp(r'[^\d]'), '');
-  }
-  */
-
-  String _toOpenImUserId(String id) {
-  return id.replaceAll(RegExp(r'[^\d]'), '');
   }
 
   MessageStatus _mapStatus(int? status) {

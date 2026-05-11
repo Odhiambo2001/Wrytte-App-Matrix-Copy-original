@@ -1,7 +1,9 @@
+// lib/ui/screens/chats/chat_screen.dart
 import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart'
     hide MessageStatus;
 
@@ -15,6 +17,7 @@ import 'package:wrytte/ui/screens/calls/call_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_input.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class ChatScreen extends StatefulWidget {
   final String conversationId;
@@ -46,7 +49,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   StreamSubscription<ChatMessage>? _msgSub;
 
-  final List<ChatMessage> _messages = [];
+  final List<ChatMessage>   _messages              = [];
   final Map<String, String> _optimisticIdByContent = {};
 
   String? _resolvedConversationId;
@@ -55,21 +58,30 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loadingOlder = false;
   bool _hasMoreOlder = true;
 
-  bool _isSending = false;
+  bool    _isSending = false;
   String? _sendError;
 
   UserProfile? _receiverProfile;
 
+  // ── debug overlay ──────────────────────────────────────────────────────────
+  bool _showDebug = false;
+  final ScrollController _debugScrollCtrl = ScrollController();
+  final ApkDebugLogger   _logger          = ApkDebugLogger.instance;
+
   static const double _kHeaderPillH = 48.0;
   static const double _kInputPillH  = 40.0;
 
-
-  // LIFECYCLE
-
+  // ─── LIFECYCLE ─────────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
+    apkLog('ChatScreen', '── initState ──  '
+        'convId="${widget.conversationId}"  '
+        'receiverId="${widget.receiverId}"  '
+        'currentUserId="${widget.currentUserId}"');
+
+    _logger.addListener(_onNewLog);
     _loadInitial();
     _loadReceiverProfile();
     _scrollCtrl.addListener(_onScroll);
@@ -77,33 +89,50 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _logger.removeListener(_onNewLog);
     _msgSub?.cancel();
     _controller.dispose();
     _scrollCtrl.dispose();
+    _debugScrollCtrl.dispose();
     _focusNode.dispose();
     super.dispose();
   }
 
-  String _normaliseId(String id) {
-    return id.replaceAll(RegExp(r'[^\d]'), '');
+  void _onNewLog() {
+    if (_showDebug && mounted) {
+      setState(() {});
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_debugScrollCtrl.hasClients) {
+          _debugScrollCtrl.jumpTo(
+            _debugScrollCtrl.position.maxScrollExtent);
+        }
+      });
+    }
   }
+
+  // ─── RESOLVE CONVERSATION ID ───────────────────────────────────────────────
+
+  String _normaliseId(String id) =>
+      id.replaceAll(RegExp(r'[^\d]'), '');
 
   String _buildSortedConvId(String normalisedReceiverId) {
     final ids = [normalisedReceiverId, widget.currentUserId]..sort();
     return 'si_${ids[0]}_${ids[1]}';
   }
 
-
-  // RESOLVE CONVERSATION ID
-
-
   Future<String> _resolveConversationId() async {
     if (_resolvedConversationId != null) return _resolvedConversationId!;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
+    apkLog('ChatScreen._resolveConv',
+        'raw="${widget.receiverId}"  '
+        'normalised="$normalisedReceiverId"  '
+        'passedConvId="${widget.conversationId}"');
 
     if (widget.conversationId.startsWith('si_')) {
       _resolvedConversationId = widget.conversationId;
+      apkLog('ChatScreen._resolveConv',
+          'used passedConvId → "$_resolvedConversationId"');
       return _resolvedConversationId!;
     }
 
@@ -117,21 +146,46 @@ class _ChatScreenState extends State<ChatScreen> {
           );
       _resolvedConversationId =
           conv.conversationID ?? _buildSortedConvId(normalisedReceiverId);
-    } catch (_) {
+      apkLog('ChatScreen._resolveConv',
+          'getOneConversation → "$_resolvedConversationId"');
+    } catch (e) {
       _resolvedConversationId = _buildSortedConvId(normalisedReceiverId);
+      apkLog('ChatScreen._resolveConv',
+          'getOneConversation threw → fallback '
+          '"$_resolvedConversationId"  err=$e');
     }
 
     return _resolvedConversationId!;
   }
 
-
-  // INIT
-
+  // ─── INIT ──────────────────────────────────────────────────────────────────
 
   Future<void> _loadInitial() async {
-    await _chat.connect();
+    apkLog('ChatScreen._loadInitial', 'calling chat.connect()…');
+
+    // ── FIX: catch connect failure and bail out early ─────────────────────
+    try {
+      await _chat.connect();
+    } catch (e) {
+      apkLog('ChatScreen._loadInitial', ' connect() FAILED: $e');
+      if (mounted) {
+        setState(() {}); // optionally show an error state in UI
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not connect to chat: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      return; // stop — do not attempt fetchMessageHistory or subscribe
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    apkLog('ChatScreen._loadInitial',
+        'connect() done  isConnected=${_chat.isConnected}'); // use actual flag
 
     final realConvId = await _resolveConversationId();
+    apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
 
     await _chat.markConversationAsRead(realConvId);
 
@@ -139,21 +193,24 @@ class _ChatScreenState extends State<ChatScreen> {
       conversationID: realConvId,
       count: 40,
     );
+    apkLog('ChatScreen._loadInitial',
+        'fetchMessageHistory returned ${msgs.length} msgs');
 
     if (!mounted) return;
-    setState(() {
-      _mergeMessages(msgs);
-    });
+    setState(() => _mergeMessages(msgs));
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
     _msgSub = _chat.messageStream.listen((msg) {
       if (msg.conversationId != realConvId) return;
       if (!mounted) return;
-
+      apkLog('ChatScreen.msgStream',
+          'new msg id=${msg.id}  convId=${msg.conversationId}');
       setState(() => _upsertMessage(msg));
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     });
   }
+
+
 
   Future<void> _loadReceiverProfile() async {
     final profile =
@@ -161,9 +218,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) setState(() => _receiverProfile = profile);
   }
 
-
-  // PAGINATION
-
+  // ─── PAGINATION ────────────────────────────────────────────────────────────
 
   void _onScroll() {
     if (_scrollCtrl.position.pixels <= 80 &&
@@ -180,14 +235,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final realConvId = await _resolveConversationId();
 
     try {
-      Message? cursor;
-      if (_oldestOpenImMsg != null) {
-        cursor = _oldestOpenImMsg;
-      }
-
       final older = await _chat.fetchMessageHistory(
         conversationID: realConvId,
-        startMsg: cursor,
+        startMsg: _oldestOpenImMsg,
         count: 40,
       );
 
@@ -200,7 +250,6 @@ class _ChatScreenState extends State<ChatScreen> {
       }
 
       final currentOffset = _scrollCtrl.position.pixels;
-
       setState(() {
         final existingIds = _messages.map((m) => m.id).toSet();
         final newOnes =
@@ -212,26 +261,24 @@ class _ChatScreenState extends State<ChatScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scrollCtrl.hasClients) {
           _scrollCtrl.jumpTo(
-            _scrollCtrl.position.pixels + currentOffset,
-          );
+              _scrollCtrl.position.pixels + currentOffset);
         }
       });
     } catch (e) {
-      debugPrint('[ChatScreen] loadOlderMessages error: $e');
+      apkLog('ChatScreen.loadOlder', ' ERROR: $e');
       if (mounted) setState(() => _loadingOlder = false);
     }
   }
 
-
-  // SEND TEXT
-
+  // ─── SEND TEXT ─────────────────────────────────────────────────────────────
 
   Future<void> _send() async {
-    debugPrint('SEND CLICKED');
-    debugPrint('_isSending=$_isSending');
-    debugPrint('text=${_controller.text}');
-
     final text = _controller.text.trim();
+    apkLog('ChatScreen._send',
+        'text="${text.length > 40 ? text.substring(0, 40) : text}"  '
+        'isSending=$_isSending  '
+        'textEmpty=${text.isEmpty}');
+
     if (text.isEmpty || _isSending) return;
 
     _controller.clear();
@@ -239,6 +286,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final realConvId           = await _resolveConversationId();
     final normalisedReceiverId = _normaliseId(widget.receiverId);
+
+    apkLog('ChatScreen._send',
+        'realConvId="$realConvId"  '
+        'normalisedReceiver="$normalisedReceiverId"');
 
     final optimistic = ChatMessage(
       id: 'opt_${DateTime.now().millisecondsSinceEpoch}',
@@ -255,21 +306,24 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
     try {
+      apkLog('ChatScreen._send', 'calling chat.sendMessage…');
       final sent = await _chat.sendMessage(optimistic);
+      apkLog('ChatScreen._send',
+          ' sent  id=${sent.id}  status=${sent.status}');
 
       if (mounted) {
-        setState(() {
-          _replaceOptimisticMessage(optimistic.id, sent);
-        });
-      }}catch (e) {
-      debugPrint('[ChatScreen] send error: $e');
+        setState(() => _replaceOptimisticMessage(optimistic.id, sent));
+      }
+    } catch (e) {
+      apkLog('ChatScreen._send', ' SEND FAILED: $e');
       if (mounted) {
         setState(() {
           final idx = _messages.indexWhere((m) => m.id == optimistic.id);
           if (idx != -1) {
-            _messages[idx] = optimistic.copyWith(status: MessageStatus.failed);
+            _messages[idx] =
+                optimistic.copyWith(status: MessageStatus.failed);
           }
-          _sendError = e.toString(); 
+          _sendError = e.toString();
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -283,15 +337,16 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-
-  // SEND VOICE NOTE
-
+  // ─── SEND VOICE ────────────────────────────────────────────────────────────
 
   Future<void> _sendVoiceNote(String filePath, int durationSeconds) async {
     final realConvId           = await _resolveConversationId();
     final normalisedReceiverId = _normaliseId(widget.receiverId);
+    apkLog('ChatScreen._sendVoice',
+        'duration=${durationSeconds}s  receiver="$normalisedReceiverId"');
 
-    final placeholderId = 'voice_${DateTime.now().millisecondsSinceEpoch}';
+    final placeholderId =
+        'voice_${DateTime.now().millisecondsSinceEpoch}';
     final placeholder = ChatMessage(
       id: placeholderId,
       conversationId: realConvId,
@@ -313,14 +368,15 @@ class _ChatScreenState extends State<ChatScreen> {
         filePath: filePath,
         durationSeconds: durationSeconds,
       );
-
       if (mounted) {
-        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
+        setState(
+            () => _messages.removeWhere((m) => m.id == placeholderId));
       }
     } catch (e) {
-      debugPrint('[ChatScreen] voice send error: $e');
+      apkLog('ChatScreen._sendVoice', ' ERROR: $e');
       if (mounted) {
-        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
+        setState(
+            () => _messages.removeWhere((m) => m.id == placeholderId));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to send voice note: $e'),
@@ -331,14 +387,11 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-
-  // CALL
-
+  // ─── CALL ──────────────────────────────────────────────────────────────────
 
   Future<void> _startCall(CallType type) async {
-    //final displayName          = _receiverProfile?.displayName ?? widget.title;
     final normalisedReceiverId = _normaliseId(widget.receiverId);
-    final displayName = widget.title;
+    final displayName          = widget.title;
 
     try {
       await _call.makeCall(
@@ -371,9 +424,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-
-  // SCROLL
-
+  // ─── SCROLL ────────────────────────────────────────────────────────────────
 
   void _scrollToBottom() {
     if (_scrollCtrl.hasClients) {
@@ -384,6 +435,8 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
   }
+
+  // ─── MESSAGE HELPERS ───────────────────────────────────────────────────────
 
   void _mergeMessages(List<ChatMessage> incoming) {
     for (final msg in incoming) {
@@ -398,13 +451,11 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages[exactIdx] = msg;
       return;
     }
-
     final optimisticId = _matchingOptimisticId(msg);
     if (optimisticId != null) {
       _replaceOptimisticMessage(optimisticId, msg);
       return;
     }
-
     _messages.add(msg);
   }
 
@@ -415,17 +466,18 @@ class _ChatScreenState extends State<ChatScreen> {
         orElse: () => msg,
       );
       if (optimistic.id != entry.value) continue;
-      final sameContent = optimistic.content == msg.content;
+      final sameContent  = optimistic.content == msg.content;
       final sameReceiver = optimistic.receiverId == msg.receiverId ||
           optimistic.receiverId == msg.senderId;
-      final closeInTime =
+      final closeInTime  =
           msg.timestamp.difference(optimistic.timestamp).inSeconds.abs() < 30;
       if (sameContent && sameReceiver && closeInTime) return optimistic.id;
     }
     return null;
   }
 
-  void _replaceOptimisticMessage(String optimisticId, ChatMessage sent) {
+  void _replaceOptimisticMessage(
+      String optimisticId, ChatMessage sent) {
     final idx = _messages.indexWhere((m) => m.id == optimisticId);
     if (idx != -1) {
       _messages[idx] = sent;
@@ -436,9 +488,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
 
-
-  // BUILD
-
+  // ─── BUILD ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -451,21 +501,23 @@ class _ChatScreenState extends State<ChatScreen> {
       extendBody: true,
       body: Stack(
         children: [
+          // ── main chat UI ──────────────────────────────────────────────────
           Column(
             children: [
               SizedBox(height: appBarH),
               Expanded(child: _buildMessageList()),
               MessageInputField(
                 controller: _controller,
-                focusNode: _focusNode,
-                isSending: _isSending,
-                onSend: _send,
+                focusNode:  _focusNode,
+                isSending:  _isSending,
+                onSend:     _send,
                 inputPillHeight: _kInputPillH,
                 onVoiceMessage: _sendVoiceNote,
               ),
             ],
           ),
 
+          // ── gradient behind app bar ───────────────────────────────────────
           Positioned(
             top: 0, left: 0, right: 0,
             height: appBarH + 20,
@@ -487,18 +539,204 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
 
+          // ── app bar ───────────────────────────────────────────────────────
           Positioned(
             top: 0, left: 0, right: 0,
             child: _buildAppBar(statusBarH),
+          ),
+
+          // ── debug overlay ─────────────────────────────────────────────────
+          if (_showDebug) _buildDebugOverlay(appBarH),
+
+          // ── debug toggle button ───────────────────────────────────────────
+          Positioned(
+            bottom: 120,
+            right: 12,
+            child: GestureDetector(
+              onTap: () => setState(() => _showDebug = !_showDebug),
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: _showDebug
+                      ? Colors.orangeAccent
+                      : Colors.grey.withOpacity(0.6),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Text('🐛',
+                      style: TextStyle(fontSize: 18)),
+                ),
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
+  // ─── DEBUG OVERLAY ─────────────────────────────────────────────────────────
 
-  // MESSAGE LIST
+  Widget _buildDebugOverlay(double topOffset) {
+    final lines = _logger.lines;
 
+    return Positioned(
+      top: topOffset + 4,
+      left: 4,
+      right: 4,
+      bottom: 140,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.88),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orangeAccent, width: 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── header ───────────────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 10, vertical: 6),
+              decoration: const BoxDecoration(
+                color: Colors.orangeAccent,
+                borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(11)),
+              ),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'APK DEBUG LOG',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                  // Copy all logs button
+                  GestureDetector(
+                    onTap: () {
+                      Clipboard.setData(
+                          ClipboardData(text: lines.join('\n')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Logs copied to clipboard')),
+                      );
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8),
+                      child: Text('COPY',
+                          style: TextStyle(
+                              color: Colors.black,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11)),
+                    ),
+                  ),
+                  // Clear button
+                  GestureDetector(
+                    onTap: () {
+                      _logger.clear();
+                      setState(() {});
+                    },
+                    child: const Text('CLR',
+                        style: TextStyle(
+                            color: Colors.black,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 11)),
+                  ),
+                  const SizedBox(width: 8),
+                  // Close button
+                  GestureDetector(
+                    onTap: () =>
+                        setState(() => _showDebug = false),
+                    child: const Icon(Icons.close,
+                        size: 16, color: Colors.black),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── log lines ────────────────────────────────────────────────────
+            Expanded(
+              child: lines.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No logs yet.\nTry sending a message.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            color: Colors.white38, fontSize: 12),
+                      ),
+                    )
+                  : ListView.builder(
+                      controller: _debugScrollCtrl,
+                      padding: const EdgeInsets.all(6),
+                      itemCount: lines.length,
+                      itemBuilder: (_, i) {
+                        final line = lines[i];
+                        // Colour-code by severity
+                        Color c = Colors.white70;
+                        if (line.contains('❌') ||
+                            line.contains('🚨') ||
+                            line.contains('FAIL') ||
+                            line.contains('ERROR') ||
+                            line.contains('TIMEOUT')) {
+                          c = const Color(0xFFFF6B6B);
+                        } else if (line.contains('⚠️') ||
+                            line.contains('WARN') ||
+                            line.contains('MISMATCH')) {
+                          c = const Color(0xFFFFD93D);
+                        } else if (line.contains('✅')) {
+                          c = const Color(0xFF6BCB77);
+                        } else if (line.contains('🔄') ||
+                            line.contains('⏳')) {
+                          c = const Color(0xFF4DA3FF);
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: SelectableText(
+                            line,
+                            style: TextStyle(
+                              color: c,
+                              fontSize: 10,
+                              fontFamily: 'monospace',
+                              height: 1.35,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+
+            // ── summary bar ──────────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 10, vertical: 5),
+              decoration: const BoxDecoration(
+                color: Color(0xFF1A1A2E),
+                borderRadius: BorderRadius.vertical(
+                    bottom: Radius.circular(11)),
+              ),
+              child: Text(
+                'convId: ${_resolvedConversationId ?? "not resolved"}  '
+                '|  receiver: ${_normaliseId(widget.receiverId)}  '
+                '|  msgs: ${_messages.length}',
+                style: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: 9,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── MESSAGE LIST ──────────────────────────────────────────────────────────
 
   Widget _buildMessageList() {
     return Column(
@@ -509,12 +747,9 @@ class _ChatScreenState extends State<ChatScreen> {
             child: SizedBox(
               height: 20, width: 20,
               child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Color(0xFF4DA3FF),
-              ),
+                strokeWidth: 2, color: Color(0xFF4DA3FF)),
             ),
           ),
-
         Expanded(
           child: _messages.isEmpty
               ? Center(
@@ -522,27 +757,30 @@ class _ChatScreenState extends State<ChatScreen> {
                     'No messages yet.\nSay hello!',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.3),
-                      fontSize: 15,
-                      height: 1.6,
-                    ),
+                        color: Colors.white.withOpacity(0.3),
+                        fontSize: 15, height: 1.6),
                   ),
                 )
               : ListView.builder(
                   controller: _scrollCtrl,
-                  padding: const EdgeInsets.only(top: 12, bottom: 8),
+                  padding:
+                      const EdgeInsets.only(top: 12, bottom: 8),
                   physics: const BouncingScrollPhysics(),
                   itemCount: _messages.length,
                   itemBuilder: (context, index) {
                     final msg    = _messages[index];
-                    final isMine = msg.senderId == widget.currentUserId;
-                    final prev   = index > 0 ? _messages[index - 1] : null;
+                    final isMine =
+                        msg.senderId == widget.currentUserId;
+                    final prev =
+                        index > 0 ? _messages[index - 1] : null;
                     final showTail = prev == null ||
-                        (prev.senderId == widget.currentUserId) != isMine;
-
+                        (prev.senderId ==
+                                widget.currentUserId) !=
+                            isMine;
                     return Column(
                       children: [
-                        if (index == 0) _buildDateDivider('Today'),
+                        if (index == 0)
+                          _buildDateDivider('Today'),
                         MessageBubble(
                           content:       msg.content,
                           time:          _formatTime(msg.timestamp),
@@ -562,9 +800,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-
-  // APP BAR
-
+  // ─── APP BAR ───────────────────────────────────────────────────────────────
 
   Widget _buildAppBar(double statusBarH) {
     final displayName = widget.title;
@@ -584,13 +820,13 @@ class _ChatScreenState extends State<ChatScreen> {
                 onTap: () => Navigator.pop(context),
               ),
               const SizedBox(width: 8),
-
               Expanded(
                 child: GestureDetector(
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => ProfileScreen(uid: widget.receiverId)),
+                        builder: (_) =>
+                            ProfileScreen(uid: widget.receiverId)),
                   ),
                   child: SizedBox(
                     height: _kHeaderPillH,
@@ -601,12 +837,14 @@ class _ChatScreenState extends State<ChatScreen> {
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(24),
                             child: BackdropFilter(
-                              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                              filter: ImageFilter.blur(
+                                  sigmaX: 24, sigmaY: 24),
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: const Color(0xFF23262C)
                                       .withOpacity(0.30),
-                                  borderRadius: BorderRadius.circular(24),
+                                  borderRadius:
+                                      BorderRadius.circular(24),
                                   border: Border.all(
                                       color: const Color(0xFF23262C),
                                       width: 1.0),
@@ -621,10 +859,11 @@ class _ChatScreenState extends State<ChatScreen> {
                             aspectRatio: 1,
                             child: UserAvatar(
                               size: _kHeaderPillH + 12,
-                              imageUrl:
-                                  _receiverProfile?.hasProfileImage == true
-                                      ? _receiverProfile!.profileImage
-                                      : widget.avatarUrl,
+                              imageUrl: _receiverProfile
+                                          ?.hasProfileImage ==
+                                      true
+                                  ? _receiverProfile!.profileImage
+                                  : widget.avatarUrl,
                               name: displayName,
                             ),
                           ),
@@ -633,8 +872,10 @@ class _ChatScreenState extends State<ChatScreen> {
                           left: _kHeaderPillH + 14,
                           top: 0, bottom: 0, right: 12,
                           child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment:
+                                MainAxisAlignment.center,
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
                             children: [
                               Text(
                                 displayName,
@@ -648,7 +889,8 @@ class _ChatScreenState extends State<ChatScreen> {
                               Text(
                                 'Online',
                                 style: TextStyle(
-                                  color: Colors.white.withOpacity(0.5),
+                                  color:
+                                      Colors.white.withOpacity(0.5),
                                   fontSize: 12,
                                 ),
                               ),
@@ -661,7 +903,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-
               _glassPill(
                 width: _kHeaderPillH, height: _kHeaderPillH,
                 child: const Icon(Icons.videocam_outlined,
@@ -682,9 +923,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-
-  // HELPERS
-
+  // ─── HELPERS ───────────────────────────────────────────────────────────────
 
   String _formatTime(DateTime dt) {
     final h      = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
@@ -703,8 +942,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   color: Colors.white.withOpacity(0.08), height: 1)),
           const SizedBox(width: 10),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(
+                horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: const Color(0xFF23262C).withOpacity(0.60),
               borderRadius: BorderRadius.circular(12),
@@ -745,8 +984,8 @@ class _ChatScreenState extends State<ChatScreen> {
             decoration: BoxDecoration(
               color: const Color(0xFF23262C).withOpacity(0.30),
               borderRadius: BorderRadius.circular(height / 2),
-              border:
-                  Border.all(color: const Color(0xFF23262C), width: 1.0),
+              border: Border.all(
+                  color: const Color(0xFF23262C), width: 1.0),
             ),
             child: Center(child: child),
           ),

@@ -9,6 +9,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/chat/open_im_login_exception.dart';
+import 'package:wrytte/main.dart' show openImReady;
 
 /// Central authentication service.
 ///
@@ -25,7 +27,7 @@ class AuthService {
   AuthService._();
   static final AuthService instance = AuthService._();
 
-  // ── Dependencies ────────────────────────────────────────────────────────────
+  //  Dependencies 
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   );
@@ -37,24 +39,29 @@ class AuthService {
   final Map<String, String> _pendingEmailOtps = {};
 
   // ── Storage keys ─────────────────────────────────────────────────────────────
-  static const _tokenKey = 'auth_token';
-  static const _expiryKey = 'auth_token_expiry';
-  static const _userIdKey = 'user_id';
-  static const _usernameKey = 'username';
-  static const _secretKey = 'secret';
-  static const _phoneKey = 'phone';
+  static const _tokenKey       = 'auth_token';
+  static const _expiryKey      = 'auth_token_expiry';
+  static const _userIdKey      = 'user_id';
+  static const _usernameKey    = 'username';
+  static const _secretKey      = 'secret';
+  static const _phoneKey       = 'phone';
   static const _openImTokenKey = 'openim_token';
-  static const _chatTokenKey = 'chat_token';
+  static const _chatTokenKey   = 'chat_token';
 
   // ── OpenIM configuration ─────────────────────────────────────────────────────
-  static const _openImApiBase = 'http://34.63.32.143:10002';
-  static const _openImAdminId = 'imAdmin';
-  static const _openImSecret = 'openIM123';
+  static const _openImApiBase    = 'http://34.63.32.143:10002';
+  static const _openImAdminId    = 'imAdmin';
+  static const _openImSecret     = 'openIM123';
   static const _openImPlatformId = 2;
 
-  // ── Timeout constants ─────────────────────────────────────────────────────────
-  static const _httpTimeout = Duration(seconds: 15);
-  static const _openImLoginTimeout = Duration(seconds: 20);
+  // ── Timeout / retry constants ─────────────────────────────────────────────────
+  static const _httpTimeout        = Duration(seconds: 15);
+  static const _openImLoginTimeout = Duration(seconds: 35);  // 
+  static const _sdkReadyTimeout    = Duration(seconds: 90);  // 
+  static const _maxLoginAttempts   = 4;
+
+  static const _initialBackoff     = Duration(seconds: 2);
+  static const _maxBackoff         = Duration(seconds: 16);
 
   // ============================================================================
   // PUBLIC: Firebase Auth (anonymous) — call this BEFORE any Firestore write
@@ -87,58 +94,133 @@ class AuthService {
 
   /// Logs the user into the OpenIM SDK.
   ///
-  /// If [imToken] is provided (from the chat-server login response), it is used
-  /// directly.  Otherwise the admin-token flow is used to register + token the
-  /// user (development / first-time setup path).
+  /// Retry contract (production-safe):
+  ///   • Waits up to [_sdkReadyTimeout] for initSDK to signal readiness.
+  ///   • Retries the actual SDK login up to [_maxLoginAttempts] times with
+  ///     exponential backoff capped at [_maxBackoff].
+  ///   • Token rejection errors (errCode 1501/1502) abort retries immediately.
+  ///   • On permanent failure throws [OpenImLoginException] so callers can
+  ///     distinguish chat unavailability from authentication failures.
+  ///
+  /// Token resolution order:
+  ///   1. [imToken] parameter (chat-server login flow).
+  ///   2. Stored token from secure storage.
+  ///   3. Admin-token fallback (dev / first-time setup).
+
   Future<void> loginToOpenIM({
     required String userId,
     required String nickname,
     String faceUrl = '',
     String imToken = '',
   }) async {
-    try {
-      if (imToken.isNotEmpty) {
-        await _storage.write(key: _openImTokenKey, value: imToken);
-        await OpenIM.iMManager
-            .login(userID: userId, token: imToken)
-            .timeout(_openImLoginTimeout);
-        debugPrint('[OpenIM] Logged in as $userId (chat-server token)');
-        return;
-      }
+    debugPrint('[OpenIM] loginToOpenIM: start for $userId');
 
-      // ── Admin-token fallback ──────────────────────────────────────────────
-      final adminToken = await _getOpenImAdminToken();
-      if (adminToken == null) {
-        debugPrint('[OpenIM] Could not obtain admin token');
-        return;
-      }
+    // Wait briefly for initSDK to at least be called (not for WS connection).
+    // 10 seconds is more than enough — initSDK itself returns in under 1 second.
+   debugPrint('[OpenIM] waiting for SDK ready');
 
-      await _registerOpenImUser(
-        adminToken: adminToken,
-        userId: userId,
-        nickname: nickname,
-        faceUrl: faceUrl,
-      );
+    final ready = await openImReady;
 
-      final userToken = await _getOpenImUserToken(
-        adminToken: adminToken,
-        userId: userId,
-      );
-      if (userToken == null) {
-        debugPrint('[OpenIM] Could not obtain user token');
-        return;
-      }
-
-      await _storage.write(key: _openImTokenKey, value: userToken);
-      await OpenIM.iMManager
-          .login(userID: userId, token: userToken)
-          .timeout(_openImLoginTimeout);
-      debugPrint('[OpenIM] Logged in as $userId (admin-token flow)');
-    } on TimeoutException {
-      debugPrint('[OpenIM] loginToOpenIM timed out for $userId');
-    } catch (e) {
-      debugPrint('[OpenIM] loginToOpenIM error: $e');
+    if (!ready) {
+      throw Exception('OpenIM SDK failed to initialize');
     }
+
+    debugPrint('[OpenIM] SDK ready, starting login for $userId');
+
+    // Resolve the token
+    String effectiveToken = imToken;
+
+    if (effectiveToken.isEmpty) {
+      effectiveToken = await _storage.read(key: _openImTokenKey) ?? '';
+    }
+
+    if (effectiveToken.isEmpty) {
+      debugPrint('[OpenIM] loginToOpenIM: no token stored — using admin-token flow');
+      effectiveToken = await _fetchTokenViaAdminFlow(
+        userId:   userId,
+        nickname: nickname,
+        faceUrl:  faceUrl,
+      );
+    }
+
+    // Login with retry + exponential backoff
+    Object? lastError;
+    Duration backoff = _initialBackoff;
+
+    for (int attempt = 1; attempt <= _maxLoginAttempts; attempt++) {
+      try {
+        debugPrint('[OpenIM] login attempt $attempt/$_maxLoginAttempts '
+            'userId=$userId tokenEmpty=${effectiveToken.isEmpty}');
+
+        await OpenIM.iMManager
+            .login(userID: userId, token: effectiveToken)
+            .timeout(_openImLoginTimeout);
+
+        await _storage.write(key: _openImTokenKey, value: effectiveToken);
+        debugPrint('[OpenIM] login SUCCESS on attempt $attempt');
+        return;
+
+      } on TimeoutException catch (e) {
+        lastError = e;
+        debugPrint('[OpenIM] login attempt $attempt TIMEOUT');
+      } catch (e) {
+        lastError = e;
+        debugPrint('[OpenIM] login attempt $attempt ERROR: $e');
+
+        final msg = e.toString().toLowerCase();
+        if ((msg.contains('token') && msg.contains('invalid')) ||
+            msg.contains('errcode: 1501') ||
+            msg.contains('errcode: 1502')) {
+          debugPrint('[OpenIM] Token rejected — aborting retries');
+          break;
+        }
+      }
+
+      if (attempt < _maxLoginAttempts) {
+        debugPrint('[OpenIM] backing off ${backoff.inSeconds}s before retry');
+        await Future.delayed(backoff);
+        backoff = Duration(
+          seconds: (backoff.inSeconds * 2).clamp(0, _maxBackoff.inSeconds),
+        );
+      }
+    }
+
+    throw OpenImLoginException(
+      'OpenIM login failed after $_maxLoginAttempts attempts: $lastError',
+      cause: lastError,
+    );
+  }
+
+  // ── Private: admin-token flow ───────────────────────────────────────────────
+  Future<String> _fetchTokenViaAdminFlow({
+    required String userId,
+    required String nickname,
+    String faceUrl = '',
+  }) async {
+    final adminToken = await _getOpenImAdminToken();
+    if (adminToken == null) {
+      throw OpenImLoginException(
+        'loginToOpenIM: could not obtain admin token',
+      );
+    }
+
+    await _registerOpenImUser(
+      adminToken: adminToken,
+      userId:     userId,
+      nickname:   nickname,
+      faceUrl:    faceUrl,
+    );
+
+    final userToken = await _getOpenImUserToken(
+      adminToken: adminToken,
+      userId:     userId,
+    );
+    if (userToken == null || userToken.isEmpty) {
+      throw OpenImLoginException(
+        'loginToOpenIM: could not obtain user token from admin flow',
+      );
+    }
+    return userToken;
   }
 
   Future<void> logoutFromOpenIM() async {
@@ -172,9 +254,9 @@ class AuthService {
 
       await _registerOpenImUser(
         adminToken: adminToken,
-        userId: sanitizedId,
-        nickname: nickname.isNotEmpty ? nickname : sanitizedId,
-        faceUrl: faceUrl,
+        userId:     sanitizedId,
+        nickname:   nickname.isNotEmpty ? nickname : sanitizedId,
+        faceUrl:    faceUrl,
       );
 
       debugPrint('[OpenIM] ensureOpenImUserExists: registered/verified '
@@ -201,11 +283,11 @@ class AuthService {
   }) async {
     // 1. Write tokens to secure storage first (fast, no network).
     await Future.wait([
-      _storage.write(key: _tokenKey, value: userId),
-      _storage.write(key: _userIdKey, value: userId),
+      _storage.write(key: _tokenKey,    value: userId),
+      _storage.write(key: _userIdKey,   value: userId),
       _storage.write(key: _usernameKey, value: username),
-      _storage.write(key: _secretKey, value: userId),
-      _storage.write(key: _phoneKey, value: phone),
+      _storage.write(key: _secretKey,   value: userId),
+      _storage.write(key: _phoneKey,    value: phone),
       _storage.delete(key: _expiryKey),
       if (imToken.isNotEmpty)
         _storage.write(key: _openImTokenKey, value: imToken),
@@ -219,8 +301,8 @@ class AuthService {
     // 3. Write/update the Firestore user document.
     try {
       await _ensureUserDocument(
-        uid: userId,
-        phone: phone,
+        uid:      userId,
+        phone:    phone,
         username: username,
       );
     } catch (e) {
@@ -261,23 +343,23 @@ class AuthService {
       throw Exception('Invalid verification code.');
     }
 
-    final userId = _phoneToUserId(normalizedPhone);
+    final userId          = _phoneToUserId(normalizedPhone);
     final effectiveUsername = username ?? normalizedPhone;
 
     // Ensure Firebase auth before Firestore write.
     await ensureFirebaseAuth();
     await _ensureUserDocument(
-      uid: userId,
-      phone: normalizedPhone,
+      uid:      userId,
+      phone:    normalizedPhone,
       username: effectiveUsername,
     );
 
     final user = AuthUser(
-      userId: userId,
-      username: effectiveUsername,
-      secret: userId,
-      token: userId,
-      phone: normalizedPhone,
+      userId:    userId,
+      username:  effectiveUsername,
+      secret:    userId,
+      token:     userId,
+      phone:     normalizedPhone,
       expiresAt: null,
     );
 
@@ -299,10 +381,10 @@ class AuthService {
       return savedUser;
     }
     return registerRealPhone(
-      phone: phone,
-      code: code,
+      phone:    phone,
+      code:     code,
       username: username,
-      login: true,
+      login:    true,
     );
   }
 
@@ -334,22 +416,22 @@ class AuthService {
       throw Exception('Invalid verification code.');
     }
 
-    final userId = phone.replaceAll(RegExp(r'[^\d]'), '');
+    final userId          = phone.replaceAll(RegExp(r'[^\d]'), '');
     final effectiveUsername = username ?? normalizedEmail.split('@').first;
 
     await ensureFirebaseAuth();
     await _ensureUserDocument(
-      uid: userId,
-      phone: phone,
+      uid:      userId,
+      phone:    phone,
       username: effectiveUsername,
     );
 
     final user = AuthUser(
-      userId: userId,
-      username: effectiveUsername,
-      secret: userId,
-      token: userId,
-      phone: phone,
+      userId:    userId,
+      username:  effectiveUsername,
+      secret:    userId,
+      token:     userId,
+      phone:     phone,
       expiresAt: null,
     );
 
@@ -368,26 +450,30 @@ class AuthService {
     if (token == null) return null;
 
     final expiryString = await _storage.read(key: _expiryKey);
-    final userId = await _storage.read(key: _userIdKey) ?? '';
+    final userId   = await _storage.read(key: _userIdKey)   ?? '';
     final username = await _storage.read(key: _usernameKey) ?? '';
-    final secret = await _storage.read(key: _secretKey) ?? '';
+    final secret   = await _storage.read(key: _secretKey)   ?? '';
+
+    // ── FIX: never touch OpenIM.iMManager.userID here ──────────────────────
+    // userID is a `late` field that throws LateInitializationError if OpenIM
+    // has not been initialized yet.  All user-identity data must come from
+    // secure storage only at this point.
+    // ────────────────────────────────────────────────────────────────────────
 
     return AuthUser(
-      userId: userId,
-      username: username,
-      secret: secret,
-      token: token,
-      expiresAt:
-          expiryString != null ? DateTime.tryParse(expiryString) : null,
+      userId:    userId,
+      username:  username,
+      secret:    secret,
+      token:     token,
+      expiresAt: expiryString != null ? DateTime.tryParse(expiryString) : null,
     );
   }
 
-  Future<String?> getSavedPhone() async => _storage.read(key: _phoneKey);
-  Future<String?> getCurrentUserId() async => _storage.read(key: _userIdKey);
-  Future<String?> getToken() async => _storage.read(key: _tokenKey);
-  Future<String?> getOpenImToken() async =>
-      _storage.read(key: _openImTokenKey);
-  Future<String?> getChatToken() async => _storage.read(key: _chatTokenKey);
+  Future<String?> getSavedPhone()     async => _storage.read(key: _phoneKey);
+  Future<String?> getCurrentUserId()  async => _storage.read(key: _userIdKey);
+  Future<String?> getToken()          async => _storage.read(key: _tokenKey);
+  Future<String?> getOpenImToken()    async => _storage.read(key: _openImTokenKey);
+  Future<String?> getChatToken()      async => _storage.read(key: _chatTokenKey);
 
   Future<void> updateStoredUsername(String username) async {
     if (username.trim().isEmpty) return;
@@ -406,37 +492,22 @@ class AuthService {
   // ============================================================================
   // PUBLIC: Logout
   // ============================================================================
-  /*
-  Future<void> logout() async {
-    await logoutFromOpenIM();
-    try {
-      await _firebaseAuth.signOut();
-    } catch (e) {
-      debugPrint('[AuthService] Firebase sign-out error: $e');
-    }
-    await _storage.deleteAll();
-  }
-
-  */
-
 
   Future<void> logout() async {
-    // 1. Clear ChatService in-memory state FIRST (before OpenIM wipes SQLite)
+    // 1. Clear ChatService in-memory state FIRST (before OpenIM wipes SQLite).
     await ChatService().reset();
-    // 2. Log out of OpenIM — clears its local SQLite DB for this user
+    // 2. Log out of OpenIM — clears its local SQLite DB for this user.
     await logoutFromOpenIM();
-    // 3. Sign out of Firebase
+    // 3. Sign out of Firebase.
     try {
       await _firebaseAuth.signOut();
     } catch (e) {
       debugPrint('[AuthService] Firebase sign-out error: $e');
     }
-    // 4. Wipe all secure storage tokens
+    // 4. Wipe all secure storage tokens.
     await _storage.deleteAll();
     debugPrint('[AuthService] logout complete');
   }
-
-
 
   Future<void> signOutFirebase() async {
     try {
@@ -445,10 +516,7 @@ class AuthService {
       debugPrint('[AuthService] signOutFirebase error: $e');
     }
   }
-
-  // ============================================================================
   // PUBLIC: Utilities
-  // ============================================================================
 
   /// Strips non-numeric characters so the ID is valid for OpenIM.
   ///
@@ -456,10 +524,7 @@ class AuthService {
   /// e.g. `"+254758634762"` → `"254758634762"`
   String sanitizeOpenImUserId(String id) =>
       id.replaceAll(RegExp(r'[^\d]'), '');
-
-  // ============================================================================
   // PRIVATE: OpenIM HTTP helpers
-  // ============================================================================
 
   Future<String?> _getOpenImAdminToken() async {
     try {
@@ -469,8 +534,7 @@ class AuthService {
             uri,
             headers: {
               'Content-Type': 'application/json',
-              'operationID':
-                  DateTime.now().millisecondsSinceEpoch.toString(),
+              'operationID':  DateTime.now().millisecondsSinceEpoch.toString(),
             },
             body: jsonEncode(
               {'secret': _openImSecret, 'userID': _openImAdminId},
@@ -501,26 +565,25 @@ class AuthService {
             uri,
             headers: {
               'Content-Type': 'application/json',
-              'operationID':
-                  DateTime.now().millisecondsSinceEpoch.toString(),
-              'token': adminToken,
+              'operationID':  DateTime.now().millisecondsSinceEpoch.toString(),
+              'token':        adminToken,
             },
             body: jsonEncode({
               'users': [
                 {
-                  'userID': userId,
+                  'userID':   userId,
                   'nickname': nickname.isNotEmpty ? nickname : userId,
-                  'faceURL': faceUrl,
+                  'faceURL':  faceUrl,
                 }
               ],
             }),
           )
           .timeout(_httpTimeout);
 
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final body    = jsonDecode(response.body) as Map<String, dynamic>;
       final errCode = (body['errCode'] as num?)?.toInt() ?? -1;
-      // errCode 10001 means "user already exists" — that is fine.
-      if (errCode != 0 && errCode != 10001) {
+      // errCode 10001 / 1102 means "user already exists" — that is fine.
+      if (errCode != 0 && errCode != 10001 && errCode != 1102) {
         debugPrint('[OpenIM] _registerOpenImUser failed: '
             'errCode=$errCode errMsg=${body['errMsg']}');
       }
@@ -540,9 +603,8 @@ class AuthService {
             uri,
             headers: {
               'Content-Type': 'application/json',
-              'operationID':
-                  DateTime.now().millisecondsSinceEpoch.toString(),
-              'token': adminToken,
+              'operationID':  DateTime.now().millisecondsSinceEpoch.toString(),
+              'token':        adminToken,
             },
             body: jsonEncode(
               {'userID': userId, 'platformID': _openImPlatformId},
@@ -588,27 +650,28 @@ class AuthService {
     String? phone,
     String? username,
   }) async {
-    final userRef = _firestore.collection('users').doc(uid);
+    final userRef  = _firestore.collection('users').doc(uid);
     final snapshot = await userRef.get();
     final existing = snapshot.data() ?? {};
-    final now = FieldValue.serverTimestamp();
+    final now        = FieldValue.serverTimestamp();
     final firebaseUid = _firebaseAuth.currentUser?.uid;
 
     await userRef.set(
       {
-        'uid': uid,
+        'uid':       uid,
         'updatedAt': now,
         if (!snapshot.exists) 'createdAt': now,
         if (phone != null && phone.isNotEmpty)
           'phone': _normalizePhone(phone),
-        // AFTER: This permanently sets the username on first login.  Future logins with different usernames will be ignored to avoid confusion and abuse.  The username can still be changed manually in Firestore if needed.
+        // Username is set permanently on first login to prevent abuse.
+        // It can still be changed manually in Firestore if needed.
         if (username != null && username.isNotEmpty) ...{
           'username': username,
-          if ((existing['name'] == null || (existing['name'] as String).isEmpty) &&
+          if ((existing['name'] == null ||
+                  (existing['name'] as String).isEmpty) &&
               !_looksLikePhone(username))
             'name': username,
         },
-
         if (firebaseUid != null) 'firebaseUid': firebaseUid,
         'isOnline': true,
         'lastSeen': now,
@@ -617,25 +680,21 @@ class AuthService {
     );
   }
 
-  // ============================================================================
   // PRIVATE: Auth persistence
-  // ============================================================================
 
   Future<void> _persistAuth(AuthUser user, {String? phone}) async {
     await Future.wait([
-      _storage.write(key: _tokenKey, value: user.token),
-      _storage.write(key: _userIdKey, value: user.userId),
+      _storage.write(key: _tokenKey,    value: user.token),
+      _storage.write(key: _userIdKey,   value: user.userId),
       _storage.write(key: _usernameKey, value: user.username),
-      _storage.write(key: _secretKey, value: user.secret),
+      _storage.write(key: _secretKey,   value: user.secret),
       if (phone != null && phone.isNotEmpty)
         _storage.write(key: _phoneKey, value: phone),
       _storage.delete(key: _expiryKey),
     ]);
   }
 
-  // ============================================================================
   // PRIVATE: Phone utilities
-  // ============================================================================
 
   String _phoneToUserId(String normalizedPhone) =>
       normalizedPhone.replaceAll(RegExp(r'[^\d]'), '');
@@ -646,6 +705,7 @@ class AuthService {
     if (!cleaned.startsWith('+')) cleaned = '+$cleaned';
     return cleaned;
   }
+
   bool _looksLikePhone(String value) {
     final s = value.replaceAll(RegExp(r'[\s\-()+]'), '');
     return RegExp(r'^\d{6,}$').hasMatch(s);
