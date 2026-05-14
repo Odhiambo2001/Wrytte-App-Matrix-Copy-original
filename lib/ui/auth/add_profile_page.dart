@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
@@ -127,7 +126,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
         final List<String?> errors = await Future.wait<String?>(
           [
             _updateFirestore(uid, name),
-            _updateOpenImNicknameWithRetry(name),
+            _updateMatrixNicknameWithRetry(name),
           ],
           eagerError: false,
         );
@@ -162,41 +161,26 @@ class _AddProfilePageState extends State<AddProfilePage> {
     }
   }
 
-  Future<String?> _updateOpenImNicknameWithRetry(String name) async {
+  Future<String?> _updateMatrixNicknameWithRetry(String name) async {
     const maxAttempts = 5;
     const retryDelay = Duration(milliseconds: 800);
 
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        final loginStatus = await OpenIM.iMManager
-            .getLoginStatus()
-            .timeout(const Duration(seconds: 5));
-
-        if (loginStatus != LoginStatus.logged) {
-          debugPrint(
-            '[AddProfilePage] OpenIM not ready (status=$loginStatus), '
-            'attempt $attempt/$maxAttempts — retrying…',
-          );
-          if (attempt < maxAttempts) await Future.delayed(retryDelay);
-          continue;
-        }
-
-        await OpenIM.iMManager.userManager
-            .setSelfInfo(nickname: name)
+        await AuthService.instance.updateStoredUsername(name)
             .timeout(const Duration(seconds: 10));
-
-        debugPrint('[AddProfilePage] OpenIM nickname updated → "$name"');
+        debugPrint('[AddProfilePage] Matrix nickname updated -> "$name"');
         return null;
       } catch (e) {
         debugPrint(
-          '[AddProfilePage] OpenIM setSelfInfo attempt $attempt/$maxAttempts '
+          '[AddProfilePage] Matrix display-name attempt $attempt/$maxAttempts '
           'failed: $e',
         );
         if (attempt < maxAttempts) await Future.delayed(retryDelay);
       }
     }
 
-    return 'OpenIM setSelfInfo failed after $maxAttempts attempts';
+    return 'Matrix display-name update failed after $maxAttempts attempts';
   }
 
   @override

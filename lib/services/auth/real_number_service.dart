@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:wrytte/services/auth/auth_service.dart';
-import 'package:wrytte/services/auth/openim_chat_service.dart';
 import 'package:wrytte/utils/countries.dart';
 
 // =============================================================================
@@ -103,62 +102,23 @@ class RealNumberService {
       usedFor:     1,
     );
 
-    // ── 3. Register (new user) — fall back to login (returning user) ─────────
-    OpenIMRegisterResult result;
-    bool isNewUser;
+    final userId = '$areaCode$phoneNumber'.replaceAll(RegExp(r'[^\d]'), '');
+    final existing = await AuthService.instance.getCurrentUserId();
+    final isNewUser = existing == null || existing != userId;
 
-    try {
-      result = await OpenIMChatService.instance.registerWithPhone(
-        areaCode:    areaCode,
-        phoneNumber: phoneNumber,
-        nickname:    displayName,
-      );
-      isNewUser = true; // ← brand-new account
-      debugPrint('[RealNumberService] Registered new user: ${result.userID}');
-    } on OpenIMChatException catch (e) {
-      debugPrint(
-        '[RealNumberService] Register failed [${e.code}] "$e" '
-        '— retrying as login',
-      );
-
-      await _sendVerificationSession(
-        areaCode:    areaCode,
-        phoneNumber: phoneNumber,
-        usedFor:     2,
-      );
-
-      result = await OpenIMChatService.instance.loginWithPhone(
-        areaCode:    areaCode,
-        phoneNumber: phoneNumber,
-      );
-      isNewUser = false; // ← returning user
-      debugPrint('[RealNumberService] Logged in existing user: ${result.userID}');
-    }
-
-    // ── 4. Persist session & connect OpenIM SDK ───────────────────────────────
     if (login) {
       await AuthService.instance.persistPhoneSession(
-        userId:    result.userID,
+        userId:    userId,
         username:  displayName,
         phone:     '$areaCode$phoneNumber',
-        imToken:   result.imToken,
-        chatToken: result.chatToken,
       );
-
-      AuthService.instance.loginToOpenIM(
-        userId:   result.userID,
-        nickname: displayName,
-        imToken:  result.imToken,
-      ).catchError((e) {
-        debugPrint('[RealNumberService] Background OpenIM login error: $e');
-      });
     }
 
     return RealNumberRegisterResult(
       username:  displayName,
-      userId:    result.userID,
-      secret:    result.userID,
-      isNewUser: isNewUser, // ← passed through to OtpVerificationPage
+      userId:    userId,
+      secret:    userId,
+      isNewUser: isNewUser,
     );
   }
 

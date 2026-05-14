@@ -1,4 +1,5 @@
 import 'package:hive/hive.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 
 class LocalUserService {
   static const boxName = 'users_box';
@@ -22,4 +23,8 @@ class LocalUserService {
     }
     return result;
   }
+
+  String? get matrixUserId => MatrixClientService.instance.userId;
+
+  String? get matrixAccessToken => MatrixClientService.instance.accessToken;
 }

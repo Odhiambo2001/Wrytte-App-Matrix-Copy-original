@@ -3,8 +3,6 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'package:wrytte/ui/auth/auth_entry_screen.dart';
 import 'package:wrytte/ui/auth/email_verification_page.dart';
@@ -22,6 +20,7 @@ import 'package:wrytte/ui/widgets/theme_wrapper.dart';
 import 'package:wrytte/services/call_listener_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 
 import 'firebase_options.dart';
 import 'core/theme.dart';
@@ -29,21 +28,6 @@ import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 const _systemBarColor = Colors.transparent;
-
-const _openImApiAddr = 'http://34.63.32.143:10002';
-const _openImWsAddr  = 'ws://34.63.32.143:10001/msg_gateway';
-
-
-final Completer<bool> _openImReadyCompleter = Completer<bool>();
-Future<bool> get openImReady => _openImReadyCompleter.future;
-
-
-void _completeOpenImReady(bool value) {
-  if (!_openImReadyCompleter.isCompleted) {
-    _openImReadyCompleter.complete(value);
-  }
-}
-
 
 void apkLog(String tag, String message) {
   print('[$tag] $message');
@@ -60,8 +44,7 @@ Future<void> main() async {
     persistenceEnabled: false,
   );
 
-  //_initOpenIM();
-  unawaited(_initOpenIM());  // still non-blocking, but now internally handles completion correctly
+  unawaited(MatrixClientService.instance.ensureInitialized());
 
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
@@ -79,79 +62,6 @@ Future<void> main() async {
   );
 
   runApp(const WrytteApp());
-}
-
-Future<void> _initOpenIM() async {
-  try {
-    final dir = await getApplicationDocumentsDirectory();
-    apkLog('OpenIM', 'INIT START');
-    apkLog('OpenIM', 'API=$_openImApiAddr');
-    apkLog('OpenIM', 'WS=$_openImWsAddr');
-
-
-    final success = await OpenIM.iMManager.initSDK(
-      platformID: IMPlatform.android,
-      apiAddr: _openImApiAddr,
-      wsAddr: _openImWsAddr,
-      dataDir: dir.path,
-      logLevel: 6,
-      listener: OnConnectListener(
-        onConnecting: () {
-          apkLog('OpenIM', 'onConnecting');
-        },
-
-        onConnectSuccess: () {
-          apkLog('OpenIM', 'onConnectSuccess');
-        },
-
-        onConnectFailed: (code, msg) {
-          apkLog('OpenIM', 'onConnectFailed code=$code msg=$msg');
-        },
-
-        /*
-
-        onConnectSuccess: () {
-          apkLog('OpenIM', 'onConnectSuccess');
-          if (!_openImReadyCompleter.isCompleted) {
-            _openImReadyCompleter.complete(true);
-          }
-        },
-        onConnectFailed: (code, msg) {
-          apkLog('OpenIM', 'onConnectFailed code=$code msg=$msg');
-          if (!_openImReadyCompleter.isCompleted) {
-            _openImReadyCompleter.complete(false);
-          }
-        },
-
-        */
-
-
-        onKickedOffline:    () {},
-        onUserTokenExpired: () {},
-      ),
-    );
-
-    apkLog('OpenIM', 'initSDK result=$success');
-
-    _completeOpenImReady(success == true);
-
-    } catch (e) {
-      apkLog('OpenIM', 'Critical initSDK error: $e');
-
-      _completeOpenImReady(false);
-    }
-
-    /*
-
-    apkLog('OpenIM', 'initSDK result=$success');
-
-  } catch (e) {
-    apkLog('OpenIM', 'Critical initSDK error: $e');
-    _completeOpenImReady(false);
-
-  }
-  */
-
 }
 
 class WrytteApp extends StatelessWidget {
@@ -315,15 +225,12 @@ class _AuthWrapperState extends State<AuthWrapper> {
     String faceUrl  = '',
   }) async {
     try {
-      final imToken = await AuthService.instance.getOpenImToken();
-      await AuthService.instance.loginToOpenIM(
+      await AuthService.instance.loginToMatrix(
         userId:   userId,
         nickname: nickname.isNotEmpty ? nickname : userId,
-        faceUrl:  faceUrl,
-        imToken:  imToken ?? '',
       );
     } catch (e) {
-      debugPrint('[AuthWrapper] OpenIM login error: $e');
+      debugPrint('[AuthWrapper] Matrix login error: $e');
     }
 
     try {

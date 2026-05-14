@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:wrytte/local_user_service.dart';
 import 'package:flutter/material.dart';
+import 'package:wrytte/services/matrix/matrix_auth_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 
 
 class UserSearchService {
@@ -45,6 +47,7 @@ class UserSearchService {
           .toList();
 
       final result = <String, String>{};
+      await _searchMatrixDirectory(allIdentifiers, result);
       final localService = LocalUserService();
         final localResult = await localService.getUsers(phones);
         result.addAll(localResult);
@@ -80,7 +83,7 @@ class UserSearchService {
         }
 
       // ── Single field query for Wrytte IDs ─────────────────────
-      // Only query 'uid' field — numeric OpenIM user IDs
+      // Only query uid field — Matrix user IDs
       for (var i = 0; i < wrytteIds.length; i += 10) {
         final chunk = wrytteIds.skip(i).take(10).toList();
         try {
@@ -105,6 +108,33 @@ class UserSearchService {
     } catch (e) {
       debugPrint('Firebase user search failed: $e');
       throw Exception("User search error: $e");
+    }
+  }
+
+  Future<void> _searchMatrixDirectory(
+    List<String> identifiers,
+    Map<String, String> result,
+  ) async {
+    try {
+      await MatrixAuthService.instance.restore();
+      final client = MatrixClientService.instance.client;
+      if (!client.isLogged()) return;
+
+      for (final identifier in identifiers) {
+        final query = identifier.trim();
+        if (query.length < 3) continue;
+        final response = await client.searchUserDirectory(query, limit: 10);
+        for (final user in response.results) {
+          final userId = user.userId;
+          result[query] = userId;
+          if (userId.startsWith('@')) {
+            result[userId] = userId;
+            result[userId.split(':').first.substring(1)] = userId;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Matrix user directory search failed: $e');
     }
   }
 
@@ -134,7 +164,8 @@ class UserSearchService {
   String _resolveUserId(
       QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data();
-    return data['openImUserId']?.toString() ??
+    return data['matrixUserId']?.toString() ??
+        data['openImUserId']?.toString() ??
         data['userId']?.toString() ??
         data['uid']?.toString() ??
         doc.id;

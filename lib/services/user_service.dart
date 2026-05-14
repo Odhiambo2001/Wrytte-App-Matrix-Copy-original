@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/matrix/matrix_auth_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 
 class UserService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -105,6 +107,21 @@ class UserService {
       updateData['updatedAt'] = FieldValue.serverTimestamp();
 
       await _firestore.collection('users').doc(uid).update(updateData);
+
+      try {
+        await MatrixAuthService.instance.restore();
+        final client = MatrixClientService.instance.client;
+        final matrixUserId = client.userID;
+        if (matrixUserId != null) {
+
+          if (name != null) {await client.setProfileField(matrixUserId,'m.displayname',{'displayname': name},);
+        }
+        if (profileImage != null && profileImage.isNotEmpty) {await client.setProfileField(matrixUserId,'m.avatar_url', {'avatar_url': profileImage},);
+        }   
+        }
+      } catch (e) {
+        print('Matrix profile update skipped: $e');
+      }
 
       // ignore: avoid_print
       print('User profile updated successfully');

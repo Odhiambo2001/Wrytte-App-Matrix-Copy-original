@@ -1,16 +1,13 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_contacts/flutter_contacts.dart' as fc;
 import 'package:wrytte/models/contact_model.dart';
+import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'user_search_service.dart';
-
-const String _kOpenImApi = 'http://34.63.32.143:10002';
 
 class ContactService {
   final UserSearchService _userSearchService = UserSearchService();
@@ -155,7 +152,7 @@ static bool _permissionRequestInProgress = false;
         'name': contact.displayName ?? '',
         'username': contact.displayName ?? '',
         'uid': contact.wrytteUserId ?? docId,
-        'openImUserId': contact.wrytteUserId ?? '',
+        'matrixUserId': contact.wrytteUserId ?? '',
         'isOnWrytte': contact.isOnWrytte,
         'avatarUrl': contact.avatarUrl ?? '',
         'updatedAt': FieldValue.serverTimestamp(),
@@ -195,7 +192,8 @@ static bool _permissionRequestInProgress = false;
           phones: [data['phone']?.toString() ?? ''],
           avatarUrl: data['avatarUrl']?.toString(),
           isOnWrytte: data['isOnWrytte'] as bool? ?? false,
-          wrytteUserId: data['openImUserId']?.toString(),
+          wrytteUserId: data['matrixUserId']?.toString() ??
+              data['openImUserId']?.toString(),
         );
       }).toList();
 
@@ -316,7 +314,8 @@ Future<Contact> saveManualContact({
 
   /*  
   
-  ✅ FIXED: Do NOT write to device contacts. Instead, if this is a Wrytte contact, add as friend via OpenIM API.
+  Do NOT write to device contacts. If this is a Wrytte contact, Matrix direct
+  room creation can be used to establish the contact relationship.
    This keeps the contact management within Wrytte and avoids polluting the user's phonebook with entries they didn't explicitly add there.
   
 
@@ -325,7 +324,7 @@ Future<Contact> saveManualContact({
     if (selfUserId == null || selfUserId.isEmpty) {
       throw Exception('Could not resolve your user ID. Please log in again.');
     }
-    await _openImAddFriend(
+    await _matrixAddFriend(
       selfUserId: selfUserId,
       friendUserId: wrytteUserId,
       remark: displayName,
@@ -359,42 +358,15 @@ Future<Contact> saveManualContact({
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // OpenIM REST — addFriend
+  // Matrix direct room — contact relationship
   // ──────────────────────────────────────────────────────────────────────
-  Future<void> _openImAddFriend({
+  Future<void> _matrixAddFriend({
     required String selfUserId,
     required String friendUserId,
     required String remark,
     required String token,
   }) async {
-    final uri = Uri.parse('$_kOpenImApi/friend/add_friend');
-
-    final response = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'token': token,
-        'operationID': DateTime.now().millisecondsSinceEpoch.toString(),
-      },
-      body: jsonEncode({
-        'toUserID': friendUserId,
-        'reqMsg': 'Hello! I would like to add you on Wrytte.',
-        'ex': '',
-      }),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception(
-          'OpenIM addFriend failed: ${response.statusCode} ${response.body}');
-    }
-
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
-    final errCode = json['errCode'] as int? ?? -1;
-
-    if (errCode != 0 && errCode != 1201) {
-      throw Exception('OpenIM addFriend error $errCode: ${json['errMsg']}');
-    }
-
-    debugPrint('OpenIM addFriend → errCode=$errCode');
+    await MatrixChatService.instance.getOrCreateDirectRoom(friendUserId);
+    debugPrint('Matrix direct room ensured for $friendUserId');
   }
 }

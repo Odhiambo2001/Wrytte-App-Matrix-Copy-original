@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:wrytte/components/user_avatar.dart';
@@ -152,10 +151,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() => _isLoggingOut = true);
 
     try {
-      await OpenIM.iMManager.logout()
+      await AuthService.instance.logoutFromMatrix()
           .timeout(const Duration(seconds: 5));
     } catch (e) {
-      debugPrint('[Logout] OpenIM error (skipping): $e');
+      debugPrint('[Logout] Matrix error (skipping): $e');
     }
 
     try {

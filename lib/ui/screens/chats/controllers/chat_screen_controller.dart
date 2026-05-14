@@ -1,5 +1,3 @@
-import 'package:flutter_openim_sdk/flutter_openim_sdk.dart' hide MessageStatus;
-
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
@@ -104,18 +102,8 @@ class ChatScreenController {
   Future<String> _resolveConversationId() async {
     if (_cachedConversationId != null) return _cachedConversationId!;
 
-    try {
-      final ConversationInfo conv = await OpenIM
-          .iMManager
-          .conversationManager
-          .getOneConversation(
-            sourceID: receiverId,
-            sessionType: ConversationType.single,
-          );
-      _cachedConversationId = conv.conversationID ?? conversationId;
-    } catch (_) {
-      _cachedConversationId = conversationId;
-    }
+    _cachedConversationId =
+        await _chatService.getOpenImConversationId(receiverId) ?? conversationId;
 
     return _cachedConversationId!;
   }

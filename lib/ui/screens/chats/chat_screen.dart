@@ -4,8 +4,6 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_openim_sdk/flutter_openim_sdk.dart'
-    hide MessageStatus;
 
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
@@ -54,7 +52,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String? _resolvedConversationId;
 
-  Message? _oldestOpenImMsg;
   bool _loadingOlder = false;
   bool _hasMoreOlder = true;
 
@@ -112,13 +109,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ─── RESOLVE CONVERSATION ID ───────────────────────────────────────────────
 
-  String _normaliseId(String id) =>
-      id.replaceAll(RegExp(r'[^\d]'), '');
-
-  String _buildSortedConvId(String normalisedReceiverId) {
-    final ids = [normalisedReceiverId, widget.currentUserId]..sort();
-    return 'si_${ids[0]}_${ids[1]}';
-  }
+  String _normaliseId(String id) => id.trim();
 
   Future<String> _resolveConversationId() async {
     if (_resolvedConversationId != null) return _resolvedConversationId!;
@@ -129,31 +120,18 @@ class _ChatScreenState extends State<ChatScreen> {
         'normalised="$normalisedReceiverId"  '
         'passedConvId="${widget.conversationId}"');
 
-    if (widget.conversationId.startsWith('si_')) {
+    if (widget.conversationId.startsWith('!')) {
       _resolvedConversationId = widget.conversationId;
       apkLog('ChatScreen._resolveConv',
           'used passedConvId → "$_resolvedConversationId"');
       return _resolvedConversationId!;
     }
 
-    try {
-      final ConversationInfo conv = await OpenIM
-          .iMManager
-          .conversationManager
-          .getOneConversation(
-            sourceID: normalisedReceiverId,
-            sessionType: ConversationType.single,
-          );
-      _resolvedConversationId =
-          conv.conversationID ?? _buildSortedConvId(normalisedReceiverId);
-      apkLog('ChatScreen._resolveConv',
-          'getOneConversation → "$_resolvedConversationId"');
-    } catch (e) {
-      _resolvedConversationId = _buildSortedConvId(normalisedReceiverId);
-      apkLog('ChatScreen._resolveConv',
-          'getOneConversation threw → fallback '
-          '"$_resolvedConversationId"  err=$e');
-    }
+    _resolvedConversationId =
+        await _chat.getOpenImConversationId(normalisedReceiverId) ??
+            widget.conversationId;
+    apkLog('ChatScreen._resolveConv',
+        'Matrix direct room -> "$_resolvedConversationId"');
 
     return _resolvedConversationId!;
   }
@@ -237,7 +215,6 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final older = await _chat.fetchMessageHistory(
         conversationID: realConvId,
-        startMsg: _oldestOpenImMsg,
         count: 40,
       );
 

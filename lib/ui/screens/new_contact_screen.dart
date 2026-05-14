@@ -255,7 +255,7 @@ class _NewContactPageState extends State<NewContactPage> {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // Save — now fully wired to OpenIM + device contacts
+  // Save — now fully wired to Matrix + device contacts
   // ─────────────────────────────────────────────────────────────
   Future<void> _save() async {
     if (!_canSave || _isSaving) return;

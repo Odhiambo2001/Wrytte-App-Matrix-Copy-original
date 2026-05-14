@@ -1,279 +1,115 @@
-import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:http/http.dart' as http;
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
-import 'package:wrytte/services/chat/open_im_login_exception.dart';
-import 'package:wrytte/main.dart' show openImReady;
+import 'package:wrytte/services/matrix/matrix_auth_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 
-/// Central authentication service.
-///
-/// Auth model:
-///   1. OpenIM chat-server handles phone/OTP login and issues [imToken] + [chatToken].
-///   2. Firebase is signed in **anonymously** so that Firestore security rules
-///      (`request.auth != null` / `request.auth.uid == userId`) are satisfied.
-///      We persist the mapping `firebaseUid → openImUserId` inside the user
-///      document so that rules can be tightened to custom-token auth later
-///      without any data-migration work.
-///   3. All tokens are stored in FlutterSecureStorage (AES-256 on Android,
-///      Keychain on iOS).
 class AuthService {
   AuthService._();
   static final AuthService instance = AuthService._();
 
-  //  Dependencies 
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   );
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
 
-  // ── In-memory OTP store (replace with a real SMS gateway in production) ─────
   final Map<String, String> _pendingPhoneOtps = {};
   final Map<String, String> _pendingEmailOtps = {};
 
-  // ── Storage keys ─────────────────────────────────────────────────────────────
-  static const _tokenKey       = 'auth_token';
-  static const _expiryKey      = 'auth_token_expiry';
-  static const _userIdKey      = 'user_id';
-  static const _usernameKey    = 'username';
-  static const _secretKey      = 'secret';
-  static const _phoneKey       = 'phone';
-  static const _openImTokenKey = 'openim_token';
-  static const _chatTokenKey   = 'chat_token';
+  static const _tokenKey = 'auth_token';
+  static const _expiryKey = 'auth_token_expiry';
+  static const _userIdKey = 'user_id';
+  static const _usernameKey = 'username';
+  static const _secretKey = 'secret';
+  static const _phoneKey = 'phone';
+  static const _matrixPasswordKey = 'matrix_password';
 
-  // ── OpenIM configuration ─────────────────────────────────────────────────────
-  static const _openImApiBase    = 'http://34.63.32.143:10002';
-  static const _openImAdminId    = 'imAdmin';
-  static const _openImSecret     = 'openIM123';
-  static const _openImPlatformId = 2;
+  static const _defaultHomeserver = String.fromEnvironment(
+    'WRYTTE_MATRIX_HOMESERVER',
+    defaultValue: 'https://matrix.org',
+  );
 
-  // ── Timeout / retry constants ─────────────────────────────────────────────────
-  static const _httpTimeout        = Duration(seconds: 15);
-  static const _openImLoginTimeout = Duration(seconds: 35);  // 
-  static const _sdkReadyTimeout    = Duration(seconds: 90);  // 
-  static const _maxLoginAttempts   = 4;
-
-  static const _initialBackoff     = Duration(seconds: 2);
-  static const _maxBackoff         = Duration(seconds: 16);
-
-  // ============================================================================
-  // PUBLIC: Firebase Auth (anonymous) — call this BEFORE any Firestore write
-  // ============================================================================
-
-  /// Ensures there is a valid Firebase anonymous session.
-  ///
-  /// This is idempotent — it is safe to call multiple times.  All Firestore
-  /// writes must await this method first so that `request.auth` is never null.
   Future<User?> ensureFirebaseAuth() async {
     try {
       if (_firebaseAuth.currentUser != null) return _firebaseAuth.currentUser;
       final credential = await _firebaseAuth.signInAnonymously();
-      debugPrint('[AuthService] Firebase anonymous auth established: '
-          '${credential.user?.uid}');
       return credential.user;
-    } on FirebaseAuthException catch (e) {
-      debugPrint('[AuthService] Firebase anonymous sign-in failed: '
-          '${e.code} — ${e.message}');
-      return null;
     } catch (e) {
-      debugPrint('[AuthService] ensureFirebaseAuth unexpected error: $e');
+      debugPrint('[AuthService] Firebase anonymous sign-in failed: $e');
       return null;
     }
   }
 
-  // ============================================================================
-  // PUBLIC: OpenIM
-  // ============================================================================
+  Future<void> loginToMatrix({
+    required String userId,
+    required String nickname,
+    String homeserver = _defaultHomeserver,
+  }) async {
+    final password = await _matrixPasswordForUser(userId);
+    try {
+      await MatrixAuthService.instance.login(
+        username: userId,
+        password: password,
+        homeserver: homeserver,
+      );
+    } catch (_) {
+      await MatrixAuthService.instance.register(
+        username: userId,
+        password: password,
+        homeserver: homeserver,
+      );
+    }
 
-  /// Logs the user into the OpenIM SDK.
-  ///
-  /// Retry contract (production-safe):
-  ///   • Waits up to [_sdkReadyTimeout] for initSDK to signal readiness.
-  ///   • Retries the actual SDK login up to [_maxLoginAttempts] times with
-  ///     exponential backoff capped at [_maxBackoff].
-  ///   • Token rejection errors (errCode 1501/1502) abort retries immediately.
-  ///   • On permanent failure throws [OpenImLoginException] so callers can
-  ///     distinguish chat unavailability from authentication failures.
-  ///
-  /// Token resolution order:
-  ///   1. [imToken] parameter (chat-server login flow).
-  ///   2. Stored token from secure storage.
-  ///   3. Admin-token fallback (dev / first-time setup).
+    final client = MatrixClientService.instance.client;
+    if (nickname.trim().isNotEmpty) {
+      try {
+        //await client.setDisplayName(client.userID!, nickname.trim());
+        //await client.setDisplayName(client.userID!, nickname.trim());
 
-  Future<void> loginToOpenIM({
+        await client.setProfileField(client.userID!,'m.displayname',{'displayname': nickname.trim()},);
+      } catch (e) {
+        debugPrint('[AuthService] Matrix display-name update failed: $e');
+      }
+    }
+    try {
+      await _firestore.collection('users').doc(userId).set({
+        'matrixUserId': client.userID,
+        'matrixHomeserver': client.baseUri?.toString(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('[AuthService] Matrix identity persistence failed: $e');
+    }
+  }
+
+  Future<void> logoutFromMatrix() => MatrixAuthService.instance.logout();
+
+  Future<void> loginToMatrix_legacy({
     required String userId,
     required String nickname,
     String faceUrl = '',
     String imToken = '',
-  }) async {
-    debugPrint('[OpenIM] loginToOpenIM: start for $userId');
-
-    // Wait briefly for initSDK to at least be called (not for WS connection).
-    // 10 seconds is more than enough — initSDK itself returns in under 1 second.
-   debugPrint('[OpenIM] waiting for SDK ready');
-
-    final ready = await openImReady;
-
-    if (!ready) {
-      throw Exception('OpenIM SDK failed to initialize');
-    }
-
-    debugPrint('[OpenIM] SDK ready, starting login for $userId');
-
-    // Resolve the token
-    String effectiveToken = imToken;
-
-    if (effectiveToken.isEmpty) {
-      effectiveToken = await _storage.read(key: _openImTokenKey) ?? '';
-    }
-
-    if (effectiveToken.isEmpty) {
-      debugPrint('[OpenIM] loginToOpenIM: no token stored — using admin-token flow');
-      effectiveToken = await _fetchTokenViaAdminFlow(
-        userId:   userId,
-        nickname: nickname,
-        faceUrl:  faceUrl,
-      );
-    }
-
-    // Login with retry + exponential backoff
-    Object? lastError;
-    Duration backoff = _initialBackoff;
-
-    for (int attempt = 1; attempt <= _maxLoginAttempts; attempt++) {
-      try {
-        debugPrint('[OpenIM] login attempt $attempt/$_maxLoginAttempts '
-            'userId=$userId tokenEmpty=${effectiveToken.isEmpty}');
-
-        await OpenIM.iMManager
-            .login(userID: userId, token: effectiveToken)
-            .timeout(_openImLoginTimeout);
-
-        await _storage.write(key: _openImTokenKey, value: effectiveToken);
-        debugPrint('[OpenIM] login SUCCESS on attempt $attempt');
-        return;
-
-      } on TimeoutException catch (e) {
-        lastError = e;
-        debugPrint('[OpenIM] login attempt $attempt TIMEOUT');
-      } catch (e) {
-        lastError = e;
-        debugPrint('[OpenIM] login attempt $attempt ERROR: $e');
-
-        final msg = e.toString().toLowerCase();
-        if ((msg.contains('token') && msg.contains('invalid')) ||
-            msg.contains('errcode: 1501') ||
-            msg.contains('errcode: 1502')) {
-          debugPrint('[OpenIM] Token rejected — aborting retries');
-          break;
-        }
-      }
-
-      if (attempt < _maxLoginAttempts) {
-        debugPrint('[OpenIM] backing off ${backoff.inSeconds}s before retry');
-        await Future.delayed(backoff);
-        backoff = Duration(
-          seconds: (backoff.inSeconds * 2).clamp(0, _maxBackoff.inSeconds),
-        );
-      }
-    }
-
-    throw OpenImLoginException(
-      'OpenIM login failed after $_maxLoginAttempts attempts: $lastError',
-      cause: lastError,
-    );
+  }) {
+    return loginToMatrix(userId: userId, nickname: nickname);
   }
 
-  // ── Private: admin-token flow ───────────────────────────────────────────────
-  Future<String> _fetchTokenViaAdminFlow({
-    required String userId,
-    required String nickname,
-    String faceUrl = '',
-  }) async {
-    final adminToken = await _getOpenImAdminToken();
-    if (adminToken == null) {
-      throw OpenImLoginException(
-        'loginToOpenIM: could not obtain admin token',
-      );
-    }
+  Future<void> logoutFromMatrix_legacy() => logoutFromMatrix();
 
-    await _registerOpenImUser(
-      adminToken: adminToken,
-      userId:     userId,
-      nickname:   nickname,
-      faceUrl:    faceUrl,
-    );
-
-    final userToken = await _getOpenImUserToken(
-      adminToken: adminToken,
-      userId:     userId,
-    );
-    if (userToken == null || userToken.isEmpty) {
-      throw OpenImLoginException(
-        'loginToOpenIM: could not obtain user token from admin flow',
-      );
-    }
-    return userToken;
-  }
-
-  Future<void> logoutFromOpenIM() async {
-    try {
-      await OpenIM.iMManager.logout();
-      await _storage.delete(key: _openImTokenKey);
-    } catch (e) {
-      debugPrint('[OpenIM] logout error: $e');
-    }
-  }
-
-  /// Ensures an OpenIM user record exists on the server (idempotent).
   Future<void> ensureOpenImUserExists({
     required String userId,
     String nickname = '',
     String faceUrl = '',
   }) async {
-    try {
-      final sanitizedId = sanitizeOpenImUserId(userId);
-      if (sanitizedId.isEmpty) {
-        debugPrint('[OpenIM] ensureOpenImUserExists: sanitized ID is empty '
-            'for "$userId"');
-        return;
-      }
-
-      final adminToken = await _getOpenImAdminToken();
-      if (adminToken == null) {
-        debugPrint('[OpenIM] ensureOpenImUserExists: could not get admin token');
-        return;
-      }
-
-      await _registerOpenImUser(
-        adminToken: adminToken,
-        userId:     sanitizedId,
-        nickname:   nickname.isNotEmpty ? nickname : sanitizedId,
-        faceUrl:    faceUrl,
-      );
-
-      debugPrint('[OpenIM] ensureOpenImUserExists: registered/verified '
-          '$sanitizedId (original: $userId)');
-    } catch (e) {
-      debugPrint('[OpenIM] ensureOpenImUserExists error: $e');
-    }
+    await MatrixAuthService.instance.restore();
   }
 
-  // ============================================================================
-  // PUBLIC: Session persistence
-  // ============================================================================
-
-  /// Persists a phone-login session.
-  ///
-  /// Call this after a successful OpenIM chat-server login so that all
-  /// subsequent app launches can restore the session without re-authenticating.
   Future<void> persistPhoneSession({
     required String userId,
     required String username,
@@ -281,45 +117,22 @@ class AuthService {
     String imToken = '',
     String chatToken = '',
   }) async {
-    // 1. Write tokens to secure storage first (fast, no network).
     await Future.wait([
-      _storage.write(key: _tokenKey,    value: userId),
-      _storage.write(key: _userIdKey,   value: userId),
+      _storage.write(key: _tokenKey, value: userId),
+      _storage.write(key: _userIdKey, value: userId),
       _storage.write(key: _usernameKey, value: username),
-      _storage.write(key: _secretKey,   value: userId),
-      _storage.write(key: _phoneKey,    value: phone),
+      _storage.write(key: _secretKey, value: userId),
+      _storage.write(key: _phoneKey, value: phone),
       _storage.delete(key: _expiryKey),
-      if (imToken.isNotEmpty)
-        _storage.write(key: _openImTokenKey, value: imToken),
-      if (chatToken.isNotEmpty)
-        _storage.write(key: _chatTokenKey, value: chatToken),
     ]);
 
-    // 2. Ensure Firebase anonymous auth exists BEFORE writing to Firestore.
     await ensureFirebaseAuth();
-
-    // 3. Write/update the Firestore user document.
-    try {
-      await _ensureUserDocument(
-        uid:      userId,
-        phone:    phone,
-        username: username,
-      );
-    } catch (e) {
-      // Non-fatal: the user is logged in via OpenIM; Firestore is supplemental.
-      debugPrint('[AuthService] Firestore write error in persistPhoneSession: $e');
-    }
-
-    debugPrint('[AuthService] persistPhoneSession complete — userId=$userId');
+    await _ensureUserDocument(uid: userId, phone: phone, username: username);
+    await loginToMatrix(userId: userId, nickname: username);
   }
-
-  // ============================================================================
-  // PUBLIC: OTP flows
-  // ============================================================================
 
   Future<void> sendSmsCode(String phone) async {
     final normalizedPhone = _normalizePhone(phone);
-    // TODO(production): integrate a real SMS gateway (Twilio, Africa's Talking…)
     _pendingPhoneOtps[normalizedPhone] = '123456';
     debugPrint('[AuthService] OTP ready for $normalizedPhone (dev: use 123456)');
   }
@@ -332,38 +145,33 @@ class AuthService {
   }) async {
     final normalizedPhone = _normalizePhone(phone);
     final expected = _pendingPhoneOtps[normalizedPhone];
-
     if (expected == null) {
-      throw Exception(
-        'No OTP session found for $normalizedPhone. '
-        'Please go back and request the code again.',
-      );
+      throw Exception('No OTP session found for $normalizedPhone.');
     }
-    if (code.trim() != expected) {
-      throw Exception('Invalid verification code.');
-    }
+    if (code.trim() != expected) throw Exception('Invalid verification code.');
 
-    final userId          = _phoneToUserId(normalizedPhone);
+    final userId = _phoneToUserId(normalizedPhone);
     final effectiveUsername = username ?? normalizedPhone;
 
-    // Ensure Firebase auth before Firestore write.
     await ensureFirebaseAuth();
     await _ensureUserDocument(
-      uid:      userId,
-      phone:    normalizedPhone,
+      uid: userId,
+      phone: normalizedPhone,
       username: effectiveUsername,
     );
 
     final user = AuthUser(
-      userId:    userId,
-      username:  effectiveUsername,
-      secret:    userId,
-      token:     userId,
-      phone:     normalizedPhone,
-      expiresAt: null,
+      userId: userId,
+      username: effectiveUsername,
+      secret: userId,
+      token: userId,
+      phone: normalizedPhone,
     );
 
-    if (login) await _persistAuth(user, phone: normalizedPhone);
+    if (login) {
+      await _persistAuth(user, phone: normalizedPhone);
+      await loginToMatrix(userId: userId, nickname: effectiveUsername);
+    }
 
     _pendingPhoneOtps.remove(normalizedPhone);
     return user;
@@ -375,25 +183,22 @@ class AuthService {
     String? username,
   }) async {
     final savedUser = await getCurrentUser();
-    if (savedUser != null &&
-        savedUser.secret.isNotEmpty &&
-        savedUser.userId.isNotEmpty) {
+    if (savedUser != null && savedUser.isAuthenticated) {
+      await MatrixAuthService.instance.restore();
       return savedUser;
     }
     return registerRealPhone(
-      phone:    phone,
-      code:     code,
+      phone: phone,
+      code: code,
       username: username,
-      login:    true,
+      login: true,
     );
   }
 
   Future<void> sendEmailCode(String email) async {
     final normalizedEmail = email.trim().toLowerCase();
-    // TODO(production): send a real email OTP.
     _pendingEmailOtps[normalizedEmail] = '123456';
-    debugPrint('[AuthService] Email OTP ready for $normalizedEmail '
-        '(dev: use 123456)');
+    debugPrint('[AuthService] Email OTP ready for $normalizedEmail');
   }
 
   Future<AuthUser> registerVirtualPhone({
@@ -405,108 +210,92 @@ class AuthService {
   }) async {
     final normalizedEmail = email.trim().toLowerCase();
     final expected = _pendingEmailOtps[normalizedEmail];
-
     if (expected == null) {
-      throw Exception(
-        'No OTP session found for $normalizedEmail. '
-        'Please go back and request the code again.',
-      );
+      throw Exception('No OTP session found for $normalizedEmail.');
     }
-    if (code.trim() != expected) {
-      throw Exception('Invalid verification code.');
-    }
+    if (code.trim() != expected) throw Exception('Invalid verification code.');
 
-    final userId          = phone.replaceAll(RegExp(r'[^\d]'), '');
+    final userId = phone.replaceAll(RegExp(r'[^\d]'), '');
     final effectiveUsername = username ?? normalizedEmail.split('@').first;
 
     await ensureFirebaseAuth();
     await _ensureUserDocument(
-      uid:      userId,
-      phone:    phone,
+      uid: userId,
+      phone: phone,
       username: effectiveUsername,
     );
 
     final user = AuthUser(
-      userId:    userId,
-      username:  effectiveUsername,
-      secret:    userId,
-      token:     userId,
-      phone:     phone,
-      expiresAt: null,
+      userId: userId,
+      username: effectiveUsername,
+      secret: userId,
+      token: userId,
+      phone: phone,
     );
 
-    if (login) await _persistAuth(user, phone: phone);
+    if (login) {
+      await _persistAuth(user, phone: phone);
+      await loginToMatrix(userId: userId, nickname: effectiveUsername);
+    }
 
     _pendingEmailOtps.remove(normalizedEmail);
     return user;
   }
-
-  // ============================================================================
-  // PUBLIC: Getters
-  // ============================================================================
 
   Future<AuthUser?> getCurrentUser() async {
     final token = await _storage.read(key: _tokenKey);
     if (token == null) return null;
 
     final expiryString = await _storage.read(key: _expiryKey);
-    final userId   = await _storage.read(key: _userIdKey)   ?? '';
-    final username = await _storage.read(key: _usernameKey) ?? '';
-    final secret   = await _storage.read(key: _secretKey)   ?? '';
-
-    // ── FIX: never touch OpenIM.iMManager.userID here ──────────────────────
-    // userID is a `late` field that throws LateInitializationError if OpenIM
-    // has not been initialized yet.  All user-identity data must come from
-    // secure storage only at this point.
-    // ────────────────────────────────────────────────────────────────────────
-
     return AuthUser(
-      userId:    userId,
-      username:  username,
-      secret:    secret,
-      token:     token,
+      userId: await _storage.read(key: _userIdKey) ?? '',
+      username: await _storage.read(key: _usernameKey) ?? '',
+      secret: await _storage.read(key: _secretKey) ?? '',
+      token: token,
+      phone: await _storage.read(key: _phoneKey),
       expiresAt: expiryString != null ? DateTime.tryParse(expiryString) : null,
     );
   }
 
-  Future<String?> getSavedPhone()     async => _storage.read(key: _phoneKey);
-  Future<String?> getCurrentUserId()  async => _storage.read(key: _userIdKey);
-  Future<String?> getToken()          async => _storage.read(key: _tokenKey);
-  Future<String?> getOpenImToken()    async => _storage.read(key: _openImTokenKey);
-  Future<String?> getChatToken()      async => _storage.read(key: _chatTokenKey);
+  Future<String?> getSavedPhone() async => _storage.read(key: _phoneKey);
+  Future<String?> getCurrentUserId() async => _storage.read(key: _userIdKey);
+  Future<String?> getToken() async => _storage.read(key: _tokenKey);
+  Future<String?> getOpenImToken() async => getMatrixAccessToken();
+  Future<String?> getMatrixAccessToken() async =>
+      _storage.read(key: MatrixAuthService.matrixAccessTokenKey);
+  Future<String?> getChatToken() async => getMatrixAccessToken();
 
   Future<void> updateStoredUsername(String username) async {
     if (username.trim().isEmpty) return;
     await _storage.write(key: _usernameKey, value: username.trim());
+    final client = MatrixClientService.instance.isInitialized
+    ? MatrixClientService.instance.client
+    : null;
+    if (client?.userID != null) {
+      //await client!.setProfileField(client.userID!,'m.displayname',username.trim(),);
+
+      //await client!.setDisplayName(client.userID!, username.trim());
+
+      await client!.setProfileField(client.userID!,'m.displayname',{'displayname': username.trim()},);
+    }
   }
 
   Future<bool> isLoggedIn() async {
     final user = await getCurrentUser();
-    if (user == null) return false;
-    if (user.isExpired) return false;
-    return user.isAuthenticated;
+    return user != null && !user.isExpired && user.isAuthenticated;
   }
 
   User? get firebaseCurrentUser => _firebaseAuth.currentUser;
 
-  // ============================================================================
-  // PUBLIC: Logout
-  // ============================================================================
-
   Future<void> logout() async {
-    // 1. Clear ChatService in-memory state FIRST (before OpenIM wipes SQLite).
     await ChatService().reset();
-    // 2. Log out of OpenIM — clears its local SQLite DB for this user.
-    await logoutFromOpenIM();
-    // 3. Sign out of Firebase.
+    await logoutFromMatrix();
     try {
       await _firebaseAuth.signOut();
     } catch (e) {
       debugPrint('[AuthService] Firebase sign-out error: $e');
     }
-    // 4. Wipe all secure storage tokens.
     await _storage.deleteAll();
-    debugPrint('[AuthService] logout complete');
   }
 
   Future<void> signOutFirebase() async {
@@ -516,185 +305,61 @@ class AuthService {
       debugPrint('[AuthService] signOutFirebase error: $e');
     }
   }
-  // PUBLIC: Utilities
 
-  /// Strips non-numeric characters so the ID is valid for OpenIM.
-  ///
-  /// OpenIM rejects user IDs containing `+` or other non-alphanumeric chars.
-  /// e.g. `"+254758634762"` → `"254758634762"`
-  String sanitizeOpenImUserId(String id) =>
-      id.replaceAll(RegExp(r'[^\d]'), '');
-  // PRIVATE: OpenIM HTTP helpers
+  String sanitizeOpenImUserId(String id) => id.replaceAll(RegExp(r'[^\d]'), '');
 
-  Future<String?> _getOpenImAdminToken() async {
-    try {
-      final uri = Uri.parse('$_openImApiBase/auth/get_admin_token');
-      final response = await http
-          .post(
-            uri,
-            headers: {
-              'Content-Type': 'application/json',
-              'operationID':  DateTime.now().millisecondsSinceEpoch.toString(),
-            },
-            body: jsonEncode(
-              {'secret': _openImSecret, 'userID': _openImAdminId},
-            ),
-          )
-          .timeout(_httpTimeout);
-
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      if (body['errCode'] == 0) return body['data']['token'] as String?;
-      debugPrint('[OpenIM] _getOpenImAdminToken failed: ${body['errMsg']}');
-      return null;
-    } catch (e) {
-      debugPrint('[OpenIM] _getOpenImAdminToken exception: $e');
-      return null;
-    }
-  }
-
-  Future<void> _registerOpenImUser({
-    required String adminToken,
-    required String userId,
-    required String nickname,
-    String faceUrl = '',
-  }) async {
-    try {
-      final uri = Uri.parse('$_openImApiBase/user/user_register');
-      final response = await http
-          .post(
-            uri,
-            headers: {
-              'Content-Type': 'application/json',
-              'operationID':  DateTime.now().millisecondsSinceEpoch.toString(),
-              'token':        adminToken,
-            },
-            body: jsonEncode({
-              'users': [
-                {
-                  'userID':   userId,
-                  'nickname': nickname.isNotEmpty ? nickname : userId,
-                  'faceURL':  faceUrl,
-                }
-              ],
-            }),
-          )
-          .timeout(_httpTimeout);
-
-      final body    = jsonDecode(response.body) as Map<String, dynamic>;
-      final errCode = (body['errCode'] as num?)?.toInt() ?? -1;
-      // errCode 10001 / 1102 means "user already exists" — that is fine.
-      if (errCode != 0 && errCode != 10001 && errCode != 1102) {
-        debugPrint('[OpenIM] _registerOpenImUser failed: '
-            'errCode=$errCode errMsg=${body['errMsg']}');
-      }
-    } catch (e) {
-      debugPrint('[OpenIM] _registerOpenImUser exception: $e');
-    }
-  }
-
-  Future<String?> _getOpenImUserToken({
-    required String adminToken,
-    required String userId,
-  }) async {
-    try {
-      final uri = Uri.parse('$_openImApiBase/auth/get_user_token');
-      final response = await http
-          .post(
-            uri,
-            headers: {
-              'Content-Type': 'application/json',
-              'operationID':  DateTime.now().millisecondsSinceEpoch.toString(),
-              'token':        adminToken,
-            },
-            body: jsonEncode(
-              {'userID': userId, 'platformID': _openImPlatformId},
-            ),
-          )
-          .timeout(_httpTimeout);
-
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      if (body['errCode'] == 0) return body['data']['token'] as String?;
-      debugPrint('[OpenIM] _getOpenImUserToken failed: ${body['errMsg']}');
-      return null;
-    } catch (e) {
-      debugPrint('[OpenIM] _getOpenImUserToken exception: $e');
-      return null;
-    }
-  }
-
-  // ============================================================================
-  // PRIVATE: Firestore helpers
-  // ============================================================================
-
-  /// Creates or merges the Firestore user document for [uid].
-  ///
-  /// IMPORTANT: [ensureFirebaseAuth] MUST be awaited before calling this so
-  /// that `request.auth.uid` in the security rules matches [uid].
-  ///
-  /// Note: Firebase anonymous auth gives us a *Firebase* UID, which is
-  /// different from the OpenIM/phone-derived [uid].  Until custom-token auth
-  /// is integrated, the Firestore rule `request.auth.uid == userId` will only
-  /// work when the Firebase UID happens to equal the document ID — which is
-  /// NOT the case with anonymous auth.
-  ///
-  /// Workaround (applied here): we write a `firebaseUid` field and update the
-  /// Firestore rules (or use a Cloud Function) to accept writes where
-  /// `request.auth.uid == resource.data.firebaseUid`.
-  ///
-  /// The IMMEDIATE fix that requires NO rule change is to relax the write rule
-  /// to `allow write: if request.auth != null;` while you integrate custom
-  /// tokens.  The current rules already allow reads for any authenticated user,
-  /// so reads are unaffected.
   Future<void> _ensureUserDocument({
     required String uid,
     String? phone,
     String? username,
   }) async {
-    final userRef  = _firestore.collection('users').doc(uid);
+    final userRef = _firestore.collection('users').doc(uid);
     final snapshot = await userRef.get();
     final existing = snapshot.data() ?? {};
-    final now        = FieldValue.serverTimestamp();
+    final now = FieldValue.serverTimestamp();
     final firebaseUid = _firebaseAuth.currentUser?.uid;
 
-    await userRef.set(
-      {
-        'uid':       uid,
-        'updatedAt': now,
-        if (!snapshot.exists) 'createdAt': now,
-        if (phone != null && phone.isNotEmpty)
-          'phone': _normalizePhone(phone),
-        // Username is set permanently on first login to prevent abuse.
-        // It can still be changed manually in Firestore if needed.
-        if (username != null && username.isNotEmpty) ...{
-          'username': username,
-          if ((existing['name'] == null ||
-                  (existing['name'] as String).isEmpty) &&
-              !_looksLikePhone(username))
-            'name': username,
-        },
-        if (firebaseUid != null) 'firebaseUid': firebaseUid,
-        'isOnline': true,
-        'lastSeen': now,
+    await userRef.set({
+      'uid': uid,
+      'matrixUserId': MatrixClientService.instance.userId,
+      'updatedAt': now,
+      if (!snapshot.exists) 'createdAt': now,
+      if (phone != null && phone.isNotEmpty) 'phone': _normalizePhone(phone),
+      if (username != null && username.isNotEmpty) ...{
+        'username': username,
+        if ((existing['name'] == null ||
+                (existing['name'] as String).isEmpty) &&
+            !_looksLikePhone(username))
+          'name': username,
       },
-      SetOptions(merge: true),
-    );
+      if (firebaseUid != null) 'firebaseUid': firebaseUid,
+      'isOnline': true,
+      'lastSeen': now,
+    }, SetOptions(merge: true));
   }
-
-  // PRIVATE: Auth persistence
 
   Future<void> _persistAuth(AuthUser user, {String? phone}) async {
     await Future.wait([
-      _storage.write(key: _tokenKey,    value: user.token),
-      _storage.write(key: _userIdKey,   value: user.userId),
+      _storage.write(key: _tokenKey, value: user.token),
+      _storage.write(key: _userIdKey, value: user.userId),
       _storage.write(key: _usernameKey, value: user.username),
-      _storage.write(key: _secretKey,   value: user.secret),
-      if (phone != null && phone.isNotEmpty)
-        _storage.write(key: _phoneKey, value: phone),
+      _storage.write(key: _secretKey, value: user.secret),
+      if (phone != null && phone.isNotEmpty) _storage.write(key: _phoneKey, value: phone),
       _storage.delete(key: _expiryKey),
     ]);
   }
 
-  // PRIVATE: Phone utilities
+  Future<String> _matrixPasswordForUser(String userId) async {
+    final key = '$_matrixPasswordKey:$userId';
+    final saved = await _storage.read(key: key);
+    if (saved != null && saved.length >= 32) return saved;
+
+    final random = Random.secure();
+    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+    final password = base64UrlEncode(bytes);
+    await _storage.write(key: key, value: password);
+    return password;
+  }
 
   String _phoneToUserId(String normalizedPhone) =>
       normalizedPhone.replaceAll(RegExp(r'[^\d]'), '');

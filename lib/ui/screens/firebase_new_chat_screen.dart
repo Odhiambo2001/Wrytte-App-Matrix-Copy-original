@@ -141,7 +141,7 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
     final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
     if (currentUserId.isEmpty) return;
 
-    // The OpenIM userID is the phone number with the + prefix preserved.
+    // The Matrix userID is the phone number with the + prefix preserved.
     // wrytteUserId already stores it in this format when the contact was saved.
     // Fall back to primaryPhone as-is (which should include the + from E.164).
     final receiverId =
@@ -151,7 +151,7 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
 
     if (receiverId.isEmpty) return;
 
-    // Derive the OpenIM conversationID: si_{smaller}_{larger} (sorted)
+    // Derive the Matrix direct room between two users
     final normalizedReceiverId = receiverId.replaceAll(RegExp(r'[^\d]'), '');
     final ids = [currentUserId, normalizedReceiverId]..sort();
     final conversationId = 'si_${ids[0]}_${ids[1]}';

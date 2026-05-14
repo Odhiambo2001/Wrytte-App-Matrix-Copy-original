@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:matrix/matrix.dart' as mx;
 
 class ChatUser extends Equatable {
   final String id;
@@ -26,6 +27,16 @@ class ChatUser extends Equatable {
       isOnline: json['is_online'] ?? false,
       lastSeen:
           json['last_seen'] != null ? DateTime.parse(json['last_seen']) : null,
+    );
+  }
+
+  factory ChatUser.fromMatrixProfile(mx.Profile profile) {
+    return ChatUser(
+      id: profile.userId,
+      username: profile.displayName ?? profile.userId,
+      displayName: profile.displayName,
+      photoUrl: profile.avatarUrl?.toString(),
+      isOnline: false,
     );
   }
 

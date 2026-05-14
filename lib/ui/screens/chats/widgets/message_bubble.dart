@@ -23,7 +23,7 @@ class MessageBubble extends StatelessWidget {
   // ── Voice note fields (null = plain text bubble) ───────────────────────────
   final bool isVoiceNote;
   final int? voiceDuration;   // total seconds
-  final String? audioUrl;     // CDN URL from OpenIM soundElem.sourceUrl
+  final String? audioUrl;     // CDN URL from Matrix media upload
 
   static const Color _blue     = Color(0xFF4DA3FF);
   static const Color _incoming = Color(0xFF23262C);

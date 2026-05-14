@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:matrix/matrix.dart' as mx;
+
 enum MessageStatus { sending, sent, delivered, read, failed }
 
 MessageStatus _statusFromString(String? value) {
@@ -29,7 +31,7 @@ class ChatMessage {
   /// Sender userId
   final String senderId;
 
-  /// Receiver userId (used by socket "to")
+  /// Receiver Matrix userId or direct-chat peer id.
   final String receiverId;
 
   final String content;
@@ -38,14 +40,14 @@ class ChatMessage {
   final String? attachmentUrl;
 
   // ── attachmentType values used in this app ─────────────────────────────────
-  // 'voice'  → voice note  (OpenIM soundElem)
-  // 'video'  → video clip  (OpenIM videoElem)  — future use
-  // 'image'  → image       (OpenIM pictureElem) — future use
+  // 'voice'  → voice note
+  // 'video'  → video clip
+  // 'image'  → image
   final String? attachmentType;
 
   // ── Voice-note duration in seconds (null for non-voice messages) ───────────
-  // Populated from OpenIM soundElem.duration when receiving,
-  // and from the recorder output when sending.
+  // Populated from Matrix media metadata when receiving and recorder output
+  // when sending.
   final int? voiceDuration;
 
   final int unreadCount;
@@ -85,6 +87,36 @@ class ChatMessage {
           ? int.tryParse(json["voiceDuration"].toString())
           : null,
     );
+  }
+
+  factory ChatMessage.fromMatrix(mx.Event event) {
+    final content = event.content;
+    final msgType = content['msgtype']?.toString() ?? event.messageType;
+    final attachmentType = _attachmentTypeFromMatrix(msgType);
+    final info = content['info'];
+    int? duration;
+    if (info is Map && info['duration'] != null) {
+      duration = ((info['duration'] as num).toInt() / 1000).round();
+    }
+
+    return ChatMessage(
+      id: event.eventId,
+      conversationId: event.room.id,
+      senderId: event.senderId,
+      receiverId: event.room.directChatMatrixID ?? '',
+      content: event.body,
+      timestamp: event.originServerTs,
+      status: _statusFromMatrix(event.status),
+      attachmentUrl: event.attachmentMxcUrl?.toString(),
+      attachmentType: attachmentType,
+      voiceDuration: duration,
+    );
+  }
+
+  static ChatMessage? fromMatrixEvent(mx.Event event) {
+    if (event.type != mx.EventTypes.Message) return null;
+    if (event.body.isEmpty && !event.hasAttachment) return null;
+    return ChatMessage.fromMatrix(event);
   }
 
   // TO JSON (HTTP / Local DB)
@@ -158,4 +190,26 @@ class ChatMessage {
         "content: $content, status: $status, attachmentType: $attachmentType, "
         "voiceDuration: $voiceDuration)";
   }
+}
+
+String? _attachmentTypeFromMatrix(String msgType) {
+  switch (msgType) {
+    case mx.MessageTypes.Audio:
+      return 'voice';
+    case mx.MessageTypes.Image:
+      return 'image';
+    case mx.MessageTypes.Video:
+      return 'video';
+    case mx.MessageTypes.File:
+      return 'file';
+    default:
+      return null;
+  }
+}
+
+MessageStatus _statusFromMatrix(mx.EventStatus status) {
+  if (status.isSent) return MessageStatus.sent;
+  final raw = status.toString().toLowerCase();
+  if (raw.contains('error')) return MessageStatus.failed;
+  return MessageStatus.sending;
 }

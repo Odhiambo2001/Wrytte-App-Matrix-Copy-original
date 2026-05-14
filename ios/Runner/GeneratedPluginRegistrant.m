@@ -72,12 +72,6 @@
 @import flutter_native_splash;
 #endif
 
-#if __has_include(<flutter_openim_sdk/FlutterOpenimSdkPlugin.h>)
-#import <flutter_openim_sdk/FlutterOpenimSdkPlugin.h>
-#else
-@import flutter_openim_sdk;
-#endif
-
 #if __has_include(<flutter_ringtone_player/FlutterRingtonePlayerPlugin.h>)
 #import <flutter_ringtone_player/FlutterRingtonePlayerPlugin.h>
 #else
@@ -170,7 +164,6 @@
   [FlutterContactsPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterContactsPlugin"]];
   [FlutterLibphonenumberPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterLibphonenumberPlugin"]];
   [FlutterNativeSplashPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterNativeSplashPlugin"]];
-  [FlutterOpenimSdkPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterOpenimSdkPlugin"]];
   [FlutterRingtonePlayerPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterRingtonePlayerPlugin"]];
   [FlutterSecureStorageDarwinPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterSecureStorageDarwinPlugin"]];
   [FlutterSound registerWithRegistrar:[registry registrarForPlugin:@"FlutterSound"]];

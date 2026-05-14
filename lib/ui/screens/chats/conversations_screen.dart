@@ -22,8 +22,6 @@ import 'widgets/tab_bar_section.dart';
 //  Name resolution priority (highest → lowest):
 //    1. Saved contacts  — Firestore /users where savedBy == currentUserId.
 //       These have the human display names the user typed (e.g. "John Doe").
-//       Applied UNCONDITIONALLY — even when OpenIM already has a showName —
-//       because OpenIM's showName is just the phone number registered at
 //       sign-up, not the local user's contact alias.
 //    2. Firestore /users doc by document ID (phone digits) — session cache.
 //    3. Raw otherUserId — last resort fallback.
@@ -119,7 +117,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     // Connect ChatService (idempotent)
     await _chat.connect();
 
-    // Subscribe to OpenIM conversation stream
+    // Subscribe to Matrix conversation stream
     _convSub = _chat.conversationsStream.listen((incoming) async {
       final enriched = await _enrichNames(incoming);
       if (!mounted) return;
@@ -178,8 +176,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   // ===========================================================================
   //  ENRICHMENT
   //
-  //  Pass 1 — saved contact names (ALWAYS applied, even over OpenIM showName).
-  //    OpenIM's showName is the phone number used at registration, not the
+  //  Pass 1 — saved contact names (ALWAYS applied, even over Matrix displayname).
+  //    Matrix displayname is set at registration, not the
   //    local user's chosen contact name.
   //
   //  Pass 2 — Firestore /users doc fallback.
@@ -399,7 +397,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           return;
         }
 
-        // Mark as read via OpenIM
+        // Mark as read via Matrix
         await _chat.markConversationAsRead(conv.id);
 
         if (mounted) {

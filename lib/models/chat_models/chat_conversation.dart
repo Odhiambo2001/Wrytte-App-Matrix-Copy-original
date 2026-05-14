@@ -1,4 +1,5 @@
 import 'chat_message.dart';
+import 'package:matrix/matrix.dart' as mx;
 
 class ChatConversation {
   final String id;
@@ -65,6 +66,22 @@ class ChatConversation {
       lastMessageSenderId: message.senderId,
       lastMessageTime: message.timestamp,
       unreadCount: message.receiverId == currentUserId ? 1 : 0,
+    );
+  }
+
+  factory ChatConversation.fromMatrixRoom(mx.Room room, String currentUserId) {
+    final otherId = room.directChatMatrixID ?? room.id;
+    final last = room.lastEvent;
+    return ChatConversation(
+      id: room.id,
+      participants: [currentUserId, otherId],
+      otherUserId: otherId,
+      lastMessage: last?.body ?? '',
+      lastMessageSenderId: last?.senderId ?? '',
+      lastMessageTime: last?.originServerTs ?? DateTime.now(),
+      unreadCount: room.notificationCount,
+      otherUserName: room.displayname,
+      otherUserAvatar: room.avatar?.toString(),
     );
   }
 
