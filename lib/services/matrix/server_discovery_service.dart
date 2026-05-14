@@ -14,7 +14,7 @@ class ServerDiscoveryService {
   Future<Uri> resolveHomeserver({String? userIdOrDomain}) async {
     final domain = _domainFrom(userIdOrDomain);
     if (domain == null || domain.isEmpty) {
-      return Uri.parse(defaultHomeserver);
+      return _homeserverUri(defaultHomeserver);
     }
 
     final wellKnown = Uri.https(domain, '/.well-known/matrix/client');
@@ -23,16 +23,17 @@ class ServerDiscoveryService {
           .get(wellKnown)
           .timeout(const Duration(seconds: 8));
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return Uri.https(domain, '');
+        return _homeserverUri(domain);
       }
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final baseUrl = (data['m.homeserver'] as Map<String, dynamic>?)?['base_url']
-          ?.toString();
-      if (baseUrl == null || baseUrl.isEmpty) return Uri.https(domain, '');
-      return Uri.parse(baseUrl);
+      final baseUrl =
+          (data['m.homeserver'] as Map<String, dynamic>?)?['base_url']
+              ?.toString();
+      if (baseUrl == null || baseUrl.isEmpty) return _homeserverUri(domain);
+      return _homeserverUri(baseUrl);
     } catch (_) {
-      return Uri.https(domain, '');
+      return _homeserverUri(domain);
     }
   }
 
@@ -41,7 +42,16 @@ class ServerDiscoveryService {
     if (raw == null || raw.isEmpty) return null;
     if (raw.startsWith('@') && raw.contains(':')) return raw.split(':').last;
     if (raw.contains('@') && raw.contains('.')) return raw.split('@').last;
+    final uri = Uri.tryParse(raw);
+    if (uri != null && uri.hasScheme && uri.host.isNotEmpty) return uri.host;
     if (raw.contains('.') && !raw.contains(' ')) return raw;
     return null;
+  }
+
+  Uri _homeserverUri(String value) {
+    final raw = value.trim();
+    final uri = Uri.tryParse(raw);
+    if (uri != null && uri.hasScheme && uri.host.isNotEmpty) return uri;
+    return Uri.https(raw, '');
   }
 }
