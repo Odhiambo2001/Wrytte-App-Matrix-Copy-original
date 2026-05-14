@@ -1,683 +1,252 @@
-# wrytte
+# Wrytte App - Matrix Messaging + Firebase App Data
 
-A new Flutter project.
+Wrytte is a Flutter chat app that uses the **Matrix protocol** for messaging and **Firebase** for app identity/profile data, contacts, storage, and supporting metadata.
 
-## Getting Started
+The important architectural rule is:
 
-This project is a starting point for a Flutter application.
+> Matrix is the source of truth for chat. Firebase is the source of truth for Wrytte app metadata.
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
-
-# Wrytte App — OpenIM Server Setup & Operations Guide
-
-## Overview
-
-The Wrytte app uses **OpenIM** for real-time chat and messaging. The server runs on a Google Cloud VM at `34.63.32.143` and is fully orchestrated with Docker Compose. This guide covers everything needed to start, stop, monitor, and troubleshoot the server.
+Clearing Firebase data does not clear Matrix rooms, messages, or the local Matrix SDK cache.
 
 ---
 
-## OpenIM vs Firebase Roles
+## Messaging Architecture
 
-Wrytte currently uses both OpenIM and Firebase, but they are responsible for different parts of the app.
+### Matrix Handles
 
-### OpenIM Handles
+Matrix is responsible for the chat protocol and all message-related state.
 
 | Area | Details |
 |---|---|
-| Chat messages | One-to-one message send/receive, message IDs, sequence numbers, read state, and message history |
-| Conversations | Conversation list, latest message metadata, unread counts, and OpenIM conversation IDs like `si_254712140013_5380285960` |
-| Realtime messaging | WebSocket connection on `ws://34.63.32.143:10001` |
-| Message persistence | MongoDB database `openim_v3`, mainly collection `msg` |
-| Chat auth/session | OpenIM `imToken` and chat server `chatToken` |
-| User registration/login backend | Phone registration/login through the OpenIM chat server |
-| Voice messages | OpenIM sound messages and OpenIM/MinIO file handling |
-
-### Firebase Handles
-
-| Area | Details |
-|---|---|
-| User profile metadata | Firestore `users` documents: display name, username, phone, profile image fields, and profile lookup fallback |
-| Saved contacts | Contacts saved by a user and contact-name enrichment for chat/conversation UI |
-| Anonymous Firebase auth | Used so the app can read/write permitted Firestore profile/contact documents |
-| Profile edits | Name/profile metadata updates after signup and edit profile flows |
-| Non-chat app data | Any app features that already use Firestore outside OpenIM messaging |
-
-### Important Boundary
-
-Firebase does **not** store Wrytte chat messages in the active app flow. If Firestore has no `chats` collection, that is expected. Chat messages should be inspected in OpenIM MongoDB, not Firebase.
-
----
-
-## Server Details
-
-| Property | Value |
-|---|---|
-| **Server IP** | `34.63.32.143` |
-| **SSH User** | `odhiambov110` |
-| **Compose Directory** | `/home/odhiambov110/openim-docker` |
-| **Chat API Port** | `10008` |
-| **IM Server Port** | `10002` |
-| **WebSocket Port** | `10001` |
-| **Admin API Port** | `10009` |
-| **MinIO (File Storage)** | `10005` |
-
----
-
-## Prerequisites
-
-- SSH access to the server
-- Docker and Docker Compose installed on the server (already set up)
-- The `openim-docker` repo cloned at `/home/odhiambov110/openim-docker`
-
----
-
-## 1. SSH Into the Server
-
-```bash
-ssh odhiambov110@34.63.32.143
-```
-
----
-
-## 2. Starting the Server
-
-### First Time / After a Full Stop
-
-```bash
-cd /home/odhiambov110/openim-docker
-docker compose up -d
-```
-
-### If You Get "Container Name Already in Use" Errors
-
-This happens when old containers from a previous session are still registered. Run:
-
-```bash
-# Remove all OpenIM-related containers at once
-docker ps -a --format '{{.Names}}' | grep -E 'openim|kafka|etcd|mongodb|redis|minio|mongo' | xargs docker rm -f
-
-# Then start fresh
-docker compose up -d
-```
-
-If `minio` or `mongo` are missed by the grep, remove them individually:
-
-```bash
-docker rm -f minio mongo
-docker compose up -d
-```
-
-### Verify All Containers Are Running
-
-```bash
-docker compose ps
-```
-
-Expected output — all 9 containers should show **Up** or **healthy**:
-
-```
-openim-chat          Up (healthy)   0.0.0.0:10008-10009->10008-10009/tcp
-openim-server        Up (healthy)   0.0.0.0:10001-10002->10001-10002/tcp
-minio                Up             0.0.0.0:10005->9000/tcp
-mongo                Up             27017/tcp
-openim-web-front     Up             0.0.0.0:11001->80/tcp
-openim-admin-front   Up             0.0.0.0:11002->80/tcp
-redis                Up             6379/tcp
-kafka                Up             9092/tcp
-etcd                 Up             0.0.0.0:12379->2379/tcp
-```
-
----
-
-## 3. Stopping the Server
-
-### Stop All Containers (Keep Data)
-
-```bash
-cd /home/odhiambov110/openim-docker
-docker compose down
-```
-
-### Stop a Single Service
-
-```bash
-docker compose stop openim-chat
-docker compose stop openim-server
-```
-
-### Stop and Remove Everything (Nuclear Option — Data is Preserved in Volumes)
-
-```bash
-docker compose down --remove-orphans
-```
-
----
-
-## 4. Restarting Services
-
-### Restart a Single Container
-
-```bash
-cd /home/odhiambov110/openim-docker
-docker compose restart openim-chat
-docker compose restart openim-server
-```
-
-### Restart Everything
-
-```bash
-docker compose restart
-```
-
----
-
-## 5. Verifying the Server is Working
-
-### Test the IM Server (Port 10002)
-
-```bash
-curl -s -X POST http://localhost:10002/auth/get_admin_token \
-  -H "Content-Type: application/json" \
-  -H "operationID: test123" \
-  -d '{"secret":"openIM123","userID":"imAdmin"}'
-```
-
-✅ Expected: `{"errCode":0,...,"data":{"token":"eyJ..."}}`
-
-### Test the Chat Server (Port 10008)
-
-```bash
-curl -s -X POST http://localhost:10008/account/login \
-  -H "Content-Type: application/json" \
-  -H "operationID: test123" \
-  -d '{"areaCode":"+254","phoneNumber":"748630243","verifyCode":"666666","platform":2}'
-```
-
-✅ Expected: `{"errCode":0,...,"data":{"imToken":"eyJ...","chatToken":"eyJ...","userID":"..."}}`
-
-### Test Chat-to-IM Connectivity (From Inside Chat Container)
-
-```bash
-docker exec openim-chat wget -qO- \
-  --post-data='{"secret":"openIM123","userID":"imAdmin"}' \
-  --header='Content-Type: application/json' \
-  --header='operationID: test123' \
-  http://openim-server:10002/auth/get_admin_token
-```
-
-✅ Expected: `{"errCode":0,...}`
-
----
-
-## 6. API Reference
-
-### Register a New User
-
-```bash
-curl -s -X POST http://localhost:10008/account/register \
-  -H "Content-Type: application/json" \
-  -H "operationID: test123" \
-  -d '{
-    "verifyCode": "666666",
-    "platform": 2,
-    "autoLogin": true,
-    "user": {
-      "nickname": "TestUser",
-      "faceURL": "",
-      "areaCode": "+254",
-      "phoneNumber": "748630243"
-    }
-  }'
-```
-
-### Login an Existing User
-
-```bash
-curl -s -X POST http://localhost:10008/account/login \
-  -H "Content-Type: application/json" \
-  -H "operationID: test123" \
-  -d '{
-    "areaCode": "+254",
-    "phoneNumber": "748630243",
-    "verifyCode": "666666",
-    "platform": 2
-  }'
-```
-
-> **Note:** `verifyCode` is always `666666`. This is the server's built-in super-code that bypasses SMS verification. To enable real SMS, configure an SMS provider in `/openim-chat/config/chat-rpc-chat.yml` inside the container.
-
-### Important API Notes
-
-| Field | Location | Note |
-|---|---|---|
-| `areaCode` | Inside `user` object for register | e.g. `"+254"` |
-| `phoneNumber` | Inside `user` object for register | Local number only, e.g. `"748630243"` |
-| `areaCode` | Top-level for login | e.g. `"+254"` |
-| `verifyCode` | Always `"666666"` | Super-code, no SMS needed |
-| `operationID` header | Required on all requests | Any unique string |
-
----
-
-## 7. Viewing Logs
-
-### View Live Logs for All Services
-
-```bash
-cd /home/odhiambov110/openim-docker
-docker compose logs -f
-```
-
-### View Logs for a Specific Service
-
-```bash
-docker compose logs -f openim-chat
-docker compose logs -f openim-server
-```
-
-### View Last 100 Lines
-
-```bash
-docker logs openim-chat --tail 100
-docker logs openim-server --tail 100
-```
-
-### Filter for Errors Only
-
-```bash
-docker logs openim-chat 2>&1 | grep -E "ERROR|panic|fatal" | grep -v "rpc"
-```
-
----
-
-## 7.1. Accessing Stored Chat Messages on the Server
-
-Wrytte chat messages are stored by **OpenIM**, not Firebase Firestore. On the server, OpenIM stores message data in MongoDB:
-
-| Item | Value |
-|---|---|
-| Mongo container | `mongo` |
-| Mongo root user | `root` |
-| Mongo root password | `openIM123` |
-| OpenIM database | `openim_v3` |
-| Message collection | `msg` |
-| Conversation metadata collection | `conversation` |
-
-### SSH and Open the OpenIM Compose Directory
-
-```bash
-ssh odhiambov110@34.63.32.143
-cd /home/odhiambov110/openim-docker
-```
-
-### Confirm Containers and Logs
-
-```bash
-docker ps
-docker logs openim-server --tail 200
-docker logs openim-chat --tail 200
-```
-
-### Find Mongo Credentials
-
-```bash
-grep -RIn "mongo.*user\|mongo.*password\|username\|password\|MONGO" .env config 2>/dev/null
-docker inspect mongo --format '{{range .Config.Env}}{{println .}}{{end}}'
-```
-
-Expected values:
-
-```text
-MONGO_INITDB_ROOT_USERNAME=root
-MONGO_INITDB_ROOT_PASSWORD=openIM123
-MONGO_INITDB_DATABASE=openim_v3
-MONGO_OPENIM_USERNAME=openIM
-MONGO_OPENIM_PASSWORD=openIM123
-```
-
-### Connect to MongoDB
-
-```bash
-docker exec -it mongo mongosh -u root -p 'openIM123' --authenticationDatabase admin
-```
-
-### Select the OpenIM Database
-
-Run these inside `mongosh`:
-
-```javascript
-show dbs
-use openim_v3
-show collections
-```
-
-Expected message-related collections:
-
-```text
-conversation
-msg
-seq
-seq_user
-```
-
-### Show Recent Message Buckets
-
-```javascript
-db.msg.find().sort({_id:-1}).limit(5).pretty()
-```
-
-OpenIM stores messages in bucket documents. A one-to-one chat bucket looks like:
-
-```text
-doc_id: "si_254712140013_5380285960:0"
-msgs: [
-  {
-    msg: {
-      send_id: "5380285960",
-      recv_id: "254712140013",
-      content: "{\"content\":\"Hello\"}",
-      seq: Long("1"),
-      status: 2
-    }
-  }
-]
-```
-
-### Query a Specific Conversation Bucket
-
-```javascript
-db.msg.find({
-  doc_id: "si_254712140013_5380285960:0"
-}).pretty()
-```
-
-### Search by Server or Client Message ID
-
-Use snake_case nested fields. These work because IDs are inside the `msgs` array:
-
-```javascript
-db.msg.find({
-  "msgs.msg.server_msg_id": "681364845a0e571af71a4c0f0644d4f4"
-}).pretty()
-```
-
-```javascript
-db.msg.find({
-  "msgs.msg.client_msg_id": "0d44d3ea6e19eae4433d3d94ca88630e"
-}).pretty()
-```
-
-### Search by Sender and Receiver
-
-```javascript
-db.msg.find({
-  "msgs.msg.send_id": "5380285960",
-  "msgs.msg.recv_id": "254712140013"
-}).pretty()
-```
-
-### Print Only Real Messages in a Clean Format
-
-This hides the empty placeholder slots where `msg` is `null`:
-
-```javascript
-db.msg.aggregate([
-  { $match: { doc_id: "si_254712140013_5380285960:0" } },
-  { $unwind: "$msgs" },
-  { $match: { "msgs.msg": { $ne: null } } },
-  { $project: {
-      _id: 0,
-      send_id: "$msgs.msg.send_id",
-      recv_id: "$msgs.msg.recv_id",
-      content: "$msgs.msg.content",
-      seq: "$msgs.msg.seq",
-      server_msg_id: "$msgs.msg.server_msg_id",
-      client_msg_id: "$msgs.msg.client_msg_id",
-      status: "$msgs.msg.status",
-      is_read: "$msgs.msg.is_read"
-  }}
-])
-```
-
-### Inspect Conversation Metadata
-
-```javascript
-db.conversation.find().limit(3).pretty()
-```
-
-If you need to search by a specific conversation, first inspect the field names from the output above, then query using those exact snake_case field names.
-
-### Important Notes
-
-- `status: 2` means OpenIM accepted/sent the message.
-- `is_read: false` means the stored message has not been marked read.
-- `offlinePushMsg failed` with `appid is invalid` is a push notification configuration issue, not a message storage failure.
-- Firebase will not show a `chats` collection in the active app flow. The Firebase chat service was removed so chat has a single source of truth: OpenIM.
-
----
-
-## 8. Configuration Files
-
-All config lives **inside** the `openim-chat` container at `/openim-chat/config/`:
+| Chat messages | Text, voice/media messages, event IDs, sender IDs, timestamps, and message status |
+| Conversations | Matrix rooms, direct rooms, room IDs, latest event data, unread counts, and read markers |
+| Realtime sync | Matrix client sync and timeline event streams |
+| Message history | History is fetched from Matrix room timelines |
+| Chat auth/session | Matrix user ID, access token, homeserver, and device ID stored in secure storage |
+| User presence in chat | Matrix client login, restore, logout, and room membership |
+| Media in chat | Matrix media upload/download through the Matrix SDK |
+
+Relevant app code:
 
 | File | Purpose |
 |---|---|
-| `chat-api-chat.yml` | Chat API port (10008) |
-| `chat-rpc-chat.yml` | SMS provider config, super-code (`666666`) |
-| `share.yml` | OpenIM server URL and secret |
-| `discovery.yml` | etcd service discovery |
-| `redis.yml` | Redis connection |
-| `mongodb.yml` | MongoDB connection |
+| `lib/services/matrix/matrix_client.dart` | Creates and initializes the Matrix SDK client and local SQLite cache |
+| `lib/services/matrix/matrix_auth_service.dart` | Logs in, registers, restores, persists, and logs out Matrix sessions |
+| `lib/services/matrix/matrix_chat_service.dart` | Matrix room and chat helpers |
+| `lib/services/matrix/matrix_sync_service.dart` | Matrix sync lifecycle |
+| `lib/services/chat/chat_service.dart` | App-level chat facade backed by Matrix rooms and events |
+| `lib/models/chat_models/chat_message.dart` | Converts Matrix events into Wrytte chat messages |
+| `lib/models/chat_models/chat_conversation.dart` | Converts Matrix rooms into Wrytte conversations |
 
-### Read a Config File
+### Firebase Handles
 
-```bash
-docker exec openim-chat cat /openim-chat/config/share.yml
-docker exec openim-chat cat /openim-chat/config/chat-rpc-chat.yml
-```
+Firebase is responsible for Wrytte app data around the chat experience, but not the chat messages themselves.
 
-### Environment Variables (Set in docker-compose.yaml)
+| Area | Details |
+|---|---|
+| User profile metadata | Firestore `users` documents: `uid`, name, username, phone, profile image fields, `matrixUserId`, and `matrixHomeserver` |
+| App auth bootstrap | Anonymous Firebase Auth so the app can read/write permitted Firestore data |
+| Contact metadata | Saved contacts, contact display names, contact avatars, and Firestore-backed contact lookup |
+| Profile edits | Name/avatar/profile metadata updates after signup and from edit profile flows |
+| File/profile storage | Firebase Storage for app profile images and non-Matrix assets |
+| Call/supporting app state | Firestore documents used by non-message app features |
 
-| Variable | Value | Purpose |
-|---|---|---|
-| `CHATENV_SHARE_OPENIM_APIURL` | `http://openim-server:10002` | IM server URL |
-| `CHATENV_SHARE_OPENIM_SECRET` | `openIM123` | Shared secret |
-| `CHATENV_DISCOVERY_ETCD_ADDRESS` | `etcd:2379` | Service discovery |
+Firebase should not be treated as the chat database. If Firestore has no `chats` collection, that is expected for the active Matrix-backed flow.
 
 ---
 
-## 9. Enabling Real SMS (Production)
+## Matrix vs Firebase Boundary
 
-To replace the `666666` super-code with real SMS, edit the chat-rpc config:
+| Question | Answer |
+|---|---|
+| Where do chat messages come from? | Matrix rooms and Matrix room timelines |
+| Where are conversations listed from? | Matrix rooms, then enriched with Firestore contact/profile metadata |
+| Where are unread counts/read markers from? | Matrix room state |
+| Where are saved contact names from? | Firestore contact/user documents |
+| Where are profile names and avatars stored? | Firestore/Firebase Storage for Wrytte profile metadata, with selected Matrix profile fields also updated |
+| Does clearing Firebase delete chats? | No |
+| Does clearing app cache delete server-side Matrix messages? | No, it only affects local cache/session data |
+| What deletes server-side messages/rooms? | Matrix room/message administration or user room actions on the Matrix homeserver |
 
-```bash
-# Copy config out of container
-docker cp openim-chat:/openim-chat/config/chat-rpc-chat.yml ./chat-rpc-chat.yml
+---
 
-# Edit the file — fill in your SMS provider details
-nano chat-rpc-chat.yml
-```
+## Matrix Configuration
 
-The relevant section:
+The app uses the `matrix` Dart package.
 
 ```yaml
-verifyCode:
-  superCode: "666666"   # ← Remove or change this in production
-  phone:
-    use: "ali"          # ← Set to "ali" for Alibaba Cloud SMS
-    ali:
-      endpoint: ""
-      accessKeyId: ""
-      accessKeySecret: ""
-      signName: ""
-      verificationCodeTemplateCode: ""
+matrix: ^7.1.2
 ```
 
-After editing, copy it back and restart:
+Package page:
+
+```text
+https://pub.dev/packages/matrix
+```
+
+You do **not** clone the Matrix SDK into this repository. Flutter downloads it from pub.dev and stores it in the local pub cache after you run `flutter pub get`.
+
+### Getting the Matrix SDK
+
+If the package is already listed in `pubspec.yaml`, install all project dependencies with:
 
 ```bash
-docker cp ./chat-rpc-chat.yml openim-chat:/openim-chat/config/chat-rpc-chat.yml
-docker compose restart openim-chat
+flutter pub get
 ```
 
----
-
-## 10. Troubleshooting
-
-### Container Won't Start — Name Already in Use
+If the package is missing, add it with:
 
 ```bash
-docker ps -a --format '{{.Names}}' | grep -E 'openim|kafka|etcd|mongo|redis|minio' | xargs docker rm -f
-docker compose up -d
+flutter pub add matrix
 ```
 
-### Chat API Returns 404 on All Routes
-
-The chat-api may not have fully initialized. Restart it:
+Then fetch dependencies:
 
 ```bash
-docker compose restart openim-chat
-sleep 15
-curl -s http://localhost:10008/account/login -X POST \
-  -H "Content-Type: application/json" \
-  -H "operationID: test" \
-  -d '{}'
+flutter pub get
 ```
 
-If you get `{"errCode":1001}` instead of `404 page not found`, the routes are registered and the server is healthy.
+After that, Wrytte code can import the SDK directly:
 
-### Chat Server Can't Reach IM Server
-
-```bash
-docker exec openim-chat wget -qO- http://openim-server:10002/healthz
-```
-
-If this returns `404 Not Found` (not a connection error), the network is fine. If it times out, check that `openim-server` is running:
-
-```bash
-docker ps | grep openim-server
-```
-
-### Check Which Ports Are Listening
-
-```bash
-docker exec openim-chat netstat -tlnp
-```
-
-Expected:
-```
-tcp   :::10008   LISTEN   chat-api
-tcp   :::10009   LISTEN   admin-api
-tcp   :::30300   LISTEN   chat-rpc
-tcp   :::30200   LISTEN   admin-rpc
-```
-
-### Full Reset (Keeps All Data)
-
-```bash
-cd /home/odhiambov110/openim-docker
-docker compose down --remove-orphans
-docker ps -a --format '{{.Names}}' | grep -E 'openim|kafka|etcd|mongo|redis|minio' | xargs docker rm -f 2>/dev/null
-docker compose up -d
-```
-
----
-
-## 11. Flutter App Configuration
-
-The Flutter app connects to these endpoints defined in `lib/services/auth/auth_service.dart` and `lib/services/auth/openim_chat_service.dart`:
-
-| Endpoint | URL |
-|---|---|
-| IM Server API | `http://34.63.32.143:10002` |
-| Chat Server API | `http://34.63.32.143:10008` |
-| WebSocket | `ws://34.63.32.143:10001` |
-
-### OTP Code for Testing
-
-During development, always use `666666` as the OTP. The UI accepts any 6-digit input but the server only validates `666666`.
-
----
-
-## 12. Quick Reference Cheatsheet
-
-```bash
-# SSH in
-ssh odhiambov110@34.63.32.143
-
-# Go to compose directory
-cd /home/odhiambov110/openim-docker
-
-# Start all services
-docker compose up -d
-
-# Check status
-docker compose ps
-
-# View chat logs live
-docker compose logs -f openim-chat
-
-# Restart chat service
-docker compose restart openim-chat
-
-# Test chat server health
-curl -s -X POST http://localhost:10008/account/login \
-  -H "Content-Type: application/json" \
-  -H "operationID: test" \
-  -d '{"areaCode":"+254","phoneNumber":"748630243","verifyCode":"666666","platform":2}'
-
-# Stop everything
-docker compose down
-```
-
-
-
----------------------------------------------------
-
-Where are these chats coming from cause I cleared cache and the firebase but am still seeing them
-
-These chats are coming from your **OpenIM server**, not Firebase.
-
-You have `flutter_openim_sdk` in your `pubspec.yaml` and your own OpenIM server running at:
-```
-http://34.63.32.143:10008
-```
-
-OpenIM stores chats on **its own server and local SDK cache**, completely separate from Firebase. That's why clearing Firebase didn't remove them.
-
----
-
-## To Clear Them
-
-**Option 1 — Clear OpenIM local SDK cache** (on device):
 ```dart
-OpenIM.iMManager.logout();
+import 'package:matrix/matrix.dart';
 ```
 
-**Option 2 — Clear from the server side**, go to your OpenIM docker:
+That import is resolved locally from Flutter's pub cache. The app does not load the SDK from pub.dev at runtime; pub.dev is only where Flutter downloads the package during dependency setup.
+
+By default, Matrix auth uses this homeserver:
+
+```dart
+https://matrix.org
+```
+
+You can override it at build time with:
+
 ```bash
-cd ~/Pictures/wrytte/openim-docker-fresh
-docker compose down
-docker volume prune
-docker compose up -d
+flutter run --dart-define=WRYTTE_MATRIX_HOMESERVER=https://your-homeserver.example
 ```
-⚠️ This deletes **all** messages for all users.
 
-**Option 3 — Uninstall the app** on the device, which wipes the local OpenIM SDK storage.
+The Matrix session is stored with `flutter_secure_storage` using these keys:
+
+| Key | Meaning |
+|---|---|
+| `matrix_user_id` | Logged-in Matrix user ID, for example `@254712345678:matrix.org` |
+| `matrix_access_token` | Matrix access token |
+| `matrix_homeserver` | Homeserver URL |
+| `matrix_device_id` | Matrix device ID, when available |
+
+The local Matrix SDK cache is stored in the app support directory as:
+
+```text
+wrytte_matrix.sqlite
+```
 
 ---
 
-## Summary
+## Firebase Configuration
 
-| Storage | Cleared by Firebase clear? |
+Firebase is initialized from:
+
+```text
+lib/firebase_options.dart
+```
+
+The Flutter app currently uses Firebase packages for:
+
+```yaml
+firebase_core
+firebase_auth
+cloud_firestore
+firebase_storage
+```
+
+Firestore profile/contact data is used to make Matrix rooms feel like Wrytte conversations. For example, a Matrix direct room may provide the room and events, while Firestore supplies the saved contact name, username, phone metadata, or profile image shown in the UI.
+
+---
+
+## Authentication Flow
+
+1. The app creates or restores a local Wrytte auth session.
+2. Firebase anonymous auth is ensured so Firestore profile/contact documents can be read and written.
+3. A Firestore `users/{uid}` document is created or updated with Wrytte metadata.
+4. The app logs into Matrix, or registers the Matrix account if login fails.
+5. Matrix identity fields such as `matrixUserId` and `matrixHomeserver` are merged back into the Firestore user document.
+6. Chat screens connect to Matrix and listen for Matrix timeline/sync updates.
+
+Development OTPs are generated locally in `AuthService` and currently use:
+
+```text
+123456
+```
+
+---
+
+## Common Debugging Notes
+
+### I cleared Firebase but chats still appear
+
+That is expected. Those chats are coming from Matrix, not Firebase.
+
+Matrix stores server-side room history on the configured homeserver and also keeps a local SDK cache on the device. Firebase only stores Wrytte profile/contact/supporting metadata.
+
+### I cleared app cache but chats still return
+
+That is also expected. Clearing local cache can remove local Matrix SDK data, but when the user logs in again, Matrix can sync room history back from the homeserver.
+
+### I need to clear local Matrix session/cache
+
+Use the app logout flow, which calls Matrix logout and clears stored Matrix session keys. Uninstalling the app also removes local app storage on the device.
+
+### I need to remove server-side chat history
+
+Do this through Matrix room administration or homeserver-level tools. Firebase cleanup will not remove Matrix room events.
+
+---
+
+## Getting Started
+
+Install dependencies:
+
+```bash
+flutter pub get
+```
+
+Confirm the Matrix SDK dependency is installed:
+
+```bash
+flutter pub deps | findstr matrix
+```
+
+On macOS/Linux, use:
+
+```bash
+flutter pub deps | grep matrix
+```
+
+Run the app:
+
+```bash
+flutter run
+```
+
+Run with a custom Matrix homeserver:
+
+```bash
+flutter run --dart-define=WRYTTE_MATRIX_HOMESERVER=https://your-homeserver.example
+```
+
+---
+
+## Quick Reference
+
+| Need | Use |
 |---|---|
-| Firebase Firestore | ✅ Yes |
-| OpenIM server | ❌ No |
-| OpenIM local SDK | ❌ No |
-
+| Chat messages and history | Matrix |
+| Direct chat rooms | Matrix |
+| Realtime message sync | Matrix |
+| Message local cache | Matrix SDK SQLite cache |
+| User profiles | Firebase Firestore |
+| Saved contacts | Firebase Firestore |
+| Profile images | Firebase Storage / profile metadata |
+| Firebase login state | Firebase Auth |
+| Matrix login state | Matrix secure storage keys |
