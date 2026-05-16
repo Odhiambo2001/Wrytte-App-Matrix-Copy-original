@@ -174,6 +174,12 @@ class _ProfileScreenState extends State<ProfileScreen>
                         if (_isOtherUser) ...[
                           _buildQuickActions(),
                           const SizedBox(height: 16),
+                          _buildContactDetails(),
+                          const SizedBox(height: 16),
+                          _buildMediaLinksDocsPreview(),
+                          const SizedBox(height: 8),
+                          _buildChatPreferenceRows(),
+                          const SizedBox(height: 20),
                         ],
 
                         // ── Bio + links card (only when content exists) ─────
@@ -305,21 +311,19 @@ class _ProfileScreenState extends State<ProfileScreen>
                       ),
 
                       // ── Edit / action button ─────────────────────────
-                      _glassTextButton(
-                        // CHANGE 1: Edit text is always white
-                        text: "Edit",
-                        onTap:
-                            _isOtherUser
-                                ? () {}
-                                : () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const EditProfileScreen(),
-                                    ),
-                                  );
-                                },
-                      ),
+                      _isOtherUser
+                          ? _glassButton(icon: Icons.more_vert, onTap: () {})
+                          : _glassTextButton(
+                            text: "Edit",
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const EditProfileScreen(),
+                                ),
+                              );
+                            },
+                          ),
                     ],
                   ),
                 ),
@@ -382,6 +386,230 @@ class _ProfileScreenState extends State<ProfileScreen>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildContactDetails() {
+    final phone = _formatPhone(_profile?.phone ?? '');
+    final username = _profile?.username ?? '';
+    final uid = _profile?.uid ?? widget.uid ?? '';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          if (phone.isNotEmpty)
+            _profileInfoRow(Icons.phone_outlined, 'Phone number', phone),
+          if (username.isNotEmpty)
+            _profileInfoRow(Icons.alternate_email, 'Username', username),
+          if (uid.isNotEmpty)
+            _profileInfoRow(Icons.key_outlined, 'Wrytte ID', uid),
+        ],
+      ),
+    );
+  }
+
+  Widget _profileInfoRow(IconData icon, String label, String value) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15181E),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: Colors.white.withOpacity(0.62), size: 22),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.45),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMediaLinksDocsPreview() {
+    return Padding(
+      padding: const EdgeInsets.only(left: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Row(
+              children: [
+                Text(
+                  'Media, links, and docs',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.62),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '0',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.38),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right,
+                  color: Colors.white.withOpacity(0.38),
+                  size: 26,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 96,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              itemBuilder: (context, index) => Container(
+                width: 110,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF15181E),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white.withOpacity(0.04)),
+                ),
+                child: Icon(
+                  index == 0
+                      ? Icons.photo_outlined
+                      : index == 1
+                          ? Icons.link_outlined
+                          : Icons.insert_drive_file_outlined,
+                  color: Colors.white.withOpacity(0.22),
+                  size: 30,
+                ),
+              ),
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemCount: 3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChatPreferenceRows() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          _profileOption(
+            Icons.storage_outlined,
+            'Manage storage',
+            subtitle: 'Local media and message cache',
+          ),
+          _profileOption(Icons.photo_outlined, 'Media visibility'),
+          _profileOption(
+            Icons.timer_outlined,
+            'Disappearing messages',
+            subtitle: 'Off',
+          ),
+          _profileOption(
+            Icons.lock_outline,
+            'Chat lock',
+            subtitle: 'Lock and hide this chat on this device.',
+            trailing: Switch(
+              value: false,
+              onChanged: (_) {},
+              activeColor: const Color(0xFF4DA3FF),
+            ),
+          ),
+          _profileOption(
+            Icons.shield_outlined,
+            'Advanced chat privacy',
+            subtitle: 'Off',
+          ),
+          _profileOption(Icons.favorite_border, 'Add to Favorites'),
+          _profileOption(
+            Icons.remove_circle_outline,
+            'Clear chat',
+            destructive: true,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _profileOption(
+    IconData icon,
+    String title, {
+    String? subtitle,
+    Widget? trailing,
+    bool destructive = false,
+  }) {
+    final color = destructive ? const Color(0xFFFF6B6B) : Colors.white;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            color: destructive
+                ? color
+                : Colors.white.withOpacity(0.54),
+            size: 28,
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.42),
+                      fontSize: 14,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (trailing != null) trailing,
+        ],
       ),
     );
   }

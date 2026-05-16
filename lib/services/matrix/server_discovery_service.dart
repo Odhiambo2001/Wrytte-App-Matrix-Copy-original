@@ -2,10 +2,12 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'matrix_config.dart';
+
 class ServerDiscoveryService {
   ServerDiscoveryService({
     http.Client? httpClient,
-    this.defaultHomeserver = 'https://matrix.org',
+    this.defaultHomeserver = MatrixConfig.homeserver,
   }) : _httpClient = httpClient ?? http.Client();
 
   final http.Client _httpClient;

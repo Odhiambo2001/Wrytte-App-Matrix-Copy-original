@@ -1,8 +1,13 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+
 import 'package:flutter/foundation.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
+import 'package:matrix/matrix.dart' as mx;
+import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/matrix/matrix_call_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 
 enum CallType { voice, video }
 
@@ -15,6 +20,7 @@ class CallData {
   final String callerAvatar;
   final String receiverId;
   final CallType type;
+  final mx.CallSession? matrixSession;
   CallStatus status;
 
   CallData({
@@ -25,390 +31,187 @@ class CallData {
     required this.receiverId,
     required this.type,
     required this.status,
+    this.matrixSession,
   });
-
-  factory CallData.fromMap(String id, Map<String, dynamic> data) {
-    return CallData(
-      callId:       id,
-      callerId:     data['callerId']     ?? '',
-      callerName:   data['callerName']   ?? '',
-      callerAvatar: data['callerAvatar'] ?? '',
-      receiverId:   data['receiverId']   ?? '',
-      type:   data['type'] == 'video' ? CallType.video : CallType.voice,
-      status: _parseStatus(data['status']),
-    );
-  }
-
-  static CallStatus _parseStatus(String? s) {
-    switch (s) {
-      case 'accepted': return CallStatus.accepted;
-      case 'rejected': return CallStatus.rejected;
-      case 'ended':    return CallStatus.ended;
-      case 'missed':   return CallStatus.missed;
-      default:         return CallStatus.ringing;
-    }
-  }
 
   bool get isVoice => type == CallType.voice;
   bool get isVideo => type == CallType.video;
 }
 
 class CallService {
-  // ── Singleton ──────────────────────────────────────────────────────────────
-  CallService._();
+  CallService._() {
+    _delegate = _WrytteWebRtcDelegate(this);
+  }
   static final CallService instance = CallService._();
 
-  // ── Firebase ───────────────────────────────────────────────────────────────
-  final FirebaseFirestore _db   = FirebaseFirestore.instance;
-  final FirebaseAuth      _auth = FirebaseAuth.instance;
+  late final _WrytteWebRtcDelegate _delegate;
 
-  // ── WebRTC ─────────────────────────────────────────────────────────────────
-  RTCPeerConnection? _peerConnection;
-  MediaStream?       _localStream;
-  MediaStream?       _remoteStream;
-
-  // ── State ──────────────────────────────────────────────────────────────────
-  String? _currentCallId;
-  bool    _isCaller = false;
-
-  StreamSubscription? _callStatusSub;
-  StreamSubscription? _candidatesSub;
+  mx.CallSession? _activeSession;
+  webrtc.MediaStream? _localStream;
+  webrtc.MediaStream? _remoteStream;
   StreamSubscription? _incomingCallSub;
+  final Set<String> _attachedCallIds = {};
 
-  // ── Stream controllers ─────────────────────────────────────────────────────
-  final _incomingCallController  = StreamController<CallData>.broadcast();
-  final _callStatusController    = StreamController<CallStatus>.broadcast();
-  final _remoteStreamController  = StreamController<MediaStream>.broadcast();
-  // NEW: fires when local camera/mic stream is ready so the UI can attach it
-  final _localStreamController   = StreamController<MediaStream>.broadcast();
+  final _incomingCallController = StreamController<CallData>.broadcast();
+  final _callStatusController = StreamController<CallStatus>.broadcast();
+  final _remoteStreamController =
+      StreamController<webrtc.MediaStream>.broadcast();
+  final _localStreamController =
+      StreamController<webrtc.MediaStream>.broadcast();
 
-  // ── Public streams ─────────────────────────────────────────────────────────
-  Stream<CallData>    get incomingCallStream => _incomingCallController.stream;
-  Stream<CallStatus>  get callStatusStream   => _callStatusController.stream;
-  Stream<MediaStream> get remoteStreamStream => _remoteStreamController.stream;
-  Stream<MediaStream> get localStreamStream  => _localStreamController.stream;
+  Stream<CallData> get incomingCallStream => _incomingCallController.stream;
+  Stream<CallStatus> get callStatusStream => _callStatusController.stream;
+  Stream<webrtc.MediaStream> get remoteStreamStream =>
+      _remoteStreamController.stream;
+  Stream<webrtc.MediaStream> get localStreamStream =>
+      _localStreamController.stream;
 
-  // ── Accessors ──────────────────────────────────────────────────────────────
-  MediaStream? get localStream   => _localStream;
-  MediaStream? get remoteStream  => _remoteStream;
-  String?      get currentCallId => _currentCallId;
+  webrtc.MediaStream? get localStream => _localStream;
+  webrtc.MediaStream? get remoteStream => _remoteStream;
+  String? get currentCallId => _activeSession?.callId;
 
-  // ── STUN config ───────────────────────────────────────────────────────────
-  static const Map<String, dynamic> _iceConfig = {
-    'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
-    ],
-    'sdpSemantics': 'unified-plan',
-  };
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  INCOMING CALL LISTENER
-  // ══════════════════════════════════════════════════════════════════════════
-
-  void startListeningForIncomingCalls() {
-    final myId = _auth.currentUser?.uid;
-    if (myId == null) return;
-
-    _incomingCallSub?.cancel();
-    _incomingCallSub = _db
-        .collection('calls')
-        .where('receiverId', isEqualTo: myId)
-        .where('status',     isEqualTo: 'ringing')
-        .snapshots()
-        .listen((snapshot) {
-          for (final change in snapshot.docChanges) {
-            if (change.type == DocumentChangeType.added) {
-              final data = change.doc.data() as Map<String, dynamic>?;
-              if (data == null) continue;
-              _incomingCallController.add(
-                CallData.fromMap(change.doc.id, data),
-              );
-            }
-          }
-        });
+  Future<void> startListeningForIncomingCalls() async {
+    final voip = await MatrixCallService.instance.ensureStarted(_delegate);
+    _incomingCallSub ??= MatrixCallService.instance.incomingCalls.listen((call) {
+      final session = call.session;
+      _attachSession(session);
+      _incomingCallController.add(
+        CallData(
+          callId: session.callId,
+          callerId: session.remoteUserId ?? '',
+          callerName: session.remoteUser?.displayName ??
+              session.remoteUserId ??
+              'Incoming call',
+          callerAvatar: session.remoteUser?.avatarUrl?.toString() ?? '',
+          receiverId: MatrixClientService.instance.userId ?? '',
+          type: call.isVideo ? CallType.video : CallType.voice,
+          status: CallStatus.ringing,
+          matrixSession: session,
+        ),
+      );
+    });
+    debugPrint('[CallService] Matrix VoIP ready: ${voip.localPartyId}');
   }
 
-  void stopListeningForIncomingCalls() {
-    _incomingCallSub?.cancel();
+  Future<void> stopListeningForIncomingCalls() async {
+    await _incomingCallSub?.cancel();
     _incomingCallSub = null;
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  MAKE CALL  (caller side)
-  // ══════════════════════════════════════════════════════════════════════════
-
   Future<String> makeCall({
-    required String   receiverId,
+    required String receiverId,
     required CallType type,
-    required String   callerName,
-    String            callerAvatar = '',
+    required String callerName,
+    String callerAvatar = '',
   }) async {
-    final myId = _auth.currentUser?.uid;
-    if (myId == null) throw Exception('Not authenticated');
+    await ChatService().connect();
+    final roomId = await ChatService().getMatrixConversationId(receiverId);
+    if (roomId == null || roomId.isEmpty) {
+      throw Exception('Could not create Matrix direct room for $receiverId');
+    }
 
-    _isCaller = true;
-
-    // 1. Local media — emit on stream so CallScreen can attach to renderer
-    await _getLocalStream(type);
-
-    // 2. Peer connection
-    await _createPeerConnection();
-
-    // 3. Firestore call doc
-    final callRef  = _db.collection('calls').doc();
-    _currentCallId = callRef.id;
-
-    await callRef.set({
-      'callerId':     myId,
-      'callerName':   callerName,
-      'callerAvatar': callerAvatar,
-      'receiverId':   receiverId,
-      'type':         type == CallType.video ? 'video' : 'voice',
-      'status':       'ringing',
-      'offer':        null,
-      'answer':       null,
-      'createdAt':    FieldValue.serverTimestamp(),
-      'endedAt':      null,
-    });
-
-    // 4. ICE candidates → callerCandidates
-    _peerConnection!.onIceCandidate = (candidate) {
-      callRef.collection('callerCandidates').add(candidate.toMap());
-    };
-
-    // 5. Create + set offer
-    final offer = await _peerConnection!.createOffer({
-      'mandatory': {
-        'OfferToReceiveAudio': true,
-        'OfferToReceiveVideo': type == CallType.video,
-      },
-    });
-    await _peerConnection!.setLocalDescription(offer);
-
-    // 6. Write offer
-    await callRef.update({
-      'offer': {'sdp': offer.sdp, 'type': offer.type},
-    });
-
-    // 7. Watch for answer / rejection / end
-    _callStatusSub = callRef.snapshots().listen((snap) async {
-      final data   = snap.data() as Map<String, dynamic>?;
-      if (data == null) return;
-      final status = data['status'] as String?;
-
-      if (status == 'accepted' && data['answer'] != null) {
-        final remote = await _peerConnection?.getRemoteDescription();
-        if (remote == null) {
-          final a = data['answer'] as Map<String, dynamic>;
-          await _peerConnection?.setRemoteDescription(
-            RTCSessionDescription(a['sdp'], a['type']),
-          );
-        }
-        _callStatusController.add(CallStatus.accepted);
-      } else if (status == 'rejected') {
-        _callStatusController.add(CallStatus.rejected);
-        await _cleanup();
-      } else if (status == 'ended') {
-        _callStatusController.add(CallStatus.ended);
-        await _cleanup();
-      }
-    });
-
-    // 8. Watch receiver's ICE candidates
-    _listenForRemoteCandidates(callRef, 'receiverCandidates');
-
-    return _currentCallId!;
+    final session = await MatrixCallService.instance.invite(
+      delegate: _delegate,
+      roomId: roomId,
+      video: type == CallType.video,
+      userId: _toMatrixUserId(receiverId),
+    );
+    _attachSession(session);
+    _callStatusController.add(CallStatus.ringing);
+    return session.callId;
   }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  ACCEPT CALL  (receiver side)
-  // ══════════════════════════════════════════════════════════════════════════
 
   Future<void> acceptCall(CallData call) async {
-    _isCaller      = false;
-    _currentCallId = call.callId;
-
-    final callRef = _db.collection('calls').doc(call.callId);
-
-    // 1. Local media — emit on stream so CallScreen can attach to renderer
-    await _getLocalStream(call.type);
-
-    // 2. Peer connection
-    await _createPeerConnection();
-
-    // 3. Read offer
-    final snap = await callRef.get();
-    final data = snap.data() as Map<String, dynamic>?;
-    if (data == null) throw Exception('Call document not found');
-
-    final offerMap = data['offer'] as Map<String, dynamic>?;
-    if (offerMap == null) throw Exception('Offer missing');
-
-    await _peerConnection!.setRemoteDescription(
-      RTCSessionDescription(offerMap['sdp'], offerMap['type']),
-    );
-
-    // 4. ICE candidates → receiverCandidates
-    _peerConnection!.onIceCandidate = (candidate) {
-      callRef.collection('receiverCandidates').add(candidate.toMap());
-    };
-
-    // 5. Create + set answer
-    final answer = await _peerConnection!.createAnswer();
-    await _peerConnection!.setLocalDescription(answer);
-
-    // 6. Write answer + accept
-    await callRef.update({
-      'answer': {'sdp': answer.sdp, 'type': answer.type},
-      'status': 'accepted',
-    });
-
-    // 7. Watch caller's ICE candidates
-    _listenForRemoteCandidates(callRef, 'callerCandidates');
-
-    // 8. Watch for call end
-    _callStatusSub = callRef.snapshots().listen((snap) {
-      final d = snap.data() as Map<String, dynamic>?;
-      if (d == null) return;
-      if (d['status'] == 'ended') {
-        _callStatusController.add(CallStatus.ended);
-        _cleanup();
-      }
-    });
+    final session = call.matrixSession ?? _activeSession;
+    if (session == null) throw Exception('No active Matrix call session');
+    _attachSession(session);
+    await MatrixCallService.instance.answer(session);
+    _callStatusController.add(CallStatus.accepted);
   }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  REJECT CALL
-  // ══════════════════════════════════════════════════════════════════════════
 
   Future<void> rejectCall(String callId) async {
-    await _db.collection('calls').doc(callId).update({
-      'status':  'rejected',
-      'endedAt': FieldValue.serverTimestamp(),
-    });
+    final session = _activeSession;
+    if (session != null && session.callId == callId) {
+      await MatrixCallService.instance.reject(session);
+    }
+    _callStatusController.add(CallStatus.rejected);
     await _cleanup();
   }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  END CALL  (either side)
-  // ══════════════════════════════════════════════════════════════════════════
 
   Future<void> endCall() async {
-    if (_currentCallId != null) {
-      try {
-        await _db.collection('calls').doc(_currentCallId).update({
-          'status':  'ended',
-          'endedAt': FieldValue.serverTimestamp(),
-        });
-      } catch (e) {
-        debugPrint('[CallService] endCall error: $e');
-      }
+    final session = _activeSession;
+    if (session != null) {
+      await MatrixCallService.instance.hangup(session);
     }
+    _callStatusController.add(CallStatus.ended);
     await _cleanup();
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  MEDIA CONTROLS
-  // ══════════════════════════════════════════════════════════════════════════
-
   void setMicrophoneMuted(bool muted) {
-    _localStream?.getAudioTracks().forEach((t) => t.enabled = !muted);
+    final session = _activeSession;
+    if (session != null) unawaited(session.setMicrophoneMuted(muted));
+    _localStream?.getAudioTracks().forEach((track) => track.enabled = !muted);
   }
 
   void setCameraEnabled(bool enabled) {
-    _localStream?.getVideoTracks().forEach((t) => t.enabled = enabled);
+    final session = _activeSession;
+    if (session != null) unawaited(session.setLocalVideoMuted(!enabled));
+    _localStream?.getVideoTracks().forEach((track) => track.enabled = enabled);
   }
 
   Future<void> setSpeakerOn(bool on) async {
-    await Helper.setSpeakerphoneOn(on);
+    await webrtc.Helper.setSpeakerphoneOn(on);
   }
 
   Future<void> switchCamera() async {
-    final track = _localStream?.getVideoTracks().firstOrNull;
-    if (track != null) await Helper.switchCamera(track);
+    final tracks = _localStream?.getVideoTracks() ?? const [];
+    final track = tracks.isEmpty ? null : tracks.first;
+    if (track != null) await webrtc.Helper.switchCamera(track);
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  PRIVATE
-  // ══════════════════════════════════════════════════════════════════════════
+  void _attachSession(mx.CallSession session) {
+    _activeSession = session;
+    if (_attachedCallIds.add(session.callId)) {
+      _delegate.attach(session);
+    }
 
-  Future<void> _getLocalStream(CallType type) async {
-    _localStream = await navigator.mediaDevices.getUserMedia({
-      'audio': true,
-      'video': type == CallType.video
-          ? {'facingMode': 'user', 'width': 1280, 'height': 720}
-          : false,
-    });
-    // Emit so CallScreen can attach to the renderer immediately
-    _localStreamController.add(_localStream!);
+    for (final stream in session.getLocalStreams) {
+      _publishStream(stream);
+    }
+    for (final stream in session.getRemoteStreams) {
+      _publishStream(stream);
+    }
   }
 
-  Future<void> _createPeerConnection() async {
-    _peerConnection = await createPeerConnection(_iceConfig);
-
-    _localStream?.getTracks().forEach((track) {
-      _peerConnection!.addTrack(track, _localStream!);
-    });
-
-    _peerConnection!.onTrack = (event) {
-      if (event.streams.isNotEmpty) {
-        _remoteStream = event.streams.first;
-        _remoteStreamController.add(_remoteStream!);
-      }
-    };
-
-    _peerConnection!.onConnectionState = (state) {
-      debugPrint('[CallService] PeerConnection state: $state');
-      if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-          state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-        _callStatusController.add(CallStatus.ended);
-        _cleanup();
-      }
-    };
-  }
-
-  void _listenForRemoteCandidates(
-    DocumentReference callRef,
-    String collection,
-  ) {
-    _candidatesSub?.cancel();
-    _candidatesSub = callRef
-        .collection(collection)
-        .snapshots()
-        .listen((snap) {
-          for (final change in snap.docChanges) {
-            if (change.type == DocumentChangeType.added) {
-              final d = change.doc.data() as Map<String, dynamic>?;
-              if (d == null) continue;
-              _peerConnection?.addCandidate(
-                RTCIceCandidate(
-                  d['candidate'],
-                  d['sdpMid'],
-                  d['sdpMLineIndex'],
-                ),
-              );
-            }
-          }
-        });
+  void _publishStream(mx.WrappedMediaStream wrapped) {
+    final stream = wrapped.stream;
+    if (stream == null) return;
+    if (wrapped.isLocal()) {
+      _localStream = stream as webrtc.MediaStream;
+      _localStreamController.add(_localStream!);
+    } else {
+      _remoteStream = stream as webrtc.MediaStream;
+      _remoteStreamController.add(_remoteStream!);
+      _callStatusController.add(CallStatus.accepted);
+    }
   }
 
   Future<void> _cleanup() async {
-    _callStatusSub?.cancel();
-    _callStatusSub = null;
-    _candidatesSub?.cancel();
-    _candidatesSub = null;
-
-    await _localStream?.dispose();
+    _activeSession = null;
+    _attachedCallIds.clear();
     _localStream = null;
-    await _remoteStream?.dispose();
     _remoteStream = null;
+  }
 
-    await _peerConnection?.close();
-    _peerConnection = null;
-
-    _currentCallId = null;
-    _isCaller      = false;
+  String _toMatrixUserId(String value) {
+    final trimmed = value.trim();
+    if (trimmed.startsWith('@') && trimmed.contains(':')) return trimmed;
+    final own = MatrixClientService.instance.userId;
+    final domain = own != null && own.contains(':')
+        ? own.split(':').last
+        : MatrixConfig.serverName;
+    final localpart = trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
+    return '@$localpart:$domain';
   }
 
   void dispose() {
@@ -419,4 +222,88 @@ class CallService {
     _remoteStreamController.close();
     _localStreamController.close();
   }
+}
+
+class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
+  _WrytteWebRtcDelegate(this._service);
+
+  final CallService _service;
+
+  void attach(mx.CallSession session) {
+    registerListeners(session);
+  }
+
+  @override
+  webrtc.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices;
+
+  @override
+  Future<webrtc.RTCPeerConnection> createPeerConnection(
+    Map<String, dynamic> configuration, [
+    Map<String, dynamic> constraints = const {},
+  ]) {
+    return webrtc.createPeerConnection(configuration, constraints);
+  }
+
+  @override
+  Future<void> playRingtone() async {
+    try {
+      await FlutterRingtonePlayer().playRingtone(looping: true);
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> stopRingtone() async {
+    try {
+      await FlutterRingtonePlayer().stop();
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> registerListeners(mx.CallSession session) async {
+    session.onStreamAdd.stream.listen(_service._publishStream);
+    session.onStreamRemoved.stream.listen((_) {});
+    session.onCallStateChanged.stream.listen((state) {
+      switch (state) {
+        case mx.CallState.kConnected:
+          _service._callStatusController.add(CallStatus.accepted);
+          break;
+        case mx.CallState.kEnded:
+        case mx.CallState.kEnding:
+          _service._callStatusController.add(CallStatus.ended);
+          break;
+        default:
+          break;
+      }
+    });
+  }
+
+  @override
+  Future<void> handleNewCall(mx.CallSession session) async {
+    _service._attachSession(session);
+  }
+
+  @override
+  Future<void> handleCallEnded(mx.CallSession session) async {
+    _service._callStatusController.add(CallStatus.ended);
+  }
+
+  @override
+  Future<void> handleMissedCall(mx.CallSession session) async {
+    _service._callStatusController.add(CallStatus.missed);
+  }
+
+  @override
+  Future<void> handleNewGroupCall(mx.GroupCallSession groupCall) async {}
+
+  @override
+  Future<void> handleGroupCallEnded(mx.GroupCallSession groupCall) async {}
+
+  @override
+  bool get isWeb => kIsWeb;
+
+  @override
+  bool get canHandleNewCall => true;
+
+  @override
+  mx.EncryptionKeyProvider? get keyProvider => null;
 }

@@ -207,7 +207,8 @@ class _NewContactPageState extends State<NewContactPage> {
   }
 
   Future<void> _lookupUser() async {
-    final freshToken = await AuthService.instance.getOpenImToken() ?? widget.token;
+    final freshToken =
+        await AuthService.instance.getMatrixAccessToken() ?? widget.token;
     debugPrint('🔍 _lookupUser called, identifier: $_fullIdentifier');
     final identifier = _fullIdentifier;
     if (identifier.isEmpty) return;
@@ -276,7 +277,7 @@ class _NewContactPageState extends State<NewContactPage> {
         fullIdentifier: _fullIdentifier,
         wrytteUserId: _resolvedUserId,
         syncToPhone: _syncToPhone,
-        token: await AuthService.instance.getOpenImToken() ?? widget.token,
+        token: await AuthService.instance.getMatrixAccessToken() ?? widget.token,
         selfUserId: selfId,
       );
 

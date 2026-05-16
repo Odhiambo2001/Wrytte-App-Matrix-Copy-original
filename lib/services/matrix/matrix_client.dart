@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart' as sqlite;
+
+import 'matrix_config.dart';
 
 class MatrixClientService {
   MatrixClientService._();
@@ -34,15 +37,28 @@ class MatrixClientService {
 
   Future<Client> _buildClient() async {
     final supportDir = await getApplicationSupportDirectory();
+    final cacheDir = await getApplicationCacheDirectory();
+    final mediaDir = Directory('${cacheDir.path}/matrix_media');
+    if (!await mediaDir.exists()) {
+      await mediaDir.create(recursive: true);
+    }
     final database = await sqlite.openDatabase(
-      '${supportDir.path}/wrytte_matrix.sqlite',
+      '${supportDir.path}/${MatrixConfig.localDatabaseFile}',
+      onConfigure: (db) async {
+        await db.execute('PRAGMA foreign_keys = ON');
+        await db.execute('PRAGMA journal_mode = WAL');
+        await db.execute('PRAGMA synchronous = NORMAL');
+      },
     );
 
     final client = Client(
-      'Wrytte',
+      MatrixConfig.appServiceName,
       database: await MatrixSdkDatabase.init(
-        'wrytte_matrix',
+        MatrixConfig.localDatabaseName,
         database: database,
+        maxFileSize: MatrixConfig.localMediaMaxBytes,
+        fileStorageLocation: Uri.directory('${mediaDir.path}/'),
+        deleteFilesAfterDuration: MatrixConfig.localMediaTtl,
       ),
     );
     await client.init(waitForFirstSync: false);

@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dendrite
+      POSTGRES_USER: dendrite
+      POSTGRES_PASSWORD: change_this_postgres_password
+    volumes:
+      - dendrite_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dendrite -d dendrite"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - dendrite_internal
+
+  dendrite:
+    image: ghcr.io/element-hq/dendrite-monolith:v0.15.2
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8008:8008"
+      - "127.0.0.1:8448:8448"
+    volumes:
+      - ./config:/etc/dendrite:ro
+      - dendrite_media:/var/dendrite/media
+      - dendrite_jetstream:/var/dendrite/jetstream
+      - dendrite_search:/var/dendrite/searchindex
+      - dendrite_logs:/var/log/dendrite
+    networks:
+      - dendrite_internal
+
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    restart: unless-stopped
+    command:
+      - --no-cli
+      - --no-tcp-relay
+      - --fingerprint
+      - --lt-cred-mech
+      - --use-auth-secret
+      - --static-auth-secret=change_this_turn_shared_secret
+      - --realm=matrix.wrytte.com
+      - --listening-port=3478
+      - --tls-listening-port=5349
+      - --min-port=49160
+      - --max-port=49200
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "5349:5349/tcp"
+      - "49160-49200:49160-49200/udp"
+    networks:
+      - dendrite_internal
+
+networks:
+  dendrite_internal:
+    driver: bridge
+
+volumes:
+  dendrite_postgres:
+  dendrite_media:
+  dendrite_jetstream:
+  dendrite_search:
+  dendrite_logs:

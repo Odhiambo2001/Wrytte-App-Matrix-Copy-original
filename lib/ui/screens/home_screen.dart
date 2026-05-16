@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
-import 'package:wrytte/ui/screens/chats/conversations_screen.dart';
+import 'package:wrytte/ui/screens/chats/conversations_screen.dart'; // ← this one
 import 'calls/calls_screen.dart';
 import 'post/post_screen.dart';
 import 'shops/shops_screen.dart';

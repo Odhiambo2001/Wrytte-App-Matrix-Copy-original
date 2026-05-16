@@ -113,11 +113,22 @@ class UserService {
         final client = MatrixClientService.instance.client;
         final matrixUserId = client.userID;
         if (matrixUserId != null) {
-
-          if (name != null) {await client.setProfileField(matrixUserId,'m.displayname',{'displayname': name},);
-        }
-        if (profileImage != null && profileImage.isNotEmpty) {await client.setProfileField(matrixUserId,'m.avatar_url', {'avatar_url': profileImage},);
-        }   
+          if (name != null) {
+            await client.setProfileField(
+              matrixUserId,
+              'displayname',
+              {'displayname': name},
+            );
+          }
+          if (profileImage != null &&
+              profileImage.isNotEmpty &&
+              profileImage.startsWith('mxc://')) {
+            await client.setProfileField(
+              matrixUserId,
+              'avatar_url',
+              {'avatar_url': profileImage},
+            );
+          }
         }
       } catch (e) {
         print('Matrix profile update skipped: $e');

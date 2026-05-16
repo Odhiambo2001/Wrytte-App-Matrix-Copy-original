@@ -24,6 +24,11 @@ class MessageBubble extends StatelessWidget {
   final bool isVoiceNote;
   final int? voiceDuration;   // total seconds
   final String? audioUrl;     // CDN URL from Matrix media upload
+  final bool isForwarded;
+  final bool isStarred;
+  final bool isDeleted;
+  final String? replyPreview;
+  final String? replySender;
 
   static const Color _blue     = Color(0xFF4DA3FF);
   static const Color _incoming = Color(0xFF23262C);
@@ -40,6 +45,11 @@ class MessageBubble extends StatelessWidget {
     this.isVoiceNote = false,
     this.voiceDuration,
     this.audioUrl,
+    this.isForwarded = false,
+    this.isStarred = false,
+    this.isDeleted = false,
+    this.replyPreview,
+    this.replySender,
   });
 
   static const double _tailW = 8.0;
@@ -91,6 +101,12 @@ class MessageBubble extends StatelessWidget {
                   : _BubbleContent(
                       content: content,
                       timeWidget: timeWidget,
+                      isForwarded: isForwarded,
+                      isStarred: isStarred,
+                      isDeleted: isDeleted,
+                      replyPreview: replyPreview,
+                      replySender: replySender,
+                      isMine: isMine,
                     ),
             ),
           ),
@@ -348,8 +364,23 @@ class _WaveformBars extends StatelessWidget {
 class _BubbleContent extends StatelessWidget {
   final String content;
   final Widget timeWidget;
+  final bool isForwarded;
+  final bool isStarred;
+  final bool isDeleted;
+  final String? replyPreview;
+  final String? replySender;
+  final bool isMine;
 
-  const _BubbleContent({required this.content, required this.timeWidget});
+  const _BubbleContent({
+    required this.content,
+    required this.timeWidget,
+    required this.isMine,
+    this.isForwarded = false,
+    this.isStarred = false,
+    this.isDeleted = false,
+    this.replyPreview,
+    this.replySender,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -357,28 +388,114 @@ class _BubbleContent extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.only(bottom: 0),
-          child: Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(
-                  text: content,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    height: 1.35,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (isForwarded)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.shortcut_rounded,
+                        size: 14,
+                        color: Colors.white.withOpacity(0.48),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Forwarded',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.48),
+                          fontSize: 13,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                WidgetSpan(
-                  child: Opacity(
-                    opacity: 0,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: timeWidget,
+              if (replyPreview != null && replyPreview!.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(isMine ? 0.16 : 0.22),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border(
+                      left: BorderSide(
+                        color: isMine
+                            ? Colors.white.withOpacity(0.8)
+                            : const Color(0xFF4DA3FF),
+                        width: 3,
+                      ),
                     ),
                   ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (replySender != null && replySender!.isNotEmpty)
+                        Text(
+                          replySender!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF9BD2FF),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      Text(
+                        replyPreview!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.68),
+                          fontSize: 12,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
-            ),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    if (isStarred)
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Icon(
+                            Icons.star_rounded,
+                            size: 15,
+                            color: Colors.white.withOpacity(0.72),
+                          ),
+                        ),
+                      ),
+                    TextSpan(
+                      text: isDeleted ? 'This message was deleted' : content,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(isDeleted ? 0.65 : 1),
+                        fontSize: 15,
+                        height: 1.35,
+                        fontStyle: isDeleted ? FontStyle.italic : FontStyle.normal,
+                      ),
+                    ),
+                    WidgetSpan(
+                      child: Opacity(
+                        opacity: 0,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: timeWidget,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
         Positioned(bottom: 0, right: 0, child: timeWidget),

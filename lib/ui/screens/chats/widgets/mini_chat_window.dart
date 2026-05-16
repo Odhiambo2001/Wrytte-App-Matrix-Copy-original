@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
@@ -49,11 +50,16 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
   }
 
   void _listen() async {
-    await _chat.connect();
-    final messages = await _chat.fetchMessageHistory(
-      conversationID: widget.conversationId,
-      count: 30,
-    );
+    List<ChatMessage> messages;
+    try {
+      await _chat.connect();
+      messages = await _chat.fetchMessageHistory(
+        conversationID: widget.conversationId,
+        count: 30,
+      );
+    } catch (_) {
+      messages = await ChatLocalDb.instance.loadMessages(widget.conversationId);
+    }
     if (mounted) {
       setState(() => _messages = messages);
       _scrollToBottom();

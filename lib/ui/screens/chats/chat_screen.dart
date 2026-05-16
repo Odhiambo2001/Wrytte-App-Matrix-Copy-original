@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:wrytte/components/user_avatar.dart';
+import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/call_service.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/calls/call_screen.dart';
@@ -56,9 +58,10 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _hasMoreOlder = true;
 
   bool    _isSending = false;
-  String? _sendError;
+  bool _matrixAvailable = false;
 
   UserProfile? _receiverProfile;
+  ChatMessage? _replyingTo;
 
   // ── debug overlay ──────────────────────────────────────────────────────────
   bool _showDebug = false;
@@ -127,8 +130,15 @@ class _ChatScreenState extends State<ChatScreen> {
       return _resolvedConversationId!;
     }
 
+    if (!_matrixAvailable) {
+      _resolvedConversationId = widget.conversationId;
+      apkLog('ChatScreen._resolveConv',
+          'Matrix unavailable; using local convId "$_resolvedConversationId"');
+      return _resolvedConversationId!;
+    }
+
     _resolvedConversationId =
-        await _chat.getOpenImConversationId(normalisedReceiverId) ??
+        await _chat.getMatrixConversationId(normalisedReceiverId) ??
             widget.conversationId;
     apkLog('ChatScreen._resolveConv',
         'Matrix direct room -> "$_resolvedConversationId"');
@@ -139,25 +149,20 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── INIT ──────────────────────────────────────────────────────────────────
 
   Future<void> _loadInitial() async {
+    _matrixAvailable = false;
+    await _loadLocalMessages();
+
     apkLog('ChatScreen._loadInitial', 'calling chat.connect()…');
 
-    // ── FIX: catch connect failure and bail out early ─────────────────────
     try {
       await _chat.connect();
+      _matrixAvailable = true;
+      _resolvedConversationId = null;
     } catch (e) {
+      _matrixAvailable = false;
       apkLog('ChatScreen._loadInitial', ' connect() FAILED: $e');
-      if (mounted) {
-        setState(() {}); // optionally show an error state in UI
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Could not connect to chat: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
-      return; // stop — do not attempt fetchMessageHistory or subscribe
+      return; // Matrix unavailable; keep the chat usable with local messages.
     }
-    // ─────────────────────────────────────────────────────────────────────
 
     apkLog('ChatScreen._loadInitial',
         'connect() done  isConnected=${_chat.isConnected}'); // use actual flag
@@ -189,6 +194,16 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
 
+  Future<void> _loadLocalMessages() async {
+    final convId = await _resolveConversationId();
+    final msgs = await _chat.loadCachedMessages(convId);
+    apkLog('ChatScreen._loadLocalMessages',
+        'loaded ${msgs.length} local msgs for "$convId"');
+    if (!mounted) return;
+    setState(() => _mergeMessages(msgs));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+  }
+
 
   Future<void> _loadReceiverProfile() async {
     final profile =
@@ -208,6 +223,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadOlderMessages() async {
     if (_loadingOlder || !_hasMoreOlder) return;
+    if (!_matrixAvailable) {
+      setState(() => _hasMoreOlder = false);
+      return;
+    }
     setState(() => _loadingOlder = true);
 
     final realConvId = await _resolveConversationId();
@@ -259,7 +278,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty || _isSending) return;
 
     _controller.clear();
-    setState(() => _isSending = true);
+    final reply = _replyingTo;
+    setState(() {
+      _isSending = true;
+      _replyingTo = null;
+    });
 
     final realConvId           = await _resolveConversationId();
     final normalisedReceiverId = _normaliseId(widget.receiverId);
@@ -276,11 +299,28 @@ class _ChatScreenState extends State<ChatScreen> {
       content: text,
       timestamp: DateTime.now(),
       status: MessageStatus.sending,
+      replyToMessageId: reply?.id,
+      replyToSenderId: reply?.senderId,
+      replyPreview: reply == null
+          ? null
+          : (reply.isVoiceNote ? 'Voice note' : reply.content),
     );
 
     setState(() => _messages.add(optimistic));
     _optimisticIdByContent['${normalisedReceiverId}_$text'] = optimistic.id;
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+
+    if (!_matrixAvailable) {
+      final local = optimistic.copyWith(status: MessageStatus.failed);
+      await _saveLocalMessage(local);
+      if (mounted) {
+        setState(() {
+          _replaceOptimisticMessage(optimistic.id, local);
+        });
+      }
+      if (mounted) setState(() => _isSending = false);
+      return;
+    }
 
     try {
       apkLog('ChatScreen._send', 'calling chat.sendMessage…');
@@ -288,26 +328,21 @@ class _ChatScreenState extends State<ChatScreen> {
       apkLog('ChatScreen._send',
           ' sent  id=${sent.id}  status=${sent.status}');
 
+      await _saveLocalMessage(sent);
       if (mounted) {
         setState(() => _replaceOptimisticMessage(optimistic.id, sent));
       }
     } catch (e) {
       apkLog('ChatScreen._send', ' SEND FAILED: $e');
+      final local = optimistic.copyWith(status: MessageStatus.failed);
+      await _saveLocalMessage(local);
       if (mounted) {
         setState(() {
           final idx = _messages.indexWhere((m) => m.id == optimistic.id);
           if (idx != -1) {
-            _messages[idx] =
-                optimistic.copyWith(status: MessageStatus.failed);
+            _messages[idx] = local;
           }
-          _sendError = e.toString();
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to send: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
       }
     } finally {
       if (mounted) setState(() => _isSending = false);
@@ -315,6 +350,16 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   // ─── SEND VOICE ────────────────────────────────────────────────────────────
+
+  Future<void> _saveLocalMessage(ChatMessage message) async {
+    await ChatLocalDb.instance.saveMessage(message);
+    await ChatLocalDb.instance.saveConversations([
+      ChatConversation.fromMessage(message, widget.currentUserId).copyWith(
+        otherUserName: widget.title,
+        otherUserAvatar: widget.avatarUrl,
+      ),
+    ]);
+  }
 
   Future<void> _sendVoiceNote(String filePath, int durationSeconds) async {
     final realConvId           = await _resolveConversationId();
@@ -465,6 +510,184 @@ class _ChatScreenState extends State<ChatScreen> {
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
 
+  Future<void> _showMessageActions(ChatMessage message) async {
+    final isMine = _isMine(message);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF111318),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              _messageActionTile(
+                icon: Icons.reply,
+                label: 'Reply',
+                onTap: () {
+                  Navigator.pop(context);
+                  setState(() => _replyingTo = message);
+                  _focusNode.requestFocus();
+                },
+              ),
+              _messageActionTile(
+                icon: Icons.shortcut_rounded,
+                label: 'Forward',
+                onTap: () {
+                  Navigator.pop(context);
+                  _promptForward(message);
+                },
+              ),
+              _messageActionTile(
+                icon: message.isStarred
+                    ? Icons.star_rounded
+                    : Icons.star_border_rounded,
+                label: message.isStarred ? 'Unstar' : 'Star',
+                onTap: () async {
+                  Navigator.pop(context);
+                  final updated = message.copyWith(
+                    isStarred: !message.isStarred,
+                  );
+                  await _chat.starMessage(message, !message.isStarred);
+                  if (!mounted) return;
+                  setState(() => _upsertMessage(updated));
+                },
+              ),
+              _messageActionTile(
+                icon: Icons.delete_outline,
+                label: 'Delete for me',
+                onTap: () async {
+                  Navigator.pop(context);
+                  await _chat.deleteMessageForMe(message);
+                  if (!mounted) return;
+                  setState(() {
+                    _messages.removeWhere((m) => m.id == message.id);
+                  });
+                },
+              ),
+              if (isMine &&
+                  message.status != MessageStatus.sending &&
+                  message.status != MessageStatus.failed &&
+                  !message.id.startsWith('opt_'))
+                _messageActionTile(
+                  icon: Icons.delete_forever_outlined,
+                  label: 'Delete for everyone',
+                  destructive: true,
+                  onTap: () async {
+                    Navigator.pop(context);
+                    try {
+                      await _chat.deleteMessageForEveryone(message);
+                      if (!mounted) return;
+                      setState(() => _upsertMessage(message.copyWith(
+                            content: '',
+                            isDeletedForEveryone: true,
+                          )));
+                    } catch (e) {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Could not delete message: $e'),
+                          backgroundColor: Colors.redAccent,
+                        ),
+                      );
+                    }
+                  },
+                ),
+              if (message.status == MessageStatus.sending)
+                _messageActionTile(
+                  icon: Icons.close,
+                  label: 'Cancel',
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _chat.cancelLocalMessage(message);
+                    if (!mounted) return;
+                    setState(() {
+                      _messages.removeWhere((m) => m.id == message.id);
+                    });
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _messageActionTile({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    bool destructive = false,
+  }) {
+    final color = destructive ? const Color(0xFFFF6B6B) : Colors.white;
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(label, style: TextStyle(color: color)),
+      onTap: onTap,
+    );
+  }
+
+  Future<void> _promptForward(ChatMessage message) async {
+    final controller = TextEditingController();
+    final receiver = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF181B22),
+        title: const Text(
+          'Forward message',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'Phone, Wrytte ID, or Matrix ID',
+            hintStyle: TextStyle(color: Colors.white38),
+            enabledBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Colors.white24),
+            ),
+            focusedBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF4DA3FF)),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Forward'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (receiver == null || receiver.isEmpty) return;
+
+    try {
+      await _chat.forwardMessage(original: message, receiverId: receiver);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Message forwarded')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not forward message: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
   // ─── BUILD ─────────────────────────────────────────────────────────────────
 
   @override
@@ -483,6 +706,7 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               SizedBox(height: appBarH),
               Expanded(child: _buildMessageList()),
+              if (_replyingTo != null) _buildReplyComposerBanner(),
               MessageInputField(
                 controller: _controller,
                 focusNode:  _focusNode,
@@ -746,27 +970,35 @@ class _ChatScreenState extends State<ChatScreen> {
                   itemCount: _messages.length,
                   itemBuilder: (context, index) {
                     final msg    = _messages[index];
-                    final isMine =
-                        msg.senderId == widget.currentUserId;
+                    final isMine = _isMine(msg);
                     final prev =
                         index > 0 ? _messages[index - 1] : null;
+                    final showDate = prev == null ||
+                        !_isSameDay(prev.timestamp, msg.timestamp);
                     final showTail = prev == null ||
-                        (prev.senderId ==
-                                widget.currentUserId) !=
-                            isMine;
+                        _isMine(prev) != isMine;
                     return Column(
                       children: [
-                        if (index == 0)
-                          _buildDateDivider('Today'),
-                        MessageBubble(
-                          content:       msg.content,
-                          time:          _formatTime(msg.timestamp),
-                          isMine:        isMine,
-                          showTail:      showTail,
-                          status:        isMine ? msg.status : null,
-                          isVoiceNote:   msg.isVoiceNote,
-                          voiceDuration: msg.voiceDuration,
-                          audioUrl:      msg.attachmentUrl,
+                        if (showDate)
+                          _buildDateDivider(_formatDateDivider(msg.timestamp)),
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onLongPress: () => _showMessageActions(msg),
+                          child: MessageBubble(
+                            content:       msg.content,
+                            time:          _formatTime(msg.timestamp),
+                            isMine:        isMine,
+                            showTail:      showTail,
+                            status:        isMine ? msg.status : null,
+                            isVoiceNote:   msg.isVoiceNote,
+                            voiceDuration: msg.voiceDuration,
+                            audioUrl:      msg.attachmentUrl,
+                            isForwarded:   msg.isForwarded,
+                            isStarred:     msg.isStarred,
+                            isDeleted:     msg.isDeleted,
+                            replyPreview:  msg.replyPreview,
+                            replySender:   msg.replyToSenderId,
+                          ),
                         ),
                       ],
                     );
@@ -902,11 +1134,119 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ─── HELPERS ───────────────────────────────────────────────────────────────
 
+  bool _isMine(ChatMessage message) {
+    final current = widget.currentUserId.trim();
+    final sender = message.senderId.trim();
+    if (sender == current) return true;
+    if (sender.startsWith('@') && sender.contains(':')) {
+      return sender.substring(1, sender.indexOf(':')) == current;
+    }
+    return false;
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  String _formatDateDivider(DateTime dt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final date = DateTime(dt.year, dt.month, dt.day);
+    final diff = today.difference(date).inDays;
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Yesterday';
+
+    const weekdays = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    if (diff > 1 && diff < 7) return weekdays[dt.weekday - 1];
+
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final year = dt.year == now.year ? '' : ' ${dt.year}';
+    return '${dt.day} ${months[dt.month - 1]}$year';
+  }
+
   String _formatTime(DateTime dt) {
     final h      = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
     final m      = dt.minute.toString().padLeft(2, '0');
     final period = dt.hour >= 12 ? 'PM' : 'AM';
     return '$h:$m $period';
+  }
+
+  Widget _buildReplyComposerBanner() {
+    final message = _replyingTo!;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF181B22),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 3,
+            height: 42,
+            decoration: BoxDecoration(
+              color: const Color(0xFF4DA3FF),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _isMine(message) ? 'You' : widget.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF9BD2FF),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  message.isVoiceNote ? 'Voice note' : message.content,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.68),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+            onPressed: () => setState(() => _replyingTo = null),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildDateDivider(String label) {

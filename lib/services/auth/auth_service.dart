@@ -9,6 +9,7 @@ import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 
 class AuthService {
   AuthService._();
@@ -31,10 +32,7 @@ class AuthService {
   static const _phoneKey = 'phone';
   static const _matrixPasswordKey = 'matrix_password';
 
-  static const _defaultHomeserver = String.fromEnvironment(
-    'WRYTTE_MATRIX_HOMESERVER',
-    defaultValue: 'https://matrix.org',
-  );
+  static const _defaultHomeserver = MatrixConfig.homeserver;
 
   Future<User?> ensureFirebaseAuth() async {
     try {
@@ -70,10 +68,11 @@ class AuthService {
     final client = MatrixClientService.instance.client;
     if (nickname.trim().isNotEmpty) {
       try {
-        //await client.setDisplayName(client.userID!, nickname.trim());
-        //await client.setDisplayName(client.userID!, nickname.trim());
-
-        await client.setProfileField(client.userID!,'m.displayname',{'displayname': nickname.trim()},);
+        await client.setProfileField(
+          client.userID!,
+          'displayname',
+          {'displayname': nickname.trim()},
+        );
       } catch (e) {
         debugPrint('[AuthService] Matrix display-name update failed: $e');
       }
@@ -90,25 +89,6 @@ class AuthService {
   }
 
   Future<void> logoutFromMatrix() => MatrixAuthService.instance.logout();
-
-  Future<void> loginToMatrix_legacy({
-    required String userId,
-    required String nickname,
-    String faceUrl = '',
-    String imToken = '',
-  }) {
-    return loginToMatrix(userId: userId, nickname: nickname);
-  }
-
-  Future<void> logoutFromMatrix_legacy() => logoutFromMatrix();
-
-  Future<void> ensureOpenImUserExists({
-    required String userId,
-    String nickname = '',
-    String faceUrl = '',
-  }) async {
-    await MatrixAuthService.instance.restore();
-  }
 
   Future<void> persistPhoneSession({
     required String userId,
@@ -128,7 +108,7 @@ class AuthService {
 
     await ensureFirebaseAuth();
     await _ensureUserDocument(uid: userId, phone: phone, username: username);
-    await loginToMatrix(userId: userId, nickname: username);
+    await _tryLoginToMatrix(userId: userId, nickname: username);
   }
 
   Future<void> sendSmsCode(String phone) async {
@@ -170,7 +150,7 @@ class AuthService {
 
     if (login) {
       await _persistAuth(user, phone: normalizedPhone);
-      await loginToMatrix(userId: userId, nickname: effectiveUsername);
+      await _tryLoginToMatrix(userId: userId, nickname: effectiveUsername);
     }
 
     _pendingPhoneOtps.remove(normalizedPhone);
@@ -235,7 +215,7 @@ class AuthService {
 
     if (login) {
       await _persistAuth(user, phone: phone);
-      await loginToMatrix(userId: userId, nickname: effectiveUsername);
+      await _tryLoginToMatrix(userId: userId, nickname: effectiveUsername);
     }
 
     _pendingEmailOtps.remove(normalizedEmail);
@@ -260,7 +240,6 @@ class AuthService {
   Future<String?> getSavedPhone() async => _storage.read(key: _phoneKey);
   Future<String?> getCurrentUserId() async => _storage.read(key: _userIdKey);
   Future<String?> getToken() async => _storage.read(key: _tokenKey);
-  Future<String?> getOpenImToken() async => getMatrixAccessToken();
   Future<String?> getMatrixAccessToken() async =>
       _storage.read(key: MatrixAuthService.matrixAccessTokenKey);
   Future<String?> getChatToken() async => getMatrixAccessToken();
@@ -272,11 +251,11 @@ class AuthService {
     ? MatrixClientService.instance.client
     : null;
     if (client?.userID != null) {
-      //await client!.setProfileField(client.userID!,'m.displayname',username.trim(),);
-
-      //await client!.setDisplayName(client.userID!, username.trim());
-
-      await client!.setProfileField(client.userID!,'m.displayname',{'displayname': username.trim()},);
+      await client!.setProfileField(
+        client.userID!,
+        'displayname',
+        {'displayname': username.trim()},
+      );
     }
   }
 
@@ -305,8 +284,6 @@ class AuthService {
       debugPrint('[AuthService] signOutFirebase error: $e');
     }
   }
-
-  String sanitizeOpenImUserId(String id) => id.replaceAll(RegExp(r'[^\d]'), '');
 
   Future<void> _ensureUserDocument({
     required String uid,
@@ -347,6 +324,17 @@ class AuthService {
       if (phone != null && phone.isNotEmpty) _storage.write(key: _phoneKey, value: phone),
       _storage.delete(key: _expiryKey),
     ]);
+  }
+
+  Future<void> _tryLoginToMatrix({
+    required String userId,
+    required String nickname,
+  }) async {
+    try {
+      await loginToMatrix(userId: userId, nickname: nickname);
+    } catch (e) {
+      debugPrint('[AuthService] Matrix bootstrap skipped: $e');
+    }
   }
 
   Future<String> _matrixPasswordForUser(String userId) async {

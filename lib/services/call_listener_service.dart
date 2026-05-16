@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/call_service.dart';
 import 'package:wrytte/ui/screens/calls/incoming_call_screen.dart';
@@ -13,7 +12,6 @@ import 'package:wrytte/ui/screens/calls/incoming_call_screen.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CallListenerService {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
   final CallService  _callService = CallService.instance;
 
   StreamSubscription? _incomingCallSubscription;
@@ -21,11 +19,8 @@ class CallListenerService {
   // ── Start ──────────────────────────────────────────────────────────────────
 
   void startListening(BuildContext context) {
-    final currentUser = _auth.currentUser;
-    if (currentUser == null) return;
-
-    // Tell CallService to open its Firestore listener
-    _callService.startListeningForIncomingCalls();
+    // Tell CallService to open its Matrix VoIP listener.
+    unawaited(_callService.startListeningForIncomingCalls());
 
     // Forward incoming call events → full-screen IncomingCallScreen
     _incomingCallSubscription =

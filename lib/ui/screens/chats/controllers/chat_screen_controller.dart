@@ -103,7 +103,7 @@ class ChatScreenController {
     if (_cachedConversationId != null) return _cachedConversationId!;
 
     _cachedConversationId =
-        await _chatService.getOpenImConversationId(receiverId) ?? conversationId;
+        await _chatService.getMatrixConversationId(receiverId) ?? conversationId;
 
     return _cachedConversationId!;
   }

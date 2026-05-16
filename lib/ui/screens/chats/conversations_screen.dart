@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/conversation_tile.dart';
@@ -110,12 +111,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     // Load saved contacts FIRST so names are ready before conversations render
     await _loadSavedContacts();
+    await _loadLocalConversations();
 
     // Pre-warm contact cache for FirebaseNewChatScreen
     ContactService.preloadContacts(_currentUserId, ContactService());
 
     // Connect ChatService (idempotent)
-    await _chat.connect();
+    try {
+      await _chat.connect();
+    } catch (e) {
+      debugPrint('[ConversationsScreen] chat connect skipped: $e');
+    }
 
     // Subscribe to Matrix conversation stream
     _convSub = _chat.conversationsStream.listen((incoming) async {
@@ -130,6 +136,18 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final hasNet = results.any((r) => r != ConnectivityResult.none);
       if (hasNet) _retryEnrichment();
     });
+  }
+
+  Future<void> _loadLocalConversations() async {
+    try {
+      final local = await ChatLocalDb.instance.loadConversations();
+      final enriched = await _enrichNames(local);
+      if (!mounted) return;
+      setState(() => _conversations = enriched);
+      _notifyUnread(_conversations);
+    } catch (e) {
+      debugPrint('[ConversationsScreen] local conversation load error: $e');
+    }
   }
 
   // ===========================================================================
@@ -413,7 +431,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
         if (!mounted) return;
 
-        Navigator.push(
+        await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (_) => ChatScreen(
@@ -425,6 +443,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             ),
           ),
         );
+        if (mounted) await _loadLocalConversations();
       },
     );
   }
@@ -468,6 +487,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       backgroundColor: Colors.transparent,
       onRefresh: () async {
         await _loadSavedContacts();
+        await _loadLocalConversations();
         await _chat.fetchConversations();
         await _retryEnrichment();
       },

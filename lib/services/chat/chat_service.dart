@@ -7,9 +7,11 @@ import 'package:path/path.dart' as p;
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 
 class ChatService {
   ChatService._internal();
@@ -97,7 +99,7 @@ class ChatService {
     try {
       final client = MatrixClientService.instance.client;
       final room = _roomForMessage(message);
-      final eventId = await room.sendTextEvent(message.content);
+      final eventId = await room.sendEvent(_buildMessageContent(message));
       final sent = message.copyWith(
         id: eventId ?? message.id,
         conversationId: room.id,
@@ -156,14 +158,29 @@ class ChatService {
       final room = _roomById(conversationID);
       if (room == null) return [];
       final timeline = await room.getTimeline(limit: count);
+      final localById = {
+        for (final message
+            in await ChatLocalDb.instance.loadMessages(conversationID))
+          message.id: message,
+      };
       final messages = timeline.events
           .map(ChatMessage.fromMatrixEvent)
           .whereType<ChatMessage>()
+          .map((message) {
+            final local = localById[message.id];
+            if (local == null) return message;
+            return message.copyWith(
+              isStarred: local.isStarred,
+              isDeletedForMe: local.isDeletedForMe,
+            );
+          })
+          .where((message) => !message.isDeletedForMe)
           .toList()
         ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
       for (final message in messages) {
         _cacheMessage(message);
       }
+      unawaited(ChatLocalDb.instance.saveMessages(messages));
       timeline.cancelSubscriptions();
       return messages;
     } catch (e) {
@@ -179,6 +196,7 @@ class ChatService {
       _conversationsMap
         ..clear()
         ..addEntries(rooms.map((room) => MapEntry(room.id, _toConversation(room))));
+      unawaited(ChatLocalDb.instance.saveConversations(_conversationsMap.values.toList()));
       _emitConversations();
     } catch (e) {
       debugPrint('[ChatService] fetchConversations error: $e');
@@ -199,12 +217,82 @@ class ChatService {
   }
 
   List<ChatMessage> getConversationMessages(String conversationId) {
-    final messages = List<ChatMessage>.from(_messagesCache[conversationId] ?? []);
+    final messages = List<ChatMessage>.from(_messagesCache[conversationId] ?? [])
+        .where((message) => !message.isDeletedForMe)
+        .toList();
     messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return messages;
   }
 
-  Future<String?> getOpenImConversationId(String otherUserId) async {
+  Future<List<ChatMessage>> loadCachedMessages(String conversationId) async {
+    final cached = await ChatLocalDb.instance.loadMessages(conversationId);
+    final visible = cached.where((message) => !message.isDeletedForMe).toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    for (final message in visible) {
+      _messagesCache.putIfAbsent(conversationId, () => []);
+      if (!_messagesCache[conversationId]!.any((m) => m.id == message.id)) {
+        _messagesCache[conversationId]!.add(message);
+      }
+    }
+    return visible;
+  }
+
+  Future<void> starMessage(ChatMessage message, bool starred) async {
+    final updated = message.copyWith(isStarred: starred);
+    _replaceCachedMessage(updated);
+    await ChatLocalDb.instance.setMessageStarred(message.id, starred);
+    _messageController.add(updated);
+  }
+
+  Future<void> deleteMessageForMe(ChatMessage message) async {
+    final updated = message.copyWith(isDeletedForMe: true);
+    _replaceCachedMessage(updated);
+    await ChatLocalDb.instance.deleteMessageForMe(message.id);
+    _emitConversations();
+  }
+
+  Future<void> deleteMessageForEveryone(ChatMessage message) async {
+    await _waitForConnection();
+    final room = _roomById(message.conversationId);
+    if (room == null) throw StateError('Unknown Matrix room: ${message.conversationId}');
+    await room.redactEvent(message.id, reason: 'Deleted by sender');
+    final updated = message.copyWith(
+      content: 'This message was deleted',
+      isDeletedForEveryone: true,
+    );
+    _replaceCachedMessage(updated);
+    await ChatLocalDb.instance.markMessageDeletedForEveryone(message.id);
+    _messageController.add(updated);
+  }
+
+  Future<void> cancelLocalMessage(ChatMessage message) async {
+    _messagesCache[message.conversationId]?.removeWhere((m) => m.id == message.id);
+    await ChatLocalDb.instance.deleteMessageForMe(message.id);
+    _emitConversations();
+  }
+
+  Future<ChatMessage> forwardMessage({
+    required ChatMessage original,
+    required String receiverId,
+  }) async {
+    final room = await _directRoom(receiverId);
+    final message = ChatMessage(
+      id: 'fwd_${DateTime.now().millisecondsSinceEpoch}',
+      conversationId: room.id,
+      senderId: MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
+      receiverId: _toMatrixUserId(receiverId),
+      content: original.content,
+      timestamp: DateTime.now(),
+      status: MessageStatus.sending,
+      attachmentUrl: original.attachmentUrl,
+      attachmentType: original.attachmentType,
+      voiceDuration: original.voiceDuration,
+      isForwarded: true,
+    );
+    return sendMessage(message);
+  }
+
+  Future<String?> getMatrixConversationId(String otherUserId) async {
     try {
       final room = await _directRoom(otherUserId);
       return room.id;
@@ -245,7 +333,7 @@ class ChatService {
     if (byConversation != null) return byConversation;
     throw StateError(
       'Conversation ${message.conversationId} is not loaded. '
-      'Call getOpenImConversationId(receiverId) before sending.',
+      'Call getMatrixConversationId(receiverId) before sending.',
     );
   }
 
@@ -290,7 +378,36 @@ class ChatService {
     _conversationsMap[convId] = existing == null
         ? ChatConversation.fromMessage(message, currentUser)
         : existing.updateWithMessage(message, currentUser);
+    unawaited(ChatLocalDb.instance.saveMessage(message));
+    unawaited(ChatLocalDb.instance.saveConversations([_conversationsMap[convId]!]));
     _emitConversations();
+  }
+
+  void _replaceCachedMessage(ChatMessage message) {
+    final messages = _messagesCache[message.conversationId];
+    if (messages == null) return;
+    final index = messages.indexWhere((m) => m.id == message.id);
+    if (index == -1) return;
+    messages[index] = message;
+  }
+
+  Map<String, dynamic> _buildMessageContent(ChatMessage message) {
+    final content = <String, dynamic>{
+      'msgtype': mx.MessageTypes.Text,
+      'body': message.content,
+      if (message.isForwarded) 'wrytte.forwarded': true,
+    };
+
+    if (message.replyToMessageId != null) {
+      final fallbackSender = message.replyToSenderId ?? message.senderId;
+      final fallback = message.replyPreview ?? 'Message';
+      content['body'] = '> <$fallbackSender> $fallback\n\n${message.content}';
+      content['m.relates_to'] = {
+        'm.in_reply_to': {'event_id': message.replyToMessageId},
+      };
+    }
+
+    return content;
   }
 
   void _emitConversations() {
@@ -303,7 +420,9 @@ class ChatService {
     final trimmed = value.trim();
     if (trimmed.startsWith('@') && trimmed.contains(':')) return trimmed;
     final own = MatrixClientService.instance.client.userID;
-    final domain = own != null && own.contains(':') ? own.split(':').last : 'matrix.org';
+    final domain = own != null && own.contains(':')
+        ? own.split(':').last
+        : MatrixConfig.serverName;
     final localpart = trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
     return '@$localpart:$domain';
   }

@@ -169,7 +169,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
       try {
         await AuthService.instance.updateStoredUsername(name)
             .timeout(const Duration(seconds: 10));
-        debugPrint('[AddProfilePage] Matrix nickname updated -> "$name"');
+        debugPrint('[AddProfilePage] Stored nickname updated -> "$name"');
         return null;
       } catch (e) {
         debugPrint(

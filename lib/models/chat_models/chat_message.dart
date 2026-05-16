@@ -4,6 +4,9 @@ import 'package:matrix/matrix.dart' as mx;
 
 enum MessageStatus { sending, sent, delivered, read, failed }
 
+bool _boolFromJson(Object? value) =>
+    value == true || value == 1 || value?.toString() == '1';
+
 MessageStatus _statusFromString(String? value) {
   switch (value) {
     case "sent":
@@ -51,6 +54,13 @@ class ChatMessage {
   final int? voiceDuration;
 
   final int unreadCount;
+  final String? replyToMessageId;
+  final String? replyToSenderId;
+  final String? replyPreview;
+  final bool isForwarded;
+  final bool isStarred;
+  final bool isDeletedForMe;
+  final bool isDeletedForEveryone;
 
   const ChatMessage({
     required this.id,
@@ -64,6 +74,13 @@ class ChatMessage {
     this.attachmentType,
     this.voiceDuration,   // ← NEW
     this.unreadCount = 0,
+    this.replyToMessageId,
+    this.replyToSenderId,
+    this.replyPreview,
+    this.isForwarded = false,
+    this.isStarred = false,
+    this.isDeletedForMe = false,
+    this.isDeletedForEveryone = false,
   });
 
   // FROM JSON (Backend / local DB)
@@ -86,6 +103,13 @@ class ChatMessage {
       voiceDuration: json["voiceDuration"] != null          // ← NEW
           ? int.tryParse(json["voiceDuration"].toString())
           : null,
+      replyToMessageId: json["replyToMessageId"]?.toString(),
+      replyToSenderId: json["replyToSenderId"]?.toString(),
+      replyPreview: json["replyPreview"]?.toString(),
+      isForwarded: _boolFromJson(json["isForwarded"]),
+      isStarred: _boolFromJson(json["isStarred"]),
+      isDeletedForMe: _boolFromJson(json["isDeletedForMe"]),
+      isDeletedForEveryone: _boolFromJson(json["isDeletedForEveryone"]),
     );
   }
 
@@ -104,18 +128,25 @@ class ChatMessage {
       conversationId: event.room.id,
       senderId: event.senderId,
       receiverId: event.room.directChatMatrixID ?? '',
-      content: event.body,
+      content: event.redacted ? 'This message was deleted' : _stripReplyFallback(event.body),
       timestamp: event.originServerTs,
       status: _statusFromMatrix(event.status),
       attachmentUrl: event.attachmentMxcUrl?.toString(),
       attachmentType: attachmentType,
       voiceDuration: duration,
+      replyToMessageId: event.inReplyToEventId(),
+      replyToSenderId: _replySenderFromFallback(event.body),
+      replyPreview: _replyPreviewFromFallback(event.body),
+      isForwarded: content['wrytte.forwarded'] == true,
+      isDeletedForEveryone: event.redacted,
     );
   }
 
   static ChatMessage? fromMatrixEvent(mx.Event event) {
     if (event.type != mx.EventTypes.Message) return null;
-    if (event.body.isEmpty && !event.hasAttachment) return null;
+    if (!event.redacted && event.body.isEmpty && !event.hasAttachment) {
+      return null;
+    }
     return ChatMessage.fromMatrix(event);
   }
 
@@ -133,6 +164,13 @@ class ChatMessage {
       if (attachmentUrl != null) "attachmentUrl": attachmentUrl,
       if (attachmentType != null) "attachmentType": attachmentType,
       if (voiceDuration != null) "voiceDuration": voiceDuration, // ← NEW
+      if (replyToMessageId != null) "replyToMessageId": replyToMessageId,
+      if (replyToSenderId != null) "replyToSenderId": replyToSenderId,
+      if (replyPreview != null) "replyPreview": replyPreview,
+      "isForwarded": isForwarded,
+      "isStarred": isStarred,
+      "isDeletedForMe": isDeletedForMe,
+      "isDeletedForEveryone": isDeletedForEveryone,
     };
   }
 
@@ -149,6 +187,13 @@ class ChatMessage {
     String? attachmentUrl,
     String? attachmentType,
     int? voiceDuration,   // ← NEW
+    String? replyToMessageId,
+    String? replyToSenderId,
+    String? replyPreview,
+    bool? isForwarded,
+    bool? isStarred,
+    bool? isDeletedForMe,
+    bool? isDeletedForEveryone,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -161,6 +206,14 @@ class ChatMessage {
       attachmentUrl: attachmentUrl ?? this.attachmentUrl,
       attachmentType: attachmentType ?? this.attachmentType,
       voiceDuration: voiceDuration ?? this.voiceDuration, // ← NEW
+      replyToMessageId: replyToMessageId ?? this.replyToMessageId,
+      replyToSenderId: replyToSenderId ?? this.replyToSenderId,
+      replyPreview: replyPreview ?? this.replyPreview,
+      isForwarded: isForwarded ?? this.isForwarded,
+      isStarred: isStarred ?? this.isStarred,
+      isDeletedForMe: isDeletedForMe ?? this.isDeletedForMe,
+      isDeletedForEveryone:
+          isDeletedForEveryone ?? this.isDeletedForEveryone,
     );
   }
 
@@ -171,6 +224,8 @@ class ChatMessage {
   bool get hasAttachment => attachmentUrl != null;
 
   bool get isVoiceNote => attachmentType == 'voice'; // ← NEW convenience getter
+
+  bool get isDeleted => isDeletedForMe || isDeletedForEveryone;
 
   // LOCAL SERIALIZATION
 
@@ -190,6 +245,34 @@ class ChatMessage {
         "content: $content, status: $status, attachmentType: $attachmentType, "
         "voiceDuration: $voiceDuration)";
   }
+}
+
+String _stripReplyFallback(String body) {
+  final split = body.split('\n\n');
+  if (body.startsWith('> ') && split.length > 1) {
+    return split.sublist(1).join('\n\n');
+  }
+  return body;
+}
+
+String? _replyPreviewFromFallback(String body) {
+  if (!body.startsWith('> ')) return null;
+  final firstBlock = body.split('\n\n').first;
+  final lines = firstBlock
+      .split('\n')
+      .map((line) => line.replaceFirst(RegExp(r'^> ?'), '').trim())
+      .where((line) => line.isNotEmpty)
+      .toList();
+  if (lines.isEmpty) return null;
+  final text = lines.join(' ');
+  return text.length > 120 ? '${text.substring(0, 120)}...' : text;
+}
+
+String? _replySenderFromFallback(String body) {
+  final preview = _replyPreviewFromFallback(body);
+  if (preview == null) return null;
+  final match = RegExp(r'^<([^>]+)>').firstMatch(preview);
+  return match?.group(1);
 }
 
 String? _attachmentTypeFromMatrix(String msgType) {

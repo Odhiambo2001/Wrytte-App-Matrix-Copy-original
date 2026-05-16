@@ -125,6 +125,8 @@ class MatrixAuthService {
       _storage.write(key: matrixUserIdKey, value: userId),
       _storage.write(key: matrixAccessTokenKey, value: token),
       _storage.write(key: matrixHomeserverKey, value: homeserver.toString()),
+      if (client.deviceID != null)
+        _storage.write(key: matrixDeviceIdKey, value: client.deviceID),
     ]);
   }
 }

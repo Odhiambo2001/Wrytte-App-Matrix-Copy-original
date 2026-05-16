@@ -3,8 +3,9 @@ import 'package:sqflite/sqflite.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 
-/// Local SQLite cache — single source of truth for the UI.
-/// Firebase syncs into here; the UI only ever reads from here.
+/// Local SQLite cache for fast startup and offline chat access.
+/// Matrix/Dendrite remains the canonical message store; this cache mirrors
+/// recent timelines plus device-local flags such as "delete for me" and star.
 class ChatLocalDb {
   ChatLocalDb._();
   static final ChatLocalDb instance = ChatLocalDb._();
@@ -34,7 +35,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -46,13 +47,26 @@ class ChatLocalDb {
             timestamp        INTEGER NOT NULL,
             status           TEXT NOT NULL,
             attachmentUrl    TEXT,
-            attachmentType   TEXT
+            attachmentType   TEXT,
+            voiceDuration    INTEGER,
+            replyToMessageId TEXT,
+            replyToSenderId  TEXT,
+            replyPreview     TEXT,
+            isForwarded      INTEGER NOT NULL DEFAULT 0,
+            isStarred        INTEGER NOT NULL DEFAULT 0,
+            isDeletedForMe   INTEGER NOT NULL DEFAULT 0,
+            isDeletedForEveryone INTEGER NOT NULL DEFAULT 0
           )
         ''');
 
         await db.execute('''
           CREATE INDEX idx_messages_conv
           ON messages (conversationId, timestamp)
+        ''');
+
+        await db.execute('''
+          CREATE INDEX idx_messages_starred
+          ON messages (isStarred, timestamp)
         ''');
 
         await db.execute('''
@@ -78,7 +92,56 @@ class ChatLocalDb {
           ON conversations (lastMessageTime DESC)
         ''');
       },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await _addColumnIfMissing(db, 'messages', 'voiceDuration', 'INTEGER');
+          await _addColumnIfMissing(db, 'messages', 'replyToMessageId', 'TEXT');
+          await _addColumnIfMissing(db, 'messages', 'replyToSenderId', 'TEXT');
+          await _addColumnIfMissing(db, 'messages', 'replyPreview', 'TEXT');
+          await _addColumnIfMissing(
+            db,
+            'messages',
+            'isForwarded',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+          await _addColumnIfMissing(
+            db,
+            'messages',
+            'isStarred',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+          await _addColumnIfMissing(
+            db,
+            'messages',
+            'isDeletedForMe',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+          await _addColumnIfMissing(
+            db,
+            'messages',
+            'isDeletedForEveryone',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_messages_starred
+            ON messages (isStarred, timestamp)
+          ''');
+        }
+      },
     );
+  }
+
+  static Future<void> _addColumnIfMissing(
+    Database db,
+    String table,
+    String column,
+    String definition,
+  ) async {
+    final columns = await db.rawQuery('PRAGMA table_info($table)');
+    final exists = columns.any((row) => row['name'] == column);
+    if (!exists) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
+    }
   }
 
   // ── Messages ───────────────────────────────────────────────────────────────
@@ -100,6 +163,14 @@ class ChatLocalDb {
         'status': m.status.name,
         'attachmentUrl': m.attachmentUrl,
         'attachmentType': m.attachmentType,
+        'voiceDuration': m.voiceDuration,
+        'replyToMessageId': m.replyToMessageId,
+        'replyToSenderId': m.replyToSenderId,
+        'replyPreview': m.replyPreview,
+        'isForwarded': m.isForwarded ? 1 : 0,
+        'isStarred': m.isStarred ? 1 : 0,
+        'isDeletedForMe': m.isDeletedForMe ? 1 : 0,
+        'isDeletedForEveryone': m.isDeletedForEveryone ? 1 : 0,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
 
@@ -135,7 +206,57 @@ class ChatLocalDb {
       ),
       attachmentUrl: row['attachmentUrl'] as String?,
       attachmentType: row['attachmentType'] as String?,
+      voiceDuration: row['voiceDuration'] as int?,
+      replyToMessageId: row['replyToMessageId'] as String?,
+      replyToSenderId: row['replyToSenderId'] as String?,
+      replyPreview: row['replyPreview'] as String?,
+      isForwarded: (row['isForwarded'] as int? ?? 0) == 1,
+      isStarred: (row['isStarred'] as int? ?? 0) == 1,
+      isDeletedForMe: (row['isDeletedForMe'] as int? ?? 0) == 1,
+      isDeletedForEveryone:
+          (row['isDeletedForEveryone'] as int? ?? 0) == 1,
     );
+  }
+
+  Future<void> setMessageStarred(String messageId, bool isStarred) async {
+    final database = await db;
+    await database.update(
+      'messages',
+      {'isStarred': isStarred ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [messageId],
+    );
+  }
+
+  Future<void> deleteMessageForMe(String messageId) async {
+    final database = await db;
+    await database.update(
+      'messages',
+      {'isDeletedForMe': 1},
+      where: 'id = ?',
+      whereArgs: [messageId],
+    );
+  }
+
+  Future<void> markMessageDeletedForEveryone(String messageId) async {
+    final database = await db;
+    await database.update(
+      'messages',
+      {'isDeletedForEveryone': 1, 'content': 'This message was deleted'},
+      where: 'id = ?',
+      whereArgs: [messageId],
+    );
+  }
+
+  Future<List<ChatMessage>> loadStarredMessages() async {
+    final database = await db;
+    final rows = await database.query(
+      'messages',
+      where: 'isStarred = ? AND isDeletedForMe = ?',
+      whereArgs: [1, 0],
+      orderBy: 'timestamp DESC',
+    );
+    return rows.map(_rowToMessage).toList();
   }
 
   // ── Conversations ──────────────────────────────────────────────────────────

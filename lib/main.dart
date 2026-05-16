@@ -19,7 +19,6 @@ import 'package:wrytte/ui/widgets/theme_wrapper.dart';
 
 import 'package:wrytte/services/call_listener_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
-import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 
 import 'firebase_options.dart';
@@ -149,7 +148,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
   String? _currentUserId;
 
   final CallListenerService _callListener = CallListenerService();
-  final ChatService _chatService = ChatService();
 
   @override
   void initState() {
@@ -215,7 +213,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
   @override
   void dispose() {
     _callListener.stopListening();
-    _chatService.disconnect();
     super.dispose();
   }
 
@@ -224,21 +221,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
     String nickname = '',
     String faceUrl  = '',
   }) async {
-    try {
-      await AuthService.instance.loginToMatrix(
-        userId:   userId,
-        nickname: nickname.isNotEmpty ? nickname : userId,
-      );
-    } catch (e) {
-      debugPrint('[AuthWrapper] Matrix login error: $e');
-    }
-
-    try {
-      await _chatService.connect();
-    } catch (e) {
-      debugPrint('[AuthWrapper] ChatService connection error: $e');
-    }
-
     if (mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _callListener.startListening(context);
