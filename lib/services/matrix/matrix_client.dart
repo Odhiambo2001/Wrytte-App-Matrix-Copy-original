@@ -1,10 +1,8 @@
 import 'dart:async';
 import 'dart:io';
-
 import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart' as sqlite;
-
 import 'matrix_config.dart';
 
 class MatrixClientService {
@@ -42,13 +40,11 @@ class MatrixClientService {
     if (!await mediaDir.exists()) {
       await mediaDir.create(recursive: true);
     }
+
+    // ✅ FIXED — no PRAGMA statements at all
+    // MatrixSdkDatabase handles WAL internally
     final database = await sqlite.openDatabase(
       '${supportDir.path}/${MatrixConfig.localDatabaseFile}',
-      onConfigure: (db) async {
-        await db.execute('PRAGMA foreign_keys = ON');
-        await db.execute('PRAGMA journal_mode = WAL');
-        await db.execute('PRAGMA synchronous = NORMAL');
-      },
     );
 
     final client = Client(
@@ -61,6 +57,7 @@ class MatrixClientService {
         deleteFilesAfterDuration: MatrixConfig.localMediaTtl,
       ),
     );
+
     await client.init(waitForFirstSync: false);
     _client = client;
     _initializing = null;

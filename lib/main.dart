@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:hive_flutter/hive_flutter.dart'; 
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -77,12 +77,14 @@ class WrytteApp extends StatelessWidget {
         '/auth_entry_screen':
             (context) => const ThemeWrapper(child: AuthEntryScreen()),
 
-        '/phone_auth': (context) => const ThemeWrapper(child: PhoneAuthPage()),
+        '/phone_auth':
+            (context) => const ThemeWrapper(child: PhoneAuthPage()),
 
         '/virtual_phone':
             (context) => const ThemeWrapper(child: VirtualNumberPage()),
 
-        '/sign_in': (context) => const ThemeWrapper(child: SignInPage()),
+        '/sign_in':
+            (context) => const ThemeWrapper(child: SignInPage()),
 
         '/otp_verification': (context) {
           final args =
@@ -108,9 +110,10 @@ class WrytteApp extends StatelessWidget {
           );
         },
 
-        '/login_otp_page': (context) => const ThemeWrapper(child: SignInPage()),
+        '/login_otp_page':
+            (context) => const ThemeWrapper(child: SignInPage()),
 
-        "/login_email_verification_page": (context) {
+        '/login_email_verification_page': (context) {
           final args =
               ModalRoute.of(context)?.settings.arguments
                   as Map<String, dynamic>?;
@@ -123,9 +126,11 @@ class WrytteApp extends StatelessWidget {
         },
 
         '/add_profile':
-            (context) => const ThemeWrapper(child: AddProfilePage(isNewUser: true)),
+            (context) =>
+                const ThemeWrapper(child: AddProfilePage(isNewUser: true)),
 
-        '/home': (context) => const ThemeWrapper(child: AuthWrapper()),
+        '/home':
+            (context) => const ThemeWrapper(child: AuthWrapper()),
 
         'terms_privacy':
             (context) => const ThemeWrapper(child: TermsPrivacyPage()),
@@ -174,7 +179,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
             .timeout(const Duration(seconds: 6));
 
         final name = doc.data()?['name'] as String? ?? '';
-        final needsProfile = name.isEmpty ||
+        final needsProfile =
+            name.isEmpty ||
             name.trim().length < 2 ||
             _looksLikePhone(name.trim());
 
@@ -199,7 +205,10 @@ class _AuthWrapperState extends State<AuthWrapper> {
     } catch (e) {
       debugPrint('[AuthWrapper] Session check error: $e');
       if (mounted) {
-        setState(() { _isLoggedIn = false; _checking = false; });
+        setState(() {
+          _isLoggedIn = false;
+          _checking = false;
+        });
       }
       FlutterNativeSplash.remove();
     }
@@ -219,7 +228,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> _initServicesInBackground({
     required String userId,
     String nickname = '',
-    String faceUrl  = '',
+    String faceUrl = '',
   }) async {
     if (mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) {

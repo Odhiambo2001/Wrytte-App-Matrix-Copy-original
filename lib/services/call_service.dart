@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
+// At the top of call_service.dart, add this import:
+import 'package:webrtc_interface/webrtc_interface.dart' as webrtc_iface;
 import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_call_service.dart';
@@ -234,7 +236,10 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
   }
 
   @override
-  webrtc.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices;
+  webrtc_iface.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices as webrtc_iface.MediaDevices;
+
+  //@override
+  //webrtc.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices;
 
   @override
   Future<webrtc.RTCPeerConnection> createPeerConnection(

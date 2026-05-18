@@ -104,11 +104,8 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
       // A phone that already has an account always skips AddProfilePage,
       // even if somehow routed through the signup UI.
 
-      final hasUsableProfileName =
-          !result.isNewUser && await _hasUsableProfileName(result.userId);
-
-      if (result.isNewUser || !hasUsableProfileName) {
-        // First-time signup — user must set their display name.
+      if (result.isNewUser) {
+        // First-time signup only — must set profile name
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(
@@ -117,7 +114,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
           (_) => false,
         );
       } else {
-        // Returning user — profile already exists, go straight to chat.
+        // Returning user (same number, second signup+) — skip profile page entirely
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(
@@ -126,21 +123,44 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
           (_) => false,
         );
       }
-    } catch (e) {
-      HapticFeedback.heavyImpact();
-      _shakeController.forward(from: 0);
+  } catch (e) {
+  HapticFeedback.heavyImpact();
+  _shakeController.forward(from: 0);
 
-      if (!mounted) return;
+  if (!mounted) return;
 
-      setState(() {
-        _errorMessage = e.toString();
-        _otpController.clear();
-      });
+  // Convert raw API errors into user friendly messages
+  String friendlyMessage;
+  final raw = e.toString().toLowerCase();
 
-      debugPrint('OTP ERROR: $e');
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
+  if (raw.contains('invalid') ||
+      raw.contains('incorrect') ||
+      raw.contains('wrong') ||
+      raw.contains('code') ||
+      raw.contains('forbidden') ||
+      raw.contains('401') ||
+      raw.contains('400')) {
+    friendlyMessage = 'Incorrect code. Please enter the correct 6-digit code.';
+  } else if (raw.contains('network') ||
+             raw.contains('socket') ||
+             raw.contains('timeout') ||
+             raw.contains('connection')) {
+    friendlyMessage = 'No internet connection. Please check your network and try again.';
+  } else if (raw.contains('not found') || raw.contains('404')) {
+    friendlyMessage = 'Account not found. Please check your phone number.';
+  } else {
+    friendlyMessage = 'Something went wrong. Please try again.';
+  }
+
+  setState(() {
+    _errorMessage = friendlyMessage;
+    _otpController.clear();
+  });
+
+    debugPrint('OTP ERROR: $e');
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
+  }
   }
 
   Future<void> _resendCode() async {

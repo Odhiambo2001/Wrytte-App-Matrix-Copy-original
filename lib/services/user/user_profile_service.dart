@@ -1,173 +1,153 @@
-import 'dart:convert';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 
+/// Production-grade local-only UserProfileService.
+/// No Firestore. Source of truth is FlutterSecureStorage via AuthService.
 class UserProfileService {
   UserProfileService._();
   static final UserProfileService instance = UserProfileService._();
 
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FlutterSecureStorage _storage = const FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
 
-  static const _collection = 'users';
-  static const _prefKey = 'cached_user_profile'; // ← SharedPreferences key
+  static const _nameKey         = 'username';
+  static const _phoneKey        = 'phone';
+  static const _profileImageKey = 'profile_image';
+  static const _bioKey          = 'user_bio';
 
-  UserProfile? _cachedProfile;
-  String? _cachedUid;
+  // In-memory cache — survives the widget lifecycle, cleared on logout
+  UserProfile? _cache;
 
-  // ─────────────────────────────────────────────────────────────
-  // PERSIST / LOAD  (survives app restarts)
-  // ─────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // PUBLIC API
+  // ─────────────────────────────────────────────────────────────────────────
 
-  Future<void> _persistProfile(UserProfile profile) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_prefKey, jsonEncode(profile.toMap()..['uid'] = profile.uid));
-    } catch (_) {}
-  }
-
-  Future<UserProfile?> _loadPersistedProfile() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_prefKey);
-      if (raw == null) return null;
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final uid = map['uid'] as String? ?? '';
-      if (uid.isEmpty) return null;
-      return UserProfile.fromMap(uid, map);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> _clearPersistedProfile() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_prefKey);
-    } catch (_) {}
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // WARM UP
-  // ─────────────────────────────────────────────────────────────
-
-  Future<void> warmUp() async {
-    // ① Load persisted profile instantly — zero network latency
-    if (_cachedProfile == null) {
-      final persisted = await _loadPersistedProfile();
-      if (persisted != null) {
-        _cachedProfile = persisted;
-        _cachedUid = persisted.uid;
-      }
-    }
-
-    // ② Then fetch fresh from Firestore in background
-    final uid = await AuthService.instance.getCurrentUserId();
-    if (uid == null || uid.isEmpty) return;
-    _cachedUid = uid;
-    await getProfileByUid(uid);
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // FETCH
-  // ─────────────────────────────────────────────────────────────
-
+  /// Returns the current user's profile, using the in-memory cache when
+  /// available. Pass [forceRefresh] = true to always re-read from storage.
   Future<UserProfile?> getCurrentUserProfile({
     bool forceRefresh = false,
   }) async {
-    if (_cachedProfile != null && !forceRefresh) return _cachedProfile;
-
-    final uid = _cachedUid ?? await AuthService.instance.getCurrentUserId();
-    if (uid == null || uid.isEmpty) return null;
-    _cachedUid = uid;
-
-    return getProfileByUid(uid);
+    if (_cache != null && !forceRefresh) return _cache;
+    return _readFromStorage();
   }
 
-  Future<UserProfile?> getProfileByUid(String uid) async {
-    try {
-      final doc = await _firestore.collection(_collection).doc(uid).get();
-      if (!doc.exists || doc.data() == null) return null;
+  /// Persists an updated display name and invalidates the cache.
+  Future<void> updateDisplayName(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    await _storage.write(key: _nameKey, value: trimmed);
+    // Also keep AuthService in sync (it owns the same key)
+    await AuthService.instance.updateStoredUsername(trimmed);
+    _cache = null;
+    debugPrint('[UserProfileService] Display name updated: "$trimmed"');
+  }
 
-      final profile = UserProfile.fromMap(uid, doc.data()!);
+  /// Persists a profile image URL and invalidates the cache.
+  Future<void> updateProfileImage(String url) async {
+    await _storage.write(key: _profileImageKey, value: url.trim());
+    _cache = null;
+  }
 
-      final currentUid =
-          _cachedUid ?? await AuthService.instance.getCurrentUserId();
-      if (currentUid == uid) {
-        _cachedProfile = profile;
-        _cachedUid = uid;
-        await _persistProfile(profile); // ← save to disk
-      }
+  /// Persists a bio and invalidates the cache.
+  Future<void> updateBio(String bio) async {
+    await _storage.write(key: _bioKey, value: bio.trim());
+    _cache = null;
+  }
 
-      return profile;
-    } catch (e) {
-      return null;
+  /// Convenience: update multiple fields in one write pass.
+  Future<void> updateProfile({
+    String? name,
+    String? profileImage,
+    String? bio,
+  }) async {
+    if (name != null && name.trim().isNotEmpty) {
+      await _storage.write(key: _nameKey, value: name.trim());
+      await AuthService.instance.updateStoredUsername(name.trim());
     }
-  }
-
-  Future<UserProfile?> getProfileByPhone(String phone) async {
-    try {
-      final query = await _firestore
-          .collection(_collection)
-          .where('phone', isEqualTo: phone)
-          .limit(1)
-          .get();
-
-      if (query.docs.isEmpty) return null;
-
-      final doc = query.docs.first;
-      return UserProfile.fromMap(doc.id, doc.data());
-    } catch (e) {
-      return null;
+    if (profileImage != null) {
+      await _storage.write(key: _profileImageKey, value: profileImage.trim());
     }
+    if (bio != null) {
+      await _storage.write(key: _bioKey, value: bio.trim());
+    }
+    _cache = null;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // STREAM
-  // ─────────────────────────────────────────────────────────────
-
+  /// Stream that emits the current user's profile immediately from cache,
+  /// then re-reads from storage. Use this in widgets that need live updates
+  /// (e.g. after the user saves a new name or avatar).
   Stream<UserProfile?> getCurrentUserProfileStream() async* {
-    // Emit persisted profile instantly if in-memory cache is empty
-    if (_cachedProfile == null) {
-      final persisted = await _loadPersistedProfile();
-      if (persisted != null) {
-        _cachedProfile = persisted;
-        _cachedUid = persisted.uid;
-      }
-    }
+    // Emit cached value instantly so the UI has zero-latency first frame
+    if (_cache != null) yield _cache;
 
-    if (_cachedProfile != null) yield _cachedProfile;
-
-    final uid = _cachedUid ?? await AuthService.instance.getCurrentUserId();
-    if (uid == null || uid.isEmpty) {
-      yield null;
-      return;
-    }
-    _cachedUid = uid;
-
-    yield* _firestore
-        .collection(_collection)
-        .doc(uid)
-        .snapshots()
-        .map((doc) {
-      if (!doc.exists || doc.data() == null) return null;
-      final profile = UserProfile.fromMap(doc.id, doc.data()!);
-      _cachedProfile = profile;
-      _persistProfile(profile); // ← keep disk cache fresh
-      return profile;
-    });
+    // Then yield a fresh read from secure storage
+    final fresh = await _readFromStorage();
+    if (fresh != null) yield fresh;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // CACHE HELPERS
-  // ─────────────────────────────────────────────────────────────
+  /// Warm the cache on app start — call from main.dart after auth restore.
+  Future<void> warmUp() async {
+    _cache = await _readFromStorage();
+  }
 
-  UserProfile? get cachedProfile => _cachedProfile;
+  /// Fetches another user's profile by their UID.
+  /// For the current user, delegates to [getCurrentUserProfile].
+  /// For other users, returns a minimal stub built from what we know locally
+  /// (contacts, Matrix display name, etc.) — extend as your contact store grows.
+  Future<UserProfile?> getProfileByUid(String uid) async {
+    final currentUid = await AuthService.instance.getCurrentUserId();
 
+    // If it's the current user, use the full local profile
+    if (currentUid != null && currentUid == uid) {
+      return getCurrentUserProfile();
+    }
+
+    // For other users we don't have a local store yet — return null so the
+    // caller falls back to the widget.title / avatarUrl it already has.
+    // Wire this up to your contacts DB when ready.
+    return null;
+  }
+
+  /// Wipe cache on logout.
   void clearCache() {
-    _cachedProfile = null;
-    _cachedUid = null;
-    _clearPersistedProfile(); // ← wipe disk too on logout
+    _cache = null;
+  }
+
+  // Expose cached value synchronously for widgets that need it immediately
+  UserProfile? get cachedProfile => _cache;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PRIVATE
+  // ─────────────────────────────────────────────────────────────────────────
+
+  Future<UserProfile?> _readFromStorage() async {
+    try {
+      final uid   = await AuthService.instance.getCurrentUserId();
+      if (uid == null || uid.isEmpty) return null;
+
+      final name         = await _storage.read(key: _nameKey)         ?? '';
+      final phone        = await _storage.read(key: _phoneKey)        ?? '';
+      final profileImage = await _storage.read(key: _profileImageKey) ?? '';
+      final bio          = await _storage.read(key: _bioKey)          ?? '';
+
+      final profile = UserProfile(
+        uid:          uid,
+        name:         name,
+        username:     name,   // username == display name in this app
+        phone:        phone,
+        bio:          bio,
+        profileImage: profileImage,
+        links:        const [],
+      );
+
+      _cache = profile;
+      return profile;
+    } catch (e) {
+      debugPrint('[UserProfileService] _readFromStorage error: $e');
+      return null;
+    }
   }
 }

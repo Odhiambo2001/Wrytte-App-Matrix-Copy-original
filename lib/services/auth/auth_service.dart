@@ -1,5 +1,4 @@
-import 'dart:convert';
-import 'dart:math';
+import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -24,16 +23,18 @@ class AuthService {
   final Map<String, String> _pendingPhoneOtps = {};
   final Map<String, String> _pendingEmailOtps = {};
 
-  static const _tokenKey = 'auth_token';
-  static const _expiryKey = 'auth_token_expiry';
-  static const _userIdKey = 'user_id';
+  static const _tokenKey   = 'auth_token';
+  static const _expiryKey  = 'auth_token_expiry';
+  static const _userIdKey  = 'user_id';
   static const _usernameKey = 'username';
-  static const _secretKey = 'secret';
-  static const _phoneKey = 'phone';
-  static const _matrixPasswordKey = 'matrix_password';
+  static const _secretKey  = 'secret';
+  static const _phoneKey   = 'phone';
 
   static const _defaultHomeserver = MatrixConfig.homeserver;
 
+  // ---------------------------------------------------------------------------
+  // Firebase anonymous auth
+  // ---------------------------------------------------------------------------
   Future<User?> ensureFirebaseAuth() async {
     try {
       if (_firebaseAuth.currentUser != null) return _firebaseAuth.currentUser;
@@ -45,12 +46,23 @@ class AuthService {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Matrix login — always uses Simon's secret as the password.
+  // Tries login first; if the account does not exist yet, registers it.
+  // ---------------------------------------------------------------------------
   Future<void> loginToMatrix({
     required String userId,
     required String nickname,
     String homeserver = _defaultHomeserver,
   }) async {
-    final password = await _matrixPasswordForUser(userId);
+    // Use Simon's secret as the one and only Matrix password.
+    final secret = await _storage.read(key: _secretKey);
+    if (secret == null || secret.trim().isEmpty) {
+      debugPrint('[AuthService] No secret stored — Matrix login skipped.');
+      return;
+    }
+    final password = secret.trim();
+
     try {
       await MatrixAuthService.instance.login(
         username: userId,
@@ -58,6 +70,7 @@ class AuthService {
         homeserver: homeserver,
       );
     } catch (_) {
+      // Account may not exist yet on this server — register it.
       await MatrixAuthService.instance.register(
         username: userId,
         password: password,
@@ -70,7 +83,7 @@ class AuthService {
       try {
         await client.setProfileField(
           client.userID!,
-          'displayname',
+          'm.displayname',
           {'displayname': nickname.trim()},
         );
       } catch (e) {
@@ -90,33 +103,57 @@ class AuthService {
 
   Future<void> logoutFromMatrix() => MatrixAuthService.instance.logout();
 
-  Future<void> persistPhoneSession({
-    required String userId,
-    required String username,
-    required String phone,
-    String imToken = '',
-    String chatToken = '',
-  }) async {
-    await Future.wait([
-      _storage.write(key: _tokenKey, value: userId),
-      _storage.write(key: _userIdKey, value: userId),
-      _storage.write(key: _usernameKey, value: username),
-      _storage.write(key: _secretKey, value: userId),
-      _storage.write(key: _phoneKey, value: phone),
-      _storage.delete(key: _expiryKey),
-    ]);
+  // ---------------------------------------------------------------------------
+  // Persist session after successful registration/login.
+  // secret must be saved BEFORE Matrix login is attempted.
+  // ---------------------------------------------------------------------------
+Future<void> persistPhoneSession({
+  required String userId,
+  required String username,
+  required String phone,
+  required String secret,
+}) async {
+  // Never overwrite a real stored name with a phone-number fallback.
+  final currentName = await _storage.read(key: _usernameKey);
+  final nameToSave = (currentName != null && !_looksLikePhone(currentName))
+      ? currentName
+      : username;
 
-    await ensureFirebaseAuth();
-    await _ensureUserDocument(uid: userId, phone: phone, username: username);
-    await _tryLoginToMatrix(userId: userId, nickname: username);
-  }
+  // Save secret first so loginToMatrix() can read it immediately.
+  await Future.wait([
+    _storage.write(key: _tokenKey,    value: userId),
+    _storage.write(key: _userIdKey,   value: userId),
+    _storage.write(key: _usernameKey, value: nameToSave),
+    _storage.write(key: _secretKey,   value: secret),
+    _storage.write(key: _phoneKey,    value: phone),
+    _storage.delete(key: _expiryKey),
+  ]);
 
+  await ensureFirebaseAuth();
+  await _ensureUserDocument(uid: userId, phone: phone, username: nameToSave);
+
+  // Matrix login runs in background — does not block UI navigation.
+  unawaited(_tryLoginToMatrix(userId: userId, nickname: nameToSave));
+}
+  // ---------------------------------------------------------------------------
+  // Send SMS / email codes (dev stubs)
+  // ---------------------------------------------------------------------------
   Future<void> sendSmsCode(String phone) async {
     final normalizedPhone = _normalizePhone(phone);
-    _pendingPhoneOtps[normalizedPhone] = '123456';
-    debugPrint('[AuthService] OTP ready for $normalizedPhone (dev: use 123456)');
+    _pendingPhoneOtps[normalizedPhone] = '112233';
+    debugPrint('[AuthService] OTP ready for $normalizedPhone (dev: use 112233)');
   }
 
+  Future<void> sendEmailCode(String email) async {
+    final normalizedEmail = email.trim().toLowerCase();
+    _pendingEmailOtps[normalizedEmail] = '112233';
+    debugPrint('[AuthService] Email OTP ready for $normalizedEmail');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Register with real phone number (fallback — used when Simon's API
+  // is not available; normally real_number_service.dart calls Simon's API)
+  // ---------------------------------------------------------------------------
   Future<AuthUser> registerRealPhone({
     required String phone,
     required String code,
@@ -141,16 +178,21 @@ class AuthService {
     );
 
     final user = AuthUser(
-      userId: userId,
+      userId:   userId,
       username: effectiveUsername,
-      secret: userId,
-      token: userId,
-      phone: normalizedPhone,
+      secret:   userId,
+      token:    userId,
+      phone:    normalizedPhone,
     );
 
     if (login) {
-      await _persistAuth(user, phone: normalizedPhone);
-      await _tryLoginToMatrix(userId: userId, nickname: effectiveUsername);
+      // Use userId as a placeholder secret — real secret comes from Simon's API
+      await persistPhoneSession(
+        userId:   userId,
+        username: effectiveUsername,
+        phone:    normalizedPhone,
+        secret:   userId,
+      );
     }
 
     _pendingPhoneOtps.remove(normalizedPhone);
@@ -175,12 +217,9 @@ class AuthService {
     );
   }
 
-  Future<void> sendEmailCode(String email) async {
-    final normalizedEmail = email.trim().toLowerCase();
-    _pendingEmailOtps[normalizedEmail] = '123456';
-    debugPrint('[AuthService] Email OTP ready for $normalizedEmail');
-  }
-
+  // ---------------------------------------------------------------------------
+  // Register with virtual phone number (fallback stub)
+  // ---------------------------------------------------------------------------
   Future<AuthUser> registerVirtualPhone({
     required String email,
     required String code,
@@ -206,56 +245,72 @@ class AuthService {
     );
 
     final user = AuthUser(
-      userId: userId,
+      userId:   userId,
       username: effectiveUsername,
-      secret: userId,
-      token: userId,
-      phone: phone,
+      secret:   userId,
+      token:    userId,
+      phone:    phone,
     );
 
     if (login) {
-      await _persistAuth(user, phone: phone);
-      await _tryLoginToMatrix(userId: userId, nickname: effectiveUsername);
+      await persistPhoneSession(
+        userId:   userId,
+        username: effectiveUsername,
+        phone:    phone,
+        secret:   userId,
+      );
     }
 
     _pendingEmailOtps.remove(normalizedEmail);
     return user;
   }
 
+  // ---------------------------------------------------------------------------
+  // Session reads
+  // ---------------------------------------------------------------------------
   Future<AuthUser?> getCurrentUser() async {
     final token = await _storage.read(key: _tokenKey);
     if (token == null) return null;
 
     final expiryString = await _storage.read(key: _expiryKey);
     return AuthUser(
-      userId: await _storage.read(key: _userIdKey) ?? '',
-      username: await _storage.read(key: _usernameKey) ?? '',
-      secret: await _storage.read(key: _secretKey) ?? '',
-      token: token,
-      phone: await _storage.read(key: _phoneKey),
+      userId:    await _storage.read(key: _userIdKey)   ?? '',
+      username:  await _storage.read(key: _usernameKey) ?? '',
+      secret:    await _storage.read(key: _secretKey)   ?? '',
+      token:     token,
+      phone:     await _storage.read(key: _phoneKey),
       expiresAt: expiryString != null ? DateTime.tryParse(expiryString) : null,
     );
   }
 
-  Future<String?> getSavedPhone() async => _storage.read(key: _phoneKey);
-  Future<String?> getCurrentUserId() async => _storage.read(key: _userIdKey);
-  Future<String?> getToken() async => _storage.read(key: _tokenKey);
+  Future<String?> getSavedPhone()        async => _storage.read(key: _phoneKey);
+  Future<String?> getCurrentUserId()     async => _storage.read(key: _userIdKey);
+  Future<String?> getToken()             async => _storage.read(key: _tokenKey);
+   Future<String?> getStoredSecret()      async => _storage.read(key: _secretKey);   // ← add
+  Future<String?> getCurrentUsername()   async => _storage.read(key: _usernameKey); // ← add
   Future<String?> getMatrixAccessToken() async =>
       _storage.read(key: MatrixAuthService.matrixAccessTokenKey);
-  Future<String?> getChatToken() async => getMatrixAccessToken();
+  Future<String?> getChatToken()         async => getMatrixAccessToken();
 
+  // ---------------------------------------------------------------------------
+  // Update display name in storage and on Matrix
+  // ---------------------------------------------------------------------------
   Future<void> updateStoredUsername(String username) async {
     if (username.trim().isEmpty) return;
     await _storage.write(key: _usernameKey, value: username.trim());
     final client = MatrixClientService.instance.isInitialized
-    ? MatrixClientService.instance.client
-    : null;
+        ? MatrixClientService.instance.client
+        : null;
     if (client?.userID != null) {
-      await client!.setProfileField(
-        client.userID!,
-        'displayname',
-        {'displayname': username.trim()},
-      );
+      try {
+        await client!.setProfileField(
+          client.userID!,
+          'm.displayname',
+          {'displayname': username.trim()},
+        );
+      } catch (e) {
+        debugPrint('[AuthService] Matrix display-name update failed: $e');
+      }
     }
   }
 
@@ -266,6 +321,9 @@ class AuthService {
 
   User? get firebaseCurrentUser => _firebaseAuth.currentUser;
 
+  // ---------------------------------------------------------------------------
+  // Logout
+  // ---------------------------------------------------------------------------
   Future<void> logout() async {
     await ChatService().reset();
     await logoutFromMatrix();
@@ -285,47 +343,9 @@ class AuthService {
     }
   }
 
-  Future<void> _ensureUserDocument({
-    required String uid,
-    String? phone,
-    String? username,
-  }) async {
-    final userRef = _firestore.collection('users').doc(uid);
-    final snapshot = await userRef.get();
-    final existing = snapshot.data() ?? {};
-    final now = FieldValue.serverTimestamp();
-    final firebaseUid = _firebaseAuth.currentUser?.uid;
-
-    await userRef.set({
-      'uid': uid,
-      'matrixUserId': MatrixClientService.instance.userId,
-      'updatedAt': now,
-      if (!snapshot.exists) 'createdAt': now,
-      if (phone != null && phone.isNotEmpty) 'phone': _normalizePhone(phone),
-      if (username != null && username.isNotEmpty) ...{
-        'username': username,
-        if ((existing['name'] == null ||
-                (existing['name'] as String).isEmpty) &&
-            !_looksLikePhone(username))
-          'name': username,
-      },
-      if (firebaseUid != null) 'firebaseUid': firebaseUid,
-      'isOnline': true,
-      'lastSeen': now,
-    }, SetOptions(merge: true));
-  }
-
-  Future<void> _persistAuth(AuthUser user, {String? phone}) async {
-    await Future.wait([
-      _storage.write(key: _tokenKey, value: user.token),
-      _storage.write(key: _userIdKey, value: user.userId),
-      _storage.write(key: _usernameKey, value: user.username),
-      _storage.write(key: _secretKey, value: user.secret),
-      if (phone != null && phone.isNotEmpty) _storage.write(key: _phoneKey, value: phone),
-      _storage.delete(key: _expiryKey),
-    ]);
-  }
-
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
   Future<void> _tryLoginToMatrix({
     required String userId,
     required String nickname,
@@ -337,16 +357,35 @@ class AuthService {
     }
   }
 
-  Future<String> _matrixPasswordForUser(String userId) async {
-    final key = '$_matrixPasswordKey:$userId';
-    final saved = await _storage.read(key: key);
-    if (saved != null && saved.length >= 32) return saved;
+  Future<void> _ensureUserDocument({
+    required String uid,
+    String? phone,
+    String? username,
+  }) async {
+    final userRef  = _firestore.collection('users').doc(uid);
+    final snapshot = await userRef.get();
+    final existing = snapshot.data() ?? {};
+    final now      = FieldValue.serverTimestamp();
+    final firebaseUid = _firebaseAuth.currentUser?.uid;
 
-    final random = Random.secure();
-    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
-    final password = base64UrlEncode(bytes);
-    await _storage.write(key: key, value: password);
-    return password;
+    await userRef.set({
+      'uid':       uid,
+      'matrixUserId': MatrixClientService.instance.userId,
+      'updatedAt': now,
+      if (!snapshot.exists) 'createdAt': now,
+      if (phone != null && phone.isNotEmpty)
+        'phone': _normalizePhone(phone),
+      if (username != null && username.isNotEmpty) ...{
+        'username': username,
+        if ((existing['name'] == null ||
+                (existing['name'] as String).isEmpty) &&
+            !_looksLikePhone(username))
+          'name': username,
+      },
+      if (firebaseUid != null) 'firebaseUid': firebaseUid,
+      'isOnline':  true,
+      'lastSeen':  now,
+    }, SetOptions(merge: true));
   }
 
   String _phoneToUserId(String normalizedPhone) =>

@@ -3,7 +3,9 @@ class MatrixConfig {
 
   static const homeserver = String.fromEnvironment(
     'WRYTTE_MATRIX_HOMESERVER',
-    defaultValue: 'https://matrix.wrytte.com',
+    defaultValue: 'http://31.220.58.129:8008',
+    //'https://matrix.wrytte.com',
+
   );
 
   static const serverName = String.fromEnvironment(

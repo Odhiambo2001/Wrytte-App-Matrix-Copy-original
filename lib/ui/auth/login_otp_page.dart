@@ -34,7 +34,7 @@ class _LoginOtpPageState extends State<LoginOtpPage>
   late AnimationController _shakeController;
   late Animation<double> _shakeAnimation;
 
-  static const _validCode = '666666';
+  static const _validCode = '112233';
 
   bool get _isValid => _otpController.text.length == 6;
 
@@ -91,7 +91,8 @@ class _LoginOtpPageState extends State<LoginOtpPage>
         _shakeController.forward(from: 0);
         setState(() {
           _isLoading = false;
-          _errorMessage = 'Invalid code. Please try again.';
+          //_errorMessage = 'Invalid code. Please try again.';
+          _errorMessage = 'Incorrect code. Please enter the correct 6-digit code.';
           _otpController.clear();
         });
         return;

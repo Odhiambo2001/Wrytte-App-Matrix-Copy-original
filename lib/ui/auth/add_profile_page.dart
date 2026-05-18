@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
@@ -44,8 +43,6 @@ class _AddProfilePageState extends State<AddProfilePage> {
     if (valid != _isValid) setState(() => _isValid = valid);
   }
 
-  /// Loads uid and optionally pre-fills existing name.
-  /// Timeout reduced to 3s and uid + Firestore fetched concurrently.
   Future<void> _loadUserData() async {
     try {
       final uid = await AuthService.instance
@@ -59,23 +56,15 @@ class _AddProfilePageState extends State<AddProfilePage> {
       }
       _currentUserId = uid;
 
+      // Pre-fill name from local storage — no Firestore, no network call
       if (!widget.isNewUser) {
-        try {
-          final doc = await FirebaseFirestore.instance
-              .collection('users')
-              .doc(uid)
-              .get()
-              .timeout(const Duration(seconds: 3)); // was 6s — halved
-
-          final existingName = doc.data()?['name'] as String?;
-          if (existingName != null &&
-              existingName.trim().length >= 2 &&
-              !_looksLikePhoneNumber(existingName.trim())) {
-            _nicknameController.text = existingName.trim();
-            _isValid = true;
-          }
-        } catch (e) {
-          debugPrint('[AddProfilePage] Could not pre-fill name: $e');
+        final existingName = await AuthService.instance.getCurrentUsername();
+        if (existingName != null &&
+            existingName.trim().length >= 2 &&
+            !_looksLikePhoneNumber(existingName.trim())) {
+          _nicknameController.text = existingName.trim();
+          _isValid = true;
+          debugPrint('[AddProfilePage] Pre-filled name from local storage: "$existingName"');
         }
       }
     } catch (e) {
@@ -98,89 +87,65 @@ class _AddProfilePageState extends State<AddProfilePage> {
     );
   }
 
+
   Future<void> _saveAndGoHome() async {
-    if (!_isValid || _isSaving) return;
+  if (!_isValid || _isSaving) return;
 
-    final name = _nicknameController.text.trim();
-    final uid =
-        _currentUserId ?? await AuthService.instance.getCurrentUserId();
+  final name = _nicknameController.text.trim();
+  final uid = _currentUserId ?? await AuthService.instance.getCurrentUserId();
+  if (uid == null || uid.isEmpty) return;
+  _currentUserId = uid;
 
-    if (uid == null || uid.isEmpty) {
-      debugPrint('[AddProfilePage] _saveAndGoHome: uid is null, aborting');
-      return;
-    }
-    _currentUserId = uid;
+  if (mounted) setState(() => _isSaving = true);
 
-    if (mounted) setState(() => _isSaving = true);
+  await AuthService.instance.updateStoredUsername(name);
+  debugPrint('[AddProfilePage] Name saved locally: "$name"');
 
-    await AuthService.instance.updateStoredUsername(name);
-    _syncProfileInBackground(uid, name);
-    await _navigateHome(uid);
-  }
+  // ✅ FIX: re-persist the full session so the name is locked in as the
+  // stored username before any future login reads it
+  final secret = await AuthService.instance.getStoredSecret() ?? '';
+  final phone  = await AuthService.instance.getSavedPhone()   ?? '';
+  await AuthService.instance.persistPhoneSession(
+    userId:   uid,
+    username: name,        // explicit real name — bypasses the phone-number guard
+    phone:    phone,
+    secret:   secret,
+  );
 
-  void _syncProfileInBackground(String uid, String name) {
+  _syncProfileInBackground(name);
+  await _navigateHome(uid);
+}
+
+  void _syncProfileInBackground(String name) {
     unawaited(() async {
       try {
-        await AuthService.instance.ensureFirebaseAuth();
-
-        final List<String?> errors = await Future.wait<String?>(
-          [
-            _updateFirestore(uid, name),
-            _updateMatrixNicknameWithRetry(name),
-          ],
-          eagerError: false,
-        );
-
-        for (final error in errors) {
-          if (error != null) debugPrint('[AddProfilePage] Save warning: $error');
-        }
+        await _updateMatrixNicknameWithRetry(name);
       } catch (e) {
         debugPrint('[AddProfilePage] background profile sync error: $e');
       }
     }());
   }
 
-  Future<String?> _updateFirestore(String uid, String name) async {
-    try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .set(
-            {
-              'name': name,
-              'username': name,
-              'updatedAt': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true),
-          )
-          .timeout(const Duration(seconds: 10));
-      debugPrint('[AddProfilePage] Firestore name updated → "$name"');
-      return null;
-    } catch (e) {
-      return 'Firestore write failed: $e';
-    }
-  }
-
-  Future<String?> _updateMatrixNicknameWithRetry(String name) async {
-    const maxAttempts = 5;
-    const retryDelay = Duration(milliseconds: 800);
+  Future<void> _updateMatrixNicknameWithRetry(String name) async {
+    const maxAttempts = 3;
+    const retryDelay = Duration(seconds: 1);
 
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        await AuthService.instance.updateStoredUsername(name)
+        await AuthService.instance
+            .updateStoredUsername(name)
             .timeout(const Duration(seconds: 10));
-        debugPrint('[AddProfilePage] Stored nickname updated -> "$name"');
-        return null;
+        debugPrint('[AddProfilePage] Matrix display name updated: "$name"');
+        return;
       } catch (e) {
         debugPrint(
-          '[AddProfilePage] Matrix display-name attempt $attempt/$maxAttempts '
-          'failed: $e',
+          '[AddProfilePage] Matrix display-name attempt $attempt/$maxAttempts failed: $e',
         );
         if (attempt < maxAttempts) await Future.delayed(retryDelay);
       }
     }
 
-    return 'Matrix display-name update failed after $maxAttempts attempts';
+    debugPrint('[AddProfilePage] Matrix display-name update failed after $maxAttempts attempts — local name still saved');
   }
 
   @override
@@ -233,7 +198,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
               // ── Avatar placeholder ───────────────────────────────────────
               GestureDetector(
                 onTap: () {
-                  // TODO: open image picker.
+                  // TODO: open image picker
                 },
                 child: const CircleAvatar(
                   radius: 50,
