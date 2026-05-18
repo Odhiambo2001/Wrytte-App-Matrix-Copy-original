@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
@@ -150,18 +149,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() => _isLoggingOut = true);
 
     try {
-      await AuthService.instance.logoutFromMatrix()
-          .timeout(const Duration(seconds: 5));
+      await AuthService.instance.logout();
     } catch (e) {
-      debugPrint('[Logout] Matrix error (skipping): $e');
-    }
-
-    try {
-      await const FlutterSecureStorage()
-          .deleteAll()
-          .timeout(const Duration(seconds: 5));
-    } catch (e) {
-      debugPrint('[Logout] Storage error (skipping): $e');
+      debugPrint('[Logout] Auth logout error (skipping): $e');
     }
 
     try {

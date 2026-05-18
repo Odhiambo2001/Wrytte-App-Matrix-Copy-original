@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -44,6 +45,7 @@ class AuthService {
   static const _usernameKey = 'username';
   static const _secretKey  = 'secret';
   static const _phoneKey   = 'phone';
+  static const _phoneProfileCachePrefix = 'phone_profile_';
 
   static const _defaultHomeserver = MatrixConfig.homeserver;
 
@@ -138,6 +140,11 @@ class AuthService {
       writes.add(_storage.write(key: _secretKey, value: secret.trim()));
     }
     await Future.wait(writes);
+    await _cacheProfileForPhone(
+      userId: userId,
+      username: nameToSave,
+      phone: normalizedPhone,
+    );
 
     // Matrix login runs in background — does not block UI navigation.
     unawaited(_tryLoginToMatrix(userId: userId, nickname: nameToSave));
@@ -289,17 +296,17 @@ class AuthService {
     final savedPhone = await getSavedPhone();
     final savedUserId = await getCurrentUserId();
     final savedName = await getCurrentUsername();
-    if (savedPhone == null ||
-        _normalizePhone(savedPhone) != _normalizePhone(phone) ||
-        savedUserId == null ||
-        savedUserId.isEmpty) {
-      return null;
+    if (savedPhone != null &&
+        _normalizePhone(savedPhone) == _normalizePhone(phone) &&
+        savedUserId != null &&
+        savedUserId.isNotEmpty) {
+      return StoredAuthProfile(
+        userId: savedUserId,
+        username: savedName ?? savedPhone,
+        phone: _normalizePhone(savedPhone),
+      );
     }
-    return StoredAuthProfile(
-      userId: savedUserId,
-      username: savedName ?? savedPhone,
-      phone: _normalizePhone(savedPhone),
-    );
+    return _readCachedProfileForPhone(phone);
   }
 
   Future<StoredAuthProfile?> hydrateStoredProfile(
@@ -317,7 +324,17 @@ class AuthService {
   // ---------------------------------------------------------------------------
   Future<void> updateStoredUsername(String username) async {
     if (username.trim().isEmpty) return;
-    await _storage.write(key: _usernameKey, value: username.trim());
+    final trimmed = username.trim();
+    await _storage.write(key: _usernameKey, value: trimmed);
+    final userId = await getCurrentUserId();
+    final phone = await getSavedPhone();
+    if (userId != null && userId.isNotEmpty && phone != null) {
+      await _cacheProfileForPhone(
+        userId: userId,
+        username: trimmed,
+        phone: phone,
+      );
+    }
     final client = MatrixClientService.instance.isInitialized
         ? MatrixClientService.instance.client
         : null;
@@ -326,7 +343,7 @@ class AuthService {
         await client!.setProfileField(
           client.userID!,
           'm.displayname',
-          {'displayname': username.trim()},
+          {'displayname': trimmed},
         );
       } catch (e) {
         debugPrint('[AuthService] Matrix display-name update failed: $e');
@@ -345,14 +362,28 @@ class AuthService {
   // Logout
   // ---------------------------------------------------------------------------
   Future<void> logout() async {
-    await ChatService().reset();
-    await logoutFromMatrix();
+    try {
+      await ChatService().reset().timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint('[AuthService] Chat reset error during logout: $e');
+    }
+    try {
+      await logoutFromMatrix().timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint('[AuthService] Matrix logout error during logout: $e');
+    }
     try {
       await _firebaseAuth.signOut();
     } catch (e) {
       debugPrint('[AuthService] Firebase sign-out error: $e');
     }
+    final profileCache = await _readPhoneProfileCache();
     await _storage.deleteAll();
+    await Future.wait(
+      profileCache.entries.map(
+        (entry) => _storage.write(key: entry.key, value: entry.value),
+      ),
+    );
   }
 
   Future<void> signOutFirebase() async {
@@ -385,6 +416,69 @@ class AuthService {
     if (cleaned.startsWith('00')) cleaned = '+${cleaned.substring(2)}';
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
     return cleaned;
+  }
+
+  String _phoneProfileCacheKey(String phone) {
+    final digits = _normalizePhone(phone).replaceAll(RegExp(r'\D'), '');
+    return '$_phoneProfileCachePrefix$digits';
+  }
+
+  Future<void> _cacheProfileForPhone({
+    required String userId,
+    required String username,
+    required String phone,
+  }) async {
+    final trimmedName = username.trim();
+    final normalizedPhone = _normalizePhone(phone);
+    if (userId.trim().isEmpty ||
+        normalizedPhone.isEmpty ||
+        trimmedName.length < 2 ||
+        _looksLikePhone(trimmedName)) {
+      return;
+    }
+
+    await _storage.write(
+      key: _phoneProfileCacheKey(normalizedPhone),
+      value: jsonEncode({
+        'userId': userId.trim(),
+        'username': trimmedName,
+        'phone': normalizedPhone,
+      }),
+    );
+  }
+
+  Future<StoredAuthProfile?> _readCachedProfileForPhone(String phone) async {
+    final raw = await _storage.read(key: _phoneProfileCacheKey(phone));
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final userId = (map['userId'] as String? ?? '').trim();
+      final username = (map['username'] as String? ?? '').trim();
+      final cachedPhone = _normalizePhone(map['phone'] as String? ?? phone);
+      if (userId.isEmpty || username.isEmpty) return null;
+      return StoredAuthProfile(
+        userId: userId,
+        username: username,
+        phone: cachedPhone,
+      );
+    } catch (e) {
+      debugPrint('[AuthService] Cached profile read failed: $e');
+      return null;
+    }
+  }
+
+  Future<Map<String, String>> _readPhoneProfileCache() async {
+    try {
+      final allValues = await _storage.readAll();
+      return Map.fromEntries(
+        allValues.entries.where(
+          (entry) => entry.key.startsWith(_phoneProfileCachePrefix),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[AuthService] Profile cache preservation failed: $e');
+      return const {};
+    }
   }
 
   bool _looksLikePhone(String value) {
