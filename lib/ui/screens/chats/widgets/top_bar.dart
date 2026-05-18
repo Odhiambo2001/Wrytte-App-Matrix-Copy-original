@@ -1,4 +1,3 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -89,7 +88,7 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => FutureBuilder<String?>(future: FirebaseAuth.instance.currentUser?.getIdToken(), builder: (context, snapshot) => NewContactPage(token: snapshot.data ?? '')),
+            builder: (_) => const NewContactPage(token: ''),
           ),
         );
       } else if (value == 'profile') {

@@ -44,14 +44,14 @@ Firebase is responsible for Wrytte app data around the chat experience, but not 
 
 | Area | Details |
 |---|---|
-| User profile metadata | Firestore `users` documents: `uid`, name, username, phone, profile image fields, `matrixUserId`, and `matrixHomeserver` |
-| App auth bootstrap | Anonymous Firebase Auth so the app can read/write permitted Firestore data |
-| Contact metadata | Saved contacts, contact display names, contact avatars, and Firestore-backed contact lookup |
+| User profile metadata | Matrix profile plus local secure profile storage |
+| App auth bootstrap | Matrix auth plus local secure session storage |
+| Contact metadata | Saved contacts in Matrix account data, contact display names, contact avatars, and Matrix user-directory lookup |
 | Profile edits | Name/avatar/profile metadata updates after signup and from edit profile flows |
 | File/profile storage | Firebase Storage for app profile images and non-Matrix assets |
-| Supporting app state | Firestore documents used by non-message app features; calls use Matrix VoIP signaling |
+| Supporting app state | Matrix and local app metadata; calls use Matrix VoIP signaling |
 
-Firebase should not be treated as the chat database. If Firestore has no `chats` collection, that is expected for the active Matrix-backed flow.
+Matrix is the chat database for rooms, messages, contacts, and sync.
 
 ---
 
@@ -60,10 +60,10 @@ Firebase should not be treated as the chat database. If Firestore has no `chats`
 | Question | Answer |
 |---|---|
 | Where do chat messages come from? | Matrix rooms and Matrix room timelines |
-| Where are conversations listed from? | Matrix rooms, then enriched with Firestore contact/profile metadata |
+| Where are conversations listed from? | Matrix rooms enriched with Matrix account-data contacts and Matrix profile data |
 | Where are unread counts/read markers from? | Matrix room state |
-| Where are saved contact names from? | Firestore contact/user documents |
-| Where are profile names and avatars stored? | Firestore/Firebase Storage for Wrytte profile metadata, with selected Matrix profile fields also updated |
+| Where are saved contact names from? | Matrix account data `com.wrytte.contacts` |
+| Where are profile names and avatars stored? | Matrix profile and local secure profile storage |
 | Does clearing Firebase delete chats? | No |
 | Does clearing app cache delete server-side Matrix messages? | No, it only affects local cache/session data |
 | What deletes server-side messages/rooms? | Matrix room/message administration or user room actions on the Matrix homeserver |
@@ -250,6 +250,7 @@ docker compose -f deploy/dendrite/docker-compose.yml exec dendrite \
 | Read markers/unread counts | Matrix room read markers and sync state |
 | Offline startup cache | Matrix SDK SQLite plus Wrytte chat SQLite projections |
 | Permanent server-side history | Dendrite PostgreSQL and media store |
+| Saved contacts | Matrix per-user account data `com.wrytte.contacts`; app also mirrors to `users/{uid}/contacts` during migration |
 
 For public production, avoid unrestricted open registration. The current Flutter flow can register Matrix accounts directly, so `registration_disabled` is set to `false` in the provided baseline. Before a public launch, put registration behind a backend/appservice/shared-secret flow or enable CAPTCHA/rate limits appropriate for the deployment.
 
@@ -267,7 +268,8 @@ Wrytte keeps a **local cache**, not a second source of truth.
 | Media files | Yes, bounded cache | Avoid repeat downloads, support offline playback |
 | Full infinite room history | Not guaranteed | Fetched from Dendrite on demand when pagination needs older events |
 | Server-side message truth | Dendrite PostgreSQL/media store | Durable canonical history |
-| Wrytte profile/contact metadata | Firestore plus small app caches | UI names, avatars, contacts |
+| Saved Wrytte contacts | Yes, Matrix account data | Contacts sync with the Matrix account across devices |
+| Wrytte profile/contact metadata | Matrix account data plus local caches | UI names, avatars, contacts |
 
 So the answer to “do we keep all messages and all data on the user side?” is:
 
@@ -313,21 +315,20 @@ The Flutter app currently uses Firebase packages for:
 ```yaml
 firebase_core
 firebase_auth
-cloud_firestore
 firebase_storage
 ```
 
-Firestore profile/contact data is used to make Matrix rooms feel like Wrytte conversations. For example, a Matrix direct room may provide the room and events, while Firestore supplies the saved contact name, username, phone metadata, or profile image shown in the UI.
+Matrix account data and Matrix profile data make Matrix rooms feel like Wrytte conversations.
 
 ---
 
 ## Authentication Flow
 
 1. The app creates or restores a local Wrytte auth session.
-2. Firebase anonymous auth is ensured so Firestore profile/contact documents can be read and written.
-3. A Firestore `users/{uid}` document is created or updated with Wrytte metadata.
+2. Matrix session restore is attempted for profile and contact sync.
+3. Local secure profile storage is updated with Wrytte metadata.
 4. The app logs into Matrix, or registers the Matrix account if login fails.
-5. Matrix identity fields such as `matrixUserId` and `matrixHomeserver` are merged back into the Firestore user document.
+5. Matrix identity stays in Matrix secure storage and account data.
 6. Chat screens connect to Matrix and listen for Matrix timeline/sync updates.
 
 Development OTPs are generated locally in `AuthService` and currently use:
@@ -404,8 +405,8 @@ flutter run \
 | Direct chat rooms | Matrix |
 | Realtime message sync | Matrix |
 | Message local cache | Matrix SDK SQLite cache |
-| User profiles | Firebase Firestore |
-| Saved contacts | Firebase Firestore |
+| User profiles | Matrix profile and secure local storage |
+| Saved contacts | Matrix account data, mirrored to Firebase during migration |
 | Profile images | Firebase Storage / profile metadata |
 | Firebase login state | Firebase Auth |
 | Matrix login state | Matrix secure storage keys |

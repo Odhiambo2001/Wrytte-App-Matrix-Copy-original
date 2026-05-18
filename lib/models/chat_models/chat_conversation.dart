@@ -19,7 +19,7 @@ class ChatConversation {
   final DateTime? deletedAt;
   final List<String> deletedBy;
 
-  // ── SQLite cache fields — populated after Firestore /users lookup ──────────
+  // ── SQLite cache fields — populated from Matrix contacts/profile data ──────
   // Stored locally so the UI never waits for a network call to show names/avatars
   final String? otherUserName;
   final String? otherUserAvatar;
@@ -85,9 +85,9 @@ class ChatConversation {
     );
   }
 
-  // ── Factory: from Firestore document ──────────────────────────────────────
+  // ── Factory: from legacy map data ─────────────────────────────────────────
 
-  factory ChatConversation.fromFirestore(
+  factory ChatConversation.fromLegacyMap(
     String docId,
     Map<String, dynamic> data,
     String currentUserId,
@@ -147,7 +147,7 @@ class ChatConversation {
       createdAt: _toDateTime(data['createdAt']),
       deletedAt: _toDateTime(data['deletedAt']),
       deletedBy: List<String>.from(data['deletedBy'] ?? []),
-      // otherUserName / otherUserAvatar come from SQLite, not Firestore
+      // otherUserName / otherUserAvatar come from SQLite.
     );
   }
 

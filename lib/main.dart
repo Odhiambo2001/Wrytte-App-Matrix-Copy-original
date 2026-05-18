@@ -24,7 +24,6 @@ import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'firebase_options.dart';
 import 'core/theme.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 const _systemBarColor = Colors.transparent;
 
@@ -38,10 +37,6 @@ Future<void> main() async {
   await Hive.initFlutter();
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  FirebaseFirestore.instance.settings = const Settings(
-    persistenceEnabled: false,
-  );
 
   unawaited(MatrixClientService.instance.ensureInitialized());
 
@@ -172,13 +167,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
           nickname: user?.username ?? userId,
         );
 
-        final doc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(userId)
-            .get()
-            .timeout(const Duration(seconds: 6));
-
-        final name = doc.data()?['name'] as String? ?? '';
+        final profile = await AuthService.instance.hydrateStoredProfile(userId);
+        final name = profile?.username ?? user?.username ?? '';
         final needsProfile =
             name.isEmpty ||
             name.trim().length < 2 ||

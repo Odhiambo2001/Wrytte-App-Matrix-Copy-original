@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 
@@ -21,11 +20,8 @@ import 'widgets/tab_bar_section.dart';
 //  ConversationsScreen
 //
 //  Name resolution priority (highest → lowest):
-//    1. Saved contacts  — Firestore /users where savedBy == currentUserId.
-//       These have the human display names the user typed (e.g. "John Doe").
-//       sign-up, not the local user's contact alias.
-//    2. Firestore /users doc by document ID (phone digits) — session cache.
-//    3. Raw otherUserId — last resort fallback.
+//    1. Saved contacts in Matrix account data.
+//    2. Raw Matrix room/user data.
 // =============================================================================
 
 const double _kSearchBarHeight = 60.0;
@@ -64,11 +60,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   // e.g. "254700239641" → "John Doe"
   final Map<String, String>  _contactNameCache   = {};
   final Map<String, String?> _contactAvatarCache = {};
-
-  // ── Priority 2: Firestore /users doc fallback (session-only) ─────────────
-  // Key: phone digits (same format as _contactNameCache)
-  final Map<String, String>  _nameCache   = {};
-  final Map<String, String?> _avatarCache = {};
 
   // ===========================================================================
   //  LIFECYCLE
@@ -158,9 +149,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _loadSavedContacts() async {
     try {
-      // Always fetch fresh from Firestore — don't rely on stale static cache
       final contacts = await ContactService()
-          .getFirestoreContactsCached(_currentUserId);
+          .getMatrixContactsCached(_currentUserId);
 
       // Clear existing cache before reloading so removed/renamed contacts
       // don't linger
@@ -198,9 +188,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   //    Matrix displayname is set at registration, not the
   //    local user's chosen contact name.
   //
-  //  Pass 2 — Firestore /users doc fallback.
-  //    Only runs for conversations where pass 1 found no saved-contact name
-  //    AND the current name is still a phone number or missing entirely.
   // ===========================================================================
 
   Future<List<ChatConversation>> _enrichNames(
@@ -218,84 +205,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       return c;
     }).toList();
 
-    // ── Pass 2: Firestore fallback for still-unnamed conversations ─────────
-    final unknownDigits = afterSavedContacts
-        .where((c) => _needsFirestoreLookup(c))
-        .map((c) => c.otherUserId.replaceAll(RegExp(r'[^\d]'), ''))
-        .where((d) => d.isNotEmpty && !_nameCache.containsKey(d))
-        .toSet()
-        .toList();
-
-    if (unknownDigits.isNotEmpty) {
-      const chunk = 10;
-      for (int i = 0; i < unknownDigits.length; i += chunk) {
-        final slice = unknownDigits.sublist(
-            i, (i + chunk).clamp(0, unknownDigits.length));
-
-        try {
-          final snap = await FirebaseFirestore.instance
-              .collection('users')
-              .where(FieldPath.documentId, whereIn: slice)
-              .get();
-
-          for (final doc in snap.docs) {
-            final data   = doc.data();
-            final digits = doc.id;
-
-            // Prefer saved-contact name if somehow we have one
-            if (_contactNameCache.containsKey(digits)) {
-              _nameCache[digits]   = _contactNameCache[digits]!;
-              _avatarCache[digits] = _contactAvatarCache[digits];
-            } else {
-              _nameCache[digits]   = _resolveName(data);
-              final avatar = data['profileImage']?.toString() ??
-                  data['photoUrl']?.toString() ??
-                  data['avatarUrl']?.toString();
-              _avatarCache[digits] =
-                  avatar?.isNotEmpty == true ? avatar : null;
-            }
-          }
-        } catch (e) {
-          debugPrint('[ConversationsScreen] enrichment error: $e');
-        }
-      }
-    }
-
-    return _applyFallbackCache(afterSavedContacts);
-  }
-
-  /// Returns true when this conversation still needs a Firestore lookup.
-  bool _needsFirestoreLookup(ChatConversation c) {
-    final digits = c.otherUserId.replaceAll(RegExp(r'[^\d]'), '');
-    if (digits.isEmpty) return false;
-    // Already resolved by saved contacts
-    if (_contactNameCache.containsKey(digits)) return false;
-    // No name at all
-    if (c.otherUserName == null) return true;
-    // Name is a phone number — needs a better name from Firestore
-    return _looksLikePhone(c.otherUserName!);
-  }
-
-  /// Applies the Firestore fallback cache to conversations that:
-  ///   - Were NOT resolved by saved contacts (pass 1)
-  ///   - Have a usable non-phone name in the fallback cache
-  List<ChatConversation> _applyFallbackCache(List<ChatConversation> convs) {
-    return convs.map((c) {
-      final digits = c.otherUserId.replaceAll(RegExp(r'[^\d]'), '');
-      // Don't overwrite a name that came from saved contacts
-      if (_contactNameCache.containsKey(digits)) return c;
-      // Apply Firestore fallback if we have a real name for this number
-      if (_nameCache.containsKey(digits)) {
-        final cached = _nameCache[digits]!;
-        if (!_looksLikePhone(cached)) {
-          return c.copyWith(
-            otherUserName:   cached,
-            otherUserAvatar: _avatarCache[digits],
-          );
-        }
-      }
-      return c;
-    }).toList();
+    return afterSavedContacts;
   }
 
   /// Returns true when [value] is a raw phone number rather than a
@@ -303,19 +213,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   bool _looksLikePhone(String value) {
     final s = value.replaceAll(RegExp(r'[\s\-()]'), '');
     return s.startsWith('+') || RegExp(r'^\d{7,}$').hasMatch(s);
-  }
-
-  String _resolveName(Map<String, dynamic> data) {
-    final name = data['name']?.toString() ?? '';
-    if (name.isNotEmpty && !_looksLikePhone(name)) return name;
-
-    final username = data['username']?.toString() ?? '';
-    if (username.isNotEmpty && !_looksLikePhone(username)) return username;
-
-    final phone = data['phone']?.toString() ?? '';
-    if (phone.isNotEmpty) return phone;
-
-    return data['uid']?.toString() ?? 'Unknown';
   }
 
   Future<void> _retryEnrichment() async {
@@ -532,7 +429,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                     ),
                   );
                   // Reload contacts fresh (static cache was busted by
-                  // ContactService.invalidateFirestoreCache() on save)
+                  // ContactService.invalidateMatrixContactsCache() on save)
                   // then re-enrich so the new contact name shows immediately.
                   if (mounted) {
                     await _loadSavedContacts();

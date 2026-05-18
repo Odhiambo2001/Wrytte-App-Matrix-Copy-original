@@ -56,9 +56,17 @@ class _AddProfilePageState extends State<AddProfilePage> {
       }
       _currentUserId = uid;
 
-      // Pre-fill name from local storage — no Firestore, no network call
+      // Pre-fill name from local storage first, then heal from the persisted
+      // profile document when this is a returning account on a fresh device.
       if (!widget.isNewUser) {
-        final existingName = await AuthService.instance.getCurrentUsername();
+        var existingName = await AuthService.instance.getCurrentUsername();
+        if (existingName == null ||
+            existingName.trim().length < 2 ||
+            _looksLikePhoneNumber(existingName.trim())) {
+          final remoteProfile =
+              await AuthService.instance.hydrateStoredProfile(uid);
+          existingName = remoteProfile?.username ?? existingName;
+        }
         if (existingName != null &&
             existingName.trim().length >= 2 &&
             !_looksLikePhoneNumber(existingName.trim())) {

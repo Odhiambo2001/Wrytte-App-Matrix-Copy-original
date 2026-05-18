@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
@@ -18,41 +17,6 @@ class _SignInPageState extends State<SignInPage> {
   bool _isLoading = false;
   String? _errorMessage;
 
-  /// Queries Firestore to find a registered user by phone number or WrytteID.
-  /// Returns the user's Firestore document data, or null if not found.
-  Future<Map<String, dynamic>?> _findRegisteredUser(String input) async {
-    final firestore = FirebaseFirestore.instance;
-
-    // Normalize: strip leading + if present for wrytteId comparison,
-    // but keep full +format for phone comparison.
-    final normalized = input.startsWith('+') ? input : '+$input';
-
-    // 1. Try matching by phone field
-    final byPhone = await firestore
-        .collection('users')
-        .where('phone', isEqualTo: normalized)
-        .limit(1)
-        .get();
-
-    if (byPhone.docs.isNotEmpty) {
-      return byPhone.docs.first.data();
-    }
-
-    // 2. Try matching by wrytteId field (stored without leading +)
-    final wrytteIdRaw = input.replaceAll('+', '');
-    final byWrytteId = await firestore
-        .collection('users')
-        .where('wrytteId', isEqualTo: wrytteIdRaw)
-        .limit(1)
-        .get();
-
-    if (byWrytteId.docs.isNotEmpty) {
-      return byWrytteId.docs.first.data();
-    }
-
-    return null;
-  }
-
   Future<void> _goNext() async {
     if (!_isValid || _isLoading) return;
 
@@ -64,29 +28,16 @@ class _SignInPageState extends State<SignInPage> {
     });
 
     try {
-      final userData = await _findRegisteredUser(input);
-
       if (!mounted) return;
 
-      if (userData == null) {
-        // User does not exist — reject login, they must sign up first
-        setState(() {
-          _errorMessage =
-              'No account found. Please sign up first.';
-        });
-        return;
-      }
-
-      // User exists — proceed to OTP page (no Firebase involvement)
-      final phone = userData['phone']?.toString() ?? '+$input';
-      final userId = userData['uid']?.toString() ?? '';
+      final phone = _normalizePhone(input);
 
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => LoginOtpPage(
             phoneNumber: phone,
-            userId: userId,
+            userId: '',
           ),
         ),
       );
@@ -98,6 +49,15 @@ class _SignInPageState extends State<SignInPage> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  String _normalizePhone(String input) {
+    var cleaned = input.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleaned.startsWith('00') && cleaned.length > 4) {
+      cleaned = '+${cleaned.substring(2)}';
+    }
+    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    return cleaned;
   }
 
   @override

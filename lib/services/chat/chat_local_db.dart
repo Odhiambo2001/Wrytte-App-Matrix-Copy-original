@@ -303,7 +303,7 @@ class ChatLocalDb {
     }
   }
 
-  /// Update name + avatar for a conversation after a Firestore /users lookup.
+  /// Update name + avatar for a conversation after Matrix contact or profile enrichment.
   Future<void> updateConversationUserInfo({
     required String conversationId,
     required String name,

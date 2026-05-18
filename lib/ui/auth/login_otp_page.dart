@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
@@ -98,23 +97,6 @@ class _LoginOtpPageState extends State<LoginOtpPage>
         return;
       }
 
-      // Step 2 — Double-check the user is still registered in Firestore
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(widget.userId)
-          .get();
-
-      if (!doc.exists) {
-        _shakeController.forward(from: 0);
-        setState(() {
-          _isLoading = false;
-          _errorMessage = 'Account not found. Please sign up first.';
-          _otpController.clear();
-        });
-        return;
-      }
-
-      // Step 3 — Persist auth session
       String resolvedUserId = widget.userId;
 
       try {
@@ -124,7 +106,6 @@ class _LoginOtpPageState extends State<LoginOtpPage>
         );
         resolvedUserId = user.userId;
       } catch (_) {
-        // authenticatePhone failed — fall back to the Firestore userId
         resolvedUserId = widget.userId;
       }
 

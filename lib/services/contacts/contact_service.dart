@@ -1,47 +1,44 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_contacts/flutter_contacts.dart' as fc;
 import 'package:wrytte/models/contact_model.dart';
-import 'package:wrytte/services/matrix/matrix_chat_service.dart';
+import 'package:wrytte/services/matrix/matrix_contact_service.dart';
 import 'user_search_service.dart';
 
 class ContactService {
   final UserSearchService _userSearchService = UserSearchService();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // ── Cache to avoid repeated Firestore lookups ──────────────────────────
+  // ── Cache to avoid repeated Matrix directory lookups ───────────────────
   Map<String, String>? _phoneUserMapCache;
   DateTime? _cacheTime;
 
   // ── Static in-memory cache shared across screen opens ──────────────────
-  static List<Contact>? _firestoreContactsCache;
-  static String? _firestoreContactsCacheOwner;
+  static List<Contact>? _matrixContactsCache;
+  static String? _matrixContactsCacheOwner;
 
   static void preloadContacts(String ownerUserId, ContactService service) {
-    service.getFirestoreContacts(ownerUserId).then((contacts) {
-      _firestoreContactsCache = contacts;
-      _firestoreContactsCacheOwner = ownerUserId;
+    service.getMatrixContacts(ownerUserId).then((contacts) {
+      _matrixContactsCache = contacts;
+      _matrixContactsCacheOwner = ownerUserId;
     });
   }
 
-  Future<List<Contact>> getFirestoreContactsCached(String ownerUserId) async {
-    if (_firestoreContactsCache != null &&
-        _firestoreContactsCacheOwner == ownerUserId) {
-      return _firestoreContactsCache!;
+  Future<List<Contact>> getMatrixContactsCached(String ownerUserId) async {
+    if (_matrixContactsCache != null &&
+        _matrixContactsCacheOwner == ownerUserId) {
+      return _matrixContactsCache!;
     }
-    final contacts = await getFirestoreContacts(ownerUserId);
-    _firestoreContactsCache = contacts;
-    _firestoreContactsCacheOwner = ownerUserId;
+    final contacts = await getMatrixContacts(ownerUserId);
+    _matrixContactsCache = contacts;
+    _matrixContactsCacheOwner = ownerUserId;
     return contacts;
   }
 
-  static void invalidateFirestoreCache() {
-    _firestoreContactsCache = null;
-    _firestoreContactsCacheOwner = null;
+  static void invalidateMatrixContactsCache() {
+    _matrixContactsCache = null;
+    _matrixContactsCacheOwner = null;
   }
 
   void invalidateCache() {
@@ -55,7 +52,7 @@ class ContactService {
   // ✅ FIXED — check status first, only request if not yet determined
   // Add as a class-level field
 
-static bool _permissionRequestInProgress = false;
+  static bool _permissionRequestInProgress = false;
 
   Future<bool> requestContactsPermission() async {
     final status = await Permission.contacts.status;
@@ -83,10 +80,10 @@ static bool _permissionRequestInProgress = false;
   // ──────────────────────────────────────────────────────────────────────
   String _normalizePhone(String phone) {
     String cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
-    if (cleaned.startsWith('+')) return cleaned;
     if (cleaned.startsWith('00') && cleaned.length > 4) {
-      return '+${cleaned.substring(2)}';
+      cleaned = '+${cleaned.substring(2)}';
     }
+    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) return '+$cleaned';
     return cleaned;
   }
 
@@ -121,86 +118,32 @@ static bool _permissionRequestInProgress = false;
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Save contact to PRIVATE subcollection under the owner's user document
-  // users/{ownerUserId}/contacts/{phoneDigits}
+  // Save contact through Matrix account data only.
   // ──────────────────────────────────────────────────────────────────────
-  Future<void> saveContactToFirestore({
+  Future<void> saveContactToMatrix({
     required String ownerUserId,
     required Contact contact,
   }) async {
     try {
-      final phone = contact.phones.isNotEmpty
-          ? _normalizePhone(contact.phones.first)
-          : null;
-
-      if (phone == null || phone.isEmpty) {
-        debugPrint('No phone number — skipping Firestore save');
-        return;
-      }
-
-      final docId = phone.replaceAll(RegExp(r'[^\d]'), '');
-
-      // ✅ FIXED: write to private subcollection under the owner's UID
-      final contactRef = _firestore
-          .collection('users')
-          .doc(ownerUserId)
-          .collection('contacts')
-          .doc(docId);
-
-      await contactRef.set({
-        'phone': phone,
-        'name': contact.displayName ?? '',
-        'username': contact.displayName ?? '',
-        'uid': contact.wrytteUserId ?? docId,
-        'matrixUserId': contact.wrytteUserId ?? '',
-        'isOnWrytte': contact.isOnWrytte,
-        'avatarUrl': contact.avatarUrl ?? '',
-        'updatedAt': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      debugPrint('✅ Contact saved to users/$ownerUserId/contacts/$docId: ${contact.displayName}');
+      await MatrixContactService.instance.saveContact(_normalizeContact(contact));
+      debugPrint('✅ Contact saved to Matrix account data: ${contact.displayName}');
     } catch (e, stack) {
-      debugPrint('🔴 Firestore write FAILED: $e');
+      debugPrint('🔴 Contact save FAILED: $e');
       debugPrint('🔴 Stack: $stack');
       rethrow;
     }
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Fetch contacts saved by this user — from their PRIVATE subcollection
+  // Fetch contacts saved by this user from Matrix account data.
   // ──────────────────────────────────────────────────────────────────────
-  Future<List<Contact>> getFirestoreContacts(String ownerUserId) async {
-    final currentUid = FirebaseAuth.instance.currentUser?.uid;
-    if (currentUid == null) {
-      debugPrint('🔴 Not authenticated');
-      return [];
-    }
-
+  Future<List<Contact>> getMatrixContacts(String ownerUserId) async {
     try {
-      // ✅ FIXED: read only from this user's private subcollection
-      final snapshot = await _firestore
-          .collection('users')
-          .doc(ownerUserId)
-          .collection('contacts')
-          .get();
-
-      final contacts = snapshot.docs.map((doc) {
-        final data = doc.data();
-        return Contact(
-          displayName: data['name']?.toString(),
-          phones: [data['phone']?.toString() ?? ''],
-          avatarUrl: data['avatarUrl']?.toString(),
-          isOnWrytte: data['isOnWrytte'] as bool? ?? false,
-          wrytteUserId: data['matrixUserId']?.toString() ??
-              data['openImUserId']?.toString(),
-        );
-      }).toList();
-
-      debugPrint('Loaded ${contacts.length} Firestore contacts');
+      final contacts = await MatrixContactService.instance.loadContacts();
+      debugPrint('Loaded ${contacts.length} Matrix contacts');
       return contacts;
     } catch (e) {
-      debugPrint('Failed to load Firestore contacts: $e');
+      debugPrint('Failed to load Matrix contacts: $e');
       return [];
     }
   }
@@ -221,9 +164,6 @@ static bool _permissionRequestInProgress = false;
         .toList();
 
     if (allPhones.isEmpty) return [];
-
-    final token = await FirebaseAuth.instance.currentUser?.getIdToken();
-    if (token == null || token.isEmpty) throw Exception('User not authenticated');
 
     // ✅ Use cache if less than 5 minutes old
     final now = DateTime.now();
@@ -249,7 +189,7 @@ static bool _permissionRequestInProgress = false;
       final results = await Future.wait(
         chunks.map((chunk) => _userSearchService.searchUsersByPhones(
               phoneNumbersC: chunk.join('|'),
-              token: token,
+              token: '',
             )),
       );
 
@@ -299,74 +239,46 @@ static bool _permissionRequestInProgress = false;
   // Save a manually-entered contact
   // ✅ NEVER writes to device phonebook — stays inside Wrytte only
   // ──────────────────────────────────────────────────────────────────────
-Future<Contact> saveManualContact({
-  required String firstName,
-  required String lastName,
-  required String fullIdentifier,
-  required String? wrytteUserId,
-  required bool syncToPhone,
-  required String token,
-  required String? selfUserId,
-}) async {
-  final displayName = '$firstName $lastName'.trim();
-  final isWrytteContact = wrytteUserId != null && wrytteUserId.isNotEmpty;
+  Future<Contact> saveManualContact({
+    required String firstName,
+    required String lastName,
+    required String fullIdentifier,
+    required String? wrytteUserId,
+    required bool syncToPhone,
+    required String token,
+    required String? selfUserId,
+  }) async {
+    final displayName = '$firstName $lastName'.trim();
+    final isWrytteContact = wrytteUserId != null && wrytteUserId.isNotEmpty;
 
-
-  /*  
-  
-  Do NOT write to device contacts. If this is a Wrytte contact, Matrix direct
-  room creation can be used to establish the contact relationship.
-   This keeps the contact management within Wrytte and avoids polluting the user's phonebook with entries they didn't explicitly add there.
-  
-
-
-  if (isWrytteContact) {
-    if (selfUserId == null || selfUserId.isEmpty) {
-      throw Exception('Could not resolve your user ID. Please log in again.');
-    }
-    await _matrixAddFriend(
-      selfUserId: selfUserId,
-      friendUserId: wrytteUserId,
-      remark: displayName,
-      token: token,
-    );
-  }
-
-  */
-
-
-  final contact = Contact(
+    final contact = Contact(
       displayName: displayName,
-      phones: [fullIdentifier],
+      phones: [_normalizePhone(fullIdentifier)],
       isOnWrytte: isWrytteContact,
       wrytteUserId: wrytteUserId,
     );
 
-    if (selfUserId != null && selfUserId.isNotEmpty)
-     {
-      await saveContactToFirestore(
+    if (selfUserId != null && selfUserId.isNotEmpty) {
+      await saveContactToMatrix(
         ownerUserId: selfUserId,
         contact: contact,
       );
       await ContactLocalDb.addContact(contact);
 
       invalidateCache();
-      invalidateFirestoreCache();
+      invalidateMatrixContactsCache();
     }
 
     return contact;
   }
 
-  // ──────────────────────────────────────────────────────────────────────
-  // Matrix direct room — contact relationship
-  // ──────────────────────────────────────────────────────────────────────
-  Future<void> _matrixAddFriend({
-    required String selfUserId,
-    required String friendUserId,
-    required String remark,
-    required String token,
-  }) async {
-    await MatrixChatService.instance.getOrCreateDirectRoom(friendUserId);
-    debugPrint('Matrix direct room ensured for $friendUserId');
+  Contact _normalizeContact(Contact contact) {
+    return contact.copyWith(
+      phones: contact.phones
+          .map(_normalizePhone)
+          .where((phone) => phone.isNotEmpty)
+          .toSet()
+          .toList(),
+    );
   }
 }

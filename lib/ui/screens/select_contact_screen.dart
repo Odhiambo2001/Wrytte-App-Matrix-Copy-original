@@ -1,4 +1,3 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/contact_components/contact_item.dart';
 import 'package:wrytte/models/contact_model.dart';
@@ -92,17 +91,17 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         });
       }
 
-      final firestoreContacts =
-          await _contactService.getFirestoreContacts(currentUserId);
+      final matrixContacts =
+          await _contactService.getMatrixContacts(currentUserId);
 
-      await ContactLocalDb.saveContacts(firestoreContacts);
+      await ContactLocalDb.saveContacts(matrixContacts);
 
       if (mounted) {
         setState(() {
           _wrytteContacts =
-              firestoreContacts.where((c) => c.isOnWrytte).toList();
+              matrixContacts.where((c) => c.isOnWrytte).toList();
           _nonWrytteContacts =
-              firestoreContacts.where((c) => !c.isOnWrytte).toList();
+              matrixContacts.where((c) => !c.isOnWrytte).toList();
           _filteredWrytte = _wrytteContacts;
           _filteredNonWrytte = _nonWrytteContacts;
           _isLoading = false;
@@ -445,16 +444,11 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => FutureBuilder<String?>(
-                    future: FirebaseAuth.instance.currentUser?.getIdToken(),
-                    builder: (context, snapshot) {
-                      return NewContactPage(token: snapshot.data ?? '');
-                    },
-                  ),
+                  builder: (_) => const NewContactPage(token: ''),
                 ),
               );
 
-              // Reload so the newly saved Firestore contact appears immediately
+              // Reload so the newly saved Matrix contact appears immediately
               if (result != null && mounted) {
                 _loadContacts();
               }

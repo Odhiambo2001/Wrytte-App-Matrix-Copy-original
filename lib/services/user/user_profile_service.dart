@@ -4,7 +4,7 @@ import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 
 /// Production-grade local-only UserProfileService.
-/// No Firestore. Source of truth is FlutterSecureStorage via AuthService.
+/// Source of truth is FlutterSecureStorage via AuthService.
 class UserProfileService {
   UserProfileService._();
   static final UserProfileService instance = UserProfileService._();
@@ -62,6 +62,7 @@ class UserProfileService {
     String? name,
     String? profileImage,
     String? bio,
+    List<String>? links,
   }) async {
     if (name != null && name.trim().isNotEmpty) {
       await _storage.write(key: _nameKey, value: name.trim());
@@ -72,6 +73,9 @@ class UserProfileService {
     }
     if (bio != null) {
       await _storage.write(key: _bioKey, value: bio.trim());
+    }
+    if (links != null) {
+      await _storage.write(key: 'user_links', value: links.join('\n'));
     }
     _cache = null;
   }
@@ -129,9 +133,12 @@ class UserProfileService {
       if (uid == null || uid.isEmpty) return null;
 
       final name         = await _storage.read(key: _nameKey)         ?? '';
-      final phone        = await _storage.read(key: _phoneKey)        ?? '';
+      final phone        = _normalizePhone(
+        await _storage.read(key: _phoneKey) ?? '',
+      );
       final profileImage = await _storage.read(key: _profileImageKey) ?? '';
       final bio          = await _storage.read(key: _bioKey)          ?? '';
+      final linksRaw     = await _storage.read(key: 'user_links')     ?? '';
 
       final profile = UserProfile(
         uid:          uid,
@@ -140,7 +147,11 @@ class UserProfileService {
         phone:        phone,
         bio:          bio,
         profileImage: profileImage,
-        links:        const [],
+        links:        linksRaw
+            .split('\n')
+            .map((link) => link.trim())
+            .where((link) => link.isNotEmpty)
+            .toList(),
       );
 
       _cache = profile;
@@ -149,5 +160,14 @@ class UserProfileService {
       debugPrint('[UserProfileService] _readFromStorage error: $e');
       return null;
     }
+  }
+
+  String _normalizePhone(String phone) {
+    var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleaned.startsWith('00') && cleaned.length > 4) {
+      cleaned = '+${cleaned.substring(2)}';
+    }
+    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    return cleaned;
   }
 }

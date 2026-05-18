@@ -74,17 +74,17 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
       final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
 
       if (currentUserId.isNotEmpty) {
-        final firestoreContacts =
-            await _contactService.getFirestoreContactsCached(currentUserId);
+        final matrixContacts =
+            await _contactService.getMatrixContactsCached(currentUserId);
 
-        firestoreContacts.sort((a, b) => a.formattedName
+        matrixContacts.sort((a, b) => a.formattedName
             .toLowerCase()
             .compareTo(b.formattedName.toLowerCase()));
 
         if (mounted) {
           setState(() {
-            _allContacts = firestoreContacts;
-            _filteredContacts = firestoreContacts;
+            _allContacts = matrixContacts;
+            _filteredContacts = matrixContacts;
             _isLoading = false;
           });
         }
@@ -98,8 +98,8 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
 
       final currentUserId2 =
           await AuthService.instance.getCurrentUserId() ?? '';
-      final firestoreContacts =
-          await _contactService.getFirestoreContacts(currentUserId2);
+      final matrixContacts =
+          await _contactService.getMatrixContacts(currentUserId2);
 
       final seenPhones = <String>{};
       final merged = <Contact>[];
@@ -109,7 +109,7 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
         merged.add(c);
       }
 
-      for (final c in firestoreContacts) {
+      for (final c in matrixContacts) {
         final alreadySeen = c.phones.any((p) => seenPhones.contains(p));
         if (!alreadySeen) {
           seenPhones.addAll(c.phones);

@@ -111,7 +111,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       child: Row(
                         children: [
-                          // Real avatar — imageUrl from Firestore
+                          // Real avatar — profile image URL
                           // falls back to initials, then icon
                           _profileLoading
                               ? SizedBox(

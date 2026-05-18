@@ -91,11 +91,26 @@ class RealNumberService {
           return loginResult;
         }
 
-        // No stored secret — user exists but this is a fresh install.
-        // Resolve best available name from local storage and go to HomeScreen.
-        final existingUserId = await AuthService.instance.getCurrentUserId() ?? '';
-        final existingUsername = await AuthService.instance.getCurrentUsername() ?? phone;
+        // No stored secret — user exists but this may be a fresh install or a
+        // local-storage reset. Rehydrate from secure local profile storage
+        // before falling back to the phone number.
+        final remoteProfile =
+            await AuthService.instance.findUserProfileByPhone(phone);
+        final localUserId = await AuthService.instance.getCurrentUserId();
+        final localUsername = await AuthService.instance.getCurrentUsername();
+        final existingUserId = remoteProfile?.userId ?? localUserId ?? '';
+        final existingUsername =
+            remoteProfile?.username ?? localUsername ?? phone;
         final displayName = _resolveDisplayName(existingUsername, phone);
+
+        if (existingUserId.isNotEmpty) {
+          await AuthService.instance.persistPhoneSession(
+            userId: existingUserId,
+            username: displayName,
+            phone: phone,
+            secret: '',
+          );
+        }
 
         debugPrint('[RealNumberService] 409 no secret — display name: "$displayName"');
 
@@ -208,9 +223,13 @@ class RealNumberService {
       throw Exception('Invalid server response: missing userid.');
     }
 
-    // Resolve display name from local storage — fast, offline, no timeout risk
     final storedName = await AuthService.instance.getCurrentUsername();
-    final displayName = _resolveDisplayName(storedName ?? rawUsername, fallbackPhone);
+    final remoteProfile =
+        await AuthService.instance.findUserProfileByPhone(fallbackPhone);
+    final displayName = _resolveDisplayName(
+      storedName ?? remoteProfile?.username ?? rawUsername,
+      fallbackPhone,
+    );
 
     // isNewUser: true only when registering AND no real name is stored yet
     bool isNewUser = false;

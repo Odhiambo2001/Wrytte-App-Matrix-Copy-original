@@ -219,7 +219,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
                           label: 'Calls',
                         ),
 
-                        /// Profile — real avatar from Firestore stream
+                        /// Profile — real profile avatar
                         BottomNavigationBarItem(
                           icon: _NavIcon(
                             isActive: widget.currentIndex == 4,

@@ -9,7 +9,7 @@ class ContactLocalDb {
     final prefs = await SharedPreferences.getInstance();
     final data = contacts.map((c) => jsonEncode({
           'name': c.displayName,
-          'phones': c.phones,
+          'phones': c.phones.map(_normalizePhone).toList(),
           'avatar': c.avatarUrl,
           'wrytteUserId': c.wrytteUserId,
           'isOnWrytte': c.isOnWrytte,
@@ -26,7 +26,7 @@ class ContactLocalDb {
       final json = jsonDecode(e);
       return Contact(
         displayName: json['name'],
-        phones: List<String>.from(json['phones']),
+        phones: List<String>.from(json['phones']).map(_normalizePhone).toList(),
         avatarUrl: json['avatar'],
         wrytteUserId: json['wrytteUserId'],
         isOnWrytte: json['isOnWrytte'] ?? false,
@@ -36,7 +36,18 @@ class ContactLocalDb {
 
   static Future<void> addContact(Contact contact) async {
     final existing = await loadContacts();
-    existing.add(contact);
+    existing.add(contact.copyWith(
+      phones: contact.phones.map(_normalizePhone).toList(),
+    ));
     await saveContacts(existing);
+  }
+
+  static String _normalizePhone(String phone) {
+    var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleaned.startsWith('00') && cleaned.length > 4) {
+      cleaned = '+${cleaned.substring(2)}';
+    }
+    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    return cleaned;
   }
 }

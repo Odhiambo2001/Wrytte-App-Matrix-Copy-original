@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PinnedMessageWidget extends StatelessWidget {
-  final DocumentSnapshot? pinnedMessageDoc;
+  final Map<String, dynamic>? pinnedMessage;
   final VoidCallback onTap;
   final String currentUserId;
   final String otherUserName;
 
   const PinnedMessageWidget({
     super.key,
-    required this.pinnedMessageDoc,
+    required this.pinnedMessage,
     required this.onTap,
     required this.currentUserId,
     required this.otherUserName,
@@ -17,31 +16,27 @@ class PinnedMessageWidget extends StatelessWidget {
 
   String _getMessagePreview(Map<String, dynamic> messageData) {
     final messageType = messageData['messageType'] ?? 'text';
-
     if (messageType == 'text') {
-      final text = messageData['text'] ?? '';
+      final text = messageData['text']?.toString() ?? '';
       return text.length > 40 ? '${text.substring(0, 40)}...' : text;
-    } else if (messageType == 'image') {
-      return '📷 Photo';
-    } else if (messageType == 'audio') {
-      return '🎤 Voice message';
     }
-
-    return 'Unknown message type';
+    if (messageType == 'image') return 'Photo';
+    if (messageType == 'audio') return 'Voice message';
+    return 'Message';
   }
 
   String _getSenderName(Map<String, dynamic> messageData) {
-    final senderId = messageData['senderId'] ?? '';
+    final senderId = messageData['senderId']?.toString() ?? '';
     return senderId == currentUserId ? 'You' : otherUserName;
   }
 
   @override
   Widget build(BuildContext context) {
-    if (pinnedMessageDoc == null || !pinnedMessageDoc!.exists) {
+    final messageData = pinnedMessage;
+    if (messageData == null || messageData.isEmpty) {
       return const SizedBox.shrink();
     }
 
-    final messageData = pinnedMessageDoc!.data() as Map<String, dynamic>;
     final senderName = _getSenderName(messageData);
     final messagePreview = _getMessagePreview(messageData);
 
@@ -57,7 +52,6 @@ class PinnedMessageWidget extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // Pin icon
             Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
@@ -66,10 +60,7 @@ class PinnedMessageWidget extends StatelessWidget {
               ),
               child: const Icon(Icons.push_pin, color: Colors.blue, size: 16),
             ),
-
             const SizedBox(width: 12),
-
-            // Message preview
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -83,35 +74,15 @@ class PinnedMessageWidget extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  RichText(
+                  Text(
+                    '$senderName: $messagePreview',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    text: TextSpan(
-                      children: [
-                        TextSpan(
-                          text: '$senderName: ',
-                          style: const TextStyle(
-                            color: Colors.blue,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        TextSpan(
-                          text: messagePreview,
-                          style: TextStyle(
-                            color: Colors.grey.shade300,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
+                    style: TextStyle(color: Colors.grey.shade300, fontSize: 13),
                   ),
                 ],
               ),
             ),
-
-            // Close/Unpin button (optional - can be added later)
-            const SizedBox(width: 8),
           ],
         ),
       ),
