@@ -147,7 +147,9 @@ class AuthService {
     );
 
     // Matrix login runs in background — does not block UI navigation.
-    unawaited(_tryLoginToMatrix(userId: userId, nickname: nameToSave));
+    //unawaited(_tryLoginToMatrix(userId: userId, nickname: nameToSave));
+    final matrixUserId = normalizedPhone.replaceAll(RegExp(r'[^\d]'), '');
+    unawaited(_tryLoginToMatrix(userId: matrixUserId, nickname: nameToSave));
   }
   // ---------------------------------------------------------------------------
   // Send SMS / email codes (dev stubs)
