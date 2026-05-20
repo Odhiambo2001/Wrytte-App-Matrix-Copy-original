@@ -41,15 +41,15 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
-  final ScrollController      _scrollCtrl = ScrollController();
-  final FocusNode             _focusNode  = FocusNode();
+  final ScrollController _scrollCtrl = ScrollController();
+  final FocusNode _focusNode = FocusNode();
 
   final ChatService _chat = ChatService();
   final CallService _call = CallService.instance;
 
   StreamSubscription<ChatMessage>? _msgSub;
 
-  final List<ChatMessage>   _messages              = [];
+  final List<ChatMessage> _messages = [];
   final Map<String, String> _optimisticIdByContent = {};
 
   String? _resolvedConversationId;
@@ -57,7 +57,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loadingOlder = false;
   bool _hasMoreOlder = true;
 
-  bool    _isSending = false;
+  bool _isSending = false;
   bool _matrixAvailable = false;
 
   UserProfile? _receiverProfile;
@@ -66,20 +66,23 @@ class _ChatScreenState extends State<ChatScreen> {
   // ── debug overlay ──────────────────────────────────────────────────────────
   bool _showDebug = false;
   final ScrollController _debugScrollCtrl = ScrollController();
-  final ApkDebugLogger   _logger          = ApkDebugLogger.instance;
+  final ApkDebugLogger _logger = ApkDebugLogger.instance;
 
   static const double _kHeaderPillH = 48.0;
-  static const double _kInputPillH  = 40.0;
+  static const double _kInputPillH = 40.0;
 
   // ─── LIFECYCLE ─────────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
-    apkLog('ChatScreen', '── initState ──  '
-        'convId="${widget.conversationId}"  '
-        'receiverId="${widget.receiverId}"  '
-        'currentUserId="${widget.currentUserId}"');
+    apkLog(
+      'ChatScreen',
+      '── initState ──  '
+          'convId="${widget.conversationId}"  '
+          'receiverId="${widget.receiverId}"  '
+          'currentUserId="${widget.currentUserId}"',
+    );
 
     _logger.addListener(_onNewLog);
     _loadInitial();
@@ -103,8 +106,7 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {});
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_debugScrollCtrl.hasClients) {
-          _debugScrollCtrl.jumpTo(
-            _debugScrollCtrl.position.maxScrollExtent);
+          _debugScrollCtrl.jumpTo(_debugScrollCtrl.position.maxScrollExtent);
         }
       });
     }
@@ -118,32 +120,85 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_resolvedConversationId != null) return _resolvedConversationId!;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
-    apkLog('ChatScreen._resolveConv',
-        'raw="${widget.receiverId}"  '
-        'normalised="$normalisedReceiverId"  '
-        'passedConvId="${widget.conversationId}"');
+    apkLog(
+      'ChatScreen._resolveConv',
+      'raw="${widget.receiverId}"  '
+          'normalised="$normalisedReceiverId"  '
+          'passedConvId="${widget.conversationId}"',
+    );
 
     if (widget.conversationId.startsWith('!')) {
       _resolvedConversationId = widget.conversationId;
-      apkLog('ChatScreen._resolveConv',
-          'used passedConvId → "$_resolvedConversationId"');
+      apkLog(
+        'ChatScreen._resolveConv',
+        'used passedConvId → "$_resolvedConversationId"',
+      );
       return _resolvedConversationId!;
     }
 
     if (!_matrixAvailable) {
-      _resolvedConversationId = widget.conversationId;
-      apkLog('ChatScreen._resolveConv',
-          'Matrix unavailable; using local convId "$_resolvedConversationId"');
-      return _resolvedConversationId!;
+      apkLog(
+        'ChatScreen._resolveConv',
+        'Matrix unavailable; using local convId "${widget.conversationId}"',
+      );
+      return widget.conversationId;
     }
 
-    _resolvedConversationId =
-        await _chat.getMatrixConversationId(normalisedReceiverId) ??
-            widget.conversationId;
-    apkLog('ChatScreen._resolveConv',
-        'Matrix direct room -> "$_resolvedConversationId"');
+    final matrixConversationId = await _chat.findMatrixConversationId(
+      normalisedReceiverId,
+    );
+    if (matrixConversationId == null) {
+      apkLog(
+        'ChatScreen._resolveConv',
+        'Matrix direct room unavailable; using local convId "${widget.conversationId}"',
+      );
+      return widget.conversationId;
+    }
+
+    _resolvedConversationId = matrixConversationId;
+    apkLog(
+      'ChatScreen._resolveConv',
+      'Matrix direct room -> "$_resolvedConversationId"',
+    );
 
     return _resolvedConversationId!;
+  }
+
+  Future<String?> _resolveMatrixConversationIdForSend() async {
+    if (widget.conversationId.startsWith('!')) {
+      _resolvedConversationId = widget.conversationId;
+      return widget.conversationId;
+    }
+
+    if (!_matrixAvailable) {
+      try {
+        apkLog(
+          'ChatScreen._resolveSendConv',
+          'connecting Matrix before send...',
+        );
+        await _chat.connect();
+        _matrixAvailable = true;
+        _resolvedConversationId = null;
+      } catch (e) {
+        _matrixAvailable = false;
+        apkLog('ChatScreen._resolveSendConv', 'Matrix connect failed: $e');
+        return null;
+      }
+    }
+
+    final normalisedReceiverId = _normaliseId(widget.receiverId);
+    final matrixConversationId = await _chat.getMatrixConversationId(
+      normalisedReceiverId,
+    );
+    if (matrixConversationId == null) {
+      apkLog(
+        'ChatScreen._resolveSendConv',
+        'failed to create/reuse Matrix direct room',
+      );
+      return null;
+    }
+    _resolvedConversationId = matrixConversationId;
+    return matrixConversationId;
   }
 
   // ─── INIT ──────────────────────────────────────────────────────────────────
@@ -164,8 +219,10 @@ class _ChatScreenState extends State<ChatScreen> {
       return; // Matrix unavailable; keep the chat usable with local messages.
     }
 
-    apkLog('ChatScreen._loadInitial',
-        'connect() done  isConnected=${_chat.isConnected}'); // use actual flag
+    apkLog(
+      'ChatScreen._loadInitial',
+      'connect() done  isConnected=${_chat.isConnected}',
+    ); // use actual flag
 
     final realConvId = await _resolveConversationId();
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
@@ -176,8 +233,10 @@ class _ChatScreenState extends State<ChatScreen> {
       conversationID: realConvId,
       count: 40,
     );
-    apkLog('ChatScreen._loadInitial',
-        'fetchMessageHistory returned ${msgs.length} msgs');
+    apkLog(
+      'ChatScreen._loadInitial',
+      'fetchMessageHistory returned ${msgs.length} msgs',
+    );
 
     if (!mounted) return;
     setState(() => _mergeMessages(msgs));
@@ -186,37 +245,41 @@ class _ChatScreenState extends State<ChatScreen> {
     _msgSub = _chat.messageStream.listen((msg) {
       if (msg.conversationId != realConvId) return;
       if (!mounted) return;
-      apkLog('ChatScreen.msgStream',
-          'new msg id=${msg.id}  convId=${msg.conversationId}');
+      apkLog(
+        'ChatScreen.msgStream',
+        'new msg id=${msg.id}  convId=${msg.conversationId}',
+      );
       setState(() => _upsertMessage(msg));
+      if (!_isMine(msg)) {
+        unawaited(_chat.markConversationAsRead(realConvId));
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     });
   }
 
-
   Future<void> _loadLocalMessages() async {
     final convId = await _resolveConversationId();
     final msgs = await _chat.loadCachedMessages(convId);
-    apkLog('ChatScreen._loadLocalMessages',
-        'loaded ${msgs.length} local msgs for "$convId"');
+    apkLog(
+      'ChatScreen._loadLocalMessages',
+      'loaded ${msgs.length} local msgs for "$convId"',
+    );
     if (!mounted) return;
     setState(() => _mergeMessages(msgs));
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
-
   Future<void> _loadReceiverProfile() async {
-    final profile =
-        await UserProfileService.instance.getProfileByUid(widget.receiverId);
+    final profile = await UserProfileService.instance.getProfileByUid(
+      widget.receiverId,
+    );
     if (mounted) setState(() => _receiverProfile = profile);
   }
 
   // ─── PAGINATION ────────────────────────────────────────────────────────────
 
   void _onScroll() {
-    if (_scrollCtrl.position.pixels <= 80 &&
-        !_loadingOlder &&
-        _hasMoreOlder) {
+    if (_scrollCtrl.position.pixels <= 80 && !_loadingOlder && _hasMoreOlder) {
       _loadOlderMessages();
     }
   }
@@ -256,8 +319,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scrollCtrl.hasClients) {
-          _scrollCtrl.jumpTo(
-              _scrollCtrl.position.pixels + currentOffset);
+          _scrollCtrl.jumpTo(_scrollCtrl.position.pixels + currentOffset);
         }
       });
     } catch (e) {
@@ -270,10 +332,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _send() async {
     final text = _controller.text.trim();
-    apkLog('ChatScreen._send',
-        'text="${text.length > 40 ? text.substring(0, 40) : text}"  '
-        'isSending=$_isSending  '
-        'textEmpty=${text.isEmpty}');
+    apkLog(
+      'ChatScreen._send',
+      'text="${text.length > 40 ? text.substring(0, 40) : text}"  '
+          'isSending=$_isSending  '
+          'textEmpty=${text.isEmpty}',
+    );
 
     if (text.isEmpty || _isSending) return;
 
@@ -284,16 +348,11 @@ class _ChatScreenState extends State<ChatScreen> {
       _replyingTo = null;
     });
 
-    final realConvId           = await _resolveConversationId();
     final normalisedReceiverId = _normaliseId(widget.receiverId);
-
-    apkLog('ChatScreen._send',
-        'realConvId="$realConvId"  '
-        'normalisedReceiver="$normalisedReceiverId"');
 
     final optimistic = ChatMessage(
       id: 'opt_${DateTime.now().millisecondsSinceEpoch}',
-      conversationId: realConvId,
+      conversationId: _resolvedConversationId ?? widget.conversationId,
       senderId: widget.currentUserId,
       receiverId: normalisedReceiverId,
       content: text,
@@ -301,17 +360,30 @@ class _ChatScreenState extends State<ChatScreen> {
       status: MessageStatus.sending,
       replyToMessageId: reply?.id,
       replyToSenderId: reply?.senderId,
-      replyPreview: reply == null
-          ? null
-          : (reply.isVoiceNote ? 'Voice note' : reply.content),
+      replyPreview:
+          reply == null
+              ? null
+              : (reply.isVoiceNote ? 'Voice note' : reply.content),
     );
 
     setState(() => _messages.add(optimistic));
     _optimisticIdByContent['${normalisedReceiverId}_$text'] = optimistic.id;
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
-    if (!_matrixAvailable) {
-      final local = optimistic.copyWith(status: MessageStatus.failed);
+    final realConvId = await _resolveMatrixConversationIdForSend();
+
+    apkLog(
+      'ChatScreen._send',
+      'realConvId="$realConvId"  '
+          'normalisedReceiver="$normalisedReceiverId"',
+    );
+
+    final outbound = optimistic.copyWith(
+      conversationId: realConvId ?? optimistic.conversationId,
+    );
+
+    if (!_matrixAvailable || realConvId == null) {
+      final local = outbound.copyWith(status: MessageStatus.failed);
       await _saveLocalMessage(local);
       if (mounted) {
         setState(() {
@@ -324,9 +396,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       apkLog('ChatScreen._send', 'calling chat.sendMessage…');
-      final sent = await _chat.sendMessage(optimistic);
-      apkLog('ChatScreen._send',
-          ' sent  id=${sent.id}  status=${sent.status}');
+      final sent = await _chat.sendMessage(outbound);
+      apkLog('ChatScreen._send', ' sent  id=${sent.id}  status=${sent.status}');
 
       await _saveLocalMessage(sent);
       if (mounted) {
@@ -334,7 +405,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (e) {
       apkLog('ChatScreen._send', ' SEND FAILED: $e');
-      final local = optimistic.copyWith(status: MessageStatus.failed);
+      final local = outbound.copyWith(status: MessageStatus.failed);
       await _saveLocalMessage(local);
       if (mounted) {
         setState(() {
@@ -362,13 +433,19 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendVoiceNote(String filePath, int durationSeconds) async {
-    final realConvId           = await _resolveConversationId();
     final normalisedReceiverId = _normaliseId(widget.receiverId);
-    apkLog('ChatScreen._sendVoice',
-        'duration=${durationSeconds}s  receiver="$normalisedReceiverId"');
+    final realConvId = await _resolveMatrixConversationIdForSend();
+    apkLog(
+      'ChatScreen._sendVoice',
+      'duration=${durationSeconds}s  receiver="$normalisedReceiverId"',
+    );
 
-    final placeholderId =
-        'voice_${DateTime.now().millisecondsSinceEpoch}';
+    if (realConvId == null) {
+      apkLog('ChatScreen._sendVoice', 'Matrix room unavailable');
+      return;
+    }
+
+    final placeholderId = 'voice_${DateTime.now().millisecondsSinceEpoch}';
     final placeholder = ChatMessage(
       id: placeholderId,
       conversationId: realConvId,
@@ -391,14 +468,12 @@ class _ChatScreenState extends State<ChatScreen> {
         durationSeconds: durationSeconds,
       );
       if (mounted) {
-        setState(
-            () => _messages.removeWhere((m) => m.id == placeholderId));
+        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
       }
     } catch (e) {
       apkLog('ChatScreen._sendVoice', ' ERROR: $e');
       if (mounted) {
-        setState(
-            () => _messages.removeWhere((m) => m.id == placeholderId));
+        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to send voice note: $e'),
@@ -413,27 +488,31 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _startCall(CallType type) async {
     final normalisedReceiverId = _normaliseId(widget.receiverId);
-    final displayName          = widget.title;
+    final displayName = widget.title;
 
     try {
       await _call.makeCall(
-        receiverId:   normalisedReceiverId,
-        type:         type,
-        callerName:   widget.currentUserId,
+        receiverId: normalisedReceiverId,
+        type: type,
+        callerName: widget.currentUserId,
         callerAvatar: '',
       );
       if (!mounted) return;
-      Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => CallScreen(
-          remoteUserId:     normalisedReceiverId,
-          remoteUserName:   displayName,
-          remoteUserAvatar: _receiverProfile?.hasProfileImage == true
-              ? _receiverProfile!.profileImage
-              : widget.avatarUrl,
-          type:     type,
-          isCaller: true,
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder:
+              (_) => CallScreen(
+                remoteUserId: normalisedReceiverId,
+                remoteUserName: displayName,
+                remoteUserAvatar:
+                    _receiverProfile?.hasProfileImage == true
+                        ? _receiverProfile!.profileImage
+                        : widget.avatarUrl,
+                type: type,
+                isCaller: true,
+              ),
         ),
-      ));
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -488,18 +567,18 @@ class _ChatScreenState extends State<ChatScreen> {
         orElse: () => msg,
       );
       if (optimistic.id != entry.value) continue;
-      final sameContent  = optimistic.content == msg.content;
-      final sameReceiver = optimistic.receiverId == msg.receiverId ||
+      final sameContent = optimistic.content == msg.content;
+      final sameReceiver =
+          optimistic.receiverId == msg.receiverId ||
           optimistic.receiverId == msg.senderId;
-      final closeInTime  =
+      final closeInTime =
           msg.timestamp.difference(optimistic.timestamp).inSeconds.abs() < 30;
       if (sameContent && sameReceiver && closeInTime) return optimistic.id;
     }
     return null;
   }
 
-  void _replaceOptimisticMessage(
-      String optimisticId, ChatMessage sent) {
+  void _replaceOptimisticMessage(String optimisticId, ChatMessage sent) {
     final idx = _messages.indexWhere((m) => m.id == optimisticId);
     if (idx != -1) {
       _messages[idx] = sent;
@@ -542,9 +621,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
               _messageActionTile(
-                icon: message.isStarred
-                    ? Icons.star_rounded
-                    : Icons.star_border_rounded,
+                icon:
+                    message.isStarred
+                        ? Icons.star_rounded
+                        : Icons.star_border_rounded,
                 label: message.isStarred ? 'Unstar' : 'Star',
                 onTap: () async {
                   Navigator.pop(context);
@@ -581,10 +661,14 @@ class _ChatScreenState extends State<ChatScreen> {
                     try {
                       await _chat.deleteMessageForEveryone(message);
                       if (!mounted) return;
-                      setState(() => _upsertMessage(message.copyWith(
+                      setState(
+                        () => _upsertMessage(
+                          message.copyWith(
                             content: '',
                             isDeletedForEveryone: true,
-                          )));
+                          ),
+                        ),
+                      );
                     } catch (e) {
                       if (!mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -635,38 +719,39 @@ class _ChatScreenState extends State<ChatScreen> {
     final controller = TextEditingController();
     final receiver = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF181B22),
-        title: const Text(
-          'Forward message',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            hintText: 'Phone, Wrytte ID, or Matrix ID',
-            hintStyle: TextStyle(color: Colors.white38),
-            enabledBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Colors.white24),
+      builder:
+          (context) => AlertDialog(
+            backgroundColor: const Color(0xFF181B22),
+            title: const Text(
+              'Forward message',
+              style: TextStyle(color: Colors.white),
             ),
-            focusedBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Color(0xFF4DA3FF)),
+            content: TextField(
+              controller: controller,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                hintText: 'Phone, Wrytte ID, or Matrix ID',
+                hintStyle: TextStyle(color: Colors.white38),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white24),
+                ),
+                focusedBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF4DA3FF)),
+                ),
+              ),
             ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, controller.text.trim()),
+                child: const Text('Forward'),
+              ),
+            ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Forward'),
-          ),
-        ],
-      ),
     );
     controller.dispose();
     if (receiver == null || receiver.isEmpty) return;
@@ -674,9 +759,9 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       await _chat.forwardMessage(original: message, receiverId: receiver);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Message forwarded')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Message forwarded')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -693,7 +778,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final double statusBarH = MediaQuery.of(context).padding.top;
-    final double appBarH    = statusBarH + kToolbarHeight;
+    final double appBarH = statusBarH + kToolbarHeight;
 
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
@@ -709,9 +794,9 @@ class _ChatScreenState extends State<ChatScreen> {
               if (_replyingTo != null) _buildReplyComposerBanner(),
               MessageInputField(
                 controller: _controller,
-                focusNode:  _focusNode,
-                isSending:  _isSending,
-                onSend:     _send,
+                focusNode: _focusNode,
+                isSending: _isSending,
+                onSend: _send,
                 inputPillHeight: _kInputPillH,
                 onVoiceMessage: _sendVoiceNote,
               ),
@@ -720,7 +805,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
           // ── gradient behind app bar ───────────────────────────────────────
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             height: appBarH + 20,
             child: IgnorePointer(
               child: Container(
@@ -742,7 +829,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
           // ── app bar ───────────────────────────────────────────────────────
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             child: _buildAppBar(statusBarH),
           ),
 
@@ -759,14 +848,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: _showDebug
-                      ? Colors.orangeAccent
-                      : Colors.grey.withOpacity(0.6),
+                  color:
+                      _showDebug
+                          ? Colors.orangeAccent
+                          : Colors.grey.withOpacity(0.6),
                   shape: BoxShape.circle,
                 ),
                 child: const Center(
-                  child: Text('🐛',
-                      style: TextStyle(fontSize: 18)),
+                  child: Text('🐛', style: TextStyle(fontSize: 18)),
                 ),
               ),
             ),
@@ -797,12 +886,10 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             // ── header ───────────────────────────────────────────────────────
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: const BoxDecoration(
                 color: Colors.orangeAccent,
-                borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(11)),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(11)),
               ),
               child: Row(
                 children: [
@@ -820,20 +907,23 @@ class _ChatScreenState extends State<ChatScreen> {
                   // Copy all logs button
                   GestureDetector(
                     onTap: () {
-                      Clipboard.setData(
-                          ClipboardData(text: lines.join('\n')));
+                      Clipboard.setData(ClipboardData(text: lines.join('\n')));
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                            content: Text('Logs copied to clipboard')),
+                          content: Text('Logs copied to clipboard'),
+                        ),
                       );
                     },
                     child: const Padding(
                       padding: EdgeInsets.symmetric(horizontal: 8),
-                      child: Text('COPY',
-                          style: TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 11)),
+                      child: Text(
+                        'COPY',
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
                     ),
                   ),
                   // Clear button
@@ -842,19 +932,24 @@ class _ChatScreenState extends State<ChatScreen> {
                       _logger.clear();
                       setState(() {});
                     },
-                    child: const Text('CLR',
-                        style: TextStyle(
-                            color: Colors.black,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 11)),
+                    child: const Text(
+                      'CLR',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   // Close button
                   GestureDetector(
-                    onTap: () =>
-                        setState(() => _showDebug = false),
-                    child: const Icon(Icons.close,
-                        size: 16, color: Colors.black),
+                    onTap: () => setState(() => _showDebug = false),
+                    child: const Icon(
+                      Icons.close,
+                      size: 16,
+                      color: Colors.black,
+                    ),
                   ),
                 ],
               ),
@@ -862,63 +957,63 @@ class _ChatScreenState extends State<ChatScreen> {
 
             // ── log lines ────────────────────────────────────────────────────
             Expanded(
-              child: lines.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'No logs yet.\nTry sending a message.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            color: Colors.white38, fontSize: 12),
-                      ),
-                    )
-                  : ListView.builder(
-                      controller: _debugScrollCtrl,
-                      padding: const EdgeInsets.all(6),
-                      itemCount: lines.length,
-                      itemBuilder: (_, i) {
-                        final line = lines[i];
-                        // Colour-code by severity
-                        Color c = Colors.white70;
-                        if (line.contains('❌') ||
-                            line.contains('🚨') ||
-                            line.contains('FAIL') ||
-                            line.contains('ERROR') ||
-                            line.contains('TIMEOUT')) {
-                          c = const Color(0xFFFF6B6B);
-                        } else if (line.contains('⚠️') ||
-                            line.contains('WARN') ||
-                            line.contains('MISMATCH')) {
-                          c = const Color(0xFFFFD93D);
-                        } else if (line.contains('✅')) {
-                          c = const Color(0xFF6BCB77);
-                        } else if (line.contains('🔄') ||
-                            line.contains('⏳')) {
-                          c = const Color(0xFF4DA3FF);
-                        }
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: SelectableText(
-                            line,
-                            style: TextStyle(
-                              color: c,
-                              fontSize: 10,
-                              fontFamily: 'monospace',
-                              height: 1.35,
+              child:
+                  lines.isEmpty
+                      ? const Center(
+                        child: Text(
+                          'No logs yet.\nTry sending a message.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.white38, fontSize: 12),
+                        ),
+                      )
+                      : ListView.builder(
+                        controller: _debugScrollCtrl,
+                        padding: const EdgeInsets.all(6),
+                        itemCount: lines.length,
+                        itemBuilder: (_, i) {
+                          final line = lines[i];
+                          // Colour-code by severity
+                          Color c = Colors.white70;
+                          if (line.contains('❌') ||
+                              line.contains('🚨') ||
+                              line.contains('FAIL') ||
+                              line.contains('ERROR') ||
+                              line.contains('TIMEOUT')) {
+                            c = const Color(0xFFFF6B6B);
+                          } else if (line.contains('⚠️') ||
+                              line.contains('WARN') ||
+                              line.contains('MISMATCH')) {
+                            c = const Color(0xFFFFD93D);
+                          } else if (line.contains('✅')) {
+                            c = const Color(0xFF6BCB77);
+                          } else if (line.contains('🔄') ||
+                              line.contains('⏳')) {
+                            c = const Color(0xFF4DA3FF);
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 2),
+                            child: SelectableText(
+                              line,
+                              style: TextStyle(
+                                color: c,
+                                fontSize: 10,
+                                fontFamily: 'monospace',
+                                height: 1.35,
+                              ),
                             ),
-                          ),
-                        );
-                      },
-                    ),
+                          );
+                        },
+                      ),
             ),
 
             // ── summary bar ──────────────────────────────────────────────────
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: const BoxDecoration(
                 color: Color(0xFF1A1A2E),
                 borderRadius: BorderRadius.vertical(
-                    bottom: Radius.circular(11)),
+                  bottom: Radius.circular(11),
+                ),
               ),
               child: Text(
                 'convId: ${_resolvedConversationId ?? "not resolved"}  '
@@ -946,64 +1041,70 @@ class _ChatScreenState extends State<ChatScreen> {
           const Padding(
             padding: EdgeInsets.all(8),
             child: SizedBox(
-              height: 20, width: 20,
+              height: 20,
+              width: 20,
               child: CircularProgressIndicator(
-                strokeWidth: 2, color: Color(0xFF4DA3FF)),
+                strokeWidth: 2,
+                color: Color(0xFF4DA3FF),
+              ),
             ),
           ),
         Expanded(
-          child: _messages.isEmpty
-              ? Center(
-                  child: Text(
-                    'No messages yet.\nSay hello!',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
+          child:
+              _messages.isEmpty
+                  ? Center(
+                    child: Text(
+                      'No messages yet.\nSay hello!',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
                         color: Colors.white.withOpacity(0.3),
-                        fontSize: 15, height: 1.6),
-                  ),
-                )
-              : ListView.builder(
-                  controller: _scrollCtrl,
-                  padding:
-                      const EdgeInsets.only(top: 12, bottom: 8),
-                  physics: const BouncingScrollPhysics(),
-                  itemCount: _messages.length,
-                  itemBuilder: (context, index) {
-                    final msg    = _messages[index];
-                    final isMine = _isMine(msg);
-                    final prev =
-                        index > 0 ? _messages[index - 1] : null;
-                    final showDate = prev == null ||
-                        !_isSameDay(prev.timestamp, msg.timestamp);
-                    final showTail = prev == null ||
-                        _isMine(prev) != isMine;
-                    return Column(
-                      children: [
-                        if (showDate)
-                          _buildDateDivider(_formatDateDivider(msg.timestamp)),
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onLongPress: () => _showMessageActions(msg),
-                          child: MessageBubble(
-                            content:       msg.content,
-                            time:          _formatTime(msg.timestamp),
-                            isMine:        isMine,
-                            showTail:      showTail,
-                            status:        isMine ? msg.status : null,
-                            isVoiceNote:   msg.isVoiceNote,
-                            voiceDuration: msg.voiceDuration,
-                            audioUrl:      msg.attachmentUrl,
-                            isForwarded:   msg.isForwarded,
-                            isStarred:     msg.isStarred,
-                            isDeleted:     msg.isDeleted,
-                            replyPreview:  msg.replyPreview,
-                            replySender:   msg.replyToSenderId,
+                        fontSize: 15,
+                        height: 1.6,
+                      ),
+                    ),
+                  )
+                  : ListView.builder(
+                    controller: _scrollCtrl,
+                    padding: const EdgeInsets.only(top: 12, bottom: 8),
+                    physics: const BouncingScrollPhysics(),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = _messages[index];
+                      final isMine = _isMine(msg);
+                      final prev = index > 0 ? _messages[index - 1] : null;
+                      final showDate =
+                          prev == null ||
+                          !_isSameDay(prev.timestamp, msg.timestamp);
+                      final showTail = prev == null || _isMine(prev) != isMine;
+                      return Column(
+                        children: [
+                          if (showDate)
+                            _buildDateDivider(
+                              _formatDateDivider(msg.timestamp),
+                            ),
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onLongPress: () => _showMessageActions(msg),
+                            child: MessageBubble(
+                              content: msg.content,
+                              time: _formatTime(msg.timestamp),
+                              isMine: isMine,
+                              showTail: showTail,
+                              status: isMine ? msg.status : null,
+                              isVoiceNote: msg.isVoiceNote,
+                              voiceDuration: msg.voiceDuration,
+                              audioUrl: msg.attachmentUrl,
+                              isForwarded: msg.isForwarded,
+                              isStarred: msg.isStarred,
+                              isDeleted: msg.isDeleted,
+                              replyPreview: msg.replyPreview,
+                              replySender: msg.replyToSenderId,
+                            ),
                           ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
+                        ],
+                      );
+                    },
+                  ),
         ),
       ],
     );
@@ -1023,20 +1124,25 @@ class _ChatScreenState extends State<ChatScreen> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               _glassPill(
-                width: _kHeaderPillH, height: _kHeaderPillH,
-                child: const Icon(Icons.arrow_back_ios_new,
-                    color: Colors.white, size: 16),
+                width: _kHeaderPillH,
+                height: _kHeaderPillH,
+                child: const Icon(
+                  Icons.arrow_back_ios_new,
+                  color: Colors.white,
+                  size: 16,
+                ),
                 onTap: () => Navigator.pop(context),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: GestureDetector(
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) =>
-                            ProfileScreen(uid: widget.receiverId)),
-                  ),
+                  onTap:
+                      () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ProfileScreen(uid: widget.receiverId),
+                        ),
+                      ),
                   child: SizedBox(
                     height: _kHeaderPillH,
                     child: Stack(
@@ -1046,45 +1152,46 @@ class _ChatScreenState extends State<ChatScreen> {
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(24),
                             child: BackdropFilter(
-                              filter: ImageFilter.blur(
-                                  sigmaX: 24, sigmaY: 24),
+                              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF23262C)
-                                      .withOpacity(0.30),
-                                  borderRadius:
-                                      BorderRadius.circular(24),
+                                  color: const Color(
+                                    0xFF23262C,
+                                  ).withOpacity(0.30),
+                                  borderRadius: BorderRadius.circular(24),
                                   border: Border.all(
-                                      color: const Color(0xFF23262C),
-                                      width: 1.0),
+                                    color: const Color(0xFF23262C),
+                                    width: 1.0,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
                         Positioned(
-                          left: 2, top: -2, bottom: -2,
+                          left: 2,
+                          top: -2,
+                          bottom: -2,
                           child: AspectRatio(
                             aspectRatio: 1,
                             child: UserAvatar(
                               size: _kHeaderPillH + 12,
-                              imageUrl: _receiverProfile
-                                          ?.hasProfileImage ==
-                                      true
-                                  ? _receiverProfile!.profileImage
-                                  : widget.avatarUrl,
+                              imageUrl:
+                                  _receiverProfile?.hasProfileImage == true
+                                      ? _receiverProfile!.profileImage
+                                      : widget.avatarUrl,
                               name: displayName,
                             ),
                           ),
                         ),
                         Positioned(
                           left: _kHeaderPillH + 14,
-                          top: 0, bottom: 0, right: 12,
+                          top: 0,
+                          bottom: 0,
+                          right: 12,
                           child: Column(
-                            mainAxisAlignment:
-                                MainAxisAlignment.center,
-                            crossAxisAlignment:
-                                CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 displayName,
@@ -1098,8 +1205,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               Text(
                                 'Online',
                                 style: TextStyle(
-                                  color:
-                                      Colors.white.withOpacity(0.5),
+                                  color: Colors.white.withOpacity(0.5),
                                   fontSize: 12,
                                 ),
                               ),
@@ -1113,16 +1219,24 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               const SizedBox(width: 8),
               _glassPill(
-                width: _kHeaderPillH, height: _kHeaderPillH,
-                child: const Icon(Icons.videocam_outlined,
-                    color: Colors.white, size: 20),
+                width: _kHeaderPillH,
+                height: _kHeaderPillH,
+                child: const Icon(
+                  Icons.videocam_outlined,
+                  color: Colors.white,
+                  size: 20,
+                ),
                 onTap: () => _startCall(CallType.video),
               ),
               const SizedBox(width: 8),
               _glassPill(
-                width: _kHeaderPillH, height: _kHeaderPillH,
-                child: const Icon(Icons.call_outlined,
-                    color: Colors.white, size: 20),
+                width: _kHeaderPillH,
+                height: _kHeaderPillH,
+                child: const Icon(
+                  Icons.call_outlined,
+                  color: Colors.white,
+                  size: 20,
+                ),
                 onTap: () => _startCall(CallType.voice),
               ),
             ],
@@ -1185,8 +1299,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _formatTime(DateTime dt) {
-    final h      = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-    final m      = dt.minute.toString().padLeft(2, '0');
+    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final m = dt.minute.toString().padLeft(2, '0');
     final period = dt.hour >= 12 ? 'PM' : 'AM';
     return '$h:$m $period';
   }
@@ -1255,12 +1369,11 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Row(
         children: [
           Expanded(
-              child: Divider(
-                  color: Colors.white.withOpacity(0.08), height: 1)),
+            child: Divider(color: Colors.white.withOpacity(0.08), height: 1),
+          ),
           const SizedBox(width: 10),
           Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: const Color(0xFF23262C).withOpacity(0.60),
               borderRadius: BorderRadius.circular(12),
@@ -1276,8 +1389,8 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           const SizedBox(width: 10),
           Expanded(
-              child: Divider(
-                  color: Colors.white.withOpacity(0.08), height: 1)),
+            child: Divider(color: Colors.white.withOpacity(0.08), height: 1),
+          ),
         ],
       ),
     );
@@ -1301,8 +1414,7 @@ class _ChatScreenState extends State<ChatScreen> {
             decoration: BoxDecoration(
               color: const Color(0xFF23262C).withOpacity(0.30),
               borderRadius: BorderRadius.circular(height / 2),
-              border: Border.all(
-                  color: const Color(0xFF23262C), width: 1.0),
+              border: Border.all(color: const Color(0xFF23262C), width: 1.0),
             ),
             child: Center(child: child),
           ),

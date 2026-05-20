@@ -14,6 +14,9 @@ class ServerDiscoveryService {
   final String defaultHomeserver;
 
   Future<Uri> resolveHomeserver({String? userIdOrDomain}) async {
+    final explicit = _explicitHomeserverUri(userIdOrDomain);
+    if (explicit != null) return explicit;
+
     final domain = _domainFrom(userIdOrDomain);
     if (domain == null || domain.isEmpty) {
       return _homeserverUri(defaultHomeserver);
@@ -48,6 +51,14 @@ class ServerDiscoveryService {
     if (uri != null && uri.hasScheme && uri.host.isNotEmpty) return uri.host;
     if (raw.contains('.') && !raw.contains(' ')) return raw;
     return null;
+  }
+
+  Uri? _explicitHomeserverUri(String? value) {
+    final raw = value?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    final uri = Uri.tryParse(raw);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) return null;
+    return uri;
   }
 
   Uri _homeserverUri(String value) {

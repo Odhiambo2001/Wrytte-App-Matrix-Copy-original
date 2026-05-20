@@ -24,13 +24,52 @@ class ApiService {
     };
 
     debugPrint("➡️ POST $uri");
-    debugPrint("📦 BODY: $body");
+    debugPrint("📦 BODY: ${_redactMap(body)}");
 
     final response = await http
         .post(
           uri,
           headers: headers,
           body: body?.map((k, v) => MapEntry(k, v?.toString() ?? "")),
+        )
+        .timeout(const Duration(seconds: 20));
+
+    debugPrint("⬅️ STATUS: ${response.statusCode}");
+    debugPrint("⬅️ RESPONSE: ${response.body}");
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return _safeDecode(response.body);
+    }
+
+    throw ApiException(response.statusCode, response.body);
+  }
+
+  // POST (application/json)
+
+  static Future<dynamic> postJson(
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, dynamic>? queryParameters,
+    String? token,
+  }) async {
+    final uri = Uri.parse(
+      "$baseUrl$path",
+    ).replace(queryParameters: queryParameters);
+
+    final headers = {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      if (token != null && token.isNotEmpty) "Authorization": "Bearer $token",
+    };
+
+    debugPrint("➡️ POST JSON $uri");
+    debugPrint("📦 JSON BODY: ${_redactMap(body)}");
+
+    final response = await http
+        .post(
+          uri,
+          headers: headers,
+          body: jsonEncode(body ?? const <String, dynamic>{}),
         )
         .timeout(const Duration(seconds: 20));
 
@@ -61,7 +100,7 @@ class ApiService {
     }
 
     debugPrint("➡️ POST MULTIPART $uri");
-    debugPrint("📦 FIELDS: $fields");
+    debugPrint("📦 FIELDS: ${_redactMap(fields)}");
 
     final streamedResponse = await request.send().timeout(
       const Duration(seconds: 20),
@@ -132,6 +171,17 @@ class ApiService {
       debugPrint("⚠️ Non-JSON response received, treating as success");
       return null;
     }
+  }
+
+  static Map<String, dynamic>? _redactMap(Map<String, dynamic>? map) {
+    if (map == null) return null;
+    return map.map((key, value) {
+      final lowerKey = key.toLowerCase();
+      final shouldRedact = lowerKey.contains('secret') ||
+          lowerKey.contains('token') ||
+          lowerKey.contains('password');
+      return MapEntry(key, shouldRedact ? '***' : value);
+    });
   }
 }
 

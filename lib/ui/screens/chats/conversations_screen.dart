@@ -25,7 +25,7 @@ import 'widgets/tab_bar_section.dart';
 // =============================================================================
 
 const double _kSearchBarHeight = 60.0;
-const double _kTabBarHeight    = 56.0;
+const double _kTabBarHeight = 56.0;
 
 class ConversationsScreen extends StatefulWidget {
   final Function(int)? onUnreadCountUpdated;
@@ -47,7 +47,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   List<ChatConversation> _conversations = [];
 
   String _currentUserId = '';
-  bool   _isSelectionMode = false;
+  bool _isSelectionMode = false;
   final Set<String> _selectedIds = {};
 
   StreamSubscription<List<ChatConversation>>? _convSub;
@@ -56,9 +56,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   final ScrollController _scrollCtrl = ScrollController();
   double _searchBarProgress = 0.0;
 
-  // ── Priority 1: saved contact names keyed by phone digits ─────────────────
-  // e.g. "254700239641" → "John Doe"
-  final Map<String, String>  _contactNameCache   = {};
+  // ── Priority 1: saved contact names keyed by phone, Matrix ID, and localpart.
+  final Map<String, String> _contactNameCache = {};
   final Map<String, String?> _contactAvatarCache = {};
 
   // ===========================================================================
@@ -82,8 +81,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   void _onScroll() {
-    final progress =
-        (_scrollCtrl.offset / _kSearchBarHeight).clamp(0.0, 1.0);
+    final progress = (_scrollCtrl.offset / _kSearchBarHeight).clamp(0.0, 1.0);
     if ((progress - _searchBarProgress).abs() > 0.005) {
       setState(() => _searchBarProgress = progress);
     }
@@ -94,9 +92,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   // ===========================================================================
 
   Future<void> _initialize() async {
-    _currentUserId = widget.currentUserId.isNotEmpty
-        ? widget.currentUserId
-        : await AuthService.instance.getCurrentUserId() ?? '';
+    _currentUserId =
+        widget.currentUserId.isNotEmpty
+            ? widget.currentUserId
+            : await AuthService.instance.getCurrentUserId() ?? '';
 
     if (_currentUserId.isEmpty) return;
 
@@ -149,8 +148,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _loadSavedContacts() async {
     try {
-      final contacts = await ContactService()
-          .getMatrixContactsCached(_currentUserId);
+      final contacts = await ContactService().getMatrixContactsCached(
+        _currentUserId,
+      );
 
       // Clear existing cache before reloading so removed/renamed contacts
       // don't linger
@@ -162,20 +162,18 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         // Only cache real human names — skip if it looks like a phone number
         if (name.isEmpty || _looksLikePhone(name)) continue;
 
+        _cacheContactName(c.wrytteUserId, name, c.avatarUrl);
+        _cacheContactName(_matrixLocalpart(c.wrytteUserId), name, c.avatarUrl);
+
         for (final phone in c.phones) {
           // Strip everything except digits so we can match with/without '+'
-          final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
-          if (digits.length >= 7) {
-            _contactNameCache[digits]   = name;
-            _contactAvatarCache[digits] = c.avatarUrl?.isNotEmpty == true
-                ? c.avatarUrl
-                : null;
-          }
+          _cacheContactName(phone, name, c.avatarUrl);
         }
       }
 
       debugPrint(
-          '[ConversationsScreen] loaded ${_contactNameCache.length} saved contact names');
+        '[ConversationsScreen] loaded ${_contactNameCache.length} saved contact names',
+      );
     } catch (e) {
       debugPrint('[ConversationsScreen] _loadSavedContacts error: $e');
     }
@@ -193,19 +191,100 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   Future<List<ChatConversation>> _enrichNames(
     List<ChatConversation> convs,
   ) async {
+    final deduped = _dedupeLocalPlaceholders(convs);
+
     // ── Pass 1: saved contact names always win ─────────────────────────────
-    final afterSavedContacts = convs.map((c) {
-      final digits = c.otherUserId.replaceAll(RegExp(r'[^\d]'), '');
-      if (_contactNameCache.containsKey(digits)) {
-        return c.copyWith(
-          otherUserName:   _contactNameCache[digits],
-          otherUserAvatar: _contactAvatarCache[digits],
-        );
-      }
-      return c;
-    }).toList();
+    final afterSavedContacts =
+        deduped.map((c) {
+          final contactKey = _contactKeyForConversation(c);
+          if (contactKey != null) {
+            return c.copyWith(
+              otherUserName: _contactNameCache[contactKey],
+              otherUserAvatar: _contactAvatarCache[contactKey],
+            );
+          }
+          if (_isTechnicalName(c.otherUserName ?? c.otherUserId)) {
+            return c.copyWith(otherUserName: 'Wrytte contact');
+          }
+          return c;
+        }).toList();
 
     return afterSavedContacts;
+  }
+
+  List<ChatConversation> _dedupeLocalPlaceholders(
+    List<ChatConversation> convs,
+  ) {
+    final matrixPeerKeys =
+        convs
+            .where((c) => c.id.startsWith('!'))
+            .expand(_conversationKeys)
+            .toSet();
+
+    if (matrixPeerKeys.isEmpty) return convs;
+
+    return convs.where((c) {
+      if (!c.id.startsWith('si_')) return true;
+      return !_conversationKeys(c).any(matrixPeerKeys.contains);
+    }).toList();
+  }
+
+  String? _contactKeyForConversation(ChatConversation conv) {
+    for (final key in _conversationKeys(conv)) {
+      if (_contactNameCache.containsKey(key)) return key;
+    }
+    return null;
+  }
+
+  Iterable<String> _conversationKeys(ChatConversation conv) sync* {
+    yield* _identityKeys(conv.otherUserId);
+    if (conv.otherUserName != null) yield* _identityKeys(conv.otherUserName!);
+    for (final participant in conv.participants) {
+      if (participant != _currentUserId &&
+          participant != '@$_currentUserId:matrix.wryte.com') {
+        yield* _identityKeys(participant);
+      }
+    }
+  }
+
+  void _cacheContactName(String? raw, String name, String? avatarUrl) {
+    final avatar = avatarUrl?.isNotEmpty == true ? avatarUrl : null;
+    for (final key in _identityKeys(raw)) {
+      _contactNameCache[key] = name;
+      _contactAvatarCache[key] = avatar;
+    }
+  }
+
+  Iterable<String> _identityKeys(String? raw) sync* {
+    final value = raw?.trim();
+    if (value == null || value.isEmpty) return;
+
+    yield value;
+
+    final localpart = _matrixLocalpart(value);
+    if (localpart != null && localpart.isNotEmpty) yield localpart;
+
+    final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.length >= 6) yield digits;
+  }
+
+  String? _matrixLocalpart(String? value) {
+    final trimmed = value?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    if (trimmed.startsWith('@') && trimmed.contains(':')) {
+      return trimmed.substring(1, trimmed.indexOf(':'));
+    }
+    return trimmed;
+  }
+
+  bool _isTechnicalName(String value) {
+    final sanitized = value.trim();
+    if (sanitized.isEmpty) return true;
+    if (_looksLikePhone(sanitized)) return true;
+    if (sanitized.startsWith('@') && sanitized.contains(':')) return true;
+    if (sanitized.startsWith('!') && sanitized.contains(':')) return true;
+    if (sanitized.toLowerCase().startsWith('group with ')) return true;
+    return false;
   }
 
   /// Returns true when [value] is a raw phone number rather than a
@@ -230,28 +309,36 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     widget.onUnreadCountUpdated?.call(total);
   }
 
-  String _sanitize(String s) => String.fromCharCodes(
-      s.runes.where((r) => r <= 0xD7FF || r >= 0xE000));
+  String _sanitize(String s) =>
+      String.fromCharCodes(s.runes.where((r) => r <= 0xD7FF || r >= 0xE000));
 
-  void _enterSelection() =>
-      setState(() { _isSelectionMode = true; _selectedIds.clear(); });
-  void _exitSelection() =>
-      setState(() { _isSelectionMode = false; _selectedIds.clear(); });
+  void _enterSelection() => setState(() {
+    _isSelectionMode = true;
+    _selectedIds.clear();
+  });
+  void _exitSelection() => setState(() {
+    _isSelectionMode = false;
+    _selectedIds.clear();
+  });
   void _toggleSelection(String id) => setState(() {
-    if (_selectedIds.contains(id)) _selectedIds.remove(id);
-    else _selectedIds.add(id);
+    if (_selectedIds.contains(id)) {
+      _selectedIds.remove(id);
+    } else {
+      _selectedIds.add(id);
+    }
   });
 
-  void _onPin()        => debugPrint('Pin: ${_selectedIds.toList()}');
+  void _onPin() => debugPrint('Pin: ${_selectedIds.toList()}');
   void _onMarkAsRead() => debugPrint('MarkAsRead: ${_selectedIds.toList()}');
-  void _onMute()       => debugPrint('Mute: ${_selectedIds.toList()}');
-  void _onArchive()    => debugPrint('Archive: ${_selectedIds.toList()}');
-  void _onDelete()     => debugPrint('Delete: ${_selectedIds.toList()}');
+  void _onMute() => debugPrint('Mute: ${_selectedIds.toList()}');
+  void _onArchive() => debugPrint('Archive: ${_selectedIds.toList()}');
+  void _onDelete() => debugPrint('Delete: ${_selectedIds.toList()}');
 
   String _formatTime(DateTime dt) {
-    final now   = DateTime.now();
+    final now = DateTime.now();
     final local = dt.toLocal();
-    final isToday = local.year == now.year &&
+    final isToday =
+        local.year == now.year &&
         local.month == now.month &&
         local.day == now.day;
     if (isToday) {
@@ -262,7 +349,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final yesterday = now.subtract(const Duration(days: 1));
     if (local.year == yesterday.year &&
         local.month == yesterday.month &&
-        local.day == yesterday.day) return 'Yesterday';
+        local.day == yesterday.day) {
+      return 'Yesterday';
+    }
     if (now.difference(local).inDays < 7) {
       const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       return days[local.weekday - 1];
@@ -275,16 +364,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   // ===========================================================================
 
   Widget _buildTile(ChatConversation conv) {
-    final rawName  = conv.otherUserName ?? conv.otherUserId;
-    final name     = _sanitize(rawName);
-    final avatar   = conv.otherUserAvatar;
+    final rawName = conv.otherUserName ?? conv.otherUserId;
+    final name = _sanitize(rawName);
+    final avatar = conv.otherUserAvatar;
     final selected = _selectedIds.contains(conv.id);
 
     return ConversationTile(
       name: name,
-      lastMessage: conv.lastMessage.isEmpty
-          ? 'Say hello! 👋'
-          : _sanitize(conv.lastMessage),
+      lastMessage:
+          conv.lastMessage.isEmpty
+              ? 'Say hello! 👋'
+              : _sanitize(conv.lastMessage),
       time: _formatTime(conv.lastMessageTime),
       avatarUrl: avatar,
       unreadCount: conv.unreadCount,
@@ -297,13 +387,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           barrierDismissible: true,
           barrierLabel: 'Preview',
           barrierColor: Colors.transparent,
-          pageBuilder: (_, __, ___) => MiniChatPreview(
-            conversationId: conv.id,
-            name: name,
-            avatarUrl: avatar,
-            currentUserId: _currentUserId,
-            receiverId: conv.otherUserId,
-          ),
+          pageBuilder:
+              (_, __, ___) => MiniChatPreview(
+                conversationId: conv.id,
+                name: name,
+                avatarUrl: avatar,
+                currentUserId: _currentUserId,
+                receiverId: conv.otherUserId,
+              ),
         );
       },
       onTap: () async {
@@ -317,11 +408,12 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
         if (mounted) {
           setState(() {
-            _conversations = _conversations
-                .map((c) => c.id == conv.id
-                    ? c.copyWith(unreadCount: 0)
-                    : c)
-                .toList();
+            _conversations =
+                _conversations
+                    .map(
+                      (c) => c.id == conv.id ? c.copyWith(unreadCount: 0) : c,
+                    )
+                    .toList();
           });
           _notifyUnread(_conversations);
         }
@@ -331,13 +423,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => ChatScreen(
-              conversationId: conv.id,
-              receiverId:     conv.otherUserId,
-              currentUserId:  _currentUserId,
-              title:          name,
-              avatarUrl:      avatar,
-            ),
+            builder:
+                (_) => ChatScreen(
+                  conversationId: conv.id,
+                  receiverId: conv.otherUserId,
+                  currentUserId: _currentUserId,
+                  title: name,
+                  avatarUrl: avatar,
+                ),
           ),
         );
         if (mounted) await _loadLocalConversations();
@@ -360,18 +453,28 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           Center(
             child: Column(
               children: [
-                Icon(Icons.chat_bubble_outline_rounded,
-                    size: 64, color: Colors.white.withOpacity(0.12)),
+                Icon(
+                  Icons.chat_bubble_outline_rounded,
+                  size: 64,
+                  color: Colors.white.withOpacity(0.12),
+                ),
                 const SizedBox(height: 16),
-                Text('No conversations yet',
-                    style: TextStyle(
-                        color: Colors.white.withOpacity(0.35),
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500)),
+                Text(
+                  'No conversations yet',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.35),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
                 const SizedBox(height: 8),
-                Text('Tap the pencil icon to start a new chat',
-                    style: TextStyle(
-                        color: Colors.white.withOpacity(0.2), fontSize: 13)),
+                Text(
+                  'Tap the pencil icon to start a new chat',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.2),
+                    fontSize: 13,
+                  ),
+                ),
               ],
             ),
           ),
@@ -400,13 +503,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final double statusBarH  = MediaQuery.of(context).padding.top;
+    final double statusBarH = MediaQuery.of(context).padding.top;
     final double bottomInset = MediaQuery.of(context).padding.bottom;
-    final double headerH = statusBarH +
-        kToolbarHeight +
-        _kSearchBarHeight +
-        _kTabBarHeight +
-        8.0;
+    final double headerH =
+        statusBarH + kToolbarHeight + _kSearchBarHeight + _kTabBarHeight + 8.0;
 
     final double searchBarOffset = _kSearchBarHeight * _searchBarProgress;
     final double gradientH = headerH - searchBarOffset;
@@ -415,34 +515,35 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       backgroundColor: Colors.transparent,
       extendBody: true,
       extendBodyBehindAppBar: true,
-      floatingActionButton: _isSelectionMode
-          ? null
-          : Padding(
-              padding: EdgeInsets.only(bottom: bottomInset + 80.0),
-              child: FloatingActionButton(
-                // ── FIX: await the push so we can reload contacts on return ──
-                onPressed: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const FirebaseNewChatScreen(),
-                    ),
-                  );
-                  // Reload contacts fresh (static cache was busted by
-                  // ContactService.invalidateMatrixContactsCache() on save)
-                  // then re-enrich so the new contact name shows immediately.
-                  if (mounted) {
-                    await _loadSavedContacts();
-                    final enriched = await _enrichNames(_conversations);
+      floatingActionButton:
+          _isSelectionMode
+              ? null
+              : Padding(
+                padding: EdgeInsets.only(bottom: bottomInset + 80.0),
+                child: FloatingActionButton(
+                  // ── FIX: await the push so we can reload contacts on return ──
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const FirebaseNewChatScreen(),
+                      ),
+                    );
+                    // Reload contacts fresh (static cache was busted by
+                    // ContactService.invalidateMatrixContactsCache() on save)
+                    // then re-enrich so the new contact name shows immediately.
                     if (mounted) {
-                      setState(() => _conversations = enriched);
+                      await _loadSavedContacts();
+                      final enriched = await _enrichNames(_conversations);
+                      if (mounted) {
+                        setState(() => _conversations = enriched);
+                      }
                     }
-                  }
-                },
-                backgroundColor: const Color(0xFF4DA3FF),
-                child: const Icon(Icons.edit_square, color: Colors.black),
+                  },
+                  backgroundColor: const Color(0xFF4DA3FF),
+                  child: const Icon(Icons.edit_square, color: Colors.black),
+                ),
               ),
-            ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: DefaultTabController(
         length: 3,
@@ -456,15 +557,19 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   Center(
                     child: Padding(
                       padding: EdgeInsets.only(top: headerH),
-                      child: const Text('Channels coming soon',
-                          style: TextStyle(color: Colors.grey)),
+                      child: const Text(
+                        'Channels coming soon',
+                        style: TextStyle(color: Colors.grey),
+                      ),
                     ),
                   ),
                   Center(
                     child: Padding(
                       padding: EdgeInsets.only(top: headerH),
-                      child: const Text('Groups coming soon',
-                          style: TextStyle(color: Colors.grey)),
+                      child: const Text(
+                        'Groups coming soon',
+                        style: TextStyle(color: Colors.grey),
+                      ),
                     ),
                   ),
                 ],
@@ -473,7 +578,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
             // ── Gradient ─────────────────────────────────────────────────
             Positioned(
-              top: 0, left: 0, right: 0,
+              top: 0,
+              left: 0,
+              right: 0,
               height: gradientH,
               child: IgnorePointer(
                 child: Container(
@@ -495,7 +602,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
             // ── Sticky header ─────────────────────────────────────────────
             Positioned(
-              top: 0, left: 0, right: 0,
+              top: 0,
+              left: 0,
+              right: 0,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [

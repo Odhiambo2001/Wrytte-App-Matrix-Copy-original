@@ -8,6 +8,7 @@ import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
+import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
@@ -35,12 +36,16 @@ class ChatService {
   Future<void>? _connectFuture;
   StreamSubscription? _timelineSub;
   StreamSubscription? _syncSub;
+  bool _handlingSync = false;
 
   final Map<String, ChatConversation> _conversationsMap = {};
   final Map<String, List<ChatMessage>> _messagesCache = {};
 
   bool get isConnected => _isConnected;
   String? get currentUserId => _currentUserId;
+
+  String _expectedMatrixUserId(String userId) =>
+      '@$userId:${MatrixConfig.serverName}';
 
   Future<void> connect() async {
     if (_isConnected) return;
@@ -62,25 +67,42 @@ class ChatService {
       }
 
       await MatrixAuthService.instance.restore();
-      final client = MatrixClientService.instance.client;
-      if (!client.isLogged()) {
+      var client = MatrixClientService.instance.client;
+      final expectedMatrixUserId = _expectedMatrixUserId(_currentUserId!);
+      if (client.isLogged() && client.userID != expectedMatrixUserId) {
+        await MatrixAuthService.instance.logout().timeout(
+          const Duration(seconds: 4),
+          onTimeout: () {},
+        );
+        client = MatrixClientService.instance.client;
+      }
+
+      if (!client.isLogged() || client.userID != expectedMatrixUserId) {
         await AuthService.instance.loginToMatrix(
           userId: _currentUserId!,
           nickname: user?.username ?? _currentUserId!,
         );
+        client = MatrixClientService.instance.client;
+      }
+
+      if (!client.isLogged() || client.userID != expectedMatrixUserId) {
+        throw StateError('Matrix session did not match the current user.');
       }
 
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
         final message = ChatMessage.fromMatrixEvent(event);
         if (message == null) return;
         _cacheMessage(message);
+        _refreshMessageStatusesForRoom(event.room);
         _messageController.add(message);
       });
-      _syncSub ??= client.onSync.stream.listen((_) => fetchConversations());
+      _syncSub ??= client.onSync.stream.listen((_) {
+        unawaited(_handleSyncUpdate());
+      });
 
       _isConnected = true;
       _connectionController.add(true);
-      await fetchConversations();
+      unawaited(_finishConnectionWarmup());
     } catch (e) {
       _isConnected = false;
       _connectionController.add(false);
@@ -89,9 +111,42 @@ class ChatService {
     }
   }
 
+  Future<void> _finishConnectionWarmup() async {
+    try {
+      await MatrixChatService.instance.ensureSyncedAndAutoJoinInvites();
+      await _syncLocalContactsToMatrix();
+      await fetchConversations();
+      _refreshAllMessageStatuses();
+    } catch (e) {
+      debugPrint('[ChatService] connection warmup skipped: $e');
+    }
+  }
+
   Future<void> _waitForConnection() async {
     if (_isConnected) return;
     await connect();
+  }
+
+  Future<void> _handleSyncUpdate() async {
+    if (_handlingSync) return;
+    _handlingSync = true;
+    try {
+      await MatrixChatService.instance.autoJoinTrustedDirectInvites();
+      await fetchConversations();
+      _refreshAllMessageStatuses();
+    } finally {
+      _handlingSync = false;
+    }
+  }
+
+  Future<void> _syncLocalContactsToMatrix() async {
+    final ownerUserId = _currentUserId;
+    if (ownerUserId == null || ownerUserId.isEmpty) return;
+    try {
+      await ContactService().syncLocalContactsToMatrix(ownerUserId);
+    } catch (e) {
+      debugPrint('[ChatService] Matrix contact sync skipped: $e');
+    }
   }
 
   Future<ChatMessage> sendMessage(ChatMessage message) async {
@@ -109,6 +164,7 @@ class ChatService {
         status: MessageStatus.sent,
       );
       _cacheMessage(sent);
+      _refreshMessageStatusesForRoom(room);
       _messageController.add(sent);
       return sent;
     } catch (e) {
@@ -132,11 +188,15 @@ class ChatService {
       mimeType: 'audio/mpeg',
       duration: durationSeconds * 1000,
     );
-    final eventId = await room.sendAudioEvent(file, durationInMs: durationSeconds * 1000);
+    final eventId = await room.sendAudioEvent(
+      file,
+      durationInMs: durationSeconds * 1000,
+    );
     final local = ChatMessage(
       id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
       conversationId: room.id,
-      senderId: MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
+      senderId:
+          MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
       receiverId: _toMatrixUserId(receiverID),
       content: 'Voice message',
       timestamp: DateTime.now(),
@@ -159,28 +219,31 @@ class ChatService {
       if (room == null) return [];
       final timeline = await room.getTimeline(limit: count);
       final localById = {
-        for (final message
-            in await ChatLocalDb.instance.loadMessages(conversationID))
+        for (final message in await ChatLocalDb.instance.loadMessages(
+          conversationID,
+        ))
           message.id: message,
       };
-      final messages = timeline.events
-          .map(ChatMessage.fromMatrixEvent)
-          .whereType<ChatMessage>()
-          .map((message) {
-            final local = localById[message.id];
-            if (local == null) return message;
-            return message.copyWith(
-              isStarred: local.isStarred,
-              isDeletedForMe: local.isDeletedForMe,
-            );
-          })
-          .where((message) => !message.isDeletedForMe)
-          .toList()
-        ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      final messages =
+          timeline.events
+              .map(ChatMessage.fromMatrixEvent)
+              .whereType<ChatMessage>()
+              .map((message) {
+                final local = localById[message.id];
+                if (local == null) return message;
+                return message.copyWith(
+                  isStarred: local.isStarred,
+                  isDeletedForMe: local.isDeletedForMe,
+                );
+              })
+              .where((message) => !message.isDeletedForMe)
+              .toList()
+            ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
       for (final message in messages) {
         _cacheMessage(message);
       }
       unawaited(ChatLocalDb.instance.saveMessages(messages));
+      _refreshMessageStatusesForRoom(room);
       timeline.cancelSubscriptions();
       return messages;
     } catch (e) {
@@ -195,8 +258,14 @@ class ChatService {
       final rooms = MatrixClientService.instance.client.rooms;
       _conversationsMap
         ..clear()
-        ..addEntries(rooms.map((room) => MapEntry(room.id, _toConversation(room))));
-      unawaited(ChatLocalDb.instance.saveConversations(_conversationsMap.values.toList()));
+        ..addEntries(
+          rooms.map((room) => MapEntry(room.id, _toConversation(room))),
+        );
+      unawaited(
+        ChatLocalDb.instance.saveConversations(
+          _conversationsMap.values.toList(),
+        ),
+      );
       _emitConversations();
     } catch (e) {
       debugPrint('[ChatService] fetchConversations error: $e');
@@ -217,17 +286,19 @@ class ChatService {
   }
 
   List<ChatMessage> getConversationMessages(String conversationId) {
-    final messages = List<ChatMessage>.from(_messagesCache[conversationId] ?? [])
-        .where((message) => !message.isDeletedForMe)
-        .toList();
+    final messages =
+        List<ChatMessage>.from(
+          _messagesCache[conversationId] ?? [],
+        ).where((message) => !message.isDeletedForMe).toList();
     messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return messages;
   }
 
   Future<List<ChatMessage>> loadCachedMessages(String conversationId) async {
     final cached = await ChatLocalDb.instance.loadMessages(conversationId);
-    final visible = cached.where((message) => !message.isDeletedForMe).toList()
-      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final visible =
+        cached.where((message) => !message.isDeletedForMe).toList()
+          ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     for (final message in visible) {
       _messagesCache.putIfAbsent(conversationId, () => []);
       if (!_messagesCache[conversationId]!.any((m) => m.id == message.id)) {
@@ -254,7 +325,9 @@ class ChatService {
   Future<void> deleteMessageForEveryone(ChatMessage message) async {
     await _waitForConnection();
     final room = _roomById(message.conversationId);
-    if (room == null) throw StateError('Unknown Matrix room: ${message.conversationId}');
+    if (room == null) {
+      throw StateError('Unknown Matrix room: ${message.conversationId}');
+    }
     await room.redactEvent(message.id, reason: 'Deleted by sender');
     final updated = message.copyWith(
       content: 'This message was deleted',
@@ -266,7 +339,9 @@ class ChatService {
   }
 
   Future<void> cancelLocalMessage(ChatMessage message) async {
-    _messagesCache[message.conversationId]?.removeWhere((m) => m.id == message.id);
+    _messagesCache[message.conversationId]?.removeWhere(
+      (m) => m.id == message.id,
+    );
     await ChatLocalDb.instance.deleteMessageForMe(message.id);
     _emitConversations();
   }
@@ -279,7 +354,8 @@ class ChatService {
     final message = ChatMessage(
       id: 'fwd_${DateTime.now().millisecondsSinceEpoch}',
       conversationId: room.id,
-      senderId: MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
+      senderId:
+          MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
       receiverId: _toMatrixUserId(receiverId),
       content: original.content,
       timestamp: DateTime.now(),
@@ -298,6 +374,18 @@ class ChatService {
       return room.id;
     } catch (e) {
       debugPrint('[ChatService] get conversation id error: $e');
+      return null;
+    }
+  }
+
+  Future<String?> findMatrixConversationId(String otherUserId) async {
+    try {
+      final room = await MatrixChatService.instance.findDirectRoom(
+        _toMatrixUserId(otherUserId),
+      );
+      return room?.id;
+    } catch (e) {
+      debugPrint('[ChatService] find conversation id error: $e');
       return null;
     }
   }
@@ -337,8 +425,9 @@ class ChatService {
     );
   }
 
-  Future<mx.Room> _directRoom(String otherUserId) async =>
-      MatrixChatService.instance.getOrCreateDirectRoom(_toMatrixUserId(otherUserId));
+  Future<mx.Room> _directRoom(String otherUserId) async => MatrixChatService
+      .instance
+      .getOrCreateDirectRoom(_toMatrixUserId(otherUserId));
 
   mx.Room? _roomById(String roomId) {
     for (final room in MatrixClientService.instance.client.rooms) {
@@ -353,33 +442,34 @@ class ChatService {
     final last = room.lastEvent;
     return ChatConversation(
       id: room.id,
-      participants: [
-        if (client.userID != null) client.userID!,
-        otherId,
-      ],
+      participants: [if (client.userID != null) client.userID!, otherId],
       otherUserId: otherId,
       lastMessage: last?.body ?? '',
       lastMessageSenderId: last?.senderId ?? '',
       lastMessageTime: last?.originServerTs ?? DateTime.now(),
       unreadCount: room.notificationCount,
-      otherUserName: room.displayname,
+      otherUserName: room.getLocalizedDisplayname(),
       otherUserAvatar: room.avatar?.toString(),
     );
   }
 
   void _cacheMessage(ChatMessage message) {
     final convId = message.conversationId;
-    final currentUser = MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
+    final currentUser =
+        MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
     _messagesCache.putIfAbsent(convId, () => []);
     if (!_messagesCache[convId]!.any((m) => m.id == message.id)) {
       _messagesCache[convId]!.add(message);
     }
     final existing = _conversationsMap[convId];
-    _conversationsMap[convId] = existing == null
-        ? ChatConversation.fromMessage(message, currentUser)
-        : existing.updateWithMessage(message, currentUser);
+    _conversationsMap[convId] =
+        existing == null
+            ? ChatConversation.fromMessage(message, currentUser)
+            : existing.updateWithMessage(message, currentUser);
     unawaited(ChatLocalDb.instance.saveMessage(message));
-    unawaited(ChatLocalDb.instance.saveConversations([_conversationsMap[convId]!]));
+    unawaited(
+      ChatLocalDb.instance.saveConversations([_conversationsMap[convId]!]),
+    );
     _emitConversations();
   }
 
@@ -389,6 +479,110 @@ class ChatService {
     final index = messages.indexWhere((m) => m.id == message.id);
     if (index == -1) return;
     messages[index] = message;
+  }
+
+  void _refreshAllMessageStatuses() {
+    for (final room in MatrixClientService.instance.client.rooms) {
+      _refreshMessageStatusesForRoom(room);
+    }
+  }
+
+  void _refreshMessageStatusesForRoom(mx.Room room) {
+    final messages = _messagesCache[room.id];
+    if (messages == null || messages.isEmpty) return;
+
+    final currentUser = MatrixClientService.instance.client.userID;
+    if (currentUser == null || currentUser.isEmpty) return;
+
+    final otherReceiptEventIds = _otherUserReceiptEventIds(room, currentUser);
+    final peerJoined = _directPeerJoined(room, currentUser);
+    final readIndex = messages.lastIndexWhere(
+      (message) => otherReceiptEventIds.contains(message.id),
+    );
+
+    var changed = false;
+    for (var i = 0; i < messages.length; i++) {
+      final message = messages[i];
+      if (!_isOwnMessage(message, currentUser)) continue;
+      if (message.status == MessageStatus.failed ||
+          message.status == MessageStatus.sending) {
+        continue;
+      }
+
+      final nextStatus =
+          readIndex >= i
+              ? MessageStatus.read
+              : peerJoined
+              ? MessageStatus.delivered
+              : MessageStatus.sent;
+      if (_messageStatusRank(nextStatus) < _messageStatusRank(message.status)) {
+        continue;
+      }
+      if (message.status == nextStatus) continue;
+
+      final updated = message.copyWith(status: nextStatus);
+      messages[i] = updated;
+      changed = true;
+      _messageController.add(updated);
+    }
+
+    if (!changed) return;
+    unawaited(ChatLocalDb.instance.saveMessages(messages));
+    _emitConversations();
+  }
+
+  Set<String> _otherUserReceiptEventIds(mx.Room room, String currentUser) {
+    final eventIds = <String>{};
+
+    void collect(Map<String, dynamic> receiptsByUser) {
+      for (final entry in receiptsByUser.entries) {
+        if (entry.key == currentUser) continue;
+        final eventId = entry.value.eventId;
+        if (eventId is String && eventId.isNotEmpty) {
+          eventIds.add(eventId);
+        }
+      }
+    }
+
+    collect(room.receiptState.global.otherUsers);
+    final mainThreadReceipts = room.receiptState.mainThread?.otherUsers;
+    if (mainThreadReceipts != null) collect(mainThreadReceipts);
+    return eventIds;
+  }
+
+  bool _directPeerJoined(mx.Room room, String currentUser) {
+    final directUserId = room.directChatMatrixID;
+    if (directUserId == null || directUserId == currentUser) return false;
+    return room
+        .getParticipants([mx.Membership.join])
+        .any((user) => user.id == directUserId);
+  }
+
+  bool _isOwnMessage(ChatMessage message, String currentMatrixUserId) {
+    final sender = message.senderId.trim();
+    if (sender == currentMatrixUserId) return true;
+    final localUserId = _currentUserId;
+    if (localUserId == null || localUserId.isEmpty) return false;
+    if (sender == localUserId) return true;
+    if (sender.startsWith('@') && sender.contains(':')) {
+      return sender.substring(1, sender.indexOf(':')) == localUserId;
+    }
+    return false;
+  }
+
+  int _messageStatusRank(MessageStatus status) {
+    switch (status) {
+      case MessageStatus.failed:
+        return -1;
+      case MessageStatus.sending:
+        return 0;
+      case MessageStatus.sent:
+        return 1;
+      case MessageStatus.delivered:
+        return 2;
+      case MessageStatus.read:
+        return 3;
+    }
   }
 
   Map<String, dynamic> _buildMessageContent(ChatMessage message) {
@@ -411,8 +605,9 @@ class ChatService {
   }
 
   void _emitConversations() {
-    final sorted = _conversationsMap.values.toList()
-      ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
+    final sorted =
+        _conversationsMap.values.toList()
+          ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
     _conversationsController.add(sorted);
   }
 
@@ -420,9 +615,10 @@ class ChatService {
     final trimmed = value.trim();
     if (trimmed.startsWith('@') && trimmed.contains(':')) return trimmed;
     final own = MatrixClientService.instance.client.userID;
-    final domain = own != null && own.contains(':')
-        ? own.split(':').last
-        : MatrixConfig.serverName;
+    final domain =
+        own != null && own.contains(':')
+            ? own.split(':').last
+            : MatrixConfig.serverName;
     final localpart = trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
     return '@$localpart:$domain';
   }

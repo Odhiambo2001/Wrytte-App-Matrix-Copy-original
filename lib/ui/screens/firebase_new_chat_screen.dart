@@ -128,9 +128,16 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
         });
       }
     } catch (e) {
+      debugPrint('[FirebaseNewChatScreen] contact refresh failed: $e');
+      final message = e.toString();
+      final isDirectoryLookupFailure =
+          message.contains('User search error') ||
+          message.contains('TimeoutException') ||
+          message.contains('Wrytte contact search timed out') ||
+          message.contains('ContactDirectoryUnavailable');
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = isDirectoryLookupFailure ? '' : message;
           _isLoading = false;
         });
       }

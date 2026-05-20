@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
@@ -21,7 +20,7 @@ const _kDivider = Colors.white12;
 // ─────────────────────────────────────────────────────────────────
 // Enum for the three possible lookup states
 // ─────────────────────────────────────────────────────────────────
-enum _LookupState { idle, found, duplicate, notFound }
+enum _LookupState { idle, found, duplicate, notFound, error }
 
 class NewContactPage extends StatefulWidget {
   /// Bearer token for the UserSearchService call.
@@ -56,10 +55,11 @@ class _NewContactPageState extends State<NewContactPage> {
   final ContactService _contactService = ContactService();
   Timer? _debounce;
   _LookupState _lookupState = _LookupState.idle;
-  bool _isWrytteId = false;
 
   /// The wrytteUserId returned by the lookup — needed for addFriend.
   String? _resolvedUserId;
+  bool _isRegisteredOnWrytte = false;
+  String? _lookupError;
 
   // ── Saving ────────────────────────────────────────────────────
   bool _isSaving = false;
@@ -123,11 +123,12 @@ class _NewContactPageState extends State<NewContactPage> {
     if (result != null) {
       setState(() {
         _selectedCountry = result;
-        _isWrytteId = result.isoCode == 'WID';
         _codeCtrl.text = '+${result.dialCode}';
         _showDivider = true;
         _lookupState = _LookupState.idle;
         _resolvedUserId = null;
+        _isRegisteredOnWrytte = false;
+        _lookupError = null;
         _saveError = null;
       });
       _numberFocusNode.requestFocus();
@@ -154,10 +155,11 @@ class _NewContactPageState extends State<NewContactPage> {
       if (country.dialCode == codeWithoutPlus) {
         setState(() {
           _selectedCountry = country;
-          _isWrytteId = false;
           _showDivider = true;
           _lookupState = _LookupState.idle;
           _resolvedUserId = null;
+          _isRegisteredOnWrytte = false;
+          _lookupError = null;
         });
 
         if (!_isAutoFilling && codeWithoutPlus.isNotEmpty) {
@@ -175,8 +177,7 @@ class _NewContactPageState extends State<NewContactPage> {
   void _onCodeFieldTap() {
     if (_codeCtrl.text.isEmpty) {
       _codeCtrl.text = '+';
-      _codeCtrl.selection =
-          const TextSelection.collapsed(offset: 1);
+      _codeCtrl.selection = const TextSelection.collapsed(offset: 1);
     } else if (!_codeCtrl.text.startsWith('+')) {
       _codeCtrl.text = '+${_codeCtrl.text}';
       _codeCtrl.selection = TextSelection.fromPosition(
@@ -196,6 +197,8 @@ class _NewContactPageState extends State<NewContactPage> {
     setState(() {
       _lookupState = _LookupState.idle;
       _resolvedUserId = null;
+      _isRegisteredOnWrytte = false;
+      _lookupError = null;
       _saveError = null;
     });
     _debounce?.cancel();
@@ -214,7 +217,11 @@ class _NewContactPageState extends State<NewContactPage> {
     if (identifier.isEmpty) return;
 
     try {
-      debugPrint("🔑 token: ${freshToken.isEmpty ? "EMPTY" : freshToken.substring(0, freshToken.length.clamp(0, 20))}");
+      final tokenPreviewLength =
+          freshToken.length < 20 ? freshToken.length : 20;
+      debugPrint(
+        '🔑 token: ${freshToken.isEmpty ? "EMPTY" : freshToken.substring(0, tokenPreviewLength)}',
+      );
       final Map<String, String> result;
 
       if (_isWrytteIdMode) {
@@ -234,23 +241,38 @@ class _NewContactPageState extends State<NewContactPage> {
 
       if (!mounted) return;
 
-      if (result.containsKey(identifier)) {
+      final lookupValue =
+          result[identifier] ??
+          result[_normalizeIdentifier(identifier)] ??
+          result[_digitsOnly(identifier)];
+
+      if (lookupValue != null && lookupValue.isNotEmpty) {
+        final matrixUserId =
+            lookupValue == UserSearchService.registeredWithoutMatrixId
+                ? null
+                : lookupValue;
         setState(() {
           _lookupState = _LookupState.found;
-          _resolvedUserId = result[identifier];
+          _resolvedUserId = matrixUserId;
+          _isRegisteredOnWrytte = true;
+          _lookupError = null;
         });
       } else {
         setState(() {
           _lookupState = _LookupState.notFound;
           _resolvedUserId = null;
+          _isRegisteredOnWrytte = false;
+          _lookupError = null;
         });
       }
     } catch (e) {
       debugPrint('🔴 Lookup error: $e');
       if (!mounted) return;
       setState(() {
-        _lookupState = _LookupState.idle;
+        _lookupState = _LookupState.error;
         _resolvedUserId = null;
+        _isRegisteredOnWrytte = false;
+        _lookupError = _friendlyLookupError(e.toString());
       });
     }
   }
@@ -271,13 +293,20 @@ class _NewContactPageState extends State<NewContactPage> {
       debugPrint('🧑 selfUserId in _save: $selfId');
       debugPrint('identifier=$_fullIdentifier');
       debugPrint('resolvedUserId=$_resolvedUserId');
+      if (_matrixLocalpart(_resolvedUserId) == selfId) {
+        throw StateError(
+          'You cannot add your own Wrytte account as a contact.',
+        );
+      }
       final saved = await _contactService.saveManualContact(
         firstName: _firstNameCtrl.text.trim(),
         lastName: _lastNameCtrl.text.trim(),
         fullIdentifier: _fullIdentifier,
         wrytteUserId: _resolvedUserId,
+        isOnWrytte: _isRegisteredOnWrytte,
         syncToPhone: _syncToPhone,
-        token: await AuthService.instance.getMatrixAccessToken() ?? widget.token,
+        token:
+            await AuthService.instance.getMatrixAccessToken() ?? widget.token,
         selfUserId: selfId,
       );
 
@@ -295,13 +324,15 @@ class _NewContactPageState extends State<NewContactPage> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => ChatScreen(
-            conversationId: conversationId,
-            receiverId: receiverId.isNotEmpty ? receiverId : normalizedReceiverId,
-            currentUserId: selfId,
-            title: saved.formattedName,
-            avatarUrl: saved.avatarUrl,
-          ),
+          builder:
+              (_) => ChatScreen(
+                conversationId: conversationId,
+                receiverId:
+                    receiverId.isNotEmpty ? receiverId : normalizedReceiverId,
+                currentUserId: selfId,
+                title: saved.formattedName,
+                avatarUrl: saved.avatarUrl,
+              ),
         ),
       );
     } catch (e) {
@@ -309,18 +340,61 @@ class _NewContactPageState extends State<NewContactPage> {
       if (!mounted) return;
       setState(() {
         _isSaving = false;
-        //_saveError = _friendlyError(e.toString());
-         _saveError = e.toString();
+        _saveError = _friendlyError(e.toString());
       });
     }
   }
 
   String _friendlyError(String raw) {
+    if (raw.toLowerCase().contains('own wrytte account')) {
+      return 'You cannot add yourself as a contact.';
+    }
     if (raw.contains('1201')) return 'You are already friends with this user.';
     if (raw.contains('permission')) return 'Phone contacts permission denied.';
-    if (raw.contains('not authenticated')) return 'Session expired — please log in again.';
+    if (raw.contains('not authenticated')) {
+      return 'Session expired — please log in again.';
+    }
     return 'Something went wrong. Please try again.';
   }
+
+  String? _matrixLocalpart(String? value) {
+    final trimmed = value?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    if (trimmed.startsWith('@') && trimmed.contains(':')) {
+      return trimmed.substring(1, trimmed.indexOf(':'));
+    }
+    return trimmed;
+  }
+
+  String _friendlyLookupError(String raw) {
+    final lower = raw.toLowerCase();
+    if (lower.contains('resolver endpoint') || lower.contains('404')) {
+      return 'Could not verify this phone yet. Contact lookup is not available.';
+    }
+    if (lower.contains('backend session') ||
+        lower.contains('session is missing') ||
+        lower.contains('401') ||
+        lower.contains('unauthorized')) {
+      return 'Please sign in again so Wrytte can verify this phone number.';
+    }
+    if (lower.contains('network') ||
+        lower.contains('socket') ||
+        lower.contains('timeout') ||
+        lower.contains('connection')) {
+      return 'Could not verify this phone. Check your connection.';
+    }
+    return 'Could not verify this phone number right now.';
+  }
+
+  String _normalizeIdentifier(String identifier) {
+    final trimmed = identifier.trim();
+    final digits = _digitsOnly(trimmed);
+    if (digits.length >= 6) return '+$digits';
+    return trimmed;
+  }
+
+  String _digitsOnly(String identifier) =>
+      identifier.replaceAll(RegExp(r'[^\d]'), '');
 
   // ─────────────────────────────────────────────────────────────
   // Status line below the number card
@@ -341,7 +415,7 @@ class _NewContactPageState extends State<NewContactPage> {
 
     final bool isWrytteId = _isWrytteIdMode;
 
-    Widget _row(String text, {bool checkmark = false, Widget? trailing}) {
+    Widget statusRow(String text, {bool checkmark = false, Widget? trailing}) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 2),
         child: Row(
@@ -367,7 +441,7 @@ class _NewContactPageState extends State<NewContactPage> {
       case _LookupState.found:
         return Padding(
           padding: const EdgeInsets.only(top: 6),
-          child: _row(
+          child: statusRow(
             isWrytteId
                 ? 'Wrytte number is on Wrytte'
                 : 'Phone number is on Wrytte',
@@ -381,7 +455,7 @@ class _NewContactPageState extends State<NewContactPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _row(
+              statusRow(
                 isWrytteId
                     ? 'Wrytte number is already in your contacts.'
                     : 'Phone number is already in your contacts.',
@@ -407,25 +481,35 @@ class _NewContactPageState extends State<NewContactPage> {
       case _LookupState.notFound:
         return Padding(
           padding: const EdgeInsets.only(top: 6),
-          child: isWrytteId
-              ? _row('Wrytte number is not on Wrytte.')
-              : Row(
-                  children: [
-                    const Text(
-                      'Phone number is not on Wrytte. ',
-                      style: TextStyle(color: Colors.white54, fontSize: 13),
-                    ),
-                    GestureDetector(
-                      onTap: () {
-                        // TODO: share invite link
-                      },
-                      child: const Text(
-                        'Invite',
-                        style: TextStyle(color: _kBlue, fontSize: 13),
+          child:
+              isWrytteId
+                  ? statusRow('Wrytte number is not on Wrytte.')
+                  : Row(
+                    children: [
+                      const Text(
+                        'Phone number is not on Wrytte. ',
+                        style: TextStyle(color: Colors.white54, fontSize: 13),
                       ),
-                    ),
-                  ],
-                ),
+                      GestureDetector(
+                        onTap: () {
+                          // TODO: share invite link
+                        },
+                        child: const Text(
+                          'Invite',
+                          style: TextStyle(color: _kBlue, fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+        );
+
+      case _LookupState.error:
+        return Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Text(
+            _lookupError ?? 'Could not verify this phone number right now.',
+            style: const TextStyle(color: Colors.redAccent, fontSize: 13),
+          ),
         );
 
       case _LookupState.idle:
@@ -463,23 +547,24 @@ class _NewContactPageState extends State<NewContactPage> {
         actions: [
           TextButton(
             onPressed: _canSave && !_isSaving ? _save : null,
-            child: _isSaving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: _kBlue,
+            child:
+                _isSaving
+                    ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: _kBlue,
+                      ),
+                    )
+                    : Text(
+                      'Save',
+                      style: TextStyle(
+                        color: _canSave ? _kBlue : Colors.white38,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                  )
-                : Text(
-                    'Save',
-                    style: TextStyle(
-                      color: _canSave ? _kBlue : Colors.white38,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
           ),
         ],
       ),
@@ -543,16 +628,18 @@ class _NewContactPageState extends State<NewContactPage> {
                         _selectedCountry == null
                             ? 'Country'
                             : _isWrytteIdMode
-                                ? 'Wrytte ID number'
-                                : '${_selectedCountry!.flag} ${_selectedCountry!.name}',
+                            ? 'Wrytte ID number'
+                            : '${_selectedCountry!.flag} ${_selectedCountry!.name}',
                         style: TextStyle(
-                          color: _selectedCountry == null
-                              ? Colors.white38
-                              : Colors.white,
+                          color:
+                              _selectedCountry == null
+                                  ? Colors.white38
+                                  : Colors.white,
                           fontSize: 15,
-                          fontWeight: _selectedCountry != null
-                              ? FontWeight.w500
-                              : FontWeight.normal,
+                          fontWeight:
+                              _selectedCountry != null
+                                  ? FontWeight.w500
+                                  : FontWeight.normal,
                         ),
                       ),
                       trailing: const Icon(
@@ -589,12 +676,14 @@ class _NewContactPageState extends State<NewContactPage> {
                               decoration: const InputDecoration(
                                 border: InputBorder.none,
                                 isDense: true,
-                                contentPadding:
-                                    EdgeInsets.symmetric(vertical: 8),
+                                contentPadding: EdgeInsets.symmetric(
+                                  vertical: 8,
+                                ),
                               ),
-                              onChanged: _isWrytteIdMode
-                                  ? null
-                                  : _detectCountryFromCode,
+                              onChanged:
+                                  _isWrytteIdMode
+                                      ? null
+                                      : _detectCountryFromCode,
                               onTap: _onCodeFieldTap,
                               readOnly: _isWrytteIdMode,
                             ),
@@ -606,8 +695,7 @@ class _NewContactPageState extends State<NewContactPage> {
                               height: 22,
                               width: 1,
                               color: _kBlue,
-                              margin:
-                                  const EdgeInsets.symmetric(horizontal: 8),
+                              margin: const EdgeInsets.symmetric(horizontal: 8),
                             ),
 
                           // Number / ID field
@@ -624,19 +712,21 @@ class _NewContactPageState extends State<NewContactPage> {
                                 fontSize: 15,
                               ),
                               decoration: InputDecoration(
-                                hintText: _showDivider
-                                    ? (_isWrytteIdMode
-                                        ? 'Wrytte ID'
-                                        : 'Phone number')
-                                    : '',
+                                hintText:
+                                    _showDivider
+                                        ? (_isWrytteIdMode
+                                            ? 'Wrytte ID'
+                                            : 'Phone number')
+                                        : '',
                                 hintStyle: const TextStyle(
                                   color: Colors.white38,
                                   fontSize: 15,
                                 ),
                                 border: InputBorder.none,
                                 isDense: true,
-                                contentPadding:
-                                    const EdgeInsets.symmetric(vertical: 8),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                ),
                               ),
                               enabled: _showDivider,
                             ),
@@ -667,7 +757,7 @@ class _NewContactPageState extends State<NewContactPage> {
                     style: TextStyle(color: Colors.white, fontSize: 15),
                   ),
                   value: _syncToPhone,
-                  activeColor: _kBlue,
+                  activeThumbColor: _kBlue,
                   onChanged: (v) => setState(() => _syncToPhone = v),
                 ),
               ),

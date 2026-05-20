@@ -82,13 +82,21 @@ class RealNumberService {
       if (e.statusCode == 409) {
         debugPrint('[RealNumberService] 409 — user exists, attempting login with stored secret');
 
+        final archivedProfile =
+            await AuthService.instance.findArchivedProfileByPhone(phone);
         final storedSecret = await AuthService.instance.getStoredSecret();
+        final archivedSecret = archivedProfile?.secret.trim() ?? '';
 
         if (storedSecret != null && storedSecret.isNotEmpty) {
           // Login with stored secret — _handleRegisterResponse will
           // resolve the display name from local storage and persist session
           final loginResult = await login_(secret: storedSecret, phone: phone);
           return loginResult;
+        }
+
+        if (archivedSecret.isNotEmpty) {
+          debugPrint('[RealNumberService] 409 — logging in with archived secret');
+          return login_(secret: archivedSecret, phone: phone);
         }
 
         // No stored secret — user exists but this may be a fresh install or a
@@ -98,9 +106,16 @@ class RealNumberService {
             await AuthService.instance.findUserProfileByPhone(phone);
         final localUserId = await AuthService.instance.getCurrentUserId();
         final localUsername = await AuthService.instance.getCurrentUsername();
-        final existingUserId = remoteProfile?.userId ?? localUserId ?? '';
-        final existingUsername =
-            remoteProfile?.username ?? localUsername ?? phone;
+        final existingUserId = remoteProfile?.userId ??
+            archivedProfile?.userId ??
+            localUserId ??
+            '';
+        final existingUsername = _firstRealName([
+              remoteProfile?.username,
+              archivedProfile?.username,
+              localUsername,
+            ]) ??
+            phone;
         final displayName = _resolveDisplayName(existingUsername, phone);
 
         if (existingUserId.isNotEmpty) {
@@ -215,19 +230,39 @@ class RealNumberService {
       throw Exception(map['error'] as String);
     }
 
-    final userId = (map['userid'] as String? ?? '').trim();
-    final rawUsername = (map['username'] as String? ?? fallbackPhone).trim();
+    final remoteProfile =
+        await AuthService.instance.findUserProfileByPhone(fallbackPhone);
+    final archivedProfile =
+        await AuthService.instance.findArchivedProfileByPhone(fallbackPhone);
+    final storedUserId = await AuthService.instance.getCurrentUserId();
+    final storedName = await AuthService.instance.getCurrentUsername();
+
+    final userId = (map['userid'] as String? ??
+            map['userId'] as String? ??
+            archivedProfile?.userId ??
+            remoteProfile?.userId ??
+            storedUserId ??
+            '')
+        .trim();
+    final rawUsername =
+        (map['username'] as String? ?? archivedProfile?.username ?? fallbackPhone)
+            .trim();
     final secret = (map['secret'] as String? ?? '').trim();
+    final token = (map['token'] as String? ?? '').trim();
+    final expiresAt = DateTime.tryParse((map['expires'] ?? '').toString());
 
     if (userId.isEmpty) {
       throw Exception('Invalid server response: missing userid.');
     }
 
-    final storedName = await AuthService.instance.getCurrentUsername();
-    final remoteProfile =
-        await AuthService.instance.findUserProfileByPhone(fallbackPhone);
     final displayName = _resolveDisplayName(
-      storedName ?? remoteProfile?.username ?? rawUsername,
+      _firstRealName([
+            storedName,
+            remoteProfile?.username,
+            archivedProfile?.username,
+            rawUsername,
+          ]) ??
+          rawUsername,
       fallbackPhone,
     );
 
@@ -242,13 +277,15 @@ class RealNumberService {
       userId: userId,
       username: displayName,
       phone: fallbackPhone,
-      secret: secret,
+      secret: secret.isNotEmpty ? secret : archivedProfile?.secret ?? '',
+      token: token,
+      expiresAt: expiresAt,
     );
 
     return RealNumberRegisterResult(
       username: displayName,
       userId: userId,
-      secret: secret,
+      secret: secret.isNotEmpty ? secret : archivedProfile?.secret ?? '',
       isNewUser: isNewUser,
     );
   }
@@ -273,6 +310,13 @@ class RealNumberService {
     if (name == null || name.trim().length < 2) return false;
     final stripped = name.trim().replaceAll(RegExp(r'[\s\-]'), '');
     return !RegExp(r'^\+?\d{6,}$').hasMatch(stripped);
+  }
+
+  String? _firstRealName(Iterable<String?> names) {
+    for (final name in names) {
+      if (_hasRealName(name)) return name!.trim();
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------------------

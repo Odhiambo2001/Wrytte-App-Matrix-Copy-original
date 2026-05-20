@@ -77,7 +77,8 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
       final currentUserId =
           await AuthService.instance.getCurrentUserId() ?? '';
 
-      final localContacts = await ContactLocalDb.loadContacts();
+      final localContacts =
+          await ContactLocalDb.loadContacts(ownerUserId: currentUserId);
 
       if (mounted && localContacts.isNotEmpty) {
         setState(() {
@@ -94,7 +95,10 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
       final matrixContacts =
           await _contactService.getMatrixContacts(currentUserId);
 
-      await ContactLocalDb.saveContacts(matrixContacts);
+      await ContactLocalDb.saveContacts(
+        matrixContacts,
+        ownerUserId: currentUserId,
+      );
 
       if (mounted) {
         setState(() {
@@ -108,8 +112,15 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         });
       }
     } catch (e) {
+      debugPrint('[SelectContactScreen] contact refresh failed: $e');
+      final message = e.toString();
+      final isDirectoryLookupFailure =
+          message.contains('User search error') ||
+          message.contains('TimeoutException') ||
+          message.contains('Wrytte contact search timed out') ||
+          message.contains('ContactDirectoryUnavailable');
       setState(() {
-        _error = e.toString();
+        _error = isDirectoryLookupFailure ? '' : message;
         _isLoading = false;
       });
     }

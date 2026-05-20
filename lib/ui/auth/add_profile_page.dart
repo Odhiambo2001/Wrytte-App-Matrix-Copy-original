@@ -118,6 +118,11 @@ class _AddProfilePageState extends State<AddProfilePage> {
     username: name,        // explicit real name — bypasses the phone-number guard
     phone:    phone,
     secret:   secret,
+  ).timeout(
+    const Duration(seconds: 3),
+    onTimeout: () {
+      debugPrint('[AddProfilePage] Session re-persist timed out; continuing.');
+    },
   );
 
   _syncProfileInBackground(name);

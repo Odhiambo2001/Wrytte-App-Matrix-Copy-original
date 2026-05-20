@@ -5,7 +5,18 @@ import 'package:wrytte/models/contact_model.dart';
 class ContactLocalDb {
   static const _key = 'local_contacts';
 
-  static Future<void> saveContacts(List<Contact> contacts) async {
+  static String _keyForOwner(String ownerUserId) {
+    final normalizedOwner = ownerUserId.trim();
+    if (normalizedOwner.isEmpty) {
+      throw StateError('Cannot save contacts without a signed-in user.');
+    }
+    return '${_key}_$normalizedOwner';
+  }
+
+  static Future<void> saveContacts(
+    List<Contact> contacts, {
+    required String ownerUserId,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
     final data = contacts.map((c) => jsonEncode({
           'name': c.displayName,
@@ -15,12 +26,14 @@ class ContactLocalDb {
           'isOnWrytte': c.isOnWrytte,
         })).toList();
 
-    await prefs.setStringList(_key, data);
+    await prefs.setStringList(_keyForOwner(ownerUserId), data);
   }
 
-  static Future<List<Contact>> loadContacts() async {
+  static Future<List<Contact>> loadContacts({
+    required String ownerUserId,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getStringList(_key) ?? [];
+    final data = prefs.getStringList(_keyForOwner(ownerUserId)) ?? [];
 
     return data.map((e) {
       final json = jsonDecode(e);
@@ -34,12 +47,15 @@ class ContactLocalDb {
     }).toList();
   }
 
-  static Future<void> addContact(Contact contact) async {
-    final existing = await loadContacts();
+  static Future<void> addContact(
+    Contact contact, {
+    required String ownerUserId,
+  }) async {
+    final existing = await loadContacts(ownerUserId: ownerUserId);
     existing.add(contact.copyWith(
       phones: contact.phones.map(_normalizePhone).toList(),
     ));
-    await saveContacts(existing);
+    await saveContacts(existing, ownerUserId: ownerUserId);
   }
 
   static String _normalizePhone(String phone) {

@@ -132,10 +132,19 @@ class UserProfileService {
       final uid   = await AuthService.instance.getCurrentUserId();
       if (uid == null || uid.isEmpty) return null;
 
-      final name         = await _storage.read(key: _nameKey)         ?? '';
       final phone        = _normalizePhone(
         await _storage.read(key: _phoneKey) ?? '',
       );
+      var name           = await _storage.read(key: _nameKey)         ?? '';
+      if (_looksLikePhone(name) || name.trim().isEmpty) {
+        final archived = await AuthService.instance.findArchivedProfileByPhone(
+          phone,
+        );
+        if (archived != null && archived.hasUsableName) {
+          name = archived.username;
+          await _storage.write(key: _nameKey, value: name);
+        }
+      }
       final profileImage = await _storage.read(key: _profileImageKey) ?? '';
       final bio          = await _storage.read(key: _bioKey)          ?? '';
       final linksRaw     = await _storage.read(key: 'user_links')     ?? '';
@@ -169,5 +178,10 @@ class UserProfileService {
     }
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
     return cleaned;
+  }
+
+  bool _looksLikePhone(String value) {
+    final s = value.trim().replaceAll(RegExp(r'[\s\-()+]'), '');
+    return RegExp(r'^\d{6,}$').hasMatch(s);
   }
 }

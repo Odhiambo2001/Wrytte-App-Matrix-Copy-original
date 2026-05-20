@@ -4,7 +4,9 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
+import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
@@ -14,17 +16,24 @@ class StoredAuthProfile {
   final String userId;
   final String username;
   final String phone;
+  final String secret;
+  final String? token;
+  final DateTime? expiresAt;
 
   const StoredAuthProfile({
     required this.userId,
     required this.username,
     required this.phone,
+    this.secret = '',
+    this.token,
+    this.expiresAt,
   });
 
   bool get hasUsableName =>
       username.trim().length >= 2 &&
-      !RegExp(r'^\+?\d{6,}$')
-          .hasMatch(username.trim().replaceAll(RegExp(r'[\s\-()+]'), ''));
+      !RegExp(
+        r'^\+?\d{6,}$',
+      ).hasMatch(username.trim().replaceAll(RegExp(r'[\s\-()+]'), ''));
 }
 
 class AuthService {
@@ -38,14 +47,15 @@ class AuthService {
 
   final Map<String, String> _pendingPhoneOtps = {};
   final Map<String, String> _pendingEmailOtps = {};
+  int _matrixBootstrapGeneration = 0;
 
-  static const _tokenKey   = 'auth_token';
-  static const _expiryKey  = 'auth_token_expiry';
-  static const _userIdKey  = 'user_id';
+  static const _tokenKey = 'auth_token';
+  static const _expiryKey = 'auth_token_expiry';
+  static const _userIdKey = 'user_id';
   static const _usernameKey = 'username';
-  static const _secretKey  = 'secret';
-  static const _phoneKey   = 'phone';
-  static const _phoneProfileCachePrefix = 'phone_profile_';
+  static const _secretKey = 'secret';
+  static const _phoneKey = 'phone';
+  static const _profileArchiveKey = 'auth_profile_archive_v1';
 
   static const _defaultHomeserver = MatrixConfig.homeserver;
 
@@ -71,7 +81,13 @@ class AuthService {
     required String userId,
     required String nickname,
     String homeserver = _defaultHomeserver,
+    int? generation,
   }) async {
+    if (!await _isCurrentMatrixBootstrap(userId, generation)) {
+      debugPrint('[AuthService] Matrix login skipped for stale user $userId.');
+      return;
+    }
+
     // Use Simon's secret as the one and only Matrix password.
     final secret = await _storage.read(key: _secretKey);
     if (secret == null || secret.trim().isEmpty) {
@@ -87,6 +103,12 @@ class AuthService {
         homeserver: homeserver,
       );
     } catch (_) {
+      if (!await _isCurrentMatrixBootstrap(userId, generation)) {
+        debugPrint(
+          '[AuthService] Matrix register skipped for stale user $userId.',
+        );
+        return;
+      }
       // Account may not exist yet on this server — register it.
       await MatrixAuthService.instance.register(
         username: userId,
@@ -96,13 +118,16 @@ class AuthService {
     }
 
     final client = MatrixClientService.instance.client;
+    if (!await _isCurrentMatrixBootstrap(userId, generation)) {
+      await _logoutMatrixUserIfMatches(userId);
+      debugPrint('[AuthService] Ignored stale Matrix login for $userId.');
+      return;
+    }
     if (nickname.trim().isNotEmpty) {
       try {
-        await client.setProfileField(
-          client.userID!,
-          'm.displayname',
-          {'displayname': nickname.trim()},
-        );
+        await client.setProfileField(client.userID!, 'm.displayname', {
+          'displayname': nickname.trim(),
+        });
       } catch (e) {
         debugPrint('[AuthService] Matrix display-name update failed: $e');
       }
@@ -120,44 +145,77 @@ class AuthService {
     required String username,
     required String phone,
     required String secret,
+    String? token,
+    DateTime? expiresAt,
   }) async {
     // Never overwrite a real stored name with a phone-number fallback.
     final currentName = await _storage.read(key: _usernameKey);
+    final currentToken = await _storage.read(key: _tokenKey);
     final normalizedPhone = _normalizePhone(phone);
-    final nameToSave = (currentName != null && !_looksLikePhone(currentName))
-        ? currentName.trim()
-        : username.trim();
+    final nameToSave =
+        (currentName != null && !_looksLikePhone(currentName))
+            ? currentName.trim()
+            : username.trim();
+    final tokenToSave =
+        (token != null && token.trim().isNotEmpty)
+            ? token.trim()
+            : _looksLikeJwt(currentToken)
+            ? currentToken!.trim()
+            : userId;
 
     // Save secret first so loginToMatrix() can read it immediately.
     final writes = <Future<void>>[
-      _storage.write(key: _tokenKey, value: userId),
+      _storage.write(key: _tokenKey, value: tokenToSave),
       _storage.write(key: _userIdKey, value: userId),
       _storage.write(key: _usernameKey, value: nameToSave),
       _storage.write(key: _phoneKey, value: normalizedPhone),
-      _storage.delete(key: _expiryKey),
     ];
+    if (expiresAt != null) {
+      writes.add(
+        _storage.write(key: _expiryKey, value: expiresAt.toIso8601String()),
+      );
+    } else {
+      writes.add(_storage.delete(key: _expiryKey));
+    }
     if (secret.trim().isNotEmpty) {
       writes.add(_storage.write(key: _secretKey, value: secret.trim()));
     }
     await Future.wait(writes);
-    await _cacheProfileForPhone(
+    await _archiveProfile(
+      phone: normalizedPhone,
       userId: userId,
       username: nameToSave,
-      phone: normalizedPhone,
+      secret: secret,
+      token: tokenToSave,
+      expiresAt: expiresAt,
     );
 
-    // Matrix login runs in background — does not block UI navigation.
-    //unawaited(_tryLoginToMatrix(userId: userId, nickname: nameToSave));
-    final matrixUserId = normalizedPhone.replaceAll(RegExp(r'[^\d]'), '');
-    unawaited(_tryLoginToMatrix(userId: matrixUserId, nickname: nameToSave));
+    // Do not block onboarding on Matrix. A slow/unreachable homeserver must not
+    // trap the user on the OTP screen after Wrytte auth has succeeded.
+    if (secret.trim().isNotEmpty) {
+      final generation = ++_matrixBootstrapGeneration;
+      await _tryLoginToMatrix(
+        userId: userId,
+        nickname: nameToSave,
+        generation: generation,
+      ).timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          debugPrint('[AuthService] Matrix bootstrap timed out; continuing.');
+        },
+      );
+    }
   }
+
   // ---------------------------------------------------------------------------
   // Send SMS / email codes (dev stubs)
   // ---------------------------------------------------------------------------
   Future<void> sendSmsCode(String phone) async {
     final normalizedPhone = _normalizePhone(phone);
     _pendingPhoneOtps[normalizedPhone] = '112233';
-    debugPrint('[AuthService] OTP ready for $normalizedPhone (dev: use 112233)');
+    debugPrint(
+      '[AuthService] OTP ready for $normalizedPhone (dev: use 112233)',
+    );
   }
 
   Future<void> sendEmailCode(String email) async {
@@ -187,20 +245,20 @@ class AuthService {
     final effectiveUsername = username ?? normalizedPhone;
 
     final user = AuthUser(
-      userId:   userId,
+      userId: userId,
       username: effectiveUsername,
-      secret:   userId,
-      token:    userId,
-      phone:    normalizedPhone,
+      secret: userId,
+      token: userId,
+      phone: normalizedPhone,
     );
 
     if (login) {
       // Use userId as a placeholder secret — real secret comes from Simon's API
       await persistPhoneSession(
-        userId:   userId,
+        userId: userId,
         username: effectiveUsername,
-        phone:    normalizedPhone,
-        secret:   userId,
+        phone: normalizedPhone,
+        secret: userId,
       );
     }
 
@@ -247,19 +305,19 @@ class AuthService {
     final effectiveUsername = username ?? normalizedEmail.split('@').first;
 
     final user = AuthUser(
-      userId:   userId,
+      userId: userId,
       username: effectiveUsername,
-      secret:   userId,
-      token:    userId,
-      phone:    phone,
+      secret: userId,
+      token: userId,
+      phone: phone,
     );
 
     if (login) {
       await persistPhoneSession(
-        userId:   userId,
+        userId: userId,
         username: effectiveUsername,
-        phone:    phone,
-        secret:   userId,
+        phone: phone,
+        secret: userId,
       );
     }
 
@@ -276,11 +334,11 @@ class AuthService {
 
     final expiryString = await _storage.read(key: _expiryKey);
     return AuthUser(
-      userId:    await _storage.read(key: _userIdKey)   ?? '',
-      username:  await _storage.read(key: _usernameKey) ?? '',
-      secret:    await _storage.read(key: _secretKey)   ?? '',
-      token:     token,
-      phone:     await _storage.read(key: _phoneKey),
+      userId: await _storage.read(key: _userIdKey) ?? '',
+      username: await _storage.read(key: _usernameKey) ?? '',
+      secret: await _storage.read(key: _secretKey) ?? '',
+      token: token,
+      phone: await _storage.read(key: _phoneKey),
       expiresAt: expiryString != null ? DateTime.tryParse(expiryString) : null,
     );
   }
@@ -288,32 +346,216 @@ class AuthService {
   Future<String?> getSavedPhone() async => _storage.read(key: _phoneKey);
   Future<String?> getCurrentUserId() async => _storage.read(key: _userIdKey);
   Future<String?> getToken() async => _storage.read(key: _tokenKey);
+  Future<String?> getValidBackendToken() async {
+    final token = await getToken();
+    final expiryString = await _storage.read(key: _expiryKey);
+    final expiresAt =
+        expiryString != null ? DateTime.tryParse(expiryString) : null;
+    final isExpired =
+        expiresAt != null &&
+        expiresAt.isBefore(DateTime.now().add(const Duration(minutes: 2)));
+    if (_looksLikeJwt(token) && !isExpired) return token;
+    return _refreshBackendToken();
+  }
+
   Future<String?> getStoredSecret() async => _storage.read(key: _secretKey);
-  Future<String?> getCurrentUsername() async => _storage.read(key: _usernameKey);
+  Future<String?> getCurrentUsername() async =>
+      _storage.read(key: _usernameKey);
   Future<String?> getMatrixAccessToken() async =>
       _storage.read(key: MatrixAuthService.matrixAccessTokenKey);
-  Future<String?> getChatToken()         async => getMatrixAccessToken();
+  Future<String?> getChatToken() async => getMatrixAccessToken();
+
+  Future<StoredAuthProfile?> findArchivedProfileByPhone(String phone) async {
+    final archive = await _readProfileArchive();
+    final normalizedPhone = _normalizePhone(phone);
+    final raw = archive[normalizedPhone];
+    if (raw is! Map) return null;
+
+    final userId = raw['userId']?.toString().trim() ?? '';
+    final username = raw['username']?.toString().trim() ?? '';
+    final secret = raw['secret']?.toString().trim() ?? '';
+    final token = raw['token']?.toString().trim();
+    final expiresAt = DateTime.tryParse(
+      raw['expiresAt']?.toString().trim() ?? '',
+    );
+    if (userId.isEmpty || username.isEmpty) {
+      return null;
+    }
+
+    return StoredAuthProfile(
+      userId: userId,
+      username: username,
+      phone: normalizedPhone,
+      secret: secret,
+      token: _looksLikeJwt(token) ? token : null,
+      expiresAt: expiresAt,
+    );
+  }
+
+  Future<String?> _refreshBackendToken() async {
+    final phone = await getSavedPhone();
+    final userId = await getCurrentUserId();
+    if ((phone == null || phone.trim().isEmpty) &&
+        (userId == null || userId.trim().isEmpty)) {
+      return null;
+    }
+
+    final archivedProfile =
+        phone == null || phone.trim().isEmpty
+            ? null
+            : await findArchivedProfileByPhone(phone);
+    final storedSecret = (await getStoredSecret())?.trim() ?? '';
+    final secret =
+        storedSecret.isNotEmpty
+            ? storedSecret
+            : archivedProfile?.secret.trim() ?? '';
+    if (secret.isEmpty) return null;
+
+    try {
+      final response = await ApiService.postMultipart('/auth/login', {
+        'secret': secret,
+        if (phone != null && phone.trim().isNotEmpty)
+          'phone': phone.replaceAll(RegExp(r'[^\d]'), ''),
+        if (userId != null && userId.trim().isNotEmpty) 'userid': userId.trim(),
+      });
+      if (response is! Map) return null;
+
+      final refreshedToken = (response['token'] as String? ?? '').trim();
+      if (!_looksLikeJwt(refreshedToken)) return null;
+
+      final refreshedUserId =
+          (response['userid'] as String? ?? userId ?? '').trim();
+      final refreshedUsername = (response['username'] as String? ?? '').trim();
+      final refreshedSecret = (response['secret'] as String? ?? '').trim();
+      final expiresAt = DateTime.tryParse(
+        (response['expires'] ?? '').toString(),
+      );
+
+      final writes = <Future<void>>[
+        _storage.write(key: _tokenKey, value: refreshedToken),
+        if (refreshedUserId.isNotEmpty)
+          _storage.write(key: _userIdKey, value: refreshedUserId),
+        if (refreshedUsername.isNotEmpty)
+          _storage.write(key: _usernameKey, value: refreshedUsername),
+        if (refreshedSecret.isNotEmpty)
+          _storage.write(key: _secretKey, value: refreshedSecret),
+      ];
+      if (expiresAt != null) {
+        writes.add(
+          _storage.write(key: _expiryKey, value: expiresAt.toIso8601String()),
+        );
+      }
+      await Future.wait(writes);
+      final archivePhone = phone ?? archivedProfile?.phone ?? '';
+      final archiveUserId =
+          refreshedUserId.isNotEmpty
+              ? refreshedUserId
+              : archivedProfile?.userId ?? '';
+      final archiveUsername =
+          refreshedUsername.isNotEmpty
+              ? refreshedUsername
+              : archivedProfile?.username ?? '';
+      if (archivePhone.isNotEmpty &&
+          archiveUserId.isNotEmpty &&
+          archiveUsername.isNotEmpty) {
+        await _archiveProfile(
+          phone: archivePhone,
+          userId: archiveUserId,
+          username: archiveUsername,
+          secret: refreshedSecret.isNotEmpty ? refreshedSecret : secret,
+          token: refreshedToken,
+          expiresAt: expiresAt,
+        );
+      }
+      return refreshedToken;
+    } catch (e) {
+      debugPrint('[AuthService] Backend token refresh failed: $e');
+      return null;
+    }
+  }
+
+  bool _looksLikeJwt(String? token) {
+    if (token == null || token.trim().isEmpty) return false;
+    return token.trim().split('.').length == 3;
+  }
+
+  Future<Map<String, Object?>> _readProfileArchive() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_profileArchiveKey);
+      if (raw == null || raw.isEmpty) return {};
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        return Map<String, Object?>.from(decoded);
+      }
+    } catch (e) {
+      debugPrint('[AuthService] Profile archive read failed: $e');
+    }
+    return {};
+  }
+
+  Future<void> _archiveProfile({
+    required String phone,
+    required String userId,
+    required String username,
+    String? secret,
+    String? token,
+    DateTime? expiresAt,
+  }) async {
+    final normalizedPhone = _normalizePhone(phone);
+    final cleanUserId = userId.trim();
+    final cleanUsername = username.trim();
+    if (normalizedPhone.isEmpty ||
+        cleanUserId.isEmpty ||
+        cleanUsername.isEmpty) {
+      return;
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final archive = await _readProfileArchive();
+      final existingRaw = archive[normalizedPhone];
+      final existing =
+          existingRaw is Map
+              ? Map<String, Object?>.from(existingRaw)
+              : <String, Object?>{};
+      final next = <String, Object?>{
+        ...existing,
+        'userId': cleanUserId,
+        'username': cleanUsername,
+      };
+      final cleanSecret = secret?.trim() ?? '';
+      if (cleanSecret.isNotEmpty) next['secret'] = cleanSecret;
+      final cleanToken = token?.trim() ?? '';
+      if (_looksLikeJwt(cleanToken)) next['token'] = cleanToken;
+      if (expiresAt != null) {
+        next['expiresAt'] = expiresAt.toIso8601String();
+      }
+      archive[normalizedPhone] = next;
+      await prefs.setString(_profileArchiveKey, jsonEncode(archive));
+    } catch (e) {
+      debugPrint('[AuthService] Profile archive write failed: $e');
+    }
+  }
 
   Future<StoredAuthProfile?> findUserProfileByPhone(String phone) async {
     final savedPhone = await getSavedPhone();
     final savedUserId = await getCurrentUserId();
     final savedName = await getCurrentUsername();
-    if (savedPhone != null &&
-        _normalizePhone(savedPhone) == _normalizePhone(phone) &&
-        savedUserId != null &&
-        savedUserId.isNotEmpty) {
-      return StoredAuthProfile(
-        userId: savedUserId,
-        username: savedName ?? savedPhone,
-        phone: _normalizePhone(savedPhone),
-      );
+    if (savedPhone == null ||
+        _normalizePhone(savedPhone) != _normalizePhone(phone) ||
+        savedUserId == null ||
+        savedUserId.isEmpty) {
+      return null;
     }
-    return _readCachedProfileForPhone(phone);
+    return StoredAuthProfile(
+      userId: savedUserId,
+      username: savedName ?? savedPhone,
+      phone: _normalizePhone(savedPhone),
+    );
   }
 
-  Future<StoredAuthProfile?> hydrateStoredProfile(
-    String userId,
-  ) async {
+  Future<StoredAuthProfile?> hydrateStoredProfile(String userId) async {
     final savedUserId = await getCurrentUserId();
     if (savedUserId != userId) return null;
     final username = await getCurrentUsername() ?? '';
@@ -328,25 +570,24 @@ class AuthService {
     if (username.trim().isEmpty) return;
     final trimmed = username.trim();
     await _storage.write(key: _usernameKey, value: trimmed);
-    final userId = await getCurrentUserId();
     final phone = await getSavedPhone();
-    if (userId != null && userId.isNotEmpty && phone != null) {
-      await _cacheProfileForPhone(
-        userId: userId,
-        username: trimmed,
-        phone: phone,
-      );
+    final userId = await getCurrentUserId();
+    if (phone != null &&
+        phone.trim().isNotEmpty &&
+        userId != null &&
+        userId.trim().isNotEmpty &&
+        !_looksLikePhone(trimmed)) {
+      await _archiveProfile(phone: phone, userId: userId, username: trimmed);
     }
-    final client = MatrixClientService.instance.isInitialized
-        ? MatrixClientService.instance.client
-        : null;
+    final client =
+        MatrixClientService.instance.isInitialized
+            ? MatrixClientService.instance.client
+            : null;
     if (client?.userID != null) {
       try {
-        await client!.setProfileField(
-          client.userID!,
-          'm.displayname',
-          {'displayname': trimmed},
-        );
+        await client!.setProfileField(client.userID!, 'm.displayname', {
+          'displayname': username.trim(),
+        });
       } catch (e) {
         debugPrint('[AuthService] Matrix display-name update failed: $e');
       }
@@ -364,28 +605,15 @@ class AuthService {
   // Logout
   // ---------------------------------------------------------------------------
   Future<void> logout() async {
-    try {
-      await ChatService().reset().timeout(const Duration(seconds: 5));
-    } catch (e) {
-      debugPrint('[AuthService] Chat reset error during logout: $e');
-    }
-    try {
-      await logoutFromMatrix().timeout(const Duration(seconds: 5));
-    } catch (e) {
-      debugPrint('[AuthService] Matrix logout error during logout: $e');
-    }
+    _matrixBootstrapGeneration++;
+    await ChatService().reset();
+    await logoutFromMatrix();
     try {
       await _firebaseAuth.signOut();
     } catch (e) {
       debugPrint('[AuthService] Firebase sign-out error: $e');
     }
-    final profileCache = await _readPhoneProfileCache();
     await _storage.deleteAll();
-    await Future.wait(
-      profileCache.entries.map(
-        (entry) => _storage.write(key: entry.key, value: entry.value),
-      ),
-    );
   }
 
   Future<void> signOutFirebase() async {
@@ -402,11 +630,36 @@ class AuthService {
   Future<void> _tryLoginToMatrix({
     required String userId,
     required String nickname,
+    int? generation,
   }) async {
     try {
-      await loginToMatrix(userId: userId, nickname: nickname);
+      await loginToMatrix(
+        userId: userId,
+        nickname: nickname,
+        generation: generation,
+      );
     } catch (e) {
       debugPrint('[AuthService] Matrix bootstrap skipped: $e');
+    }
+  }
+
+  Future<bool> _isCurrentMatrixBootstrap(String userId, int? generation) async {
+    if (generation != null && generation != _matrixBootstrapGeneration) {
+      return false;
+    }
+    final currentUserId = await _storage.read(key: _userIdKey);
+    return currentUserId == userId;
+  }
+
+  Future<void> _logoutMatrixUserIfMatches(String userId) async {
+    if (!MatrixClientService.instance.isInitialized) return;
+    final expectedMxid = '@$userId:${MatrixConfig.serverName}';
+    final client = MatrixClientService.instance.client;
+    if (client.userID != expectedMxid) return;
+    try {
+      await MatrixAuthService.instance.logout();
+    } catch (e) {
+      debugPrint('[AuthService] stale Matrix logout failed: $e');
     }
   }
 
@@ -420,72 +673,8 @@ class AuthService {
     return cleaned;
   }
 
-  String _phoneProfileCacheKey(String phone) {
-    final digits = _normalizePhone(phone).replaceAll(RegExp(r'\D'), '');
-    return '$_phoneProfileCachePrefix$digits';
-  }
-
-  Future<void> _cacheProfileForPhone({
-    required String userId,
-    required String username,
-    required String phone,
-  }) async {
-    final trimmedName = username.trim();
-    final normalizedPhone = _normalizePhone(phone);
-    if (userId.trim().isEmpty ||
-        normalizedPhone.isEmpty ||
-        trimmedName.length < 2 ||
-        _looksLikePhone(trimmedName)) {
-      return;
-    }
-
-    await _storage.write(
-      key: _phoneProfileCacheKey(normalizedPhone),
-      value: jsonEncode({
-        'userId': userId.trim(),
-        'username': trimmedName,
-        'phone': normalizedPhone,
-      }),
-    );
-  }
-
-  Future<StoredAuthProfile?> _readCachedProfileForPhone(String phone) async {
-    final raw = await _storage.read(key: _phoneProfileCacheKey(phone));
-    if (raw == null || raw.isEmpty) return null;
-    try {
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final userId = (map['userId'] as String? ?? '').trim();
-      final username = (map['username'] as String? ?? '').trim();
-      final cachedPhone = _normalizePhone(map['phone'] as String? ?? phone);
-      if (userId.isEmpty || username.isEmpty) return null;
-      return StoredAuthProfile(
-        userId: userId,
-        username: username,
-        phone: cachedPhone,
-      );
-    } catch (e) {
-      debugPrint('[AuthService] Cached profile read failed: $e');
-      return null;
-    }
-  }
-
-  Future<Map<String, String>> _readPhoneProfileCache() async {
-    try {
-      final allValues = await _storage.readAll();
-      return Map.fromEntries(
-        allValues.entries.where(
-          (entry) => entry.key.startsWith(_phoneProfileCachePrefix),
-        ),
-      );
-    } catch (e) {
-      debugPrint('[AuthService] Profile cache preservation failed: $e');
-      return const {};
-    }
-  }
-
   bool _looksLikePhone(String value) {
     final s = value.replaceAll(RegExp(r'[\s\-()+]'), '');
     return RegExp(r'^\d{6,}$').hasMatch(s);
   }
-
 }

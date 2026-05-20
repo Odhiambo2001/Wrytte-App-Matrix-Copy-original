@@ -10,7 +10,7 @@ class MatrixConfig {
 
   static const serverName = String.fromEnvironment(
     'WRYTTE_MATRIX_SERVER_NAME',
-    defaultValue: 'matrix.wrytte.com',
+    defaultValue: 'matrix.wryte.com',
   );
 
   static const appServiceName = 'Wrytte';

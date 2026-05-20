@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_contacts/flutter_contacts.dart' as fc;
 import 'package:wrytte/models/contact_model.dart';
+import 'package:wrytte/services/contacts/contact_directory_service.dart';
 import 'package:wrytte/services/matrix/matrix_contact_service.dart';
 import 'user_search_service.dart';
 
@@ -125,8 +128,12 @@ class ContactService {
     required Contact contact,
   }) async {
     try {
-      await MatrixContactService.instance.saveContact(_normalizeContact(contact));
-      debugPrint('✅ Contact saved to Matrix account data: ${contact.displayName}');
+      await MatrixContactService.instance.saveContact(
+        _normalizeContact(contact),
+      );
+      debugPrint(
+        '✅ Contact saved to Matrix account data: ${contact.displayName}',
+      );
     } catch (e, stack) {
       debugPrint('🔴 Contact save FAILED: $e');
       debugPrint('🔴 Stack: $stack');
@@ -139,12 +146,17 @@ class ContactService {
   // ──────────────────────────────────────────────────────────────────────
   Future<List<Contact>> getMatrixContacts(String ownerUserId) async {
     try {
-      final contacts = await MatrixContactService.instance.loadContacts();
-      debugPrint('Loaded ${contacts.length} Matrix contacts');
+      await syncLocalContactsToMatrix(ownerUserId);
+      final matrixContacts = await MatrixContactService.instance.loadContacts();
+      final localContacts = await ContactLocalDb.loadContacts(
+        ownerUserId: ownerUserId,
+      );
+      final contacts = _mergeContacts(matrixContacts, localContacts);
+      debugPrint('Loaded ${contacts.length} contacts');
       return contacts;
     } catch (e) {
       debugPrint('Failed to load Matrix contacts: $e');
-      return [];
+      return ContactLocalDb.loadContacts(ownerUserId: ownerUserId);
     }
   }
 
@@ -154,20 +166,22 @@ class ContactService {
   Future<List<Contact>> getWrytteContactsOptimized() async {
     final deviceContacts = await getDeviceContacts();
 
-    final allPhones = deviceContacts
-        .expand((c) => c.phones)
-        .where((p) {
-          final digits = p.replaceAll(RegExp(r'[^\d]'), '');
-          return digits.length >= 7;
-        })
-        .toSet()
-        .toList();
+    final allPhones =
+        deviceContacts
+            .expand((c) => c.phones)
+            .where((p) {
+              final digits = p.replaceAll(RegExp(r'[^\d]'), '');
+              return digits.length >= 7;
+            })
+            .toSet()
+            .toList();
 
     if (allPhones.isEmpty) return [];
 
     // ✅ Use cache if less than 5 minutes old
     final now = DateTime.now();
-    final cacheValid = _cacheTime != null &&
+    final cacheValid =
+        _cacheTime != null &&
         now.difference(_cacheTime!).inMinutes < 5 &&
         _phoneUserMapCache != null;
 
@@ -177,25 +191,25 @@ class ContactService {
       debugPrint('✅ Using cached phone lookup');
       phoneUserMap = _phoneUserMapCache!;
     } else {
-      // ✅ Run ALL chunks in parallel
-      const chunkSize = 10;
-      final chunks = <List<String>>[];
-      for (var i = 0; i < allPhones.length; i += chunkSize) {
-        chunks.add(allPhones.skip(i).take(chunkSize).toList());
-      }
+      debugPrint('Running batched phone lookup for ${allPhones.length} phones');
 
-      debugPrint('Running ${chunks.length} parallel phone lookups');
-
-      final results = await Future.wait(
-        chunks.map((chunk) => _userSearchService.searchUsersByPhones(
-              phoneNumbersC: chunk.join('|'),
-              token: '',
-            )),
-      );
-
-      phoneUserMap = {};
-      for (final result in results) {
-        phoneUserMap.addAll(result);
+      try {
+        phoneUserMap = await _searchPhonesInChunks(allPhones);
+      } on ContactDirectoryUnavailable catch (e) {
+        debugPrint('Wrytte contact lookup unavailable: $e');
+        _phoneUserMapCache = {};
+        _cacheTime = now;
+        return [];
+      } on TimeoutException catch (e) {
+        debugPrint('Wrytte contact lookup timed out: $e');
+        _phoneUserMapCache = {};
+        _cacheTime = now;
+        return [];
+      } catch (e) {
+        debugPrint('Wrytte contact lookup failed: $e');
+        _phoneUserMapCache = {};
+        _cacheTime = now;
+        return [];
       }
 
       // ✅ Store in cache
@@ -207,15 +221,23 @@ class ContactService {
     for (final dc in deviceContacts) {
       for (final phone in dc.phones) {
         final normalizedPhone = _normalizePhone(phone);
-        final userId = phoneUserMap[normalizedPhone];
+        final userId =
+            phoneUserMap[normalizedPhone] ??
+            phoneUserMap[normalizedPhone.replaceAll(RegExp(r'[^\d]'), '')];
         if (userId != null) {
-          wrytteContacts.add(Contact(
-            displayName: dc.displayName,
-            phones: dc.phones,
-            avatarUrl: dc.avatarUrl,
-            isOnWrytte: true,
-            wrytteUserId: userId,
-          ));
+          final matrixUserId =
+              userId == UserSearchService.registeredWithoutMatrixId
+                  ? null
+                  : userId;
+          wrytteContacts.add(
+            Contact(
+              displayName: dc.displayName,
+              phones: dc.phones,
+              avatarUrl: dc.avatarUrl,
+              isOnWrytte: true,
+              wrytteUserId: matrixUserId,
+            ),
+          );
           break;
         }
       }
@@ -224,13 +246,47 @@ class ContactService {
     return wrytteContacts;
   }
 
+  Future<Map<String, String>> _searchPhonesInChunks(List<String> phones) async {
+    const chunkSize = 80;
+    final phoneUserMap = <String, String>{};
+
+    for (var start = 0; start < phones.length; start += chunkSize) {
+      final end =
+          (start + chunkSize > phones.length)
+              ? phones.length
+              : start + chunkSize;
+      final chunk = phones.sublist(start, end);
+      debugPrint(
+        'Running Wrytte phone lookup chunk '
+        '${(start ~/ chunkSize) + 1} for ${chunk.length} phones',
+      );
+
+      try {
+        final chunkResult = await _userSearchService.searchUsersByPhones(
+          phoneNumbersC: chunk.join('|'),
+          token: '',
+        );
+        phoneUserMap.addAll(chunkResult);
+      } on ContactDirectoryUnavailable catch (e) {
+        debugPrint('Wrytte contact lookup chunk unavailable: $e');
+      } on TimeoutException catch (e) {
+        debugPrint('Wrytte contact lookup chunk timed out: $e');
+      } catch (e) {
+        debugPrint('Wrytte contact lookup chunk failed: $e');
+      }
+    }
+
+    return phoneUserMap;
+  }
+
   Future<List<Contact>> getNonWrytteContacts() async {
     final deviceContacts = await getDeviceContacts();
     final wrytteContacts = await getWrytteContactsOptimized();
     final wryttePhones = wrytteContacts.expand((c) => c.phones).toSet();
-    final nonWrytte = deviceContacts
-        .where((c) => !c.phones.any((p) => wryttePhones.contains(p)))
-        .toList();
+    final nonWrytte =
+        deviceContacts
+            .where((c) => !c.phones.any((p) => wryttePhones.contains(p)))
+            .toList();
     debugPrint('Found ${nonWrytte.length} non-Wrytte contacts');
     return nonWrytte;
   }
@@ -244,12 +300,17 @@ class ContactService {
     required String lastName,
     required String fullIdentifier,
     required String? wrytteUserId,
+    required bool isOnWrytte,
     required bool syncToPhone,
     required String token,
     required String? selfUserId,
   }) async {
     final displayName = '$firstName $lastName'.trim();
-    final isWrytteContact = wrytteUserId != null && wrytteUserId.isNotEmpty;
+    final isWrytteContact =
+        isOnWrytte || (wrytteUserId != null && wrytteUserId.isNotEmpty);
+    if (_isSelfContact(wrytteUserId, selfUserId)) {
+      throw StateError('You cannot add your own Wrytte account as a contact.');
+    }
 
     final contact = Contact(
       displayName: displayName,
@@ -259,11 +320,12 @@ class ContactService {
     );
 
     if (selfUserId != null && selfUserId.isNotEmpty) {
-      await saveContactToMatrix(
-        ownerUserId: selfUserId,
-        contact: contact,
-      );
-      await ContactLocalDb.addContact(contact);
+      await ContactLocalDb.addContact(contact, ownerUserId: selfUserId);
+      try {
+        await saveContactToMatrix(ownerUserId: selfUserId, contact: contact);
+      } on StateError catch (e) {
+        debugPrint('Matrix contact sync deferred: $e');
+      }
 
       invalidateCache();
       invalidateMatrixContactsCache();
@@ -272,13 +334,70 @@ class ContactService {
     return contact;
   }
 
+  bool _isSelfContact(String? wrytteUserId, String? selfUserId) {
+    final self = selfUserId?.trim();
+    if (self == null || self.isEmpty) return false;
+    final other = _matrixLocalpart(wrytteUserId);
+    return other == self;
+  }
+
+  String? _matrixLocalpart(String? value) {
+    final trimmed = value?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    if (trimmed.startsWith('@') && trimmed.contains(':')) {
+      return trimmed.substring(1, trimmed.indexOf(':'));
+    }
+    return trimmed;
+  }
+
   Contact _normalizeContact(Contact contact) {
     return contact.copyWith(
-      phones: contact.phones
-          .map(_normalizePhone)
-          .where((phone) => phone.isNotEmpty)
-          .toSet()
-          .toList(),
+      phones:
+          contact.phones
+              .map(_normalizePhone)
+              .where((phone) => phone.isNotEmpty)
+              .toSet()
+              .toList(),
     );
+  }
+
+  Future<void> syncLocalContactsToMatrix(String ownerUserId) async {
+    final localContacts = await ContactLocalDb.loadContacts(
+      ownerUserId: ownerUserId,
+    );
+    if (localContacts.isEmpty) return;
+
+    for (final contact in localContacts) {
+      try {
+        await MatrixContactService.instance.saveContact(
+          _normalizeContact(contact),
+        );
+      } on StateError catch (e) {
+        debugPrint('Matrix contact sync not ready: $e');
+        return;
+      } catch (e) {
+        debugPrint(
+          'Matrix contact sync failed for ${contact.formattedName}: $e',
+        );
+      }
+    }
+  }
+
+  List<Contact> _mergeContacts(
+    List<Contact> matrixContacts,
+    List<Contact> localContacts,
+  ) {
+    final merged = <String, Contact>{};
+    for (final contact in [...matrixContacts, ...localContacts]) {
+      final normalized = _normalizeContact(contact);
+      final key =
+          normalized.wrytteUserId?.isNotEmpty == true
+              ? normalized.wrytteUserId!
+              : normalized.primaryPhone;
+      if (key.isEmpty) continue;
+      merged[key] = normalized;
+    }
+    return merged.values.toList()
+      ..sort((a, b) => a.formattedName.compareTo(b.formattedName));
   }
 }
