@@ -9,10 +9,21 @@ class MatrixContactService {
 
   static const accountDataType = 'com.wrytte.contacts';
   Map<String, Object?>? _memoryContacts;
+  String? _memoryContactsOwner;
+
+  void clearCache() {
+    _memoryContacts = null;
+    _memoryContactsOwner = null;
+  }
 
   Future<List<Contact>> loadContacts() async {
     final client = await MatrixAuthService.instance.restore();
     if (!client.isLogged()) return [];
+    final userId = client.userID;
+    if (_memoryContactsOwner != userId) {
+      _memoryContacts = null;
+      _memoryContactsOwner = userId;
+    }
 
     final content = client.accountData[accountDataType]?.content;
     final rawContacts = content?['contacts'];
@@ -21,6 +32,7 @@ class MatrixContactService {
     _memoryContacts = rawContacts.map(
       (key, value) => MapEntry(key.toString(), value),
     );
+    _memoryContactsOwner = userId;
 
     return rawContacts.values
         .whereType<Map>()
@@ -43,11 +55,16 @@ class MatrixContactService {
     if (userId == null || userId.isEmpty) {
       throw StateError('Matrix user ID is not available for contact save.');
     }
+    if (_memoryContactsOwner != userId) {
+      _memoryContacts = null;
+      _memoryContactsOwner = userId;
+    }
 
     final current = await _contactsMap();
     final key = _contactKey(contact);
     current[key] = _contactToAccountData(contact);
     _memoryContacts = Map<String, Object?>.from(current);
+    _memoryContactsOwner = userId;
 
     await client.setAccountData(userId, accountDataType, {
       'version': 1,
@@ -62,6 +79,11 @@ class MatrixContactService {
 
   Future<Map<String, Object?>> _contactsMap() async {
     final client = MatrixClientService.instance.client;
+    final userId = client.userID;
+    if (_memoryContactsOwner != userId) {
+      _memoryContacts = null;
+      _memoryContactsOwner = userId;
+    }
     final content = client.accountData[accountDataType]?.content;
     final rawContacts = content?['contacts'];
     if (rawContacts is! Map) {

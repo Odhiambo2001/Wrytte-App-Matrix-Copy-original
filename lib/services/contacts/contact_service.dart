@@ -9,7 +9,9 @@ import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/contacts/contact_directory_service.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_contact_service.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'user_search_service.dart';
 
@@ -195,6 +197,7 @@ class ContactService {
     await AuthService.instance
         .loginToMatrix(userId: ownerUserId, nickname: nickname)
         .timeout(const Duration(seconds: 35));
+    MatrixContactService.instance.clearCache();
     apkLog('Contact.save', 'Matrix session refresh done owner="$ownerUserId"');
   }
 
@@ -205,19 +208,44 @@ class ContactService {
   // Fetch contacts saved by this user from Matrix account data.
   // ──────────────────────────────────────────────────────────────────────
   Future<List<Contact>> getMatrixContacts(String ownerUserId) async {
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return [];
     try {
-      await syncLocalContactsToMatrix(ownerUserId);
+      final matrixReady = await _ensureMatrixContactSession(owner);
+      if (!matrixReady) {
+        debugPrint(
+          '[ContactService] Matrix contacts skipped: session not ready for $owner',
+        );
+        return ContactLocalDb.loadContacts(ownerUserId: owner);
+      }
+      await syncLocalContactsToMatrix(owner);
       final matrixContacts = await MatrixContactService.instance.loadContacts();
       final localContacts = await ContactLocalDb.loadContacts(
-        ownerUserId: ownerUserId,
+        ownerUserId: owner,
       );
       final contacts = _mergeContacts(matrixContacts, localContacts);
       debugPrint('Loaded ${contacts.length} contacts');
       return contacts;
     } catch (e) {
       debugPrint('Failed to load Matrix contacts: $e');
-      return ContactLocalDb.loadContacts(ownerUserId: ownerUserId);
+      return ContactLocalDb.loadContacts(ownerUserId: owner);
     }
+  }
+
+  Future<bool> _ensureMatrixContactSession(String ownerUserId) async {
+    final expected = _toMatrixUserId(ownerUserId);
+    var client = await MatrixAuthService.instance.restore();
+    if (client.userID == expected) return true;
+
+    if (client.isLogged()) {
+      debugPrint(
+        '[ContactService] Matrix contact session mismatch current="${client.userID}" expected="$expected"; clearing local Matrix client session.',
+      );
+      await MatrixClientService.instance.clearLocalSession();
+      MatrixContactService.instance.clearCache();
+      client = await MatrixAuthService.instance.restore();
+    }
+    return client.userID == expected;
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -432,6 +460,7 @@ class ContactService {
   }
 
   Future<void> syncLocalContactsToMatrix(String ownerUserId) async {
+    if (!await _ensureMatrixContactSession(ownerUserId)) return;
     final localContacts = await ContactLocalDb.loadContacts(
       ownerUserId: ownerUserId,
     );
@@ -451,6 +480,12 @@ class ContactService {
         );
       }
     }
+  }
+
+  String _toMatrixUserId(String userId) {
+    final trimmed = userId.trim();
+    if (trimmed.startsWith('@') && trimmed.contains(':')) return trimmed;
+    return '@${_matrixLocalpart(trimmed)}:${MatrixConfig.serverName}';
   }
 
   List<Contact> _mergeContacts(

@@ -77,6 +77,18 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
       });
 
       final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
+      if (currentUserId.trim().isEmpty) {
+        if (mounted) {
+          setState(() {
+            _wrytteContacts = [];
+            _nonWrytteContacts = [];
+            _filteredWrytte = [];
+            _filteredNonWrytte = [];
+            _isLoading = false;
+          });
+        }
+        return;
+      }
 
       final localContacts = await ContactLocalDb.loadContacts(
         ownerUserId: currentUserId,

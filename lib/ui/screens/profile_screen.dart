@@ -2,7 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui';
 import 'package:wrytte/components/user_avatar.dart';
+import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
+import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/contacts/contact_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/widgets/profile_tab_bar_section.dart';
 import 'edit_profile_screen.dart';
@@ -11,8 +16,17 @@ class ProfileScreen extends StatefulWidget {
   /// When null — shows the current logged-in user's own profile.
   /// When provided — shows another user's profile (read-only).
   final String? uid;
+  final String? fallbackName;
+  final String? fallbackPhone;
+  final String? fallbackAvatarUrl;
 
-  const ProfileScreen({super.key, this.uid});
+  const ProfileScreen({
+    super.key,
+    this.uid,
+    this.fallbackName,
+    this.fallbackPhone,
+    this.fallbackAvatarUrl,
+  });
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -24,6 +38,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _linksExpanded = false;
 
   UserProfile? _profile;
+  Contact? _savedContact;
+  String? _matrixDisplayName;
+  String? _matrixAvatarUrl;
   bool _profileLoading = true;
 
   late final TabController _tabController;
@@ -53,12 +70,115 @@ class _ProfileScreenState extends State<ProfileScreen>
         widget.uid != null
             ? await UserProfileService.instance.getProfileByUid(widget.uid!)
             : await UserProfileService.instance.getCurrentUserProfile();
+    final savedContact =
+        widget.uid != null ? await _findSavedContact(widget.uid!) : null;
+    final matrixProfile =
+        widget.uid != null ? await _loadMatrixProfile(widget.uid!) : null;
 
     if (!mounted) return;
     setState(() {
       _profile = profile;
+      _savedContact = savedContact;
+      _matrixDisplayName = matrixProfile?.$1;
+      _matrixAvatarUrl = matrixProfile?.$2;
       _profileLoading = false;
     });
+  }
+
+  Future<Contact?> _findSavedContact(String uid) async {
+    final ownerUserId = await AuthService.instance.getCurrentUserId();
+    if (ownerUserId == null || ownerUserId.isEmpty) return null;
+
+    final targetLocalpart = _matrixLocalpart(uid);
+    final contacts = await ContactService().getMatrixContactsCached(
+      ownerUserId,
+    );
+    for (final contact in contacts) {
+      final contactId = contact.wrytteUserId;
+      if (contactId == null || contactId.isEmpty) continue;
+      if (_matrixLocalpart(contactId) == targetLocalpart) return contact;
+    }
+    return null;
+  }
+
+  Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
+    try {
+      if (!MatrixClientService.instance.isLoggedIn) return null;
+      final matrixUserId = _toMatrixUserId(uid);
+      final profile = await MatrixClientService.instance.client
+          .getProfileFromUserId(
+            matrixUserId,
+            timeout: const Duration(seconds: 5),
+          );
+      return (profile.displayName, profile.avatarUrl?.toString());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _toMatrixUserId(String uid) {
+    final trimmed = uid.trim();
+    if (trimmed.startsWith('@') && trimmed.contains(':')) return trimmed;
+    return '@${_matrixLocalpart(trimmed)}:${MatrixConfig.serverName}';
+  }
+
+  String _matrixLocalpart(String value) {
+    final trimmed = value.trim();
+    if (trimmed.startsWith('@') && trimmed.contains(':')) {
+      return trimmed.substring(1, trimmed.indexOf(':'));
+    }
+    return trimmed;
+  }
+
+  bool _looksLikePhone(String value) {
+    final stripped = value.trim().replaceAll(RegExp(r'[\s\-()]'), '');
+    return stripped.startsWith('+') || RegExp(r'^\d{7,}$').hasMatch(stripped);
+  }
+
+  bool _looksLikeMatrixId(String value) {
+    final trimmed = value.trim();
+    final localpart = _matrixLocalpart(trimmed);
+    final looksLikeGeneratedUid = RegExp(
+      r'^[a-f0-9]{24,}$',
+      caseSensitive: false,
+    ).hasMatch(localpart);
+    return trimmed.startsWith('@') ||
+        trimmed.contains(':matrix.') ||
+        looksLikeGeneratedUid;
+  }
+
+  String _cleanName(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return '';
+    if (_looksLikePhone(trimmed) || _looksLikeMatrixId(trimmed)) return '';
+    return trimmed;
+  }
+
+  String _profileDisplayName() {
+    return _cleanName(_profile?.displayName).isNotEmpty
+        ? _cleanName(_profile?.displayName)
+        : _cleanName(_matrixDisplayName).isNotEmpty
+        ? _cleanName(_matrixDisplayName)
+        : _cleanName(_savedContact?.formattedName).isNotEmpty
+        ? _cleanName(_savedContact?.formattedName)
+        : _cleanName(widget.fallbackName).isNotEmpty
+        ? _cleanName(widget.fallbackName)
+        : 'User';
+  }
+
+  String _profilePhone() {
+    final candidates = [
+      _profile?.phone,
+      _savedContact?.primaryPhone,
+      widget.fallbackPhone,
+    ];
+    for (final value in candidates) {
+      final trimmed = value?.trim() ?? '';
+      if (trimmed.isNotEmpty && _looksLikePhone(trimmed)) {
+        return _formatPhone(trimmed);
+      }
+    }
+    return '';
   }
 
   String _formatPhone(String phone) {
@@ -109,10 +229,8 @@ class _ProfileScreenState extends State<ProfileScreen>
     final double statusBarHeight = MediaQuery.of(context).padding.top;
     final double topBarHeight = statusBarHeight + kToolbarHeight;
 
-    final String displayName =
-        _profileLoading ? '...' : (_profile?.displayName ?? 'User');
-    final String phone =
-        _profileLoading ? '' : _formatPhone(_profile?.phone ?? '');
+    final String displayName = _profileLoading ? '...' : _profileDisplayName();
+    final String phone = _profileLoading ? '' : _profilePhone();
     final String bioText = _profile?.bio ?? '';
     final List<String> links = _profile?.links ?? [];
 
@@ -140,8 +258,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                               imageUrl:
                                   _profile?.hasProfileImage == true
                                       ? _profile!.profileImage
-                                      : null,
-                              name: _profile?.displayName,
+                                      : (_matrixAvatarUrl ??
+                                          widget.fallbackAvatarUrl),
+                              name: displayName,
                             ),
 
                         const SizedBox(height: 12),
@@ -173,12 +292,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                         // ── Quick actions (other user only) ─────────────────
                         if (_isOtherUser) ...[
                           _buildQuickActions(),
-                          const SizedBox(height: 16),
-                          _buildContactDetails(),
-                          const SizedBox(height: 16),
-                          _buildMediaLinksDocsPreview(),
-                          const SizedBox(height: 8),
-                          _buildChatPreferenceRows(),
                           const SizedBox(height: 20),
                         ],
 
@@ -386,230 +499,6 @@ class _ProfileScreenState extends State<ProfileScreen>
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildContactDetails() {
-    final phone = _formatPhone(_profile?.phone ?? '');
-    final username = _profile?.username ?? '';
-    final uid = _profile?.uid ?? widget.uid ?? '';
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        children: [
-          if (phone.isNotEmpty)
-            _profileInfoRow(Icons.phone_outlined, 'Phone number', phone),
-          if (username.isNotEmpty)
-            _profileInfoRow(Icons.alternate_email, 'Username', username),
-          if (uid.isNotEmpty)
-            _profileInfoRow(Icons.key_outlined, 'Wrytte ID', uid),
-        ],
-      ),
-    );
-  }
-
-  Widget _profileInfoRow(IconData icon, String label, String value) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF15181E),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: Colors.white.withOpacity(0.62), size: 22),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.45),
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMediaLinksDocsPreview() {
-    return Padding(
-      padding: const EdgeInsets.only(left: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Row(
-              children: [
-                Text(
-                  'Media, links, and docs',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.62),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  '0',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.38),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                Icon(
-                  Icons.chevron_right,
-                  color: Colors.white.withOpacity(0.38),
-                  size: 26,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 96,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              itemBuilder: (context, index) => Container(
-                width: 110,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF15181E),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white.withOpacity(0.04)),
-                ),
-                child: Icon(
-                  index == 0
-                      ? Icons.photo_outlined
-                      : index == 1
-                          ? Icons.link_outlined
-                          : Icons.insert_drive_file_outlined,
-                  color: Colors.white.withOpacity(0.22),
-                  size: 30,
-                ),
-              ),
-              separatorBuilder: (_, __) => const SizedBox(width: 10),
-              itemCount: 3,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildChatPreferenceRows() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        children: [
-          _profileOption(
-            Icons.storage_outlined,
-            'Manage storage',
-            subtitle: 'Local media and message cache',
-          ),
-          _profileOption(Icons.photo_outlined, 'Media visibility'),
-          _profileOption(
-            Icons.timer_outlined,
-            'Disappearing messages',
-            subtitle: 'Off',
-          ),
-          _profileOption(
-            Icons.lock_outline,
-            'Chat lock',
-            subtitle: 'Lock and hide this chat on this device.',
-            trailing: Switch(
-              value: false,
-              onChanged: (_) {},
-              activeColor: const Color(0xFF4DA3FF),
-            ),
-          ),
-          _profileOption(
-            Icons.shield_outlined,
-            'Advanced chat privacy',
-            subtitle: 'Off',
-          ),
-          _profileOption(Icons.favorite_border, 'Add to Favorites'),
-          _profileOption(
-            Icons.remove_circle_outline,
-            'Clear chat',
-            destructive: true,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _profileOption(
-    IconData icon,
-    String title, {
-    String? subtitle,
-    Widget? trailing,
-    bool destructive = false,
-  }) {
-    final color = destructive ? const Color(0xFFFF6B6B) : Colors.white;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            color: destructive
-                ? color
-                : Colors.white.withOpacity(0.54),
-            size: 28,
-          ),
-          const SizedBox(width: 20),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.42),
-                      fontSize: 14,
-                      height: 1.25,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          if (trailing != null) trailing,
-        ],
       ),
     );
   }

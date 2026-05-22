@@ -151,7 +151,7 @@ class AuthService {
       final userId = client.userID;
       if (userId == null || userId.isEmpty) return;
       await client
-          .setProfileField(userId, 'm.displayname', {'displayname': name})
+          .setProfileField(userId, 'displayname', {'displayname': name})
           .timeout(const Duration(seconds: 3));
       apkLog('Matrix.auth', 'display name updated user_id="$userId"');
     } catch (e) {
@@ -611,7 +611,7 @@ class AuthService {
             : null;
     if (client?.userID != null) {
       try {
-        await client!.setProfileField(client.userID!, 'm.displayname', {
+        await client!.setProfileField(client.userID!, 'displayname', {
           'displayname': username.trim(),
         });
       } catch (e) {

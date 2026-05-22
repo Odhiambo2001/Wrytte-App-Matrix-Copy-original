@@ -6,6 +6,7 @@ import 'package:matrix/matrix.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
 import 'matrix_client.dart';
+import 'matrix_contact_service.dart';
 import 'server_discovery_service.dart';
 
 class MatrixAuthService {
@@ -150,6 +151,7 @@ class MatrixAuthService {
     } catch (e) {
       debugPrint('[MatrixAuth] logout error: $e');
     } finally {
+      MatrixContactService.instance.clearCache();
       await Future.wait([
         _storage.delete(key: matrixUserIdKey),
         _storage.delete(key: matrixAccessTokenKey),
@@ -165,6 +167,7 @@ class MatrixAuthService {
     } catch (e) {
       debugPrint('[MatrixAuth] clear local session error: $e');
     } finally {
+      MatrixContactService.instance.clearCache();
       await Future.wait([
         _storage.delete(key: matrixUserIdKey),
         _storage.delete(key: matrixAccessTokenKey),

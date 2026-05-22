@@ -249,6 +249,10 @@ class _ChatScreenState extends State<ChatScreen> {
         'ChatScreen.msgStream',
         'new msg id=${msg.id}  convId=${msg.conversationId}',
       );
+      if (_isMine(msg) && _isLocalOutgoingEchoId(msg.id)) {
+        apkLog('ChatScreen.reconcile', 'skip local outgoing echo id=${msg.id}');
+        return;
+      }
       setState(() => _upsertMessage(msg));
       if (!_isMine(msg)) {
         unawaited(_chat.markConversationAsRead(realConvId));
@@ -279,6 +283,8 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── PAGINATION ────────────────────────────────────────────────────────────
 
   void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    if (_scrollCtrl.position.maxScrollExtent <= 0) return;
     if (_scrollCtrl.position.pixels <= 80 && !_loadingOlder && _hasMoreOlder) {
       _loadOlderMessages();
     }
@@ -308,18 +314,26 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
 
-      final currentOffset = _scrollCtrl.position.pixels;
+      final previousMaxScrollExtent =
+          _scrollCtrl.hasClients ? _scrollCtrl.position.maxScrollExtent : 0.0;
       setState(() {
         final existingIds = _messages.map((m) => m.id).toSet();
         final newOnes =
             older.where((m) => !existingIds.contains(m.id)).toList();
+        if (newOnes.isEmpty) {
+          _hasMoreOlder = false;
+        }
         _messages.insertAll(0, newOnes);
         _loadingOlder = false;
       });
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scrollCtrl.hasClients) {
-          _scrollCtrl.jumpTo(_scrollCtrl.position.pixels + currentOffset);
+          final addedExtent =
+              _scrollCtrl.position.maxScrollExtent - previousMaxScrollExtent;
+          if (addedExtent > 0) {
+            _scrollCtrl.jumpTo(_scrollCtrl.position.pixels + addedExtent);
+          }
         }
       });
     } catch (e) {
@@ -630,7 +644,11 @@ class _ChatScreenState extends State<ChatScreen> {
         candidate.timestamp.difference(sent.timestamp).inSeconds.abs() < 60;
     return closeInTime &&
         (candidate.status == MessageStatus.sending ||
-            candidate.id.startsWith('opt_'));
+            _isLocalOutgoingEchoId(candidate.id));
+  }
+
+  bool _isLocalOutgoingEchoId(String id) {
+    return id.startsWith('opt_') || id.startsWith('Wrytte-');
   }
 
   Future<void> _showMessageActions(ChatMessage message) async {
@@ -1081,20 +1099,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildMessageList() {
     return Column(
       children: [
-        if (_loadingOlder)
-          const Padding(
-            padding: EdgeInsets.all(8),
-            child: SizedBox(
-              height: 20,
-              width: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Color(0xFF4DA3FF),
-              ),
-            ),
-          ),
         Expanded(
-          child:
+          child: Stack(
+            children: [
               _messages.isEmpty
                   ? Center(
                     child: Text(
@@ -1149,6 +1156,24 @@ class _ChatScreenState extends State<ChatScreen> {
                       );
                     },
                   ),
+              if (_loadingOlder)
+                const Positioned(
+                  top: 8,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFF4DA3FF),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ],
     );
@@ -1184,7 +1209,12 @@ class _ChatScreenState extends State<ChatScreen> {
                       () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => ProfileScreen(uid: widget.receiverId),
+                          builder:
+                              (_) => ProfileScreen(
+                                uid: widget.receiverId,
+                                fallbackName: widget.title,
+                                fallbackAvatarUrl: widget.avatarUrl,
+                              ),
                         ),
                       ),
                   child: SizedBox(
