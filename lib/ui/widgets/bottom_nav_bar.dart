@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:wrytte/components/user_avatar.dart';
@@ -25,26 +26,27 @@ class BottomNavBar extends StatefulWidget {
 
 class _BottomNavBarState extends State<BottomNavBar> {
   UserProfile? _profile;
+  StreamSubscription<UserProfile?>? _profileSub;
 
   @override
   void initState() {
     super.initState();
 
-    // ── Step 1: Show cached profile immediately (zero latency) ──────────
-    final cached = UserProfileService.instance.cachedProfile;
-    if (cached != null) {
-      _profile = cached;
-    }
-
-    // ── Step 2: Subscribe to real-time stream so any update (name,
-    //           avatar) reflects instantly without a hot-restart ─────────
-    UserProfileService.instance
+    // Subscribe to profile changes; the service validates that cached data
+    // belongs to the currently signed-in account before emitting it.
+    _profileSub = UserProfileService.instance
         .getCurrentUserProfileStream()
         .listen((profile) {
-      if (mounted && profile != null) {
-        setState(() => _profile = profile);
-      }
-    });
+          if (mounted && profile != null) {
+            setState(() => _profile = profile);
+          }
+        });
+  }
+
+  @override
+  void dispose() {
+    _profileSub?.cancel();
+    super.dispose();
   }
 
   @override
@@ -122,9 +124,10 @@ class _BottomNavBarState extends State<BottomNavBar> {
                               'assets/svg/coin_icon.png',
                               height: 26,
                               width: 26,
-                              color: widget.currentIndex == 0
-                                  ? Colors.white
-                                  : const Color(0xFF7A7A7A),
+                              color:
+                                  widget.currentIndex == 0
+                                      ? Colors.white
+                                      : const Color(0xFF7A7A7A),
                               colorBlendMode: BlendMode.srcIn,
                             ),
                           ),
@@ -144,9 +147,10 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                       : 'assets/svg/chat_icon.svg',
                                   height: 26,
                                   width: 26,
-                                  color: widget.currentIndex == 1
-                                      ? Colors.white
-                                      : const Color(0xFF7A7A7A),
+                                  color:
+                                      widget.currentIndex == 1
+                                          ? Colors.white
+                                          : const Color(0xFF7A7A7A),
                                 ),
                                 if (widget.totalUnreadCount > 0)
                                   Positioned(
@@ -193,9 +197,10 @@ class _BottomNavBarState extends State<BottomNavBar> {
                               'assets/svg/posts_icon.png',
                               height: 26,
                               width: 26,
-                              color: widget.currentIndex == 2
-                                  ? Colors.white
-                                  : const Color(0xFF7A7A7A),
+                              color:
+                                  widget.currentIndex == 2
+                                      ? Colors.white
+                                      : const Color(0xFF7A7A7A),
                               colorBlendMode: BlendMode.srcIn,
                             ),
                           ),
@@ -211,9 +216,10 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                   ? Icons.call
                                   : Icons.call_outlined,
                               size: 26,
-                              color: widget.currentIndex == 3
-                                  ? Colors.white
-                                  : const Color(0xFF7A7A7A),
+                              color:
+                                  widget.currentIndex == 3
+                                      ? Colors.white
+                                      : const Color(0xFF7A7A7A),
                             ),
                           ),
                           label: 'Calls',
@@ -226,13 +232,14 @@ class _BottomNavBarState extends State<BottomNavBar> {
                             isAvatar: true,
                             child: UserAvatar(
                               size: 28,
-                              imageUrl: _profile?.hasProfileImage == true
-                                  ? _profile!.profileImage
-                                  : null,
+                              imageUrl:
+                                  _profile?.hasProfileImage == true
+                                      ? _profile!.profileImage
+                                      : null,
                               name: _profile?.displayName,
                             ),
                           ),
-                          label: 'You',
+                          label: _profileTabLabel(),
                         ),
                       ],
                     ),
@@ -244,6 +251,14 @@ class _BottomNavBarState extends State<BottomNavBar> {
         ),
       ],
     );
+  }
+
+  String _profileTabLabel() {
+    final name = _profile?.displayName.trim() ?? '';
+    if (name.isEmpty) return 'You';
+    final firstName = name.split(RegExp(r'\s+')).first;
+    if (firstName.length <= 10) return firstName;
+    return '${firstName.substring(0, 10)}...';
   }
 }
 

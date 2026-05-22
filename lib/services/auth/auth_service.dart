@@ -33,6 +33,12 @@ class StoredAuthProfile {
 
   bool get hasUsableName =>
       username.trim().length >= 2 &&
+      !{'user', 'uder', 'unknown'}.contains(username.trim().toLowerCase()) &&
+      !RegExp(r'^[a-f0-9]{24,}$', caseSensitive: false).hasMatch(
+        username.trim().startsWith('@')
+            ? username.trim().substring(1).split(':').first
+            : username.trim().split(':').first,
+      ) &&
       !RegExp(
         r'^\+?\d{6,}$',
       ).hasMatch(username.trim().replaceAll(RegExp(r'[\s\-()+]'), ''));
@@ -174,14 +180,20 @@ class AuthService {
     String? token,
     DateTime? expiresAt,
   }) async {
-    // Never overwrite a real stored name with a phone-number fallback.
+    // Never carry a different account's name into this session, and never
+    // overwrite this account's archived real name with a generated fallback.
+    final currentUserId = await _storage.read(key: _userIdKey);
     final currentName = await _storage.read(key: _usernameKey);
     final currentToken = await _storage.read(key: _tokenKey);
     final normalizedPhone = _normalizePhone(phone);
+    final archivedProfile = await findArchivedProfileByPhone(normalizedPhone);
     final nameToSave =
-        (currentName != null && !_looksLikePhone(currentName))
-            ? currentName.trim()
-            : username.trim();
+        _firstRealProfileName([
+          if (currentUserId == userId) currentName,
+          archivedProfile?.username,
+          username,
+        ]) ??
+        username.trim();
     final tokenToSave =
         (token != null && token.trim().isNotEmpty)
             ? token.trim()
@@ -456,13 +468,18 @@ class AuthService {
       final expiresAt = DateTime.tryParse(
         (response['expires'] ?? '').toString(),
       );
+      final profileNameToSave = _firstRealProfileName([
+        refreshedUsername,
+        archivedProfile?.username,
+        await getCurrentUsername(),
+      ]);
 
       final writes = <Future<void>>[
         _storage.write(key: _tokenKey, value: refreshedToken),
         if (refreshedUserId.isNotEmpty)
           _storage.write(key: _userIdKey, value: refreshedUserId),
-        if (refreshedUsername.isNotEmpty)
-          _storage.write(key: _usernameKey, value: refreshedUsername),
+        if (profileNameToSave != null)
+          _storage.write(key: _usernameKey, value: profileNameToSave),
         if (refreshedSecret.isNotEmpty)
           _storage.write(key: _secretKey, value: refreshedSecret),
       ];
@@ -478,9 +495,7 @@ class AuthService {
               ? refreshedUserId
               : archivedProfile?.userId ?? '';
       final archiveUsername =
-          refreshedUsername.isNotEmpty
-              ? refreshedUsername
-              : archivedProfile?.username ?? '';
+          profileNameToSave ?? archivedProfile?.username ?? '';
       if (archivePhone.isNotEmpty &&
           archiveUserId.isNotEmpty &&
           archiveUsername.isNotEmpty) {
@@ -533,7 +548,7 @@ class AuthService {
     final cleanUsername = username.trim();
     if (normalizedPhone.isEmpty ||
         cleanUserId.isEmpty ||
-        cleanUsername.isEmpty) {
+        !_hasRealProfileName(cleanUsername)) {
       return;
     }
 
@@ -583,10 +598,19 @@ class AuthService {
 
   Future<StoredAuthProfile?> hydrateStoredProfile(String userId) async {
     final savedUserId = await getCurrentUserId();
-    if (savedUserId != userId) return null;
-    final username = await getCurrentUsername() ?? '';
-    final phone = _normalizePhone(await getSavedPhone() ?? '');
-    return StoredAuthProfile(userId: userId, username: username, phone: phone);
+    if (savedUserId == userId) {
+      final username = await getCurrentUsername() ?? '';
+      final phone = _normalizePhone(await getSavedPhone() ?? '');
+      if (_hasRealProfileName(username)) {
+        return StoredAuthProfile(
+          userId: userId,
+          username: username.trim(),
+          phone: phone,
+        );
+      }
+    }
+
+    return _findArchivedProfileByUserId(userId);
   }
 
   // ---------------------------------------------------------------------------
@@ -632,14 +656,26 @@ class AuthService {
   // ---------------------------------------------------------------------------
   Future<void> logout() async {
     _matrixBootstrapGeneration++;
-    await ChatService().reset();
-    await logoutFromMatrix();
+    try {
+      await ChatService().reset().timeout(const Duration(seconds: 3));
+    } catch (e) {
+      debugPrint('[AuthService] Chat reset timeout/error during logout: $e');
+    }
+    try {
+      await logoutFromMatrix().timeout(const Duration(seconds: 3));
+    } catch (e) {
+      debugPrint('[AuthService] Matrix logout timeout/error; continuing: $e');
+    }
     try {
       await _firebaseAuth.signOut();
     } catch (e) {
       debugPrint('[AuthService] Firebase sign-out error: $e');
     }
-    await _storage.deleteAll();
+    try {
+      await _storage.deleteAll();
+    } catch (e) {
+      debugPrint('[AuthService] secure storage clear failed: $e');
+    }
   }
 
   Future<void> signOutFirebase() async {
@@ -702,5 +738,62 @@ class AuthService {
   bool _looksLikePhone(String value) {
     final s = value.replaceAll(RegExp(r'[\s\-()+]'), '');
     return RegExp(r'^\d{6,}$').hasMatch(s);
+  }
+
+  bool _hasRealProfileName(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.length < 2) return false;
+    final lowered = trimmed.toLowerCase();
+    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+      return false;
+    }
+    if (_looksLikePhone(trimmed)) return false;
+    final localpart =
+        trimmed.startsWith('@')
+            ? trimmed.substring(1).split(':').first
+            : trimmed.split(':').first;
+    if (RegExp(r'^[a-f0-9]{24,}$', caseSensitive: false).hasMatch(localpart)) {
+      return false;
+    }
+    return true;
+  }
+
+  String? _firstRealProfileName(Iterable<String?> names) {
+    for (final name in names) {
+      if (_hasRealProfileName(name)) return name!.trim();
+    }
+    return null;
+  }
+
+  Future<StoredAuthProfile?> _findArchivedProfileByUserId(String userId) async {
+    final cleanUserId = userId.trim();
+    if (cleanUserId.isEmpty) return null;
+
+    final archive = await _readProfileArchive();
+    for (final entry in archive.entries) {
+      final raw = entry.value;
+      if (raw is! Map) continue;
+      final archivedUserId = raw['userId']?.toString().trim() ?? '';
+      if (archivedUserId != cleanUserId) continue;
+
+      final username = raw['username']?.toString().trim() ?? '';
+      if (!_hasRealProfileName(username)) continue;
+
+      final secret = raw['secret']?.toString().trim() ?? '';
+      final token = raw['token']?.toString().trim();
+      final expiresAt = DateTime.tryParse(
+        raw['expiresAt']?.toString().trim() ?? '',
+      );
+      return StoredAuthProfile(
+        userId: cleanUserId,
+        username: username,
+        phone: entry.key,
+        secret: secret,
+        token: _looksLikeJwt(token) ? token : null,
+        expiresAt: expiresAt,
+      );
+    }
+
+    return null;
   }
 }

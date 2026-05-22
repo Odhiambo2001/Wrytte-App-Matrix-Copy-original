@@ -20,12 +20,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _formKey = GlobalKey<FormState>();
 
   final TextEditingController _firstNameController = TextEditingController();
-  final TextEditingController _lastNameController  = TextEditingController();
-  final TextEditingController _bioController       = TextEditingController();
-  final TextEditingController _linkController      = TextEditingController();
+  final TextEditingController _lastNameController = TextEditingController();
+  final TextEditingController _bioController = TextEditingController();
+  final TextEditingController _linkController = TextEditingController();
 
-  bool _isLoading    = false;
-  bool _isSaving     = false;
+  bool _isLoading = false;
+  bool _isSaving = false;
   bool _isLoggingOut = false;
 
   File? _pickedImageFile;
@@ -47,13 +47,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (profile != null) {
       final nameParts = profile.name.trim().split(RegExp(r'\s+'));
       _firstNameController.text = nameParts.isNotEmpty ? nameParts[0] : '';
-      _lastNameController.text  =
+      _lastNameController.text =
           nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
-      _bioController.text  = profile.bio;
+      _bioController.text = profile.bio;
       _linkController.text = profile.links.isNotEmpty ? profile.links[0] : '';
       _currentImageUrl = profile.hasProfileImage ? profile.profileImage : null;
     }
-    setState(() { _profile = profile; _isLoading = false; });
+    setState(() {
+      _profile = profile;
+      _isLoading = false;
+    });
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -65,20 +68,36 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF23262C),
-      builder: (_) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(
-            leading: const Icon(Icons.photo, color: Colors.white),
-            title: const Text('Gallery', style: TextStyle(color: Colors.white)),
-            onTap: () { Navigator.pop(context); _pickImage(ImageSource.gallery); },
+      builder:
+          (_) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.photo, color: Colors.white),
+                  title: const Text(
+                    'Gallery',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _pickImage(ImageSource.gallery);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.camera_alt, color: Colors.white),
+                  title: const Text(
+                    'Camera',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _pickImage(ImageSource.camera);
+                  },
+                ),
+              ],
+            ),
           ),
-          ListTile(
-            leading: const Icon(Icons.camera_alt, color: Colors.white),
-            title: const Text('Camera', style: TextStyle(color: Colors.white)),
-            onTap: () { Navigator.pop(context); _pickImage(ImageSource.camera); },
-          ),
-        ]),
-      ),
     );
   }
 
@@ -86,12 +105,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     try {
       final uid = await AuthService.instance.getCurrentUserId();
       if (uid == null || uid.isEmpty) return null;
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('user_profile_images/$uid.jpg');
+      final ref = FirebaseStorage.instance.ref().child(
+        'user_profile_images/$uid.jpg',
+      );
       await ref.putFile(file);
       return await ref.getDownloadURL();
-    } catch (e) { return null; }
+    } catch (e) {
+      return null;
+    }
   }
 
   Future<void> _save() async {
@@ -113,14 +134,20 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         }
       }
       final firstName = _firstNameController.text.trim();
-      final lastName  = _lastNameController.text.trim();
-      final fullName  = [firstName, lastName].where((s) => s.isNotEmpty).join(' ');
-      final bio  = _bioController.text.trim();
+      final lastName = _lastNameController.text.trim();
+      final fullName = [
+        firstName,
+        lastName,
+      ].where((s) => s.isNotEmpty).join(' ');
+      final bio = _bioController.text.trim();
       final link = _linkController.text.trim();
       final existingLinks = List<String>.from(_profile?.links ?? []);
       if (link.isNotEmpty) {
-        if (existingLinks.isEmpty) existingLinks.add(link);
-        else existingLinks[0] = link;
+        if (existingLinks.isEmpty) {
+          existingLinks.add(link);
+        } else {
+          existingLinks[0] = link;
+        }
       } else {
         if (existingLinks.isNotEmpty) existingLinks.removeAt(0);
       }
@@ -130,9 +157,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         bio: bio,
         links: existingLinks,
       );
-      await UserProfileService.instance.getCurrentUserProfile(forceRefresh: true);
+      await UserProfileService.instance.getCurrentUserProfile(
+        forceRefresh: true,
+      );
       if (!mounted) return;
-      setState(() { _currentImageUrl = newImageUrl; _pickedImageFile = null; _isSaving = false; });
+      setState(() {
+        _currentImageUrl = newImageUrl;
+        _pickedImageFile = null;
+        _isSaving = false;
+      });
       _showSnack('Profile updated successfully.');
     } catch (e) {
       if (!mounted) return;
@@ -150,20 +183,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     try {
       await AuthService.instance.logout();
-    } catch (e) {
-      debugPrint('[Logout] Auth logout error (skipping): $e');
-    }
-
-    try {
       UserProfileService.instance.clearCache();
     } catch (e) {
-      debugPrint('[Logout] Cache error (skipping): $e');
+      debugPrint('[Logout] Auth logout error (skipping): $e');
+      UserProfileService.instance.clearCache();
     }
 
     try {
-      await ChatLocalDb.instance
-          .clearAll()
-          .timeout(const Duration(seconds: 5));
+      await ChatLocalDb.instance.clearAll().timeout(const Duration(seconds: 5));
     } catch (e) {
       debugPrint('[Logout] Chat DB error (skipping): $e');
     }
@@ -178,19 +205,30 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   void _showSnack(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(message),
-      backgroundColor: isError ? const Color(0xFFE05252) : const Color(0xFF4DA3FF),
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor:
+            isError ? const Color(0xFFE05252) : const Color(0xFF4DA3FF),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      ),
+    );
   }
 
   Widget _divider() => const Divider(
-      height: 1, thickness: 0.4, color: Color(0xFF3A3D44), indent: 16);
+    height: 1,
+    thickness: 0.4,
+    color: Color(0xFF3A3D44),
+    indent: 16,
+  );
 
-  Widget _inputRow(String hint, TextEditingController ctrl, {int maxLines = 1}) {
+  Widget _inputRow(
+    String hint,
+    TextEditingController ctrl, {
+    int maxLines = 1,
+  }) {
     return TextFormField(
       controller: ctrl,
       maxLines: maxLines,
@@ -198,9 +236,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: const TextStyle(color: Color(0xFF6B6E75), fontSize: 16),
-        border: InputBorder.none, enabledBorder: InputBorder.none,
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
         focusedBorder: InputBorder.none,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 16,
+        ),
       ),
     );
   }
@@ -209,25 +251,31 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const bg     = Color(0xFF08090B);
+    const bg = Color(0xFF08090B);
     const cardBg = Color(0xFF23262C);
     const accent = Color(0xFF4DA3FF);
 
-    Widget avatarWidget = _pickedImageFile != null
-        ? GestureDetector(
-            onTap: _showImageOptions,
-            child: ClipOval(
-              child: Image.file(_pickedImageFile!,
-                  width: 100, height: 100, fit: BoxFit.cover),
-            ),
-          )
-        : GestureDetector(
-            onTap: _showImageOptions,
-            child: UserAvatar(
+    Widget avatarWidget =
+        _pickedImageFile != null
+            ? GestureDetector(
+              onTap: _showImageOptions,
+              child: ClipOval(
+                child: Image.file(
+                  _pickedImageFile!,
+                  width: 100,
+                  height: 100,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            )
+            : GestureDetector(
+              onTap: _showImageOptions,
+              child: UserAvatar(
                 size: 100,
                 imageUrl: _currentImageUrl,
-                name: _profile?.displayName),
-          );
+                name: _profile?.displayName,
+              ),
+            );
 
     return Scaffold(
       backgroundColor: bg,
@@ -242,167 +290,257 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             TextButton(
               onPressed: () => Navigator.pop(context),
               style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-              child: const Text('Cancel',
-                  style: TextStyle(color: Colors.white, fontSize: 17)),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Colors.white, fontSize: 17),
+              ),
             ),
             TextButton(
               onPressed: _isSaving ? null : _save,
               style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-              child: _isSaving
-                  ? const SizedBox(
-                      width: 16, height: 16,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
-                  : const Text('Save',
-                      style: TextStyle(color: Colors.white, fontSize: 17)),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child:
+                  _isSaving
+                      ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                      : const Text(
+                        'Save',
+                        style: TextStyle(color: Colors.white, fontSize: 17),
+                      ),
             ),
           ],
         ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(
-              color: Color(0xFF4DA3FF), strokeWidth: 2))
-          : SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    const SizedBox(height: 20),
-                    avatarWidget,
-                    const SizedBox(height: 10),
-                    GestureDetector(
-                      onTap: _showImageOptions,
-                      child: const Text('Set new photo',
-                          style: TextStyle(color: accent, fontSize: 16)),
-                    ),
-                    const SizedBox(height: 28),
-
-                    // Name
-                    Container(
-                      decoration: BoxDecoration(
-                          color: cardBg, borderRadius: BorderRadius.circular(20)),
-                      child: Column(children: [
-                        _inputRow('First name', _firstNameController),
-                        _divider(),
-                        _inputRow('Last name', _lastNameController),
-                      ]),
-                    ),
-                    const SizedBox(height: 12),
-
-                    // Bio
-                    Container(
-                      decoration: BoxDecoration(
-                          color: cardBg, borderRadius: BorderRadius.circular(25)),
-                      child: _inputRow('Bio', _bioController),
-                    ),
-                    const SizedBox(height: 12),
-
-                    // Link
-                    Container(
-                      decoration: BoxDecoration(
-                          color: cardBg, borderRadius: BorderRadius.circular(25)),
-                      child: _inputRow('Link', _linkController),
-                    ),
-                    const SizedBox(height: 12),
-
-                    // Account info
-                    Container(
-                      decoration: BoxDecoration(
-                          color: cardBg, borderRadius: BorderRadius.circular(20)),
-                      child: Column(children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 14),
-                          child: Row(children: [
-                            const Text('Change number',
-                                style: TextStyle(
-                                    color: Color(0xFF6B6E75), fontSize: 16)),
-                            const Spacer(),
-                            Text(_profile?.phone ?? '',
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 16)),
-                            const SizedBox(width: 4),
-                            const Icon(Icons.chevron_right,
-                                color: Color(0xFF6B6E75), size: 20),
-                          ]),
-                        ),
-                        _divider(),
-                        InkWell(onTap: () {},
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 14),
-                            child: Row(children: const [
-                              Text('Channel', style: TextStyle(
-                                  color: Color(0xFF6B6E75), fontSize: 16)),
-                              Spacer(),
-                              Text('Add', style: TextStyle(
-                                  color: Colors.white, fontSize: 16)),
-                              SizedBox(width: 4),
-                              Icon(Icons.chevron_right,
-                                  color: Color(0xFF6B6E75), size: 20),
-                            ]),
-                          ),
-                        ),
-                        _divider(),
-                        InkWell(onTap: () {},
-                          borderRadius: const BorderRadius.only(
-                              bottomLeft: Radius.circular(14),
-                              bottomRight: Radius.circular(14)),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 14),
-                            child: Row(children: const [
-                              Text('Group', style: TextStyle(
-                                  color: Color(0xFF6B6E75), fontSize: 16)),
-                              Spacer(),
-                              Text('Add', style: TextStyle(
-                                  color: Colors.white, fontSize: 16)),
-                              SizedBox(width: 4),
-                              Icon(Icons.chevron_right,
-                                  color: Color(0xFF6B6E75), size: 20),
-                            ]),
-                          ),
-                        ),
-                      ]),
-                    ),
-                    const SizedBox(height: 28),
-
-                    // ── LOG OUT BUTTON ────────────────────────────────────
-                    GestureDetector(
-                      onTap: _isLoggingOut ? null : _logout,
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        decoration: BoxDecoration(
-                            color: cardBg,
-                            borderRadius: BorderRadius.circular(25)),
-                        child: Center(
-                          child: _isLoggingOut
-                              ? const SizedBox(
-                                  width: 20, height: 20,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Color(0xFFE05252)))
-                              : const Text('Log out',
-                                  style: TextStyle(
-                                      color: Color(0xFFE05252),
-                                      fontSize: 16)),
+      body:
+          _isLoading
+              ? const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF4DA3FF),
+                  strokeWidth: 2,
+                ),
+              )
+              : SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const SizedBox(height: 20),
+                      avatarWidget,
+                      const SizedBox(height: 10),
+                      GestureDetector(
+                        onTap: _showImageOptions,
+                        child: const Text(
+                          'Set new photo',
+                          style: TextStyle(color: accent, fontSize: 16),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 40),
-                  ],
+                      const SizedBox(height: 28),
+
+                      // Name
+                      Container(
+                        decoration: BoxDecoration(
+                          color: cardBg,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Column(
+                          children: [
+                            _inputRow('First name', _firstNameController),
+                            _divider(),
+                            _inputRow('Last name', _lastNameController),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Bio
+                      Container(
+                        decoration: BoxDecoration(
+                          color: cardBg,
+                          borderRadius: BorderRadius.circular(25),
+                        ),
+                        child: _inputRow('Bio', _bioController),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Link
+                      Container(
+                        decoration: BoxDecoration(
+                          color: cardBg,
+                          borderRadius: BorderRadius.circular(25),
+                        ),
+                        child: _inputRow('Link', _linkController),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Account info
+                      Container(
+                        decoration: BoxDecoration(
+                          color: cardBg,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Column(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 14,
+                              ),
+                              child: Row(
+                                children: [
+                                  const Text(
+                                    'Change number',
+                                    style: TextStyle(
+                                      color: Color(0xFF6B6E75),
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  Text(
+                                    _profile?.phone ?? '',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Icon(
+                                    Icons.chevron_right,
+                                    color: Color(0xFF6B6E75),
+                                    size: 20,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            _divider(),
+                            InkWell(
+                              onTap: () {},
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 14,
+                                ),
+                                child: Row(
+                                  children: const [
+                                    Text(
+                                      'Channel',
+                                      style: TextStyle(
+                                        color: Color(0xFF6B6E75),
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    Spacer(),
+                                    Text(
+                                      'Add',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    SizedBox(width: 4),
+                                    Icon(
+                                      Icons.chevron_right,
+                                      color: Color(0xFF6B6E75),
+                                      size: 20,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            _divider(),
+                            InkWell(
+                              onTap: () {},
+                              borderRadius: const BorderRadius.only(
+                                bottomLeft: Radius.circular(14),
+                                bottomRight: Radius.circular(14),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 14,
+                                ),
+                                child: Row(
+                                  children: const [
+                                    Text(
+                                      'Group',
+                                      style: TextStyle(
+                                        color: Color(0xFF6B6E75),
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    Spacer(),
+                                    Text(
+                                      'Add',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    SizedBox(width: 4),
+                                    Icon(
+                                      Icons.chevron_right,
+                                      color: Color(0xFF6B6E75),
+                                      size: 20,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 28),
+
+                      // ── LOG OUT BUTTON ────────────────────────────────────
+                      GestureDetector(
+                        onTap: _isLoggingOut ? null : _logout,
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          decoration: BoxDecoration(
+                            color: cardBg,
+                            borderRadius: BorderRadius.circular(25),
+                          ),
+                          child: Center(
+                            child:
+                                _isLoggingOut
+                                    ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Color(0xFFE05252),
+                                      ),
+                                    )
+                                    : const Text(
+                                      'Log out',
+                                      style: TextStyle(
+                                        color: Color(0xFFE05252),
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 40),
+                    ],
+                  ),
                 ),
               ),
-            ),
     );
   }
 

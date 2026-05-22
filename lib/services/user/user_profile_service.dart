@@ -13,10 +13,10 @@ class UserProfileService {
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   );
 
-  static const _nameKey         = 'username';
-  static const _phoneKey        = 'phone';
+  static const _nameKey = 'username';
+  static const _phoneKey = 'phone';
   static const _profileImageKey = 'profile_image';
-  static const _bioKey          = 'user_bio';
+  static const _bioKey = 'user_bio';
 
   // In-memory cache — survives the widget lifecycle, cleared on logout
   UserProfile? _cache;
@@ -30,7 +30,10 @@ class UserProfileService {
   Future<UserProfile?> getCurrentUserProfile({
     bool forceRefresh = false,
   }) async {
-    if (_cache != null && !forceRefresh) return _cache;
+    if (_cache != null && !forceRefresh) {
+      final uid = await AuthService.instance.getCurrentUserId();
+      if (uid != null && uid.isNotEmpty && _cache!.uid == uid) return _cache;
+    }
     return _readFromStorage();
   }
 
@@ -85,7 +88,10 @@ class UserProfileService {
   /// (e.g. after the user saves a new name or avatar).
   Stream<UserProfile?> getCurrentUserProfileStream() async* {
     // Emit cached value instantly so the UI has zero-latency first frame
-    if (_cache != null) yield _cache;
+    final uid = await AuthService.instance.getCurrentUserId();
+    if (_cache != null && uid != null && uid.isNotEmpty && _cache!.uid == uid) {
+      yield _cache;
+    }
 
     // Then yield a fresh read from secure storage
     final fresh = await _readFromStorage();
@@ -129,38 +135,39 @@ class UserProfileService {
 
   Future<UserProfile?> _readFromStorage() async {
     try {
-      final uid   = await AuthService.instance.getCurrentUserId();
+      final uid = await AuthService.instance.getCurrentUserId();
       if (uid == null || uid.isEmpty) return null;
 
-      final phone        = _normalizePhone(
-        await _storage.read(key: _phoneKey) ?? '',
-      );
-      var name           = await _storage.read(key: _nameKey)         ?? '';
-      if (_looksLikePhone(name) || name.trim().isEmpty) {
-        final archived = await AuthService.instance.findArchivedProfileByPhone(
-          phone,
-        );
-        if (archived != null && archived.hasUsableName) {
-          name = archived.username;
+      final phone = _normalizePhone(await _storage.read(key: _phoneKey) ?? '');
+      var name = await _storage.read(key: _nameKey) ?? '';
+      if (!_hasRealName(name)) {
+        await AuthService.instance.getValidBackendToken();
+        name = await _storage.read(key: _nameKey) ?? name;
+      }
+      if (!_hasRealName(name)) {
+        final restored = await AuthService.instance.hydrateStoredProfile(uid);
+        if (restored != null && restored.hasUsableName) {
+          name = restored.username;
           await _storage.write(key: _nameKey, value: name);
         }
       }
       final profileImage = await _storage.read(key: _profileImageKey) ?? '';
-      final bio          = await _storage.read(key: _bioKey)          ?? '';
-      final linksRaw     = await _storage.read(key: 'user_links')     ?? '';
+      final bio = await _storage.read(key: _bioKey) ?? '';
+      final linksRaw = await _storage.read(key: 'user_links') ?? '';
 
       final profile = UserProfile(
-        uid:          uid,
-        name:         name,
-        username:     name,   // username == display name in this app
-        phone:        phone,
-        bio:          bio,
+        uid: uid,
+        name: name,
+        username: name, // username == display name in this app
+        phone: phone,
+        bio: bio,
         profileImage: profileImage,
-        links:        linksRaw
-            .split('\n')
-            .map((link) => link.trim())
-            .where((link) => link.isNotEmpty)
-            .toList(),
+        links:
+            linksRaw
+                .split('\n')
+                .map((link) => link.trim())
+                .where((link) => link.isNotEmpty)
+                .toList(),
       );
 
       _cache = profile;
@@ -183,5 +190,23 @@ class UserProfileService {
   bool _looksLikePhone(String value) {
     final s = value.trim().replaceAll(RegExp(r'[\s\-()+]'), '');
     return RegExp(r'^\d{6,}$').hasMatch(s);
+  }
+
+  bool _hasRealName(String value) {
+    final trimmed = value.trim();
+    if (trimmed.length < 2) return false;
+    final lowered = trimmed.toLowerCase();
+    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+      return false;
+    }
+    if (_looksLikePhone(trimmed)) return false;
+    final localpart =
+        trimmed.startsWith('@')
+            ? trimmed.substring(1).split(':').first
+            : trimmed.split(':').first;
+    return !RegExp(
+      r'^[a-f0-9]{24,}$',
+      caseSensitive: false,
+    ).hasMatch(localpart);
   }
 }

@@ -37,10 +37,9 @@ class RealNumberService {
     final phone = _toFullInternational(fullPhone);
     debugPrint('[RealNumberService] sendSmsCode → $phone');
 
-    await ApiService.postMultipart(
-      '/auth/register/sendsmscode',
-      {'phone': phone},
-    );
+    await ApiService.postMultipart('/auth/register/sendsmscode', {
+      'phone': phone,
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -80,10 +79,12 @@ class RealNumberService {
       );
     } on ApiException catch (e) {
       if (e.statusCode == 409) {
-        debugPrint('[RealNumberService] 409 — user exists, attempting login with stored secret');
+        debugPrint(
+          '[RealNumberService] 409 — user exists, attempting login with stored secret',
+        );
 
-        final archivedProfile =
-            await AuthService.instance.findArchivedProfileByPhone(phone);
+        final archivedProfile = await AuthService.instance
+            .findArchivedProfileByPhone(phone);
         final storedSecret = await AuthService.instance.getStoredSecret();
         final archivedSecret = archivedProfile?.secret.trim() ?? '';
 
@@ -95,22 +96,27 @@ class RealNumberService {
         }
 
         if (archivedSecret.isNotEmpty) {
-          debugPrint('[RealNumberService] 409 — logging in with archived secret');
+          debugPrint(
+            '[RealNumberService] 409 — logging in with archived secret',
+          );
           return login_(secret: archivedSecret, phone: phone);
         }
 
         // No stored secret — user exists but this may be a fresh install or a
         // local-storage reset. Rehydrate from secure local profile storage
         // before falling back to the phone number.
-        final remoteProfile =
-            await AuthService.instance.findUserProfileByPhone(phone);
+        final remoteProfile = await AuthService.instance.findUserProfileByPhone(
+          phone,
+        );
         final localUserId = await AuthService.instance.getCurrentUserId();
         final localUsername = await AuthService.instance.getCurrentUsername();
-        final existingUserId = remoteProfile?.userId ??
+        final existingUserId =
+            remoteProfile?.userId ??
             archivedProfile?.userId ??
             localUserId ??
             '';
-        final existingUsername = _firstRealName([
+        final existingUsername =
+            _firstRealName([
               remoteProfile?.username,
               archivedProfile?.username,
               localUsername,
@@ -125,9 +131,18 @@ class RealNumberService {
             phone: phone,
             secret: '',
           );
+        } else {
+          throw Exception(
+            'This phone already has an account, but the server did not return '
+            'the saved profile. Please sign in with the existing account '
+            'session or ask the backend to return userid, username, token, '
+            'and secret after OTP verification.',
+          );
         }
 
-        debugPrint('[RealNumberService] 409 no secret — display name: "$displayName"');
+        debugPrint(
+          '[RealNumberService] 409 no secret — display name: "$displayName"',
+        );
 
         return RealNumberRegisterResult(
           username: displayName,
@@ -147,10 +162,9 @@ class RealNumberService {
   Future<void> sendEmailCode(String email) async {
     debugPrint('[RealNumberService] sendEmailCode → $email');
 
-    await ApiService.postMultipart(
-      '/auth/register/sendemailcode',
-      {'email': email.trim().toLowerCase()},
-    );
+    await ApiService.postMultipart('/auth/register/sendemailcode', {
+      'email': email.trim().toLowerCase(),
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -164,7 +178,9 @@ class RealNumberService {
     String nickname = '',
     bool login = true,
   }) async {
-    debugPrint('[RealNumberService] registerVirtualPhone → "$email" / "$phone"');
+    debugPrint(
+      '[RealNumberService] registerVirtualPhone → "$email" / "$phone"',
+    );
 
     final fields = <String, String>{
       'email': email.trim().toLowerCase(),
@@ -174,7 +190,10 @@ class RealNumberService {
       'login': login.toString(),
     };
 
-    final response = await ApiService.postMultipart('/auth/register/vpn', fields);
+    final response = await ApiService.postMultipart(
+      '/auth/register/vpn',
+      fields,
+    );
     return _handleRegisterResponse(
       response,
       fallbackPhone: phone,
@@ -230,22 +249,26 @@ class RealNumberService {
       throw Exception(map['error'] as String);
     }
 
-    final remoteProfile =
-        await AuthService.instance.findUserProfileByPhone(fallbackPhone);
-    final archivedProfile =
-        await AuthService.instance.findArchivedProfileByPhone(fallbackPhone);
+    final remoteProfile = await AuthService.instance.findUserProfileByPhone(
+      fallbackPhone,
+    );
+    final archivedProfile = await AuthService.instance
+        .findArchivedProfileByPhone(fallbackPhone);
     final storedUserId = await AuthService.instance.getCurrentUserId();
     final storedName = await AuthService.instance.getCurrentUsername();
 
-    final userId = (map['userid'] as String? ??
-            map['userId'] as String? ??
-            archivedProfile?.userId ??
-            remoteProfile?.userId ??
-            storedUserId ??
-            '')
-        .trim();
+    final userId =
+        (map['userid'] as String? ??
+                map['userId'] as String? ??
+                archivedProfile?.userId ??
+                remoteProfile?.userId ??
+                storedUserId ??
+                '')
+            .trim();
     final rawUsername =
-        (map['username'] as String? ?? archivedProfile?.username ?? fallbackPhone)
+        (map['username'] as String? ??
+                archivedProfile?.username ??
+                fallbackPhone)
             .trim();
     final secret = (map['secret'] as String? ?? '').trim();
     final token = (map['token'] as String? ?? '').trim();
@@ -255,11 +278,12 @@ class RealNumberService {
       throw Exception('Invalid server response: missing userid.');
     }
 
+    final storedNameForUser = storedUserId == userId ? storedName : null;
     final displayName = _resolveDisplayName(
       _firstRealName([
-            storedName,
-            remoteProfile?.username,
             archivedProfile?.username,
+            storedNameForUser,
+            remoteProfile?.username,
             rawUsername,
           ]) ??
           rawUsername,
@@ -269,8 +293,12 @@ class RealNumberService {
     // isNewUser: true only when registering AND no real name is stored yet
     bool isNewUser = false;
     if (serverIndicatesNewUser) {
-      isNewUser = !_hasRealName(storedName);
-      debugPrint('[RealNumberService] isNewUser=$isNewUser (storedName="$storedName")');
+      isNewUser =
+          !_hasRealName(storedNameForUser) &&
+          !_hasRealName(archivedProfile?.username);
+      debugPrint(
+        '[RealNumberService] isNewUser=$isNewUser (storedName="$storedName")',
+      );
     }
 
     await AuthService.instance.persistPhoneSession(
@@ -308,7 +336,19 @@ class RealNumberService {
   // ---------------------------------------------------------------------------
   bool _hasRealName(String? name) {
     if (name == null || name.trim().length < 2) return false;
-    final stripped = name.trim().replaceAll(RegExp(r'[\s\-]'), '');
+    final trimmed = name.trim();
+    final lowered = trimmed.toLowerCase();
+    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+      return false;
+    }
+    final stripped = trimmed.replaceAll(RegExp(r'[\s\-]'), '');
+    final localpart =
+        trimmed.startsWith('@')
+            ? trimmed.substring(1).split(':').first
+            : trimmed.split(':').first;
+    if (RegExp(r'^[a-f0-9]{24,}$', caseSensitive: false).hasMatch(localpart)) {
+      return false;
+    }
     return !RegExp(r'^\+?\d{6,}$').hasMatch(stripped);
   }
 
@@ -334,9 +374,13 @@ class RealNumberService {
       final candidate = digits.substring(0, len);
       final country = countries.firstWhere(
         (c) => c.dialCode == candidate,
-        orElse: () => const Country(
-          name: '', isoCode: '', dialCode: '__none__', flag: '',
-        ),
+        orElse:
+            () => const Country(
+              name: '',
+              isoCode: '',
+              dialCode: '__none__',
+              flag: '',
+            ),
       );
       if (country.dialCode != '__none__' && len > bestLen) {
         bestLen = len;
@@ -356,7 +400,9 @@ class RealNumberService {
       return '${bestMatch.areaCode}${bestMatch.localNumber}';
     }
 
-    debugPrint('[RealNumberService] no dial-code match, using raw digits: $digits');
+    debugPrint(
+      '[RealNumberService] no dial-code match, using raw digits: $digits',
+    );
     return digits;
   }
 }
