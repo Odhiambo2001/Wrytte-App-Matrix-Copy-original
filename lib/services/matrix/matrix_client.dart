@@ -89,4 +89,10 @@ class MatrixClientService {
       await matrix.clear();
     }
   }
+
+  Future<void> clearLocalSession() async {
+    final matrix = _client;
+    if (matrix == null) return;
+    await matrix.clear();
+  }
 }

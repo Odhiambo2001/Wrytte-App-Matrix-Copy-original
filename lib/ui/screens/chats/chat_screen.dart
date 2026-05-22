@@ -567,26 +567,70 @@ class _ChatScreenState extends State<ChatScreen> {
         orElse: () => msg,
       );
       if (optimistic.id != entry.value) continue;
+      if (optimistic.status != MessageStatus.sending) continue;
+      if (!_isMine(optimistic)) continue;
       final sameContent = optimistic.content == msg.content;
+      final sameConversation =
+          optimistic.conversationId == msg.conversationId ||
+          optimistic.conversationId == widget.conversationId ||
+          optimistic.conversationId == _resolvedConversationId;
       final sameReceiver =
           optimistic.receiverId == msg.receiverId ||
-          optimistic.receiverId == msg.senderId;
+          optimistic.receiverId == msg.senderId ||
+          _matrixLocalpart(optimistic.receiverId) ==
+              _matrixLocalpart(msg.receiverId) ||
+          _matrixLocalpart(optimistic.receiverId) ==
+              _matrixLocalpart(msg.senderId);
       final closeInTime =
-          msg.timestamp.difference(optimistic.timestamp).inSeconds.abs() < 30;
-      if (sameContent && sameReceiver && closeInTime) return optimistic.id;
+          msg.timestamp.difference(optimistic.timestamp).inSeconds.abs() < 60;
+      final ownMatrixEcho =
+          _isMine(msg) && sameContent && sameConversation && closeInTime;
+      if ((sameContent && sameReceiver && closeInTime) || ownMatrixEcho) {
+        apkLog(
+          'ChatScreen.reconcile',
+          'replace optimistic id=${optimistic.id} with Matrix id=${msg.id}',
+        );
+        return optimistic.id;
+      }
     }
     return null;
   }
 
+  String _matrixLocalpart(String value) {
+    final trimmed = value.trim();
+    if (trimmed.startsWith('@') && trimmed.contains(':')) {
+      return trimmed.substring(1, trimmed.indexOf(':'));
+    }
+    return trimmed;
+  }
+
   void _replaceOptimisticMessage(String optimisticId, ChatMessage sent) {
+    _messages.removeWhere((m) => m.id == sent.id && m.id != optimisticId);
     final idx = _messages.indexWhere((m) => m.id == optimisticId);
     if (idx != -1) {
       _messages[idx] = sent;
     } else {
       _upsertMessage(sent);
     }
+    _messages.removeWhere((m) => _isDuplicateOutgoingEcho(m, sent));
     _optimisticIdByContent.removeWhere((_, id) => id == optimisticId);
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+  }
+
+  bool _isDuplicateOutgoingEcho(ChatMessage candidate, ChatMessage sent) {
+    if (candidate.id == sent.id) return false;
+    if (!_isMine(candidate) || !_isMine(sent)) return false;
+    if (candidate.content != sent.content) return false;
+    final sameConversation =
+        candidate.conversationId == sent.conversationId ||
+        candidate.conversationId == widget.conversationId ||
+        candidate.conversationId == _resolvedConversationId;
+    if (!sameConversation) return false;
+    final closeInTime =
+        candidate.timestamp.difference(sent.timestamp).inSeconds.abs() < 60;
+    return closeInTime &&
+        (candidate.status == MessageStatus.sending ||
+            candidate.id.startsWith('opt_'));
   }
 
   Future<void> _showMessageActions(ChatMessage message) async {

@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 import 'matrix_client.dart';
 import 'server_discovery_service.dart';
@@ -9,9 +12,7 @@ class MatrixAuthService {
   MatrixAuthService._();
   static final MatrixAuthService instance = MatrixAuthService._();
 
-  final FlutterSecureStorage _storage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
   final ServerDiscoveryService _discovery = ServerDiscoveryService();
 
   static const matrixUserIdKey = 'matrix_user_id';
@@ -20,20 +21,38 @@ class MatrixAuthService {
   static const matrixDeviceIdKey = 'matrix_device_id';
 
   Future<Client> restore() async {
+    apkLog('Matrix.auth', 'restore start');
     final client = await MatrixClientService.instance.ensureInitialized();
-    if (client.isLogged()) return client;
+    if (client.isLogged()) {
+      apkLog(
+        'Matrix.auth',
+        'restore already logged user_id="${client.userID}"',
+      );
+      return client;
+    }
 
     final userId = await _storage.read(key: matrixUserIdKey);
     final token = await _storage.read(key: matrixAccessTokenKey);
     final homeserver = await _storage.read(key: matrixHomeserverKey);
     final deviceId = await _storage.read(key: matrixDeviceIdKey);
-    if (userId == null || token == null || homeserver == null) return client;
+    if (userId == null || token == null || homeserver == null) {
+      apkLog('Matrix.auth', 'restore no stored Matrix session');
+      return client;
+    }
 
+    apkLog(
+      'Matrix.auth',
+      'restore credentials user_id="$userId" homeserver="$homeserver"',
+    );
     await MatrixClientService.instance.initWithCredentials(
       homeserver: Uri.parse(homeserver),
       userId: userId,
       accessToken: token,
       deviceId: deviceId,
+    );
+    apkLog(
+      'Matrix.auth',
+      'restore ready logged=${MatrixClientService.instance.client.isLogged()} user_id="${MatrixClientService.instance.client.userID}"',
     );
     return MatrixClientService.instance.client;
   }
@@ -44,19 +63,42 @@ class MatrixAuthService {
     String? homeserver,
     String? deviceName,
   }) async {
-    final client = await MatrixClientService.instance.ensureInitialized();
-    final baseUri = await _discovery.resolveHomeserver(
-      userIdOrDomain: homeserver ?? username,
+    apkLog(
+      'Matrix.auth',
+      'resolve homeserver input="${homeserver ?? username}"',
     );
-    await client.checkHomeserver(baseUri);
-    final response = await client.login(
-      LoginType.mLoginPassword,
-      identifier: AuthenticationUserIdentifier(user: username),
-      user: username,
-      password: password,
-      initialDeviceDisplayName: deviceName ?? 'Wrytte',
+    final client = await MatrixClientService.instance.ensureInitialized();
+    final baseUri = await _discovery
+        .resolveHomeserver(userIdOrDomain: homeserver ?? username)
+        .timeout(const Duration(seconds: 5));
+    apkLog('Matrix.auth', 'resolved homeserver="$baseUri"');
+    try {
+      await client.checkHomeserver(baseUri).timeout(const Duration(seconds: 5));
+      apkLog('Matrix.auth', 'homeserver check ok "$baseUri"');
+    } on TimeoutException catch (e) {
+      apkLog(
+        'Matrix.auth',
+        'homeserver check timeout; continuing homeserver="$baseUri" error="$e"',
+      );
+    }
+    apkLog('Matrix.auth', 'password login call user_id="$username"');
+    final response = await client
+        .login(
+          LoginType.mLoginPassword,
+          identifier: AuthenticationUserIdentifier(user: username),
+          password: password,
+          initialDeviceDisplayName: deviceName ?? 'Wrytte',
+        )
+        .timeout(const Duration(seconds: 25));
+    apkLog(
+      'Matrix.auth',
+      'password login response user_id="${client.userID}" device_id="${client.deviceID}"',
     );
     await _persist(client);
+    apkLog(
+      'Matrix.auth',
+      'password login persisted user_id="${client.userID}"',
+    );
     return response;
   }
 
@@ -66,18 +108,39 @@ class MatrixAuthService {
     String? homeserver,
     String? deviceName,
   }) async {
-    final client = await MatrixClientService.instance.ensureInitialized();
-    final baseUri = await _discovery.resolveHomeserver(
-      userIdOrDomain: homeserver ?? username,
+    apkLog(
+      'Matrix.auth',
+      'resolve homeserver for register input="${homeserver ?? username}"',
     );
-    await client.checkHomeserver(baseUri);
-    final response = await client.register(
-      username: username,
-      password: password,
-      initialDeviceDisplayName: deviceName ?? 'Wrytte',
-      inhibitLogin: false,
+    final client = await MatrixClientService.instance.ensureInitialized();
+    final baseUri = await _discovery
+        .resolveHomeserver(userIdOrDomain: homeserver ?? username)
+        .timeout(const Duration(seconds: 5));
+    apkLog('Matrix.auth', 'resolved register homeserver="$baseUri"');
+    try {
+      await client.checkHomeserver(baseUri).timeout(const Duration(seconds: 5));
+      apkLog('Matrix.auth', 'register homeserver check ok "$baseUri"');
+    } on TimeoutException catch (e) {
+      apkLog(
+        'Matrix.auth',
+        'register homeserver check timeout; continuing homeserver="$baseUri" error="$e"',
+      );
+    }
+    apkLog('Matrix.auth', 'register call user_id="$username"');
+    final response = await client
+        .register(
+          username: username,
+          password: password,
+          initialDeviceDisplayName: deviceName ?? 'Wrytte',
+          inhibitLogin: false,
+        )
+        .timeout(const Duration(seconds: 25));
+    apkLog(
+      'Matrix.auth',
+      'register response user_id="${client.userID}" device_id="${client.deviceID}"',
     );
     await _persist(client);
+    apkLog('Matrix.auth', 'register persisted user_id="${client.userID}"');
     return response;
   }
 
@@ -86,6 +149,21 @@ class MatrixAuthService {
       await MatrixClientService.instance.logout();
     } catch (e) {
       debugPrint('[MatrixAuth] logout error: $e');
+    } finally {
+      await Future.wait([
+        _storage.delete(key: matrixUserIdKey),
+        _storage.delete(key: matrixAccessTokenKey),
+        _storage.delete(key: matrixHomeserverKey),
+        _storage.delete(key: matrixDeviceIdKey),
+      ]);
+    }
+  }
+
+  Future<void> clearLocalSession() async {
+    try {
+      await MatrixClientService.instance.clearLocalSession();
+    } catch (e) {
+      debugPrint('[MatrixAuth] clear local session error: $e');
     } finally {
       await Future.wait([
         _storage.delete(key: matrixUserIdKey),
@@ -106,7 +184,8 @@ class MatrixAuthService {
       _storage.write(key: matrixUserIdKey, value: userId),
       _storage.write(key: matrixAccessTokenKey, value: accessToken),
       _storage.write(key: matrixHomeserverKey, value: homeserver.toString()),
-      if (deviceId != null) _storage.write(key: matrixDeviceIdKey, value: deviceId),
+      if (deviceId != null)
+        _storage.write(key: matrixDeviceIdKey, value: deviceId),
     ]);
     await MatrixClientService.instance.initWithCredentials(
       homeserver: homeserver,

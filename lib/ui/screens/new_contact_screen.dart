@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
 import 'package:wrytte/ui/screens/Country%20id%20picker%20page.dart';
 import 'package:wrytte/utils/countries_id.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 // ─────────────────────────────────────────────────────────────────
 // Colours
@@ -290,6 +292,10 @@ class _NewContactPageState extends State<NewContactPage> {
 
     try {
       final String selfId = await AuthService.instance.getCurrentUserId() ?? '';
+      apkLog(
+        'NewContact.save',
+        'save tapped self="$selfId" name="${_firstNameCtrl.text.trim()} ${_lastNameCtrl.text.trim()}" identifier="$_fullIdentifier" resolvedUserId="$_resolvedUserId" lookupState=$_lookupState',
+      );
       debugPrint('🧑 selfUserId in _save: $selfId');
       debugPrint('identifier=$_fullIdentifier');
       debugPrint('resolvedUserId=$_resolvedUserId');
@@ -298,6 +304,10 @@ class _NewContactPageState extends State<NewContactPage> {
           'You cannot add your own Wrytte account as a contact.',
         );
       }
+      apkLog('NewContact.save', 'connecting Matrix before contact save');
+      await ChatService().connect();
+      apkLog('NewContact.save', 'Matrix connected; saving contact');
+
       final saved = await _contactService.saveManualContact(
         firstName: _firstNameCtrl.text.trim(),
         lastName: _lastNameCtrl.text.trim(),
@@ -311,13 +321,16 @@ class _NewContactPageState extends State<NewContactPage> {
       );
 
       if (!mounted) return;
+      apkLog(
+        'NewContact.save',
+        'save success name="${saved.formattedName}" wrytteUserId="${saved.wrytteUserId}" phone="${saved.primaryPhone}"',
+      );
 
       final receiverId = saved.wrytteUserId ?? '';
-      final normalizedReceiverId = (receiverId.isNotEmpty
-              ? receiverId
-              : _fullIdentifier)
-          .replaceAll(RegExp(r'[^\d]'), '');
-      final ids = [selfId, normalizedReceiverId]..sort();
+      final ids = [
+        _conversationKey(selfId),
+        _conversationKey(receiverId.isNotEmpty ? receiverId : _fullIdentifier),
+      ]..sort();
       final conversationId = 'si_${ids[0]}_${ids[1]}';
 
       // Always navigate to chat — whether on Wrytte or not
@@ -328,7 +341,7 @@ class _NewContactPageState extends State<NewContactPage> {
               (_) => ChatScreen(
                 conversationId: conversationId,
                 receiverId:
-                    receiverId.isNotEmpty ? receiverId : normalizedReceiverId,
+                    receiverId.isNotEmpty ? receiverId : _fullIdentifier,
                 currentUserId: selfId,
                 title: saved.formattedName,
                 avatarUrl: saved.avatarUrl,
@@ -337,6 +350,7 @@ class _NewContactPageState extends State<NewContactPage> {
       );
     } catch (e) {
       debugPrint('Save contact error: $e');
+      apkLog('NewContact.save', 'save FAILED error="$e"');
       if (!mounted) return;
       setState(() {
         _isSaving = false;
@@ -354,6 +368,10 @@ class _NewContactPageState extends State<NewContactPage> {
     if (raw.contains('not authenticated')) {
       return 'Session expired — please log in again.';
     }
+    if (raw.toLowerCase().contains('matrix') ||
+        raw.toLowerCase().contains('timeout')) {
+      return 'Matrix contact save failed. Check connection and try again.';
+    }
     return 'Something went wrong. Please try again.';
   }
 
@@ -364,6 +382,11 @@ class _NewContactPageState extends State<NewContactPage> {
       return trimmed.substring(1, trimmed.indexOf(':'));
     }
     return trimmed;
+  }
+
+  String _conversationKey(String value) {
+    final localpart = _matrixLocalpart(value) ?? value.trim();
+    return localpart.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
   }
 
   String _friendlyLookupError(String raw) {

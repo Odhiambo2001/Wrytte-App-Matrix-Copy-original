@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/ui/auth/country_picker_page.dart';
 import 'package:wrytte/ui/screens/terms_privacy_page.dart';
@@ -28,11 +29,9 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   final RealNumberService _realNumberService = RealNumberService();
 
   bool _isSending = false;
+  Future<void>? _sendCodeFuture;
   bool _showDivider = false;
   bool _isAutoFilling = false;
-
-  /// Dial code
-  String get _dialCode => _selectedCountry?.dialCode ?? '';
 
   /// Full phone number
   String get _fullPhone {
@@ -123,10 +122,21 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
 
   /// Start verification
   Future<void> _startVerification() async {
-    if (!_isValid || _isSending) return;
+    if (!_isValid || _isSending || _sendCodeFuture != null) return;
 
     setState(() => _isSending = true);
 
+    final future = _sendVerificationCode();
+    _sendCodeFuture = future;
+    try {
+      await future;
+    } finally {
+      _sendCodeFuture = null;
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  Future<void> _sendVerificationCode() async {
     try {
       await _realNumberService.sendSmsCode(_fullPhone);
 
@@ -142,18 +152,38 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
               ),
         ),
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[PhoneAuthPage] send verification failed: $e');
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Failed to send verification code."),
+        SnackBar(
+          content: Text(_verificationErrorMessage(e)),
           backgroundColor: Colors.red,
         ),
       );
-    } finally {
-      if (mounted) setState(() => _isSending = false);
     }
+  }
+
+  String _verificationErrorMessage(Object error) {
+    if (error is ApiException) {
+      final body = error.message.trim();
+      if (body.isNotEmpty) {
+        return 'Failed to send code (${error.statusCode}): $body';
+      }
+      return 'Failed to send code (${error.statusCode}).';
+    }
+
+    final raw = error.toString().toLowerCase();
+    if (raw.contains('timeout')) {
+      return 'Request timed out. Please try again.';
+    }
+    if (raw.contains('socket') ||
+        raw.contains('network') ||
+        raw.contains('connection')) {
+      return 'No internet connection. Please check your network.';
+    }
+    return 'Failed to send verification code.';
   }
 
   @override
@@ -419,7 +449,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                                   : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor:
-                                _isValid
+                                _isValid && !_isSending
                                     ? const Color(0xFF4DA3FF)
                                     : const Color(0xFF23262C),
                             disabledBackgroundColor: const Color(0xFF23262C),

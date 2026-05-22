@@ -58,12 +58,14 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
   void _onSearchChanged() {
     final query = _searchController.text.toLowerCase();
     setState(() {
-      _filteredWrytte = _wrytteContacts
-          .where((c) => c.formattedName.toLowerCase().contains(query))
-          .toList();
-      _filteredNonWrytte = _nonWrytteContacts
-          .where((c) => c.formattedName.toLowerCase().contains(query))
-          .toList();
+      _filteredWrytte =
+          _wrytteContacts
+              .where((c) => c.formattedName.toLowerCase().contains(query))
+              .toList();
+      _filteredNonWrytte =
+          _nonWrytteContacts
+              .where((c) => c.formattedName.toLowerCase().contains(query))
+              .toList();
     });
   }
 
@@ -74,16 +76,15 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         _error = '';
       });
 
-      final currentUserId =
-          await AuthService.instance.getCurrentUserId() ?? '';
+      final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
 
-      final localContacts =
-          await ContactLocalDb.loadContacts(ownerUserId: currentUserId);
+      final localContacts = await ContactLocalDb.loadContacts(
+        ownerUserId: currentUserId,
+      );
 
       if (mounted && localContacts.isNotEmpty) {
         setState(() {
-          _wrytteContacts =
-              localContacts.where((c) => c.isOnWrytte).toList();
+          _wrytteContacts = localContacts.where((c) => c.isOnWrytte).toList();
           _nonWrytteContacts =
               localContacts.where((c) => !c.isOnWrytte).toList();
           _filteredWrytte = _wrytteContacts;
@@ -92,8 +93,9 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         });
       }
 
-      final matrixContacts =
-          await _contactService.getMatrixContacts(currentUserId);
+      final matrixContacts = await _contactService.getMatrixContacts(
+        currentUserId,
+      );
 
       await ContactLocalDb.saveContacts(
         matrixContacts,
@@ -102,8 +104,7 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
 
       if (mounted) {
         setState(() {
-          _wrytteContacts =
-              matrixContacts.where((c) => c.isOnWrytte).toList();
+          _wrytteContacts = matrixContacts.where((c) => c.isOnWrytte).toList();
           _nonWrytteContacts =
               matrixContacts.where((c) => !c.isOnWrytte).toList();
           _filteredWrytte = _wrytteContacts;
@@ -127,11 +128,17 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
   }
 
   String _generateConversationId(String id1, String id2) {
-    final ids = [
-      id1.replaceAll(RegExp(r'[^\d]'), ''),
-      id2.replaceAll(RegExp(r'[^\d]'), ''),
-    ]..sort();
+    final ids = [_conversationKey(id1), _conversationKey(id2)]..sort();
     return 'si_${ids[0]}_${ids[1]}';
+  }
+
+  String _conversationKey(String value) {
+    final trimmed = value.trim();
+    final localpart =
+        trimmed.startsWith('@') && trimmed.contains(':')
+            ? trimmed.substring(1, trimmed.indexOf(':'))
+            : trimmed;
+    return localpart.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
   }
 
   void _navigateToChatScreen(Contact contact) async {
@@ -148,12 +155,13 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          conversationId: conversationId,
-          receiverId: contact.wrytteUserId!,
-          currentUserId: currentUserId,
-          title: contact.formattedName,
-        ),
+        builder:
+            (_) => ChatScreen(
+              conversationId: conversationId,
+              receiverId: contact.wrytteUserId!,
+              currentUserId: currentUserId,
+              title: contact.formattedName,
+            ),
       ),
     );
   }
@@ -161,9 +169,10 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
   Map<String, List<Contact>> _groupByAlphabet(List<Contact> contacts) {
     final Map<String, List<Contact>> grouped = {};
     for (final contact in contacts) {
-      final letter = contact.formattedName.isNotEmpty
-          ? contact.formattedName[0].toUpperCase()
-          : '#';
+      final letter =
+          contact.formattedName.isNotEmpty
+              ? contact.formattedName[0].toUpperCase()
+              : '#';
       grouped.putIfAbsent(letter, () => []).add(contact);
     }
     final keys = grouped.keys.toList()..sort();

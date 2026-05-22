@@ -1,10 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
 import 'package:wrytte/services/contacts/contact_directory_service.dart';
-import 'package:wrytte/services/matrix/matrix_auth_service.dart';
-import 'package:wrytte/services/matrix/matrix_client.dart';
-
 
 class UserSearchService {
   static const registeredWithoutMatrixId =
@@ -31,12 +27,13 @@ class UserSearchService {
     }
 
     try {
-      final allIdentifiers = phonesToSend
-          .split('|')
-          .map((p) => p.trim())
-          .where((p) => p.isNotEmpty)
-          .toSet()
-          .toList();
+      final allIdentifiers =
+          phonesToSend
+              .split('|')
+              .map((p) => p.trim())
+              .where((p) => p.isNotEmpty)
+              .toSet()
+              .toList();
 
       final result = <String, String>{};
       final pendingDirectory = <String, String>{};
@@ -45,13 +42,6 @@ class UserSearchService {
         final cached = _readCache(normalized);
         if (cached != null) {
           _addLookupKeys(result, identifier, cached);
-          continue;
-        }
-
-        final matrixUserId = await _findMatrixUserId(identifier);
-        if (matrixUserId != null && matrixUserId.isNotEmpty) {
-          _writeCache(normalized, matrixUserId);
-          _addLookupKeys(result, identifier, matrixUserId);
           continue;
         }
 
@@ -66,9 +56,11 @@ class UserSearchService {
         for (final entry in pendingDirectory.entries) {
           final phone = entry.key;
           final identifier = entry.value;
-          final directoryResult = resolved[phone] ?? resolved[_digitsOnly(phone)];
+          final directoryResult =
+              resolved[phone] ?? resolved[_digitsOnly(phone)];
           if (directoryResult != null && directoryResult.isOnWrytte) {
-            final resolvedUserId = directoryResult.matrixUserId ??
+            final resolvedUserId =
+                directoryResult.matrixUserId ??
                 directoryResult.userId ??
                 registeredWithoutMatrixId;
             _writeCache(phone, resolvedUserId);
@@ -79,36 +71,13 @@ class UserSearchService {
       return result;
     } on ContactDirectoryUnavailable {
       rethrow;
-    } on TimeoutException catch (e) {
-      debugPrint('Matrix user search timed out: $e');
+    } on TimeoutException {
       throw const ContactDirectoryUnavailable(
         'Wrytte contact search timed out.',
       );
     } catch (e) {
-      debugPrint('Matrix user search failed: $e');
       throw Exception("User search error: $e");
     }
-  }
-
-  Future<String?> _findMatrixUserId(String identifier) async {
-    try {
-      await MatrixAuthService.instance.restore();
-      final client = MatrixClientService.instance.client;
-      if (!client.isLogged()) return null;
-
-      for (final queryIdentifier in _matrixLookupQueries(identifier)) {
-        final query = queryIdentifier.trim();
-        if (query.length < 3) continue;
-        final response = await client.searchUserDirectory(query, limit: 10);
-        for (final user in response.results) {
-          final userId = user.userId;
-          if (userId.isNotEmpty) return userId;
-        }
-      }
-    } catch (e) {
-      debugPrint('Matrix user directory search failed: $e');
-    }
-    return null;
   }
 
   String _normalizePhone(String phone) {
@@ -125,17 +94,6 @@ class UserSearchService {
     final digits = trimmed.replaceAll(RegExp(r'[^\d]'), '');
     if (digits.length >= 6) return _normalizePhone(digits);
     return trimmed;
-  }
-
-  Iterable<String> _matrixLookupQueries(String identifier) sync* {
-    final trimmed = identifier.trim();
-    if (trimmed.isEmpty) return;
-    yield trimmed;
-    final digits = trimmed.replaceAll(RegExp(r'[^\d]'), '');
-    if (digits.length >= 6) {
-      yield _normalizePhone(digits);
-      yield digits;
-    }
   }
 
   void _addLookupKeys(
@@ -171,10 +129,7 @@ class UserSearchService {
 
   void _writeCache(String key, String userId) {
     if (key.isEmpty || userId.isEmpty) return;
-    _cache[key] = _LookupCacheEntry(
-      userId: userId,
-      createdAt: DateTime.now(),
-    );
+    _cache[key] = _LookupCacheEntry(userId: userId, createdAt: DateTime.now());
   }
 }
 
@@ -182,8 +137,5 @@ class _LookupCacheEntry {
   final String userId;
   final DateTime createdAt;
 
-  const _LookupCacheEntry({
-    required this.userId,
-    required this.createdAt,
-  });
+  const _LookupCacheEntry({required this.userId, required this.createdAt});
 }

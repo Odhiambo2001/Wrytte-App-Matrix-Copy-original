@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'matrix_auth_service.dart';
 import 'matrix_client.dart';
 import 'matrix_config.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class MatrixChatService {
   MatrixChatService._();
@@ -67,14 +68,24 @@ class MatrixChatService {
     final client = MatrixClientService.instance.client;
     if (!client.isLogged()) return;
 
-    final invites =
+    final invitedRooms =
         client.rooms
             .where((room) => room.membership == Membership.invite)
-            .where(_isTrustedDirectInvite)
             .toList();
+
+    apkLog(
+      'Matrix.join',
+      'checking invites count=${invitedRooms.length} user_id="${client.userID}"',
+    );
+
+    final invites = invitedRooms.where(_isTrustedDirectInvite).toList();
 
     for (final room in invites) {
       try {
+        apkLog(
+          'Matrix.join',
+          'joining invite room_id="${room.id}" directUser="${room.directChatMatrixID}" user_id="${client.userID}"',
+        );
         await room.join().timeout(const Duration(seconds: 12));
         await client
             .waitForRoomInSync(room.id, join: true)
@@ -86,8 +97,15 @@ class MatrixChatService {
                 );
               },
             );
+        apkLog(
+          'Matrix.join',
+          'joined invite room_id="${room.id}" user_id="${client.userID}"',
+        );
       } catch (_) {
-        // A failed invite join should not block the chat list or message send.
+        apkLog(
+          'Matrix.join',
+          'join invite failed room_id="${room.id}" user_id="${client.userID}"',
+        );
       }
     }
   }
@@ -132,6 +150,10 @@ class MatrixChatService {
 
   Future<Room> _getOrCreateDirectRoom(String matrixUserId) async {
     final client = await connect();
+    apkLog(
+      'Matrix.createRoom',
+      'session userID="${client.userID}" serverName="${MatrixConfig.serverName}" target="$matrixUserId"',
+    );
     if (!client.isLogged()) {
       throw StateError('Matrix session is not available.');
     }
@@ -144,6 +166,10 @@ class MatrixChatService {
     var room = _directRoomFor(matrixUserId, includeInvite: true);
     final inviteRoom = room;
     if (inviteRoom != null && inviteRoom.membership == Membership.invite) {
+      apkLog(
+        'Matrix.join',
+        'joining invited direct room room_id="${inviteRoom.id}" user_id="${client.userID}" target="$matrixUserId"',
+      );
       await inviteRoom.join().timeout(const Duration(seconds: 12));
       await client
           .waitForRoomInSync(inviteRoom.id, join: true)
@@ -157,20 +183,48 @@ class MatrixChatService {
           );
       room = getRoomById(inviteRoom.id);
     }
-    if (room != null && room.membership == Membership.join) return room;
+    if (room != null && room.membership == Membership.join) {
+      apkLog(
+        'Matrix.createRoom',
+        'reusing joined direct room room_id="${room.id}" user_id="${client.userID}" target="$matrixUserId"',
+      );
+      return room;
+    }
 
     // Another path may have joined/created the room while we were syncing.
     room = _directRoomFor(matrixUserId, includeInvite: true);
-    if (room != null && room.membership == Membership.join) return room;
+    if (room != null && room.membership == Membership.join) {
+      apkLog(
+        'Matrix.createRoom',
+        'reusing joined direct room room_id="${room.id}" user_id="${client.userID}" target="$matrixUserId"',
+      );
+      return room;
+    }
 
     late final String roomId;
     try {
+      apkLog(
+        'Matrix.createRoom',
+        'POST /_matrix/client/r0/createRoom user_id="${client.userID}" invite=["$matrixUserId"] is_direct=true target="$matrixUserId"',
+      );
       roomId = await client.startDirectChat(matrixUserId, waitForSync: false);
+      apkLog(
+        'Matrix.createRoom',
+        'Creating new room roomID="$roomId" userID="${client.userID}" target="$matrixUserId"',
+      );
     } catch (e) {
+      apkLog(
+        'Matrix.createRoom',
+        'createRoom failed user_id="${client.userID}" target="$matrixUserId" error="$e"',
+      );
       if (!_looksLikeAlreadyJoinedRoomError(e)) rethrow;
       await ensureSyncedAndAutoJoinInvites(forceSync: true);
       final createdRoom = _directRoomFor(matrixUserId, includeInvite: true);
       if (createdRoom != null && createdRoom.membership == Membership.join) {
+        apkLog(
+          'Matrix.createRoom',
+          'resolved already-joined room room_id="${createdRoom.id}" user_id="${client.userID}" target="$matrixUserId"',
+        );
         return createdRoom;
       }
       throw StateError(
@@ -192,6 +246,11 @@ class MatrixChatService {
     if (room == null) {
       throw StateError('Matrix room $roomId was not available after sync.');
     }
+    await _ensureDirectPeerInvited(room, matrixUserId);
+    apkLog(
+      'Matrix.createRoom',
+      'room ready room_id="${room.id}" roomID="$roomId" user_id="${client.userID}" target="$matrixUserId"',
+    );
     return room;
   }
 
@@ -201,7 +260,21 @@ class MatrixChatService {
   }) async {
     final room = getRoomById(roomId);
     if (room == null) throw StateError('Unknown Matrix room: $roomId');
-    return room.sendTextEvent(body);
+    final eventId = await room.sendTextEvent(body);
+    apkLog(
+      'Matrix.send',
+      'Sent event to roomserver event_id="$eventId" room_id="$roomId" user_id="${MatrixClientService.instance.client.userID}" type="m.room.message"',
+    );
+    return eventId;
+  }
+
+  Future<void> ensurePeerInvited({
+    required String roomId,
+    required String matrixUserId,
+  }) async {
+    final room = getRoomById(roomId);
+    if (room == null) throw StateError('Unknown Matrix room: $roomId');
+    await _ensureDirectPeerInvited(room, matrixUserId);
   }
 
   Future<String?> sendDirectText({
@@ -209,7 +282,12 @@ class MatrixChatService {
     required String body,
   }) async {
     final room = await getOrCreateDirectRoom(matrixUserId);
-    return room.sendTextEvent(body);
+    final eventId = await room.sendTextEvent(body);
+    apkLog(
+      'Matrix.send',
+      'Sent event to roomserver event_id="$eventId" room_id="${room.id}" user_id="${MatrixClientService.instance.client.userID}" type="m.room.message"',
+    );
+    return eventId;
   }
 
   Future<String?> sendFile({
@@ -260,14 +338,66 @@ class MatrixChatService {
 
   bool _isTrustedDirectInvite(Room room) {
     final directUserId = room.directChatMatrixID;
-    if (directUserId == null || directUserId.isEmpty) return false;
+    if (directUserId == null || directUserId.isEmpty) {
+      final trustedRoomServer =
+          room.id.split(':').last == MatrixConfig.serverName;
+      apkLog(
+        'Matrix.join',
+        'invite trust fallback room_id="${room.id}" directUser=null trustedRoomServer=$trustedRoomServer',
+      );
+      return trustedRoomServer;
+    }
     final domain = directUserId.split(':').last;
-    return domain == MatrixConfig.serverName;
+    final trusted = domain == MatrixConfig.serverName;
+    apkLog(
+      'Matrix.join',
+      'invite trust check room_id="${room.id}" directUser="$directUserId" trusted=$trusted',
+    );
+    return trusted;
   }
 
   bool _looksLikeAlreadyJoinedRoomError(Object error) {
     final raw = error.toString().toLowerCase();
     return raw.contains('already joined to room') ||
         raw.contains('m_forbidden');
+  }
+
+  Future<void> _ensureDirectPeerInvited(Room room, String matrixUserId) async {
+    final participants = room.getParticipants([
+      Membership.join,
+      Membership.invite,
+    ]);
+    User? peer;
+    for (final participant in participants) {
+      if (participant.id == matrixUserId) {
+        peer = participant;
+        break;
+      }
+    }
+    if (peer != null) {
+      apkLog(
+        'Matrix.invite',
+        'peer present room_id="${room.id}" target="$matrixUserId" membership="${peer.membership.name}"',
+      );
+      return;
+    }
+
+    apkLog(
+      'Matrix.invite',
+      'peer missing after createRoom; POST /_matrix/client/v3/rooms/${room.id}/invite target="$matrixUserId"',
+    );
+    try {
+      await room.invite(matrixUserId).timeout(const Duration(seconds: 12));
+      apkLog(
+        'Matrix.invite',
+        'invite sent room_id="${room.id}" target="$matrixUserId"',
+      );
+    } catch (e) {
+      apkLog(
+        'Matrix.invite',
+        'invite failed room_id="${room.id}" target="$matrixUserId" error="$e"',
+      );
+      rethrow;
+    }
   }
 }

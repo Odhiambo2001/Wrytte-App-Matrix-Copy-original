@@ -9,7 +9,7 @@ class ApkDebugLogger {
   ApkDebugLogger._();
   static final ApkDebugLogger instance = ApkDebugLogger._();
 
-  static const int _maxLines = 200;
+  static const int _maxLines = 600;
   final List<String> _lines = [];
 
   // Listeners are notified every time a line is added.

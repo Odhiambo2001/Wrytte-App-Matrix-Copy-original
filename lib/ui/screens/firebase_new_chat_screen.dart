@@ -55,11 +55,14 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
   void _onSearchChanged() {
     final query = _searchController.text.toLowerCase();
     setState(() {
-      _filteredContacts = _allContacts
-          .where((c) =>
-              _sanitize(c.formattedName).toLowerCase().contains(query) ||
-              c.primaryPhone.contains(query))
-          .toList();
+      _filteredContacts =
+          _allContacts
+              .where(
+                (c) =>
+                    _sanitize(c.formattedName).toLowerCase().contains(query) ||
+                    c.primaryPhone.contains(query),
+              )
+              .toList();
     });
   }
 
@@ -74,12 +77,15 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
       final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
 
       if (currentUserId.isNotEmpty) {
-        final matrixContacts =
-            await _contactService.getMatrixContactsCached(currentUserId);
+        final matrixContacts = await _contactService.getMatrixContactsCached(
+          currentUserId,
+        );
 
-        matrixContacts.sort((a, b) => a.formattedName
-            .toLowerCase()
-            .compareTo(b.formattedName.toLowerCase()));
+        matrixContacts.sort(
+          (a, b) => a.formattedName.toLowerCase().compareTo(
+            b.formattedName.toLowerCase(),
+          ),
+        );
 
         if (mounted) {
           setState(() {
@@ -98,14 +104,17 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
 
       final currentUserId2 =
           await AuthService.instance.getCurrentUserId() ?? '';
-      final matrixContacts =
-          await _contactService.getMatrixContacts(currentUserId2);
+      final matrixContacts = await _contactService.getMatrixContacts(
+        currentUserId2,
+      );
 
       final seenPhones = <String>{};
       final merged = <Contact>[];
 
       for (final c in wrytteContacts) {
-        for (final p in c.phones) seenPhones.add(p);
+        for (final p in c.phones) {
+          seenPhones.add(p);
+        }
         merged.add(c);
       }
 
@@ -117,9 +126,11 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
         }
       }
 
-      merged.sort((a, b) => a.formattedName
-          .toLowerCase()
-          .compareTo(b.formattedName.toLowerCase()));
+      merged.sort(
+        (a, b) => a.formattedName.toLowerCase().compareTo(
+          b.formattedName.toLowerCase(),
+        ),
+      );
 
       if (mounted) {
         setState(() {
@@ -148,9 +159,8 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
     final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
     if (currentUserId.isEmpty) return;
 
-    // The Matrix userID is the phone number with the + prefix preserved.
-    // wrytteUserId already stores it in this format when the contact was saved.
-    // Fall back to primaryPhone as-is (which should include the + from E.164).
+    // Use the real Wrytte/Matrix identity for routing. Do not strip it down
+    // to digits; Matrix invites must target the receiver's actual user ID.
     final receiverId =
         (contact.wrytteUserId != null && contact.wrytteUserId!.isNotEmpty)
             ? contact.wrytteUserId!
@@ -158,9 +168,8 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
 
     if (receiverId.isEmpty) return;
 
-    // Derive the Matrix direct room between two users
-    final normalizedReceiverId = receiverId.replaceAll(RegExp(r'[^\d]'), '');
-    final ids = [currentUserId, normalizedReceiverId]..sort();
+    final ids = [_conversationKey(currentUserId), _conversationKey(receiverId)]
+      ..sort();
     final conversationId = 'si_${ids[0]}_${ids[1]}';
 
     if (!mounted) return;
@@ -168,15 +177,25 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          conversationId: conversationId,
-          receiverId: normalizedReceiverId,
-          currentUserId: currentUserId,
-          title: _sanitize(contact.formattedName),
-          avatarUrl: contact.avatarUrl,
-        ),
+        builder:
+            (_) => ChatScreen(
+              conversationId: conversationId,
+              receiverId: receiverId,
+              currentUserId: currentUserId,
+              title: _sanitize(contact.formattedName),
+              avatarUrl: contact.avatarUrl,
+            ),
       ),
     );
+  }
+
+  String _conversationKey(String value) {
+    final trimmed = value.trim();
+    final localpart =
+        trimmed.startsWith('@') && trimmed.contains(':')
+            ? trimmed.substring(1, trimmed.indexOf(':'))
+            : trimmed;
+    return localpart.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
   }
 
   Map<String, List<Contact>> _groupByAlphabet(List<Contact> contacts) {
@@ -376,8 +395,7 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
                     color: const Color(0xFF0F1013),
                     borderRadius: BorderRadius.circular(18),
                   ),
-                  child:
-                      const Icon(Icons.close, color: Colors.white, size: 20),
+                  child: const Icon(Icons.close, color: Colors.white, size: 20),
                 ),
               ),
               const Expanded(
@@ -461,12 +479,13 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => FutureBuilder<String?>(
-                    future: AuthService.instance.getToken(),
-                    builder: (context, snapshot) {
-                      return NewContactPage(token: snapshot.data ?? '');
-                    },
-                  ),
+                  builder:
+                      (_) => FutureBuilder<String?>(
+                        future: AuthService.instance.getToken(),
+                        builder: (context, snapshot) {
+                          return NewContactPage(token: snapshot.data ?? '');
+                        },
+                      ),
                 ),
               ).then((_) => _loadMyContacts());
             }

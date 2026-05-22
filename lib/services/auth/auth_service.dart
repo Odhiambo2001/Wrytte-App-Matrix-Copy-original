@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:matrix/matrix.dart' as mx;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/auth/api_service.dart';
@@ -11,6 +12,7 @@ import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class StoredAuthProfile {
   final String userId;
@@ -83,8 +85,13 @@ class AuthService {
     String homeserver = _defaultHomeserver,
     int? generation,
   }) async {
+    apkLog(
+      'Matrix.auth',
+      'login start user_id="$userId" homeserver="$homeserver"',
+    );
     if (!await _isCurrentMatrixBootstrap(userId, generation)) {
       debugPrint('[AuthService] Matrix login skipped for stale user $userId.');
+      apkLog('Matrix.auth', 'login skipped stale user_id="$userId"');
       return;
     }
 
@@ -92,45 +99,64 @@ class AuthService {
     final secret = await _storage.read(key: _secretKey);
     if (secret == null || secret.trim().isEmpty) {
       debugPrint('[AuthService] No secret stored — Matrix login skipped.');
+      apkLog('Matrix.auth', 'login skipped missing secret user_id="$userId"');
       return;
     }
     final password = secret.trim();
 
     try {
+      apkLog('Matrix.auth', 'login request user_id="$userId"');
       await MatrixAuthService.instance.login(
         username: userId,
         password: password,
         homeserver: homeserver,
       );
+      apkLog('Matrix.auth', 'login success user_id="$userId"');
     } catch (_) {
       if (!await _isCurrentMatrixBootstrap(userId, generation)) {
         debugPrint(
           '[AuthService] Matrix register skipped for stale user $userId.',
         );
+        apkLog('Matrix.auth', 'register skipped stale user_id="$userId"');
         return;
       }
       // Account may not exist yet on this server — register it.
+      apkLog('Matrix.auth', 'login failed; register request user_id="$userId"');
       await MatrixAuthService.instance.register(
         username: userId,
         password: password,
         homeserver: homeserver,
       );
+      apkLog('Matrix.auth', 'register success user_id="$userId"');
     }
 
     final client = MatrixClientService.instance.client;
     if (!await _isCurrentMatrixBootstrap(userId, generation)) {
       await _logoutMatrixUserIfMatches(userId);
       debugPrint('[AuthService] Ignored stale Matrix login for $userId.');
+      apkLog('Matrix.auth', 'login ignored stale user_id="$userId"');
       return;
     }
     if (nickname.trim().isNotEmpty) {
-      try {
-        await client.setProfileField(client.userID!, 'm.displayname', {
-          'displayname': nickname.trim(),
-        });
-      } catch (e) {
-        debugPrint('[AuthService] Matrix display-name update failed: $e');
-      }
+      unawaited(_updateMatrixDisplayName(client, nickname.trim()));
+    }
+    apkLog(
+      'Matrix.auth',
+      'login ready user_id="$userId" mxid="${client.userID}"',
+    );
+  }
+
+  Future<void> _updateMatrixDisplayName(mx.Client client, String name) async {
+    try {
+      final userId = client.userID;
+      if (userId == null || userId.isEmpty) return;
+      await client
+          .setProfileField(userId, 'm.displayname', {'displayname': name})
+          .timeout(const Duration(seconds: 3));
+      apkLog('Matrix.auth', 'display name updated user_id="$userId"');
+    } catch (e) {
+      debugPrint('[AuthService] Matrix display-name update failed: $e');
+      apkLog('Matrix.auth', 'display name skipped error="$e"');
     }
   }
 

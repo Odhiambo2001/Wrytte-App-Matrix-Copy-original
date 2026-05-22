@@ -6,8 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_contacts/flutter_contacts.dart' as fc;
 import 'package:wrytte/models/contact_model.dart';
+import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/contacts/contact_directory_service.dart';
+import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_contact_service.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'user_search_service.dart';
 
 class ContactService {
@@ -128,18 +131,75 @@ class ContactService {
     required Contact contact,
   }) async {
     try {
-      await MatrixContactService.instance.saveContact(
-        _normalizeContact(contact),
+      apkLog(
+        'Contact.save',
+        'Matrix session refresh before account-data save owner="$ownerUserId"',
+      );
+      await _refreshMatrixSessionForContactSave(ownerUserId);
+      apkLog(
+        'Contact.save',
+        'Matrix account-data save start owner="$ownerUserId" name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}" phone="${contact.primaryPhone}"',
+      );
+      await MatrixContactService.instance
+          .saveContact(_normalizeContact(contact))
+          .timeout(const Duration(seconds: 15));
+      apkLog(
+        'Contact.save',
+        'Matrix account-data save done owner="$ownerUserId" name="${contact.formattedName}"',
       );
       debugPrint(
         '✅ Contact saved to Matrix account data: ${contact.displayName}',
       );
     } catch (e, stack) {
+      if (_isUnknownMatrixToken(e)) {
+        apkLog(
+          'Contact.save',
+          'Matrix account-data save got M_UNKNOWN_TOKEN; refreshing Matrix session owner="$ownerUserId"',
+        );
+        await _refreshMatrixSessionForContactSave(ownerUserId);
+        apkLog(
+          'Contact.save',
+          'Matrix account-data save retry start owner="$ownerUserId" name="${contact.formattedName}"',
+        );
+        await MatrixContactService.instance
+            .saveContact(_normalizeContact(contact))
+            .timeout(const Duration(seconds: 15));
+        apkLog(
+          'Contact.save',
+          'Matrix account-data save retry done owner="$ownerUserId" name="${contact.formattedName}"',
+        );
+        return;
+      }
       debugPrint('🔴 Contact save FAILED: $e');
       debugPrint('🔴 Stack: $stack');
       rethrow;
     }
   }
+
+  Future<void> _refreshMatrixSessionForContactSave(String ownerUserId) async {
+    apkLog('Contact.save', 'Matrix session refresh start owner="$ownerUserId"');
+    await MatrixAuthService.instance.clearLocalSession().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        apkLog(
+          'Contact.save',
+          'Matrix session clear timed out; continuing to login owner="$ownerUserId"',
+        );
+      },
+    );
+
+    final storedName =
+        (await AuthService.instance.getCurrentUsername())?.trim();
+    final nickname =
+        storedName != null && storedName.isNotEmpty ? storedName : ownerUserId;
+    await AuthService.instance
+        .loginToMatrix(userId: ownerUserId, nickname: nickname)
+        .timeout(const Duration(seconds: 35));
+    apkLog('Contact.save', 'Matrix session refresh done owner="$ownerUserId"');
+  }
+
+  bool _isUnknownMatrixToken(Object error) =>
+      error.toString().toUpperCase().contains('M_UNKNOWN_TOKEN');
 
   // ──────────────────────────────────────────────────────────────────────
   // Fetch contacts saved by this user from Matrix account data.
@@ -292,8 +352,7 @@ class ContactService {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Save a manually-entered contact
-  // ✅ NEVER writes to device phonebook — stays inside Wrytte only
+  // Save a manually-entered contact through Matrix account data first.
   // ──────────────────────────────────────────────────────────────────────
   Future<Contact> saveManualContact({
     required String firstName,
@@ -308,6 +367,10 @@ class ContactService {
     final displayName = '$firstName $lastName'.trim();
     final isWrytteContact =
         isOnWrytte || (wrytteUserId != null && wrytteUserId.isNotEmpty);
+    apkLog(
+      'Contact.save',
+      'manual save start self="$selfUserId" name="$displayName" identifier="$fullIdentifier" wrytteUserId="$wrytteUserId" isOnWrytte=$isWrytteContact syncToPhone=$syncToPhone',
+    );
     if (_isSelfContact(wrytteUserId, selfUserId)) {
       throw StateError('You cannot add your own Wrytte account as a contact.');
     }
@@ -320,17 +383,24 @@ class ContactService {
     );
 
     if (selfUserId != null && selfUserId.isNotEmpty) {
+      await saveContactToMatrix(ownerUserId: selfUserId, contact: contact);
+
       await ContactLocalDb.addContact(contact, ownerUserId: selfUserId);
-      try {
-        await saveContactToMatrix(ownerUserId: selfUserId, contact: contact);
-      } on StateError catch (e) {
-        debugPrint('Matrix contact sync deferred: $e');
-      }
+      apkLog(
+        'Contact.save',
+        'local cache save done after Matrix owner="$selfUserId" name="${contact.formattedName}"',
+      );
 
       invalidateCache();
       invalidateMatrixContactsCache();
+    } else {
+      throw StateError('Cannot save Matrix contact without a signed-in user.');
     }
 
+    apkLog(
+      'Contact.save',
+      'manual save complete name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}"',
+    );
     return contact;
   }
 

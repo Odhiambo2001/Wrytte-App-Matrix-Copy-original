@@ -13,6 +13,7 @@ import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class ChatService {
   ChatService._internal();
@@ -66,26 +67,30 @@ class ChatService {
         throw Exception('User not authenticated');
       }
 
-      await MatrixAuthService.instance.restore();
-      var client = MatrixClientService.instance.client;
       final expectedMatrixUserId = _expectedMatrixUserId(_currentUserId!);
-      if (client.isLogged() && client.userID != expectedMatrixUserId) {
-        await MatrixAuthService.instance.logout().timeout(
-          const Duration(seconds: 4),
-          onTimeout: () {},
-        );
-        client = MatrixClientService.instance.client;
-      }
+      apkLog(
+        'ChatService.connect',
+        'restore start user_id="$_currentUserId" expected="$expectedMatrixUserId"',
+      );
+      var client = await MatrixAuthService.instance.restore().timeout(
+        const Duration(seconds: 5),
+      );
+      apkLog(
+        'ChatService.connect',
+        'restore done logged=${client.isLogged()} user_id="${client.userID}"',
+      );
+      client = await _ensureCurrentMatrixSession(
+        expectedMatrixUserId: expectedMatrixUserId,
+        userId: _currentUserId!,
+        nickname: user?.username ?? _currentUserId!,
+        client: client,
+      );
 
       if (!client.isLogged() || client.userID != expectedMatrixUserId) {
-        await AuthService.instance.loginToMatrix(
-          userId: _currentUserId!,
-          nickname: user?.username ?? _currentUserId!,
+        apkLog(
+          'ChatService.connect',
+          'session mismatch logged=${client.isLogged()} user_id="${client.userID}" expected="$expectedMatrixUserId"',
         );
-        client = MatrixClientService.instance.client;
-      }
-
-      if (!client.isLogged() || client.userID != expectedMatrixUserId) {
         throw StateError('Matrix session did not match the current user.');
       }
 
@@ -102,13 +107,102 @@ class ChatService {
 
       _isConnected = true;
       _connectionController.add(true);
+      apkLog(
+        'ChatService.connect',
+        'ready isConnected=true user_id="${client.userID}" rooms=${client.rooms.length}',
+      );
       unawaited(_finishConnectionWarmup());
     } catch (e) {
       _isConnected = false;
       _connectionController.add(false);
       _errorController.add('Connection failed: $e');
+      apkLog('ChatService.connect', 'FAILED error="$e"');
       rethrow;
     }
+  }
+
+  Future<mx.Client> _ensureCurrentMatrixSession({
+    required String expectedMatrixUserId,
+    required String userId,
+    required String nickname,
+    required mx.Client client,
+  }) async {
+    var current = client;
+
+    if (current.isLogged() && current.userID != expectedMatrixUserId) {
+      apkLog(
+        'ChatService.connect',
+        'clearing wrong Matrix session current="${current.userID}" expected="$expectedMatrixUserId"',
+      );
+      await MatrixAuthService.instance.clearLocalSession().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {},
+      );
+      current = MatrixClientService.instance.client;
+    }
+
+    if (!current.isLogged() || current.userID != expectedMatrixUserId) {
+      current = await _loginCurrentMatrixSession(
+        expectedMatrixUserId: expectedMatrixUserId,
+        userId: userId,
+        nickname: nickname,
+      );
+    }
+
+    if (current.isLogged() && current.userID != expectedMatrixUserId) {
+      apkLog(
+        'ChatService.connect',
+        'retry clearing wrong Matrix session current="${current.userID}" expected="$expectedMatrixUserId"',
+      );
+      await MatrixAuthService.instance.clearLocalSession().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {},
+      );
+      current = await _loginCurrentMatrixSession(
+        expectedMatrixUserId: expectedMatrixUserId,
+        userId: userId,
+        nickname: nickname,
+      );
+    }
+
+    return current;
+  }
+
+  Future<mx.Client> _loginCurrentMatrixSession({
+    required String expectedMatrixUserId,
+    required String userId,
+    required String nickname,
+  }) async {
+    apkLog(
+      'ChatService.connect',
+      'Matrix login required user_id="$userId" expected="$expectedMatrixUserId"',
+    );
+    try {
+      await AuthService.instance
+          .loginToMatrix(userId: userId, nickname: nickname)
+          .timeout(const Duration(seconds: 35));
+    } on TimeoutException catch (e) {
+      final current = MatrixClientService.instance.client;
+      if (current.isLogged() && current.userID == expectedMatrixUserId) {
+        apkLog(
+          'ChatService.connect',
+          'Matrix login timeout after session became ready; continuing user_id="${current.userID}"',
+        );
+        return current;
+      }
+      apkLog(
+        'ChatService.connect',
+        'Matrix login timeout without usable session expected="$expectedMatrixUserId" current="${current.userID}" error="$e"',
+      );
+      rethrow;
+    }
+
+    final current = MatrixClientService.instance.client;
+    apkLog(
+      'ChatService.connect',
+      'Matrix login returned logged=${current.isLogged()} user_id="${current.userID}"',
+    );
+    return current;
   }
 
   Future<void> _finishConnectionWarmup() async {
@@ -154,7 +248,19 @@ class ChatService {
     try {
       final client = MatrixClientService.instance.client;
       final room = _roomForMessage(message);
+      await MatrixChatService.instance.ensurePeerInvited(
+        roomId: room.id,
+        matrixUserId: _toMatrixUserId(message.receiverId),
+      );
+      apkLog(
+        'Matrix.send',
+        'PUT /_matrix/client/r0/rooms/${room.id}/send/m.room.message user_id="${client.userID}" room_id="${room.id}"',
+      );
       final eventId = await room.sendEvent(_buildMessageContent(message));
+      apkLog(
+        'Matrix.send',
+        'Sent event to roomserver event_id="$eventId" room_id="${room.id}" user_id="${client.userID}" type="m.room.message"',
+      );
       final sent = message.copyWith(
         id: eventId ?? message.id,
         conversationId: room.id,
@@ -165,7 +271,6 @@ class ChatService {
       );
       _cacheMessage(sent);
       _refreshMessageStatusesForRoom(room);
-      _messageController.add(sent);
       return sent;
     } catch (e) {
       _errorController.add('Failed to send: $e');
@@ -371,6 +476,10 @@ class ChatService {
   Future<String?> getMatrixConversationId(String otherUserId) async {
     try {
       final room = await _directRoom(otherUserId);
+      apkLog(
+        'ChatService',
+        'Matrix direct room ready room_id="${room.id}" otherUserId="$otherUserId"',
+      );
       return room.id;
     } catch (e) {
       debugPrint('[ChatService] get conversation id error: $e');

@@ -8,6 +8,7 @@ import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/conversation_tile.dart';
 import 'package:wrytte/ui/screens/chats/widgets/mini_chat_window.dart';
@@ -241,7 +242,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     if (conv.otherUserName != null) yield* _identityKeys(conv.otherUserName!);
     for (final participant in conv.participants) {
       if (participant != _currentUserId &&
-          participant != '@$_currentUserId:matrix.wryte.com') {
+          participant != '@$_currentUserId:${MatrixConfig.serverName}') {
         yield* _identityKeys(participant);
       }
     }
@@ -456,13 +457,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 Icon(
                   Icons.chat_bubble_outline_rounded,
                   size: 64,
-                  color: Colors.white.withOpacity(0.12),
+                  color: Colors.white.withValues(alpha: 0.12),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'No conversations yet',
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.35),
+                    color: Colors.white.withValues(alpha: 0.35),
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
                   ),
@@ -471,7 +472,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 Text(
                   'Tap the pencil icon to start a new chat',
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.2),
+                    color: Colors.white.withValues(alpha: 0.2),
                     fontSize: 13,
                   ),
                 ),
@@ -590,9 +591,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       end: Alignment.bottomCenter,
                       stops: const [0.0, 0.6, 1.0],
                       colors: [
-                        const Color(0xFF08090B).withOpacity(0.95),
-                        const Color(0xFF08090B).withOpacity(0.75),
-                        const Color(0xFF08090B).withOpacity(0.0),
+                        const Color(0xFF08090B).withValues(alpha: 0.95),
+                        const Color(0xFF08090B).withValues(alpha: 0.75),
+                        const Color(0xFF08090B).withValues(alpha: 0.0),
                       ],
                     ),
                   ),
