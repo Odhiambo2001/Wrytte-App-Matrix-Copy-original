@@ -1,6 +1,16 @@
 import 'chat_message.dart';
 import 'package:matrix/matrix.dart' as mx;
 
+String _userKey(String value) {
+  final trimmed = value.trim();
+  if (trimmed.startsWith('@') && trimmed.contains(':')) {
+    return trimmed.substring(1, trimmed.indexOf(':'));
+  }
+  return trimmed;
+}
+
+bool _sameUser(String a, String b) => _userKey(a) == _userKey(b);
+
 class ChatConversation {
   final String id;
   final List<String> participants;
@@ -53,10 +63,8 @@ class ChatConversation {
     ChatMessage message,
     String currentUserId,
   ) {
-    final otherId =
-        message.senderId == currentUserId
-            ? message.receiverId
-            : message.senderId;
+    final isFromMe = _sameUser(message.senderId, currentUserId);
+    final otherId = isFromMe ? message.receiverId : message.senderId;
 
     return ChatConversation(
       id: message.conversationId,
@@ -65,7 +73,7 @@ class ChatConversation {
       lastMessage: message.content,
       lastMessageSenderId: message.senderId,
       lastMessageTime: message.timestamp,
-      unreadCount: message.receiverId == currentUserId ? 1 : 0,
+      unreadCount: isFromMe ? 0 : 1,
     );
   }
 
@@ -158,6 +166,7 @@ class ChatConversation {
     String currentUserId,
   ) {
     final isNewer = message.timestamp.isAfter(lastMessageTime);
+    final isFromMe = _sameUser(message.senderId, currentUserId);
     return ChatConversation(
       id: id,
       participants: participants,
@@ -165,7 +174,7 @@ class ChatConversation {
       lastMessage: isNewer ? message.content : lastMessage,
       lastMessageSenderId: isNewer ? message.senderId : lastMessageSenderId,
       lastMessageTime: isNewer ? message.timestamp : lastMessageTime,
-      unreadCount: unreadCount + (message.receiverId == currentUserId ? 1 : 0),
+      unreadCount: unreadCount + (isFromMe ? 0 : 1),
       lastMessageType: isNewer ? 'text' : lastMessageType,
       isArchived: isArchived,
       isMuted: isMuted,

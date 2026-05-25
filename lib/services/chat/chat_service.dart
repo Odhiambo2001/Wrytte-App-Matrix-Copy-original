@@ -349,7 +349,7 @@ class ChatService {
               .toList()
             ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
       for (final message in messages) {
-        _cacheMessage(message);
+        _cacheMessage(message, countUnread: false);
       }
       unawaited(ChatLocalDb.instance.saveMessages(messages));
       _refreshMessageStatusesForRoom(room);
@@ -389,6 +389,7 @@ class ChatService {
         _conversationsMap[conversationId] = current.copyWith(unreadCount: 0);
         _emitConversations();
       }
+      await ChatLocalDb.instance.markConversationRead(conversationId);
     } catch (e) {
       debugPrint('[ChatService] markConversationAsRead error: $e');
     }
@@ -566,19 +567,39 @@ class ChatService {
     );
   }
 
-  void _cacheMessage(ChatMessage message) {
+  void _cacheMessage(ChatMessage message, {bool countUnread = true}) {
     final convId = message.conversationId;
     final currentUser =
         MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
     _messagesCache.putIfAbsent(convId, () => []);
-    if (!_messagesCache[convId]!.any((m) => m.id == message.id)) {
+    final isNewMessage =
+        !_messagesCache[convId]!.any((m) => m.id == message.id);
+    if (isNewMessage) {
       _messagesCache[convId]!.add(message);
     }
     final existing = _conversationsMap[convId];
     _conversationsMap[convId] =
         existing == null
-            ? ChatConversation.fromMessage(message, currentUser)
-            : existing.updateWithMessage(message, currentUser);
+            ? ChatConversation.fromMessage(
+              message,
+              currentUser,
+            ).copyWith(unreadCount: countUnread ? null : 0)
+            : isNewMessage && countUnread
+            ? existing.updateWithMessage(message, currentUser)
+            : existing.copyWith(
+              lastMessage:
+                  message.timestamp.isAfter(existing.lastMessageTime)
+                      ? message.content
+                      : existing.lastMessage,
+              lastMessageSenderId:
+                  message.timestamp.isAfter(existing.lastMessageTime)
+                      ? message.senderId
+                      : existing.lastMessageSenderId,
+              lastMessageTime:
+                  message.timestamp.isAfter(existing.lastMessageTime)
+                      ? message.timestamp
+                      : existing.lastMessageTime,
+            );
     unawaited(_persistCachedMessage(message, _conversationsMap[convId]!));
     _emitConversations();
   }
