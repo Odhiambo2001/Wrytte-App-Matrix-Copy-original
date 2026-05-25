@@ -45,9 +45,9 @@ class _AddProfilePageState extends State<AddProfilePage> {
 
   Future<void> _loadUserData() async {
     try {
-      final uid = await AuthService.instance
-          .getCurrentUserId()
-          .timeout(const Duration(seconds: 3));
+      final uid = await AuthService.instance.getCurrentUserId().timeout(
+        const Duration(seconds: 3),
+      );
 
       if (uid == null || uid.isEmpty) {
         debugPrint('[AddProfilePage] No uid found');
@@ -63,8 +63,9 @@ class _AddProfilePageState extends State<AddProfilePage> {
         if (existingName == null ||
             existingName.trim().length < 2 ||
             _looksLikePhoneNumber(existingName.trim())) {
-          final remoteProfile =
-              await AuthService.instance.hydrateStoredProfile(uid);
+          final remoteProfile = await AuthService.instance.hydrateStoredProfile(
+            uid,
+          );
           existingName = remoteProfile?.username ?? existingName;
         }
         if (existingName != null &&
@@ -72,7 +73,9 @@ class _AddProfilePageState extends State<AddProfilePage> {
             !_looksLikePhoneNumber(existingName.trim())) {
           _nicknameController.text = existingName.trim();
           _isValid = true;
-          debugPrint('[AddProfilePage] Pre-filled name from local storage: "$existingName"');
+          debugPrint(
+            '[AddProfilePage] Pre-filled name from local storage: "$existingName"',
+          );
         }
       }
     } catch (e) {
@@ -95,39 +98,44 @@ class _AddProfilePageState extends State<AddProfilePage> {
     );
   }
 
-
   Future<void> _saveAndGoHome() async {
-  if (!_isValid || _isSaving) return;
+    if (!_isValid || _isSaving) return;
 
-  final name = _nicknameController.text.trim();
-  final uid = _currentUserId ?? await AuthService.instance.getCurrentUserId();
-  if (uid == null || uid.isEmpty) return;
-  _currentUserId = uid;
+    final name = _nicknameController.text.trim();
+    final uid = _currentUserId ?? await AuthService.instance.getCurrentUserId();
+    if (uid == null || uid.isEmpty) return;
+    _currentUserId = uid;
 
-  if (mounted) setState(() => _isSaving = true);
+    if (mounted) setState(() => _isSaving = true);
 
-  await AuthService.instance.updateStoredUsername(name);
-  debugPrint('[AddProfilePage] Name saved locally: "$name"');
+    await AuthService.instance.updateStoredUsername(name);
+    debugPrint('[AddProfilePage] Name saved locally: "$name"');
 
-  // ✅ FIX: re-persist the full session so the name is locked in as the
-  // stored username before any future login reads it
-  final secret = await AuthService.instance.getStoredSecret() ?? '';
-  final phone  = await AuthService.instance.getSavedPhone()   ?? '';
-  await AuthService.instance.persistPhoneSession(
-    userId:   uid,
-    username: name,        // explicit real name — bypasses the phone-number guard
-    phone:    phone,
-    secret:   secret,
-  ).timeout(
-    const Duration(seconds: 3),
-    onTimeout: () {
-      debugPrint('[AddProfilePage] Session re-persist timed out; continuing.');
-    },
-  );
+    // Re-persist the local session quickly; Matrix can finish in the background.
+    final secret = await AuthService.instance.getStoredSecret() ?? '';
+    final phone = await AuthService.instance.getSavedPhone() ?? '';
+    await AuthService.instance
+        .persistPhoneSession(
+          userId: uid,
+          username:
+              name, // explicit real name — bypasses the phone-number guard
+          phone: phone,
+          secret: secret,
+          matrixBootstrapTimeout: const Duration(milliseconds: 500),
+          preferMatrixRegisterFirst: widget.isNewUser,
+        )
+        .timeout(
+          const Duration(seconds: 2),
+          onTimeout: () {
+            debugPrint(
+              '[AddProfilePage] Session re-persist queued; continuing.',
+            );
+          },
+        );
 
-  _syncProfileInBackground(name);
-  await _navigateHome(uid);
-}
+    _syncProfileInBackground(name);
+    await _navigateHome(uid);
+  }
 
   void _syncProfileInBackground(String name) {
     unawaited(() async {
@@ -158,7 +166,9 @@ class _AddProfilePageState extends State<AddProfilePage> {
       }
     }
 
-    debugPrint('[AddProfilePage] Matrix display-name update failed after $maxAttempts attempts — local name still saved');
+    debugPrint(
+      '[AddProfilePage] Matrix display-name update failed after $maxAttempts attempts — local name still saved',
+    );
   }
 
   @override
@@ -186,23 +196,24 @@ class _AddProfilePageState extends State<AddProfilePage> {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: (_isValid && !_isSaving) ? _saveAndGoHome : null,
-                  child: _isSaving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
+                  child:
+                      _isSaving
+                          ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                          : Text(
+                            'Done',
+                            style: TextStyle(
+                              color: _isValid ? Colors.white : Colors.grey,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
                           ),
-                        )
-                      : Text(
-                          'Done',
-                          style: TextStyle(
-                            color: _isValid ? Colors.white : Colors.grey,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
                 ),
               ),
 
@@ -273,8 +284,9 @@ class _AddProfilePageState extends State<AddProfilePage> {
                   Checkbox(
                     value: _syncContacts,
                     activeColor: const Color(0xFF2AABEE),
-                    onChanged: (value) =>
-                        setState(() => _syncContacts = value ?? true),
+                    onChanged:
+                        (value) =>
+                            setState(() => _syncContacts = value ?? true),
                   ),
                   const Text(
                     'Sync contacts',

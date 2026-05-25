@@ -110,6 +110,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     // Connect ChatService (idempotent)
     try {
       await _chat.connect();
+      await _chat.fetchConversations();
     } catch (e) {
       debugPrint('[ConversationsScreen] chat connect skipped: $e');
     }

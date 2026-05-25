@@ -49,7 +49,11 @@ class ChatService {
       '@$userId:${MatrixConfig.serverName}';
 
   Future<void> connect() async {
-    if (_isConnected) return;
+    final activeUserId = await AuthService.instance.getCurrentUserId();
+    if (_isConnected && _currentUserId == activeUserId) return;
+    if (_isConnected && _currentUserId != activeUserId) {
+      await reset();
+    }
     if (_connectFuture != null) return _connectFuture;
     _connectFuture = _connect();
     try {
@@ -180,7 +184,7 @@ class ChatService {
     try {
       await AuthService.instance
           .loginToMatrix(userId: userId, nickname: nickname)
-          .timeout(const Duration(seconds: 35));
+          .timeout(const Duration(seconds: 75));
     } on TimeoutException catch (e) {
       final current = MatrixClientService.instance.client;
       if (current.isLogged() && current.userID == expectedMatrixUserId) {

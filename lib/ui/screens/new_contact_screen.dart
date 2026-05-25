@@ -2,8 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:wrytte/models/chat_models/chat_conversation.dart';
+import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
 import 'package:wrytte/ui/screens/Country%20id%20picker%20page.dart';
@@ -27,8 +31,15 @@ enum _LookupState { idle, found, duplicate, notFound, error }
 class NewContactPage extends StatefulWidget {
   /// Bearer token for the UserSearchService call.
   final String token;
+  final String? initialIdentifier;
+  final String? initialWrytteUserId;
 
-  const NewContactPage({super.key, required this.token});
+  const NewContactPage({
+    super.key,
+    required this.token,
+    this.initialIdentifier,
+    this.initialWrytteUserId,
+  });
 
   @override
   State<NewContactPage> createState() => _NewContactPageState();
@@ -91,15 +102,68 @@ class _NewContactPageState extends State<NewContactPage> {
   @override
   void initState() {
     super.initState();
+    _prefillInitialContact();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _codeCtrl.text = '+';
-      _codeCtrl.selection = TextSelection.fromPosition(
-        const TextPosition(offset: 1),
-      );
-      _codeFocusNode.requestFocus();
+      if (_codeCtrl.text.isEmpty) {
+        _codeCtrl.text = '+';
+        _codeCtrl.selection = TextSelection.fromPosition(
+          const TextPosition(offset: 1),
+        );
+        _codeFocusNode.requestFocus();
+      } else {
+        _firstNameCtrl.selection = TextSelection.fromPosition(
+          TextPosition(offset: _firstNameCtrl.text.length),
+        );
+      }
     });
     _numberCtrl.addListener(_onNumberChanged);
     _firstNameCtrl.addListener(() => setState(() {}));
+  }
+
+  void _prefillInitialContact() {
+    final identifier = widget.initialIdentifier?.trim() ?? '';
+    final wrytteUserId = widget.initialWrytteUserId?.trim() ?? '';
+    if (identifier.isEmpty && wrytteUserId.isEmpty) return;
+
+    if (wrytteUserId.isNotEmpty) {
+      _resolvedUserId = wrytteUserId;
+      _isRegisteredOnWrytte = true;
+      _lookupState = _LookupState.found;
+    }
+
+    if (identifier.isEmpty || _prefillPhone(identifier)) return;
+
+    final wrytteMode = countriesId.firstWhere(
+      (country) => country.isoCode == 'WID',
+      orElse: () => countriesId.first,
+    );
+    _selectedCountry = wrytteMode;
+    _codeCtrl.text = '+${wrytteMode.dialCode}';
+    _numberCtrl.text = identifier;
+    _showDivider = true;
+  }
+
+  bool _prefillPhone(String identifier) {
+    final digits = identifier.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.length < 7) return false;
+
+    final matches =
+        countriesId
+            .where((country) => digits.startsWith(country.dialCode))
+            .toList()
+          ..sort((a, b) => b.dialCode.length.compareTo(a.dialCode.length));
+    if (matches.isEmpty) return false;
+
+    final country = matches.first;
+    var national = digits.substring(country.dialCode.length);
+    if (national.isEmpty) return false;
+    if (!national.startsWith('0')) national = '0$national';
+
+    _selectedCountry = country;
+    _codeCtrl.text = '+${country.dialCode}';
+    _numberCtrl.text = national;
+    _showDivider = true;
+    return true;
   }
 
   @override
@@ -304,36 +368,60 @@ class _NewContactPageState extends State<NewContactPage> {
           'You cannot add your own Wrytte account as a contact.',
         );
       }
-      apkLog('NewContact.save', 'connecting Matrix before contact save');
-      await ChatService().connect();
-      apkLog('NewContact.save', 'Matrix connected; saving contact');
 
-      final saved = await _contactService.saveManualContact(
-        firstName: _firstNameCtrl.text.trim(),
-        lastName: _lastNameCtrl.text.trim(),
-        fullIdentifier: _fullIdentifier,
-        wrytteUserId: _resolvedUserId,
-        isOnWrytte: _isRegisteredOnWrytte,
-        syncToPhone: _syncToPhone,
-        token:
-            await AuthService.instance.getMatrixAccessToken() ?? widget.token,
-        selfUserId: selfId,
+      final firstName = _firstNameCtrl.text.trim();
+      final lastName = _lastNameCtrl.text.trim();
+      final contactName = _displayName(firstName, lastName, _fullIdentifier);
+      final receiverId = _resolvedUserId ?? '';
+      final localContact = Contact(
+        displayName: contactName,
+        phones: [_fullIdentifier],
+        isOnWrytte: _isRegisteredOnWrytte || receiverId.isNotEmpty,
+        wrytteUserId: receiverId.isEmpty ? null : receiverId,
       );
-
-      if (!mounted) return;
+      await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
+      ContactService.invalidateMatrixContactsCache();
+      _contactService.invalidateCache();
       apkLog(
         'NewContact.save',
-        'save success name="${saved.formattedName}" wrytteUserId="${saved.wrytteUserId}" phone="${saved.primaryPhone}"',
+        'local contact saved before navigation self="$selfId" name="$contactName" receiver="$receiverId"',
       );
 
-      final receiverId = saved.wrytteUserId ?? '';
       final ids = [
         _conversationKey(selfId),
         _conversationKey(receiverId.isNotEmpty ? receiverId : _fullIdentifier),
       ]..sort();
-      final conversationId = 'si_${ids[0]}_${ids[1]}';
+      final localConversationId = 'si_${ids[0]}_${ids[1]}';
+      final localRoomId =
+          receiverId.isEmpty
+              ? null
+              : await ChatLocalDb.instance.findDirectConversationId(
+                selfUserId: selfId,
+                otherUserId: receiverId,
+              );
+      final conversationId = localRoomId ?? localConversationId;
 
-      // Always navigate to chat — whether on Wrytte or not
+      apkLog(
+        'NewContact.save',
+        'opening chat immediately conversation_id="$conversationId" local_room_id="$localRoomId" receiver="$receiverId"',
+      );
+
+      unawaited(
+        _saveContactAndResolveRoomAfterNavigation(
+          selfId: selfId,
+          firstName: firstName,
+          lastName: lastName,
+          fullIdentifier: _fullIdentifier,
+          receiverId: receiverId,
+          isOnWrytte: _isRegisteredOnWrytte,
+          syncToPhone: _syncToPhone,
+          token: widget.token,
+          initialConversationId: conversationId,
+          fallbackContactName: contactName,
+        ),
+      );
+
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -343,8 +431,7 @@ class _NewContactPageState extends State<NewContactPage> {
                 receiverId:
                     receiverId.isNotEmpty ? receiverId : _fullIdentifier,
                 currentUserId: selfId,
-                title: saved.formattedName,
-                avatarUrl: saved.avatarUrl,
+                title: contactName,
               ),
         ),
       );
@@ -357,6 +444,154 @@ class _NewContactPageState extends State<NewContactPage> {
         _saveError = _friendlyError(e.toString());
       });
     }
+  }
+
+  Future<void> _saveContactAndResolveRoomAfterNavigation({
+    required String selfId,
+    required String firstName,
+    required String lastName,
+    required String fullIdentifier,
+    required String receiverId,
+    required bool isOnWrytte,
+    required bool syncToPhone,
+    required String token,
+    required String initialConversationId,
+    required String fallbackContactName,
+  }) async {
+    apkLog(
+      'NewContact.save',
+      'background contact save start self="$selfId" receiver="$receiverId" initial="$initialConversationId"',
+    );
+
+    String contactName = fallbackContactName;
+    String? avatarUrl;
+
+    try {
+      apkLog('NewContact.save', 'background Matrix connect before save');
+      await ChatService().connect();
+      apkLog('NewContact.save', 'background Matrix connected; saving contact');
+      final saved = await _contactService.saveManualContact(
+        firstName: firstName,
+        lastName: lastName,
+        fullIdentifier: fullIdentifier,
+        wrytteUserId: receiverId.isEmpty ? null : receiverId,
+        isOnWrytte: isOnWrytte,
+        syncToPhone: syncToPhone,
+        token: await AuthService.instance.getMatrixAccessToken() ?? token,
+        selfUserId: selfId,
+      );
+      contactName = saved.formattedName;
+      avatarUrl = saved.avatarUrl;
+      apkLog(
+        'NewContact.save',
+        'background contact save success name="${saved.formattedName}" wrytteUserId="${saved.wrytteUserId}" phone="${saved.primaryPhone}"',
+      );
+    } catch (e) {
+      apkLog('NewContact.save', 'background contact save FAILED error="$e"');
+    }
+
+    if (receiverId.isEmpty) {
+      apkLog(
+        'NewContact.room',
+        'background room skipped; contact has no Matrix receiver id',
+      );
+      return;
+    }
+
+    await _resolveMatrixRoomAfterSave(
+      selfId: selfId,
+      receiverId: receiverId,
+      initialConversationId: initialConversationId,
+      contactName: contactName,
+      avatarUrl: avatarUrl,
+    );
+  }
+
+  Future<void> _resolveMatrixRoomAfterSave({
+    required String selfId,
+    required String receiverId,
+    required String initialConversationId,
+    required String contactName,
+    String? avatarUrl,
+  }) async {
+    apkLog(
+      'NewContact.room',
+      'background start self="$selfId" receiver="$receiverId" initial="$initialConversationId"',
+    );
+
+    final chat = ChatService();
+    String? roomId;
+
+    final localRoomId = await ChatLocalDb.instance.findDirectConversationId(
+      selfUserId: selfId,
+      otherUserId: receiverId,
+    );
+    if (localRoomId != null && localRoomId.isNotEmpty) {
+      apkLog(
+        'NewContact.room',
+        'FE local DB room found room_id="$localRoomId" receiver="$receiverId"',
+      );
+      if (localRoomId.startsWith('!')) {
+        roomId = localRoomId;
+      }
+    } else {
+      apkLog(
+        'NewContact.room',
+        'FE local DB room missing receiver="$receiverId"',
+      );
+    }
+
+    if (roomId == null || roomId.isEmpty) {
+      try {
+        await chat.connect();
+        final serverRoomId = await chat.findMatrixConversationId(receiverId);
+        if (serverRoomId != null && serverRoomId.isNotEmpty) {
+          apkLog(
+            'NewContact.room',
+            'server/Matrix room found room_id="$serverRoomId" receiver="$receiverId"',
+          );
+          roomId = serverRoomId;
+        } else {
+          apkLog(
+            'NewContact.room',
+            'server/Matrix room missing; creating room receiver="$receiverId"',
+          );
+          roomId = await chat.getMatrixConversationId(receiverId);
+        }
+      } catch (e) {
+        apkLog(
+          'NewContact.room',
+          'background room resolve failed receiver="$receiverId" error="$e"',
+        );
+        return;
+      }
+    }
+
+    if (roomId == null || roomId.isEmpty) {
+      apkLog(
+        'NewContact.room',
+        'background room resolve ended without room receiver="$receiverId"',
+      );
+      return;
+    }
+
+    await ChatLocalDb.instance.saveConversations([
+      ChatConversation(
+        id: roomId,
+        participants: [selfId, receiverId],
+        otherUserId: receiverId,
+        lastMessage: '',
+        lastMessageSenderId: '',
+        lastMessageTime: DateTime.now(),
+        unreadCount: 0,
+        otherUserName: contactName,
+        otherUserAvatar: avatarUrl,
+      ),
+    ]);
+    apkLog(
+      'NewContact.room',
+      'room cached room_id="$roomId" receiver="$receiverId"',
+    );
   }
 
   String _friendlyError(String raw) {
@@ -387,6 +622,15 @@ class _NewContactPageState extends State<NewContactPage> {
   String _conversationKey(String value) {
     final localpart = _matrixLocalpart(value) ?? value.trim();
     return localpart.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
+  }
+
+  String _displayName(String firstName, String lastName, String fallback) {
+    final name = [
+      firstName,
+      lastName,
+    ].where((part) => part.isNotEmpty).join(' ');
+    if (name.isNotEmpty) return name;
+    return fallback.trim().isNotEmpty ? fallback.trim() : 'Contact';
   }
 
   String _friendlyLookupError(String raw) {
@@ -570,24 +814,14 @@ class _NewContactPageState extends State<NewContactPage> {
         actions: [
           TextButton(
             onPressed: _canSave && !_isSaving ? _save : null,
-            child:
-                _isSaving
-                    ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: _kBlue,
-                      ),
-                    )
-                    : Text(
-                      'Save',
-                      style: TextStyle(
-                        color: _canSave ? _kBlue : Colors.white38,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
+            child: Text(
+              'Save',
+              style: TextStyle(
+                color: _canSave ? _kBlue : Colors.white38,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
         ],
       ),

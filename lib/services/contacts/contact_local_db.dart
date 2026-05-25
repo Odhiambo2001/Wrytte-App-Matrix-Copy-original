@@ -18,13 +18,18 @@ class ContactLocalDb {
     required String ownerUserId,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    final data = contacts.map((c) => jsonEncode({
-          'name': c.displayName,
-          'phones': c.phones.map(_normalizePhone).toList(),
-          'avatar': c.avatarUrl,
-          'wrytteUserId': c.wrytteUserId,
-          'isOnWrytte': c.isOnWrytte,
-        })).toList();
+    final data =
+        contacts
+            .map(
+              (c) => jsonEncode({
+                'name': c.displayName,
+                'phones': c.phones.map(_normalizePhone).toList(),
+                'avatar': c.avatarUrl,
+                'wrytteUserId': c.wrytteUserId,
+                'isOnWrytte': c.isOnWrytte,
+              }),
+            )
+            .toList();
 
     await prefs.setStringList(_keyForOwner(ownerUserId), data);
   }
@@ -52,9 +57,22 @@ class ContactLocalDb {
     required String ownerUserId,
   }) async {
     final existing = await loadContacts(ownerUserId: ownerUserId);
-    existing.add(contact.copyWith(
-      phones: contact.phones.map(_normalizePhone).toList(),
-    ));
+    final incomingPhones = contact.phones.map(_normalizePhone).toSet();
+    final incomingWrytteId = contact.wrytteUserId?.trim();
+    existing.removeWhere((saved) {
+      final savedWrytteId = saved.wrytteUserId?.trim();
+      final sameWrytteId =
+          incomingWrytteId != null &&
+          incomingWrytteId.isNotEmpty &&
+          savedWrytteId == incomingWrytteId;
+      final samePhone = saved.phones
+          .map(_normalizePhone)
+          .any(incomingPhones.contains);
+      return sameWrytteId || samePhone;
+    });
+    existing.add(
+      contact.copyWith(phones: contact.phones.map(_normalizePhone).toList()),
+    );
     await saveContacts(existing, ownerUserId: ownerUserId);
   }
 

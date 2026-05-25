@@ -73,15 +73,7 @@ class MatrixAuthService {
         .resolveHomeserver(userIdOrDomain: homeserver ?? username)
         .timeout(const Duration(seconds: 5));
     apkLog('Matrix.auth', 'resolved homeserver="$baseUri"');
-    try {
-      await client.checkHomeserver(baseUri).timeout(const Duration(seconds: 5));
-      apkLog('Matrix.auth', 'homeserver check ok "$baseUri"');
-    } on TimeoutException catch (e) {
-      apkLog(
-        'Matrix.auth',
-        'homeserver check timeout; continuing homeserver="$baseUri" error="$e"',
-      );
-    }
+    _prepareHomeserver(client, baseUri);
     apkLog('Matrix.auth', 'password login call user_id="$username"');
     final response = await client
         .login(
@@ -118,15 +110,7 @@ class MatrixAuthService {
         .resolveHomeserver(userIdOrDomain: homeserver ?? username)
         .timeout(const Duration(seconds: 5));
     apkLog('Matrix.auth', 'resolved register homeserver="$baseUri"');
-    try {
-      await client.checkHomeserver(baseUri).timeout(const Duration(seconds: 5));
-      apkLog('Matrix.auth', 'register homeserver check ok "$baseUri"');
-    } on TimeoutException catch (e) {
-      apkLog(
-        'Matrix.auth',
-        'register homeserver check timeout; continuing homeserver="$baseUri" error="$e"',
-      );
-    }
+    _prepareHomeserver(client, baseUri);
     apkLog('Matrix.auth', 'register call user_id="$username"');
     final response = await client
         .register(
@@ -210,5 +194,15 @@ class MatrixAuthService {
       if (client.deviceID != null)
         _storage.write(key: matrixDeviceIdKey, value: client.deviceID),
     ]);
+  }
+
+  void _prepareHomeserver(Client client, Uri homeserver) {
+    client.homeserver = _stripTrailingSlash(homeserver);
+    apkLog('Matrix.auth', 'homeserver prepared "${client.homeserver}"');
+  }
+
+  Uri _stripTrailingSlash(Uri uri) {
+    if (!uri.path.endsWith('/') || uri.path == '/') return uri;
+    return uri.replace(path: uri.path.substring(0, uri.path.length - 1));
   }
 }

@@ -9,6 +9,7 @@ import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
+import 'package:wrytte/ui/screens/new_contact_screen.dart';
 import 'package:wrytte/ui/widgets/profile_tab_bar_section.dart';
 import 'edit_profile_screen.dart';
 
@@ -171,6 +172,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       _profile?.phone,
       _savedContact?.primaryPhone,
       widget.fallbackPhone,
+      widget.fallbackName,
     ];
     for (final value in candidates) {
       final trimmed = value?.trim() ?? '';
@@ -210,6 +212,23 @@ class _ProfileScreenState extends State<ProfileScreen>
         ),
       );
     }
+  }
+
+  Future<void> _openAddContact() async {
+    if (widget.uid == null) return;
+    final phone = _profilePhone();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder:
+            (_) => NewContactPage(
+              token: '',
+              initialIdentifier: phone.isNotEmpty ? phone : widget.uid,
+              initialWrytteUserId: _toMatrixUserId(widget.uid!),
+            ),
+      ),
+    );
+    if (mounted) _loadProfile();
   }
 
   static const TextStyle _bioStyle = TextStyle(
@@ -452,6 +471,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   // CHANGE 3: Solid 0xFF23262C, no blur/opacity
 
   Widget _buildQuickActions() {
+    final showAddContact = _savedContact == null;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
@@ -461,6 +481,16 @@ class _ProfileScreenState extends State<ProfileScreen>
             child: _actionPill(Icons.call_outlined, 'Calls', onTap: () {}),
           ),
           const SizedBox(width: 10),
+          if (showAddContact) ...[
+            Expanded(
+              child: _actionPill(
+                Icons.person_add_alt_1_outlined,
+                'Add',
+                onTap: _openAddContact,
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
           Expanded(
             child: _actionPill(Icons.videocam_outlined, 'Video', onTap: () {}),
           ),

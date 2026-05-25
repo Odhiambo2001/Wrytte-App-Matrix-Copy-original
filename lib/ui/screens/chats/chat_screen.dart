@@ -116,6 +116,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _normaliseId(String id) => id.trim();
 
+  bool _looksLikePhone(String value) {
+    final stripped = value.trim().replaceAll(RegExp(r'[\s\-()]'), '');
+    return stripped.startsWith('+') || RegExp(r'^\d{7,}$').hasMatch(stripped);
+  }
+
   Future<String> _resolveConversationId() async {
     if (_resolvedConversationId != null) return _resolvedConversationId!;
 
@@ -1213,6 +1218,12 @@ class _ChatScreenState extends State<ChatScreen> {
                               (_) => ProfileScreen(
                                 uid: widget.receiverId,
                                 fallbackName: widget.title,
+                                fallbackPhone:
+                                    _looksLikePhone(widget.receiverId)
+                                        ? widget.receiverId
+                                        : _looksLikePhone(widget.title)
+                                        ? widget.title
+                                        : null,
                                 fallbackAvatarUrl: widget.avatarUrl,
                               ),
                         ),

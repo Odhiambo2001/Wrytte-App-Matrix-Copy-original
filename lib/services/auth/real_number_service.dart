@@ -308,6 +308,7 @@ class RealNumberService {
       secret: secret.isNotEmpty ? secret : archivedProfile?.secret ?? '',
       token: token,
       expiresAt: expiresAt,
+      preferMatrixRegisterFirst: serverIndicatesNewUser,
     );
 
     return RealNumberRegisterResult(

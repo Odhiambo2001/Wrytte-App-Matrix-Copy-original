@@ -1,3 +1,4 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
@@ -10,10 +11,22 @@ class ChatLocalDb {
   ChatLocalDb._();
   static final ChatLocalDb instance = ChatLocalDb._();
 
+  static const _userIdKey = 'user_id';
+  final FlutterSecureStorage _storage = const FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+
   Database? _db;
+  String? _ownerId;
 
   Future<Database> get db async {
-    _db ??= await _open();
+    final ownerId = await _currentOwnerId();
+    if (_db != null && _ownerId != ownerId) {
+      await _db!.close();
+      _db = null;
+    }
+    _ownerId = ownerId;
+    _db ??= await _open(ownerId);
     return _db!;
   }
 
@@ -29,9 +42,9 @@ class ChatLocalDb {
 
   // ── Open / migrate ─────────────────────────────────────────────────────────
 
-  Future<Database> _open() async {
+  Future<Database> _open(String ownerId) async {
     final dbPath = await getDatabasesPath();
-    final path = join(dbPath, 'wrytte_chat.db');
+    final path = join(dbPath, 'wrytte_chat_${_dbOwnerKey(ownerId)}.db');
 
     return openDatabase(
       path,
@@ -131,6 +144,18 @@ class ChatLocalDb {
     );
   }
 
+  Future<String> _currentOwnerId() async {
+    final userId = await _storage.read(key: _userIdKey);
+    final normalized = userId?.trim();
+    if (normalized == null || normalized.isEmpty) return 'signed_out';
+    return normalized;
+  }
+
+  String _dbOwnerKey(String ownerId) {
+    final key = ownerId.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '_');
+    return key.isEmpty ? 'signed_out' : key;
+  }
+
   static Future<void> _addColumnIfMissing(
     Database db,
     String table,
@@ -213,8 +238,7 @@ class ChatLocalDb {
       isForwarded: (row['isForwarded'] as int? ?? 0) == 1,
       isStarred: (row['isStarred'] as int? ?? 0) == 1,
       isDeletedForMe: (row['isDeletedForMe'] as int? ?? 0) == 1,
-      isDeletedForEveryone:
-          (row['isDeletedForEveryone'] as int? ?? 0) == 1,
+      isDeletedForEveryone: (row['isDeletedForEveryone'] as int? ?? 0) == 1,
     );
   }
 
@@ -330,6 +354,30 @@ class ChatLocalDb {
     return rows.map(_rowToConversation).toList();
   }
 
+  Future<String?> findDirectConversationId({
+    required String selfUserId,
+    required String otherUserId,
+  }) async {
+    final self = _conversationPeerKey(selfUserId);
+    final other = _conversationPeerKey(otherUserId);
+    if (self.isEmpty || other.isEmpty) return null;
+
+    final conversations = await loadConversations();
+    ChatConversation? fallback;
+    for (final conversation in conversations) {
+      final participants =
+          conversation.participants.map(_conversationPeerKey).toSet();
+      final otherId = _conversationPeerKey(conversation.otherUserId);
+      final hasBothParticipants =
+          participants.contains(self) && participants.contains(other);
+      final hasOtherUser = otherId == other;
+      if (!hasBothParticipants && !hasOtherUser) continue;
+      if (conversation.id.startsWith('!')) return conversation.id;
+      fallback ??= conversation;
+    }
+    return fallback?.id;
+  }
+
   ChatConversation _rowToConversation(Map<String, dynamic> row) {
     final participantsRaw = row['participants'] as String? ?? '';
     final participants =
@@ -374,10 +422,19 @@ class ChatLocalDb {
 
   Future<void> clearConversationUserNames() async {
     final database = await db;
-    await database.update(
-      'conversations',
-      {'otherUserName': null, 'otherUserAvatar': null},
-    );
+    await database.update('conversations', {
+      'otherUserName': null,
+      'otherUserAvatar': null,
+    });
+  }
+
+  String _conversationPeerKey(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return '';
+    if (trimmed.startsWith('@') && trimmed.contains(':')) {
+      return trimmed.substring(1, trimmed.indexOf(':'));
+    }
+    return trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
   }
 
   // ── Full wipe — call on logout ─────────────────────────────────────────────

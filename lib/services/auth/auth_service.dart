@@ -56,6 +56,9 @@ class AuthService {
   final Map<String, String> _pendingPhoneOtps = {};
   final Map<String, String> _pendingEmailOtps = {};
   int _matrixBootstrapGeneration = 0;
+  Future<void>? _matrixLoginInFlight;
+  String? _matrixLoginInFlightUserId;
+  int? _matrixLoginInFlightGeneration;
 
   static const _tokenKey = 'auth_token';
   static const _expiryKey = 'auth_token_expiry';
@@ -90,6 +93,45 @@ class AuthService {
     required String nickname,
     String homeserver = _defaultHomeserver,
     int? generation,
+    bool preferRegisterFirst = false,
+  }) {
+    final cleanUserId = userId.trim();
+    final inFlight = _matrixLoginInFlight;
+    final inFlightIsCurrent =
+        _matrixLoginInFlightGeneration == null ||
+        _matrixLoginInFlightGeneration == _matrixBootstrapGeneration;
+    if (inFlight != null &&
+        _matrixLoginInFlightUserId == cleanUserId &&
+        inFlightIsCurrent) {
+      apkLog('Matrix.auth', 'join in-flight login user_id="$cleanUserId"');
+      return inFlight;
+    }
+
+    final future = _loginToMatrixInternal(
+      userId: cleanUserId,
+      nickname: nickname,
+      homeserver: homeserver,
+      generation: generation,
+      preferRegisterFirst: preferRegisterFirst,
+    );
+    _matrixLoginInFlight = future;
+    _matrixLoginInFlightUserId = cleanUserId;
+    _matrixLoginInFlightGeneration = generation;
+    return future.whenComplete(() {
+      if (identical(_matrixLoginInFlight, future)) {
+        _matrixLoginInFlight = null;
+        _matrixLoginInFlightUserId = null;
+        _matrixLoginInFlightGeneration = null;
+      }
+    });
+  }
+
+  Future<void> _loginToMatrixInternal({
+    required String userId,
+    required String nickname,
+    required String homeserver,
+    int? generation,
+    required bool preferRegisterFirst,
   }) async {
     apkLog(
       'Matrix.auth',
@@ -110,30 +152,63 @@ class AuthService {
     }
     final password = secret.trim();
 
-    try {
-      apkLog('Matrix.auth', 'login request user_id="$userId"');
-      await MatrixAuthService.instance.login(
-        username: userId,
-        password: password,
-        homeserver: homeserver,
-      );
-      apkLog('Matrix.auth', 'login success user_id="$userId"');
-    } catch (_) {
-      if (!await _isCurrentMatrixBootstrap(userId, generation)) {
-        debugPrint(
-          '[AuthService] Matrix register skipped for stale user $userId.',
+    if (preferRegisterFirst) {
+      try {
+        apkLog('Matrix.auth', 'register first request user_id="$userId"');
+        await MatrixAuthService.instance.register(
+          username: userId,
+          password: password,
+          homeserver: homeserver,
         );
-        apkLog('Matrix.auth', 'register skipped stale user_id="$userId"');
-        return;
+        apkLog('Matrix.auth', 'register first success user_id="$userId"');
+      } catch (e) {
+        if (!await _isCurrentMatrixBootstrap(userId, generation)) {
+          debugPrint(
+            '[AuthService] Matrix login fallback skipped for stale user $userId.',
+          );
+          apkLog('Matrix.auth', 'login skipped stale user_id="$userId"');
+          return;
+        }
+        apkLog(
+          'Matrix.auth',
+          'register first failed; login request user_id="$userId" error="$e"',
+        );
+        await MatrixAuthService.instance.login(
+          username: userId,
+          password: password,
+          homeserver: homeserver,
+        );
+        apkLog('Matrix.auth', 'login fallback success user_id="$userId"');
       }
-      // Account may not exist yet on this server — register it.
-      apkLog('Matrix.auth', 'login failed; register request user_id="$userId"');
-      await MatrixAuthService.instance.register(
-        username: userId,
-        password: password,
-        homeserver: homeserver,
-      );
-      apkLog('Matrix.auth', 'register success user_id="$userId"');
+    } else {
+      try {
+        apkLog('Matrix.auth', 'login request user_id="$userId"');
+        await MatrixAuthService.instance.login(
+          username: userId,
+          password: password,
+          homeserver: homeserver,
+        );
+        apkLog('Matrix.auth', 'login success user_id="$userId"');
+      } catch (_) {
+        if (!await _isCurrentMatrixBootstrap(userId, generation)) {
+          debugPrint(
+            '[AuthService] Matrix register skipped for stale user $userId.',
+          );
+          apkLog('Matrix.auth', 'register skipped stale user_id="$userId"');
+          return;
+        }
+        // Account may not exist yet on this server — register it.
+        apkLog(
+          'Matrix.auth',
+          'login failed; register request user_id="$userId"',
+        );
+        await MatrixAuthService.instance.register(
+          username: userId,
+          password: password,
+          homeserver: homeserver,
+        );
+        apkLog('Matrix.auth', 'register success user_id="$userId"');
+      }
     }
 
     final client = MatrixClientService.instance.client;
@@ -179,6 +254,8 @@ class AuthService {
     required String secret,
     String? token,
     DateTime? expiresAt,
+    Duration matrixBootstrapTimeout = const Duration(seconds: 3),
+    bool preferMatrixRegisterFirst = false,
   }) async {
     // Never carry a different account's name into this session, and never
     // overwrite this account's archived real name with a generated fallback.
@@ -236,8 +313,9 @@ class AuthService {
         userId: userId,
         nickname: nameToSave,
         generation: generation,
+        preferRegisterFirst: preferMatrixRegisterFirst,
       ).timeout(
-        const Duration(seconds: 3),
+        matrixBootstrapTimeout,
         onTimeout: () {
           debugPrint('[AuthService] Matrix bootstrap timed out; continuing.');
         },
@@ -693,12 +771,14 @@ class AuthService {
     required String userId,
     required String nickname,
     int? generation,
+    bool preferRegisterFirst = false,
   }) async {
     try {
       await loginToMatrix(
         userId: userId,
         nickname: nickname,
         generation: generation,
+        preferRegisterFirst: preferRegisterFirst,
       );
     } catch (e) {
       debugPrint('[AuthService] Matrix bootstrap skipped: $e');

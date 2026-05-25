@@ -196,7 +196,7 @@ class ContactService {
         storedName != null && storedName.isNotEmpty ? storedName : ownerUserId;
     await AuthService.instance
         .loginToMatrix(userId: ownerUserId, nickname: nickname)
-        .timeout(const Duration(seconds: 35));
+        .timeout(const Duration(seconds: 75));
     MatrixContactService.instance.clearCache();
     apkLog('Contact.save', 'Matrix session refresh done owner="$ownerUserId"');
   }
@@ -411,16 +411,16 @@ class ContactService {
     );
 
     if (selfUserId != null && selfUserId.isNotEmpty) {
-      await saveContactToMatrix(ownerUserId: selfUserId, contact: contact);
-
       await ContactLocalDb.addContact(contact, ownerUserId: selfUserId);
       apkLog(
         'Contact.save',
-        'local cache save done after Matrix owner="$selfUserId" name="${contact.formattedName}"',
+        'local cache save done before Matrix owner="$selfUserId" name="${contact.formattedName}"',
       );
 
       invalidateCache();
       invalidateMatrixContactsCache();
+
+      await saveContactToMatrix(ownerUserId: selfUserId, contact: contact);
     } else {
       throw StateError('Cannot save Matrix contact without a signed-in user.');
     }

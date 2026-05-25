@@ -5,7 +5,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
-import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/auth_entry_screen.dart';
 
@@ -187,12 +186,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     } catch (e) {
       debugPrint('[Logout] Auth logout error (skipping): $e');
       UserProfileService.instance.clearCache();
-    }
-
-    try {
-      await ChatLocalDb.instance.clearAll().timeout(const Duration(seconds: 5));
-    } catch (e) {
-      debugPrint('[Logout] Chat DB error (skipping): $e');
     }
 
     if (mounted) {
