@@ -579,11 +579,17 @@ class ChatService {
         existing == null
             ? ChatConversation.fromMessage(message, currentUser)
             : existing.updateWithMessage(message, currentUser);
-    unawaited(ChatLocalDb.instance.saveMessage(message));
-    unawaited(
-      ChatLocalDb.instance.saveConversations([_conversationsMap[convId]!]),
-    );
+    unawaited(_persistCachedMessage(message, _conversationsMap[convId]!));
     _emitConversations();
+  }
+
+  Future<void> _persistCachedMessage(
+    ChatMessage message,
+    ChatConversation conversation,
+  ) async {
+    await ChatLocalDb.instance.deleteDuplicateOutgoingEchoesFor(message);
+    await ChatLocalDb.instance.saveMessage(message);
+    await ChatLocalDb.instance.saveConversations([conversation]);
   }
 
   void _replaceCachedMessage(ChatMessage message) {

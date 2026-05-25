@@ -258,6 +258,9 @@ class _ChatScreenState extends State<ChatScreen> {
         apkLog('ChatScreen.reconcile', 'skip local outgoing echo id=${msg.id}');
         return;
       }
+      if (_isMine(msg)) {
+        unawaited(ChatLocalDb.instance.deleteDuplicateOutgoingEchoesFor(msg));
+      }
       setState(() => _upsertMessage(msg));
       if (!_isMine(msg)) {
         unawaited(_chat.markConversationAsRead(realConvId));
@@ -418,7 +421,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final sent = await _chat.sendMessage(outbound);
       apkLog('ChatScreen._send', ' sent  id=${sent.id}  status=${sent.status}');
 
-      await _saveLocalMessage(sent);
+      await _saveCanonicalSentMessage(sent);
       if (mounted) {
         setState(() => _replaceOptimisticMessage(optimistic.id, sent));
       }
@@ -449,6 +452,11 @@ class _ChatScreenState extends State<ChatScreen> {
         otherUserAvatar: widget.avatarUrl,
       ),
     ]);
+  }
+
+  Future<void> _saveCanonicalSentMessage(ChatMessage message) async {
+    await ChatLocalDb.instance.deleteDuplicateOutgoingEchoesFor(message);
+    await _saveLocalMessage(message);
   }
 
   Future<void> _sendVoiceNote(String filePath, int durationSeconds) async {
@@ -562,6 +570,7 @@ class _ChatScreenState extends State<ChatScreen> {
     for (final msg in incoming) {
       _upsertMessage(msg);
     }
+    _removeDuplicateOutgoingEchoes();
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
 
@@ -634,6 +643,19 @@ class _ChatScreenState extends State<ChatScreen> {
     _messages.removeWhere((m) => _isDuplicateOutgoingEcho(m, sent));
     _optimisticIdByContent.removeWhere((_, id) => id == optimisticId);
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+  }
+
+  void _removeDuplicateOutgoingEchoes() {
+    final canonicalOutgoing =
+        _messages
+            .where((m) => _isMine(m) && !_isLocalOutgoingEchoId(m.id))
+            .toList();
+    if (canonicalOutgoing.isEmpty) return;
+    _messages.removeWhere(
+      (candidate) => canonicalOutgoing.any(
+        (sent) => _isDuplicateOutgoingEcho(candidate, sent),
+      ),
+    );
   }
 
   bool _isDuplicateOutgoingEcho(ChatMessage candidate, ChatMessage sent) {

@@ -205,6 +205,55 @@ class ChatLocalDb {
   /// Save a single message — used on optimistic send and on receive.
   Future<void> saveMessage(ChatMessage message) => saveMessages([message]);
 
+  Future<void> deleteDuplicateOutgoingEchoesFor(ChatMessage canonical) async {
+    if (_isLocalOutgoingEchoId(canonical.id)) return;
+
+    final database = await db;
+    final timestamp = canonical.timestamp.millisecondsSinceEpoch;
+    final rows = await database.query(
+      'messages',
+      columns: ['id', 'senderId', 'receiverId'],
+      where: '''
+        id != ?
+        AND content = ?
+        AND timestamp BETWEEN ? AND ?
+        AND (id LIKE ? OR id LIKE ? OR status = ?)
+      ''',
+      whereArgs: [
+        canonical.id,
+        canonical.content,
+        timestamp - 60000,
+        timestamp + 60000,
+        'opt_%',
+        'Wrytte-%',
+        MessageStatus.sending.name,
+      ],
+    );
+
+    final canonicalSender = _messagePeerKey(canonical.senderId);
+    final canonicalReceiver = _messagePeerKey(canonical.receiverId);
+    final duplicateIds =
+        rows
+            .where((row) {
+              final sender = _messagePeerKey(row['senderId'] as String? ?? '');
+              final receiver = _messagePeerKey(
+                row['receiverId'] as String? ?? '',
+              );
+              return sender == canonicalSender && receiver == canonicalReceiver;
+            })
+            .map((row) => row['id'] as String)
+            .toList();
+
+    if (duplicateIds.isEmpty) return;
+
+    final placeholders = List.filled(duplicateIds.length, '?').join(',');
+    await database.delete(
+      'messages',
+      where: 'id IN ($placeholders)',
+      whereArgs: duplicateIds,
+    );
+  }
+
   /// Load all messages for a conversation, oldest first.
   Future<List<ChatMessage>> loadMessages(String conversationId) async {
     final database = await db;
@@ -435,6 +484,14 @@ class ChatLocalDb {
       return trimmed.substring(1, trimmed.indexOf(':'));
     }
     return trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
+  }
+
+  bool _isLocalOutgoingEchoId(String id) {
+    return id.startsWith('opt_') || id.startsWith('Wrytte-');
+  }
+
+  String _messagePeerKey(String value) {
+    return _conversationPeerKey(value);
   }
 
   // ── Full wipe — call on logout ─────────────────────────────────────────────
