@@ -105,8 +105,8 @@ class ChatService {
         _refreshMessageStatusesForRoom(event.room);
         _messageController.add(message);
       });
-      _syncSub ??= client.onSync.stream.listen((_) {
-        unawaited(_handleSyncUpdate());
+      _syncSub ??= client.onSync.stream.listen((update) {
+        unawaited(_handleLiveSyncUpdate(update));
       });
 
       _isConnected = true;
@@ -213,7 +213,7 @@ class ChatService {
     try {
       await MatrixChatService.instance.ensureSyncedAndAutoJoinInvites();
       await _syncLocalContactsToMatrix();
-      await fetchConversations();
+      _refreshConversationsFromRooms();
       _refreshAllMessageStatuses();
     } catch (e) {
       debugPrint('[ChatService] connection warmup skipped: $e');
@@ -225,12 +225,15 @@ class ChatService {
     await connect();
   }
 
-  Future<void> _handleSyncUpdate() async {
+  Future<void> _handleLiveSyncUpdate(mx.SyncUpdate update) async {
+    if (!update.hasRoomUpdate) return;
     if (_handlingSync) return;
     _handlingSync = true;
     try {
-      await MatrixChatService.instance.autoJoinTrustedDirectInvites();
-      await fetchConversations();
+      if (update.rooms?.invite?.isNotEmpty ?? false) {
+        await MatrixChatService.instance.autoJoinTrustedDirectInvites();
+      }
+      _refreshConversationsFromRooms();
       _refreshAllMessageStatuses();
     } finally {
       _handlingSync = false;
@@ -364,18 +367,7 @@ class ChatService {
   Future<void> fetchConversations({int offset = 0, int count = 100}) async {
     try {
       await MatrixAuthService.instance.restore();
-      final rooms = MatrixClientService.instance.client.rooms;
-      _conversationsMap
-        ..clear()
-        ..addEntries(
-          rooms.map((room) => MapEntry(room.id, _toConversation(room))),
-        );
-      unawaited(
-        ChatLocalDb.instance.saveConversations(
-          _conversationsMap.values.toList(),
-        ),
-      );
-      _emitConversations();
+      _refreshConversationsFromRooms();
     } catch (e) {
       debugPrint('[ChatService] fetchConversations error: $e');
     }
@@ -565,6 +557,19 @@ class ChatService {
       otherUserName: room.getLocalizedDisplayname(),
       otherUserAvatar: room.avatar?.toString(),
     );
+  }
+
+  void _refreshConversationsFromRooms() {
+    final rooms = MatrixClientService.instance.client.rooms;
+    _conversationsMap
+      ..clear()
+      ..addEntries(
+        rooms.map((room) => MapEntry(room.id, _toConversation(room))),
+      );
+    unawaited(
+      ChatLocalDb.instance.saveConversations(_conversationsMap.values.toList()),
+    );
+    _emitConversations();
   }
 
   void _cacheMessage(ChatMessage message, {bool countUnread = true}) {
