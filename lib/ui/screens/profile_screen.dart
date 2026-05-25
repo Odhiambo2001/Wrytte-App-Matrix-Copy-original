@@ -156,12 +156,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profileDisplayName() {
-    return _cleanName(_profile?.displayName).isNotEmpty
+    return _cleanName(_savedContact?.formattedName).isNotEmpty
+        ? _cleanName(_savedContact?.formattedName)
+        : _cleanName(_profile?.displayName).isNotEmpty
         ? _cleanName(_profile?.displayName)
         : _cleanName(_matrixDisplayName).isNotEmpty
         ? _cleanName(_matrixDisplayName)
-        : _cleanName(_savedContact?.formattedName).isNotEmpty
-        ? _cleanName(_savedContact?.formattedName)
         : _cleanName(widget.fallbackName).isNotEmpty
         ? _cleanName(widget.fallbackName)
         : 'User';
