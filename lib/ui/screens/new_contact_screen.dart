@@ -33,12 +33,14 @@ class NewContactPage extends StatefulWidget {
   final String token;
   final String? initialIdentifier;
   final String? initialWrytteUserId;
+  final String? initialName;
 
   const NewContactPage({
     super.key,
     required this.token,
     this.initialIdentifier,
     this.initialWrytteUserId,
+    this.initialName,
   });
 
   @override
@@ -123,6 +125,10 @@ class _NewContactPageState extends State<NewContactPage> {
   void _prefillInitialContact() {
     final identifier = widget.initialIdentifier?.trim() ?? '';
     final wrytteUserId = widget.initialWrytteUserId?.trim() ?? '';
+    final initialName = widget.initialName?.trim() ?? '';
+    if (initialName.isNotEmpty) {
+      _firstNameCtrl.text = initialName;
+    }
     if (identifier.isEmpty && wrytteUserId.isEmpty) return;
 
     if (wrytteUserId.isNotEmpty) {

@@ -121,6 +121,15 @@ class _ChatScreenState extends State<ChatScreen> {
     return stripped.startsWith('+') || RegExp(r'^\d{7,}$').hasMatch(stripped);
   }
 
+  String _extractPhone(String? value) {
+    final raw = value?.trim() ?? '';
+    if (raw.isEmpty) return '';
+    final match = RegExp(r'(\+?\d[\d\s\-()]{6,}\d)').firstMatch(raw);
+    if (match == null) return '';
+    final phone = match.group(1)?.trim() ?? '';
+    return _looksLikePhone(phone) ? phone : '';
+  }
+
   Future<String> _resolveConversationId() async {
     if (_resolvedConversationId != null) return _resolvedConversationId!;
 
@@ -1210,6 +1219,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildAppBar(double statusBarH) {
     final displayName = widget.title;
+    final fallbackPhone =
+        _extractPhone(widget.receiverId).isNotEmpty
+            ? _extractPhone(widget.receiverId)
+            : _extractPhone(widget.title);
     return Padding(
       padding: EdgeInsets.only(top: statusBarH),
       child: SizedBox(
@@ -1241,10 +1254,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                 uid: widget.receiverId,
                                 fallbackName: widget.title,
                                 fallbackPhone:
-                                    _looksLikePhone(widget.receiverId)
-                                        ? widget.receiverId
-                                        : _looksLikePhone(widget.title)
-                                        ? widget.title
+                                    fallbackPhone.isNotEmpty
+                                        ? fallbackPhone
                                         : null,
                                 fallbackAvatarUrl: widget.avatarUrl,
                               ),

@@ -136,6 +136,15 @@ class _ProfileScreenState extends State<ProfileScreen>
     return stripped.startsWith('+') || RegExp(r'^\d{7,}$').hasMatch(stripped);
   }
 
+  String _extractPhone(String? value) {
+    final raw = value?.trim() ?? '';
+    if (raw.isEmpty) return '';
+    final match = RegExp(r'(\+?\d[\d\s\-()]{6,}\d)').firstMatch(raw);
+    if (match == null) return '';
+    final phone = match.group(1)?.trim() ?? '';
+    return _looksLikePhone(phone) ? phone : '';
+  }
+
   bool _looksLikeMatrixId(String value) {
     final trimmed = value.trim();
     final localpart = _matrixLocalpart(trimmed);
@@ -175,9 +184,9 @@ class _ProfileScreenState extends State<ProfileScreen>
       widget.fallbackName,
     ];
     for (final value in candidates) {
-      final trimmed = value?.trim() ?? '';
-      if (trimmed.isNotEmpty && _looksLikePhone(trimmed)) {
-        return _formatPhone(trimmed);
+      final phone = _extractPhone(value);
+      if (phone.isNotEmpty) {
+        return _formatPhone(phone);
       }
     }
     return '';
@@ -225,6 +234,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               token: '',
               initialIdentifier: phone.isNotEmpty ? phone : widget.uid,
               initialWrytteUserId: _toMatrixUserId(widget.uid!),
+              initialName: _profileDisplayName(),
             ),
       ),
     );

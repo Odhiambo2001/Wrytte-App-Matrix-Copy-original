@@ -205,13 +205,25 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               otherUserAvatar: _contactAvatarCache[contactKey],
             );
           }
-          if (_isTechnicalName(c.otherUserName ?? c.otherUserId)) {
-            return c.copyWith(otherUserName: 'Wrytte contact');
-          }
-          return c;
+          return c.copyWith(otherUserName: _unsavedConversationTitle(c));
         }).toList();
 
     return afterSavedContacts;
+  }
+
+  String _unsavedConversationTitle(ChatConversation conv) {
+    for (final candidate in [
+      conv.otherUserName,
+      conv.otherUserId,
+      ...conv.participants,
+    ]) {
+      final phone = _extractPhone(candidate);
+      if (phone.isNotEmpty) return _formatPhone(phone);
+    }
+
+    final raw = conv.otherUserName ?? conv.otherUserId;
+    if (!_isTechnicalName(raw)) return raw;
+    return _matrixLocalpart(conv.otherUserId) ?? conv.otherUserId;
   }
 
   List<ChatConversation> _dedupeLocalPlaceholders(
@@ -294,6 +306,23 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   bool _looksLikePhone(String value) {
     final s = value.replaceAll(RegExp(r'[\s\-()]'), '');
     return s.startsWith('+') || RegExp(r'^\d{7,}$').hasMatch(s);
+  }
+
+  String _extractPhone(String? value) {
+    final raw = value?.trim() ?? '';
+    if (raw.isEmpty) return '';
+    final match = RegExp(r'(\+?\d[\d\s\-()]{6,}\d)').firstMatch(raw);
+    if (match == null) return '';
+    final phone = match.group(1)?.trim() ?? '';
+    return _looksLikePhone(phone) ? phone : '';
+  }
+
+  String _formatPhone(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    if (digits.startsWith('+1') && digits.length == 12) {
+      return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
+    }
+    return phone;
   }
 
   Future<void> _retryEnrichment() async {
