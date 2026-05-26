@@ -100,28 +100,31 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     if (_currentUserId.isEmpty) return;
 
-    // Load saved contacts FIRST so names are ready before conversations render
-    await _loadSavedContacts();
+    // Paint SQLite conversations first. Contact-name enrichment and Matrix
+    // live sync should never block the first frame of the chat list.
     await _loadLocalConversations();
+
+    unawaited(_loadSavedContactsAndRefresh());
 
     // Pre-warm contact cache for FirebaseNewChatScreen
     ContactService.preloadContacts(_currentUserId, ContactService());
 
-    // Connect ChatService (idempotent)
+    // Subscribe to Matrix conversation stream
+    _convSub = _chat.conversationsStream.listen((incoming) async {
+      if (incoming.isEmpty && _conversations.isNotEmpty) return;
+      final enriched = await _enrichNames(incoming);
+      if (!mounted) return;
+      setState(() => _conversations = enriched);
+      _notifyUnread(_conversations);
+    });
+
+    // Connect ChatService (idempotent) after local conversations are visible.
     try {
       await _chat.connect();
       await _chat.fetchConversations();
     } catch (e) {
       debugPrint('[ConversationsScreen] chat connect skipped: $e');
     }
-
-    // Subscribe to Matrix conversation stream
-    _convSub = _chat.conversationsStream.listen((incoming) async {
-      final enriched = await _enrichNames(incoming);
-      if (!mounted) return;
-      setState(() => _conversations = enriched);
-      _notifyUnread(_conversations);
-    });
 
     // Retry enrichment when connectivity is restored
     _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
@@ -140,6 +143,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     } catch (e) {
       debugPrint('[ConversationsScreen] local conversation load error: $e');
     }
+  }
+
+  Future<void> _loadSavedContactsAndRefresh() async {
+    await _loadSavedContacts();
+    final enriched = await _enrichNames(_conversations);
+    if (!mounted) return;
+    setState(() => _conversations = enriched);
+    _notifyUnread(_conversations);
   }
 
   // ===========================================================================
