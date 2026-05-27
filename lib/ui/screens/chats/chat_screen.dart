@@ -8,10 +8,14 @@ import 'package:flutter/services.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
+import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/call_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/contacts/contact_identity_cache.dart';
+import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/calls/call_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
@@ -61,6 +65,8 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _matrixAvailable = false;
 
   UserProfile? _receiverProfile;
+  Contact? _savedContact;
+  ContactIdentity? _receiverIdentity;
   ChatMessage? _replyingTo;
 
   // ── debug overlay ──────────────────────────────────────────────────────────
@@ -117,7 +123,8 @@ class _ChatScreenState extends State<ChatScreen> {
   String _normaliseId(String id) => id.trim();
 
   bool _looksLikePhone(String value) {
-    final stripped = value.trim().replaceAll(RegExp(r'[\s\-()]'), '');
+    final stripped = value.trim().replaceAll(RegExp(r'[\s\-()+]'), '');
+    if (stripped.length < 7 || stripped.length > 15) return false;
     return stripped.startsWith('+') || RegExp(r'^\d{7,}$').hasMatch(stripped);
   }
 
@@ -128,6 +135,34 @@ class _ChatScreenState extends State<ChatScreen> {
     if (match == null) return '';
     final phone = match.group(1)?.trim() ?? '';
     return _looksLikePhone(phone) ? phone : '';
+  }
+
+  String _phoneFromIdentifier(String? value) {
+    final extracted = _extractPhone(value);
+    if (extracted.isNotEmpty) return extracted;
+
+    final localpart = _matrixLocalpart(value ?? '');
+    final digits = localpart.replaceAll(RegExp(r'[^\d]'), '');
+    return digits.length >= 7 && digits.length <= 15 ? digits : '';
+  }
+
+  String _formatPhone(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    final digitsOnly = digits.replaceAll(RegExp(r'[^\d]'), '');
+    if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
+    if (digits.startsWith('+1') && digits.length == 12) {
+      return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
+    }
+    if (digits.isNotEmpty && !digits.startsWith('+')) return '+$digits';
+    return phone;
+  }
+
+  String _firstPhoneFrom(Iterable<String?> candidates) {
+    for (final candidate in candidates) {
+      final phone = _phoneFromIdentifier(candidate);
+      if (phone.isNotEmpty) return _formatPhone(phone);
+    }
+    return '';
   }
 
   Future<String> _resolveConversationId() async {
@@ -184,20 +219,14 @@ class _ChatScreenState extends State<ChatScreen> {
       return widget.conversationId;
     }
 
-    if (!_matrixAvailable) {
-      try {
-        apkLog(
-          'ChatScreen._resolveSendConv',
-          'connecting Matrix before send...',
-        );
-        await _chat.connect();
-        _matrixAvailable = true;
-        _resolvedConversationId = null;
-      } catch (e) {
-        _matrixAvailable = false;
-        apkLog('ChatScreen._resolveSendConv', 'Matrix connect failed: $e');
-        return null;
-      }
+    try {
+      apkLog('ChatScreen._resolveSendConv', 'validating Matrix before send...');
+      await _chat.connect();
+      _matrixAvailable = true;
+    } catch (e) {
+      _matrixAvailable = false;
+      apkLog('ChatScreen._resolveSendConv', 'Matrix connect failed: $e');
+      return null;
     }
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
@@ -291,10 +320,103 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _loadReceiverProfile() async {
+    final ownerUserId = await AuthService.instance.getCurrentUserId();
     final profile = await UserProfileService.instance.getProfileByUid(
       widget.receiverId,
     );
-    if (mounted) setState(() => _receiverProfile = profile);
+    final saved =
+        ownerUserId == null || ownerUserId.isEmpty
+            ? null
+            : await _findSavedContact(ownerUserId, widget.receiverId);
+    var identity =
+        ownerUserId == null || ownerUserId.isEmpty
+            ? null
+            : await ContactIdentityCache.instance.findByMatrixId(
+              ownerUserId: ownerUserId,
+              matrixUserId: widget.receiverId,
+            );
+
+    if (ownerUserId != null && ownerUserId.isNotEmpty) {
+      final fallbackPhone = _firstPhoneFrom([widget.receiverId, widget.title]);
+      await ContactIdentityCache.instance.upsert(
+        ownerUserId: ownerUserId,
+        matrixUserId: widget.receiverId,
+        phone: profile?.phone ?? fallbackPhone,
+        profileName: profile?.displayName,
+        savedName: saved?.formattedName,
+        avatarUrl:
+            profile?.hasProfileImage == true
+                ? profile!.profileImage
+                : widget.avatarUrl,
+      );
+      identity = await ContactIdentityCache.instance.findByMatrixId(
+        ownerUserId: ownerUserId,
+        matrixUserId: widget.receiverId,
+      );
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _receiverProfile = profile;
+      _savedContact = saved;
+      _receiverIdentity = identity;
+    });
+  }
+
+  Future<Contact?> _findSavedContact(String ownerUserId, String uid) async {
+    final targetLocalpart = _matrixLocalpart(uid);
+    final contacts = await ContactService().getMatrixContactsCached(
+      ownerUserId,
+    );
+    for (final contact in contacts) {
+      final contactId = contact.wrytteUserId;
+      if (contactId == null || contactId.isEmpty) continue;
+      if (_matrixLocalpart(contactId) == targetLocalpart) return contact;
+    }
+    return null;
+  }
+
+  String _chatDisplayName() {
+    final savedName = _cleanDisplayName(_savedContact?.formattedName);
+    if (savedName.isNotEmpty) return savedName;
+
+    final cachedSaved = _cleanDisplayName(_receiverIdentity?.savedName);
+    if (cachedSaved.isNotEmpty) return cachedSaved;
+
+    final cachedPhone = _extractPhone(_receiverIdentity?.phone);
+    if (cachedPhone.isNotEmpty) return _formatPhone(cachedPhone);
+
+    for (final candidate in [
+      widget.title,
+      widget.receiverId,
+      ..._messagePeerIdentifiers(),
+    ]) {
+      final phone = _phoneFromIdentifier(candidate);
+      if (phone.isNotEmpty) return _formatPhone(phone);
+    }
+
+    return '';
+  }
+
+  Iterable<String> _messagePeerIdentifiers() sync* {
+    for (final message in _messages.reversed) {
+      if (_isMine(message)) {
+        yield message.receiverId;
+      } else {
+        yield message.senderId;
+      }
+    }
+  }
+
+  String _cleanDisplayName(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty || _looksLikePhone(trimmed)) return '';
+    if (trimmed.startsWith('@') && trimmed.contains(':')) return '';
+    if (trimmed.startsWith('!') && trimmed.contains(':')) return '';
+    if (RegExp(r'^[a-f0-9]{24,}$', caseSensitive: false).hasMatch(trimmed)) {
+      return '';
+    }
+    return trimmed;
   }
 
   // ─── PAGINATION ────────────────────────────────────────────────────────────
@@ -1218,11 +1340,19 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── APP BAR ───────────────────────────────────────────────────────────────
 
   Widget _buildAppBar(double statusBarH) {
-    final displayName = widget.title;
+    final displayName = _chatDisplayName();
     final fallbackPhone =
-        _extractPhone(widget.receiverId).isNotEmpty
-            ? _extractPhone(widget.receiverId)
-            : _extractPhone(widget.title);
+        (_receiverIdentity?.phone?.trim().isNotEmpty == true)
+            ? _receiverIdentity!.phone!.trim()
+            : _firstPhoneFrom([
+              widget.receiverId,
+              widget.title,
+              ..._messagePeerIdentifiers(),
+            ]);
+    final profileFallbackName =
+        _receiverIdentity?.profileName?.trim().isNotEmpty == true
+            ? _receiverIdentity!.profileName!.trim()
+            : widget.title;
     return Padding(
       padding: EdgeInsets.only(top: statusBarH),
       child: SizedBox(
@@ -1245,22 +1375,24 @@ class _ChatScreenState extends State<ChatScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: GestureDetector(
-                  onTap:
-                      () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder:
-                              (_) => ProfileScreen(
-                                uid: widget.receiverId,
-                                fallbackName: widget.title,
-                                fallbackPhone:
-                                    fallbackPhone.isNotEmpty
-                                        ? fallbackPhone
-                                        : null,
-                                fallbackAvatarUrl: widget.avatarUrl,
-                              ),
-                        ),
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder:
+                            (_) => ProfileScreen(
+                              uid: widget.receiverId,
+                              fallbackName: profileFallbackName,
+                              fallbackPhone:
+                                  fallbackPhone.isNotEmpty
+                                      ? fallbackPhone
+                                      : null,
+                              fallbackAvatarUrl: widget.avatarUrl,
+                            ),
                       ),
+                    );
+                    if (mounted) _loadReceiverProfile();
+                  },
                   child: SizedBox(
                     height: _kHeaderPillH,
                     child: Stack(

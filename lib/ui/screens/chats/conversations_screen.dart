@@ -7,6 +7,7 @@ import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
+import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
@@ -20,9 +21,9 @@ import 'widgets/tab_bar_section.dart';
 // =============================================================================
 //  ConversationsScreen
 //
-//  Name resolution priority (highest → lowest):
+//  Name resolution priority (highest -> lowest):
 //    1. Saved contacts in Matrix account data.
-//    2. Raw Matrix room/user data.
+//    2. Phone number.
 // =============================================================================
 
 const double _kSearchBarHeight = 60.0;
@@ -60,6 +61,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   // ── Priority 1: saved contact names keyed by phone, Matrix ID, and localpart.
   final Map<String, String> _contactNameCache = {};
   final Map<String, String?> _contactAvatarCache = {};
+  final Map<String, ContactIdentity> _identityCache = {};
 
   // ===========================================================================
   //  LIFECYCLE
@@ -100,14 +102,18 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     if (_currentUserId.isEmpty) return;
 
+    await _loadIdentityCache();
+
     // Paint SQLite conversations first. Contact-name enrichment and Matrix
     // live sync should never block the first frame of the chat list.
     await _loadLocalConversations();
 
     unawaited(_loadSavedContactsAndRefresh());
 
-    // Pre-warm contact cache for FirebaseNewChatScreen
+    // Pre-warm saved contacts and phonebook identity matches, then repaint any
+    // rows that were initially loaded from raw Matrix room data.
     ContactService.preloadContacts(_currentUserId, ContactService());
+    unawaited(_loadPhonebookIdentitiesAndRefresh());
 
     // Subscribe to Matrix conversation stream
     _convSub = _chat.conversationsStream.listen((incoming) async {
@@ -153,6 +159,19 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     _notifyUnread(_conversations);
   }
 
+  Future<void> _loadPhonebookIdentitiesAndRefresh() async {
+    try {
+      await ContactService().getWrytteContactsOptimized();
+      await _loadIdentityCache();
+      final enriched = await _enrichNames(_conversations);
+      if (!mounted) return;
+      setState(() => _conversations = enriched);
+      _notifyUnread(_conversations);
+    } catch (e) {
+      debugPrint('[ConversationsScreen] phone identity refresh skipped: $e');
+    }
+  }
+
   // ===========================================================================
   //  LOAD SAVED CONTACTS
   //  Reads contacts the user explicitly saved (savedBy == currentUserId).
@@ -177,12 +196,22 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
         _cacheContactName(c.wrytteUserId, name, c.avatarUrl);
         _cacheContactName(_matrixLocalpart(c.wrytteUserId), name, c.avatarUrl);
+        if (c.wrytteUserId != null && c.wrytteUserId!.trim().isNotEmpty) {
+          await ContactIdentityCache.instance.upsert(
+            ownerUserId: _currentUserId,
+            matrixUserId: c.wrytteUserId!,
+            phone: c.primaryPhone,
+            savedName: name,
+            avatarUrl: c.avatarUrl,
+          );
+        }
 
         for (final phone in c.phones) {
           // Strip everything except digits so we can match with/without '+'
           _cacheContactName(phone, name, c.avatarUrl);
         }
       }
+      await _loadIdentityCache();
 
       debugPrint(
         '[ConversationsScreen] loaded ${_contactNameCache.length} saved contact names',
@@ -190,6 +219,16 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     } catch (e) {
       debugPrint('[ConversationsScreen] _loadSavedContacts error: $e');
     }
+  }
+
+  Future<void> _loadIdentityCache() async {
+    _identityCache
+      ..clear()
+      ..addAll(
+        await ContactIdentityCache.instance.loadAll(
+          ownerUserId: _currentUserId,
+        ),
+      );
   }
 
   // ===========================================================================
@@ -209,32 +248,63 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     // ── Pass 1: saved contact names always win ─────────────────────────────
     final afterSavedContacts =
         deduped.map((c) {
+          final title = _conversationTitle(c);
           final contactKey = _contactKeyForConversation(c);
-          if (contactKey != null) {
-            return c.copyWith(
-              otherUserName: _contactNameCache[contactKey],
-              otherUserAvatar: _contactAvatarCache[contactKey],
-            );
-          }
-          return c.copyWith(otherUserName: _unsavedConversationTitle(c));
+          return c.copyWith(
+            otherUserName: title,
+            otherUserAvatar:
+                contactKey == null
+                    ? c.otherUserAvatar
+                    : _contactAvatarCache[contactKey],
+          );
         }).toList();
 
     return afterSavedContacts;
   }
 
-  String _unsavedConversationTitle(ChatConversation conv) {
-    for (final candidate in [
-      conv.otherUserName,
-      conv.otherUserId,
-      ...conv.participants,
-    ]) {
-      final phone = _extractPhone(candidate);
+  String _conversationTitle(ChatConversation conv) {
+    final identity = _identityForConversation(conv);
+    final savedName = _cleanHumanName(identity?.savedName);
+    if (savedName.isNotEmpty) return savedName;
+
+    final contactKey = _contactKeyForConversation(conv);
+    if (contactKey != null) {
+      final contactName = _cleanHumanName(_contactNameCache[contactKey]);
+      if (contactName.isNotEmpty) return contactName;
+    }
+
+    final identityPhone = _extractPhone(identity?.phone);
+    if (identityPhone.isNotEmpty) return _formatPhone(identityPhone);
+
+    if (contactKey != null) {
+      final phone = _extractPhone(contactKey);
       if (phone.isNotEmpty) return _formatPhone(phone);
     }
 
-    final raw = conv.otherUserName ?? conv.otherUserId;
-    if (!_isTechnicalName(raw)) return raw;
-    return _matrixLocalpart(conv.otherUserId) ?? conv.otherUserId;
+    for (final candidate in [
+      conv.otherUserName,
+      conv.otherUserId,
+      conv.lastMessageSenderId,
+      ...conv.participants,
+    ]) {
+      final phone = _phoneFromIdentifier(candidate);
+      if (phone.isNotEmpty) return _formatPhone(phone);
+    }
+
+    final lastSenderPhone = _phoneFromIdentifier(conv.lastMessageSenderId);
+    if (lastSenderPhone.isNotEmpty) return _formatPhone(lastSenderPhone);
+
+    return '';
+  }
+
+  ContactIdentity? _identityForConversation(ChatConversation conv) {
+    for (final key in _conversationKeys(conv)) {
+      final localpart = _matrixLocalpart(key)?.toLowerCase();
+      if (localpart != null && _identityCache.containsKey(localpart)) {
+        return _identityCache[localpart];
+      }
+    }
+    return null;
   }
 
   List<ChatConversation> _dedupeLocalPlaceholders(
@@ -263,13 +333,23 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Iterable<String> _conversationKeys(ChatConversation conv) sync* {
     yield* _identityKeys(conv.otherUserId);
+    if (!_isCurrentUserIdentifier(conv.lastMessageSenderId)) {
+      yield* _identityKeys(conv.lastMessageSenderId);
+    }
     if (conv.otherUserName != null) yield* _identityKeys(conv.otherUserName!);
     for (final participant in conv.participants) {
-      if (participant != _currentUserId &&
-          participant != '@$_currentUserId:${MatrixConfig.serverName}') {
+      if (!_isCurrentUserIdentifier(participant)) {
         yield* _identityKeys(participant);
       }
     }
+  }
+
+  bool _isCurrentUserIdentifier(String value) {
+    final current = _currentUserId.trim();
+    if (current.isEmpty) return false;
+    final localpart = _matrixLocalpart(value) ?? value.trim();
+    return localpart == current ||
+        value.trim() == '@$current:${MatrixConfig.serverName}';
   }
 
   void _cacheContactName(String? raw, String name, String? avatarUrl) {
@@ -302,21 +382,28 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     return trimmed;
   }
 
-  bool _isTechnicalName(String value) {
-    final sanitized = value.trim();
-    if (sanitized.isEmpty) return true;
-    if (_looksLikePhone(sanitized)) return true;
-    if (sanitized.startsWith('@') && sanitized.contains(':')) return true;
-    if (sanitized.startsWith('!') && sanitized.contains(':')) return true;
-    if (sanitized.toLowerCase().startsWith('group with ')) return true;
-    return false;
-  }
-
   /// Returns true when [value] is a raw phone number rather than a
   /// human display name.
   bool _looksLikePhone(String value) {
-    final s = value.replaceAll(RegExp(r'[\s\-()]'), '');
+    final s = value.replaceAll(RegExp(r'[\s\-()+]'), '');
+    if (s.length < 7 || s.length > 15) return false;
     return s.startsWith('+') || RegExp(r'^\d{7,}$').hasMatch(s);
+  }
+
+  bool _looksLikeMatrixId(String value) {
+    final trimmed = value.trim();
+    final localpart = _matrixLocalpart(trimmed) ?? trimmed;
+    return trimmed.startsWith('@') ||
+        trimmed.startsWith('!') ||
+        trimmed.contains(':matrix.') ||
+        RegExp(r'^[a-f0-9]{24,}$', caseSensitive: false).hasMatch(localpart);
+  }
+
+  String _cleanHumanName(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return '';
+    if (_looksLikePhone(trimmed) || _looksLikeMatrixId(trimmed)) return '';
+    return trimmed;
   }
 
   String _extractPhone(String? value) {
@@ -328,11 +415,23 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     return _looksLikePhone(phone) ? phone : '';
   }
 
+  String _phoneFromIdentifier(String? value) {
+    final extracted = _extractPhone(value);
+    if (extracted.isNotEmpty) return extracted;
+
+    final localpart = _matrixLocalpart(value);
+    final digits = localpart?.replaceAll(RegExp(r'[^\d]'), '') ?? '';
+    return digits.length >= 7 && digits.length <= 15 ? digits : '';
+  }
+
   String _formatPhone(String phone) {
     final digits = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    final digitsOnly = digits.replaceAll(RegExp(r'[^\d]'), '');
+    if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
     if (digits.startsWith('+1') && digits.length == 12) {
       return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
     }
+    if (digits.isNotEmpty && !digits.startsWith('+')) return '+$digits';
     return phone;
   }
 

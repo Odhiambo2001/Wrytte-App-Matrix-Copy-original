@@ -48,7 +48,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -65,6 +65,7 @@ class ChatLocalDb {
             replyToMessageId TEXT,
             replyToSenderId  TEXT,
             replyPreview     TEXT,
+            senderPhone      TEXT,
             isForwarded      INTEGER NOT NULL DEFAULT 0,
             isStarred        INTEGER NOT NULL DEFAULT 0,
             isDeletedForMe   INTEGER NOT NULL DEFAULT 0,
@@ -140,6 +141,9 @@ class ChatLocalDb {
             ON messages (isStarred, timestamp)
           ''');
         }
+        if (oldVersion < 3) {
+          await _addColumnIfMissing(db, 'messages', 'senderPhone', 'TEXT');
+        }
       },
     );
   }
@@ -192,6 +196,7 @@ class ChatLocalDb {
         'replyToMessageId': m.replyToMessageId,
         'replyToSenderId': m.replyToSenderId,
         'replyPreview': m.replyPreview,
+        'senderPhone': m.senderPhone,
         'isForwarded': m.isForwarded ? 1 : 0,
         'isStarred': m.isStarred ? 1 : 0,
         'isDeletedForMe': m.isDeletedForMe ? 1 : 0,
@@ -284,6 +289,7 @@ class ChatLocalDb {
       replyToMessageId: row['replyToMessageId'] as String?,
       replyToSenderId: row['replyToSenderId'] as String?,
       replyPreview: row['replyPreview'] as String?,
+      senderPhone: row['senderPhone'] as String?,
       isForwarded: (row['isForwarded'] as int? ?? 0) == 1,
       isStarred: (row['isStarred'] as int? ?? 0) == 1,
       isDeletedForMe: (row['isDeletedForMe'] as int? ?? 0) == 1,

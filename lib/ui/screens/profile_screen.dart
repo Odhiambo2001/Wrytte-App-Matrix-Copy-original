@@ -5,6 +5,7 @@ import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
@@ -40,6 +41,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   UserProfile? _profile;
   Contact? _savedContact;
+  ContactIdentity? _identity;
   String? _matrixDisplayName;
   String? _matrixAvatarUrl;
   bool _profileLoading = true;
@@ -75,11 +77,45 @@ class _ProfileScreenState extends State<ProfileScreen>
         widget.uid != null ? await _findSavedContact(widget.uid!) : null;
     final matrixProfile =
         widget.uid != null ? await _loadMatrixProfile(widget.uid!) : null;
+    final ownerUserId = await AuthService.instance.getCurrentUserId();
+    var identity =
+        widget.uid != null && ownerUserId != null && ownerUserId.isNotEmpty
+            ? await ContactIdentityCache.instance.findByMatrixId(
+              ownerUserId: ownerUserId,
+              matrixUserId: widget.uid!,
+            )
+            : null;
+
+    if (widget.uid != null && ownerUserId != null && ownerUserId.isNotEmpty) {
+      await ContactIdentityCache.instance.upsert(
+        ownerUserId: ownerUserId,
+        matrixUserId: widget.uid!,
+        phone: profile?.phone ?? widget.fallbackPhone ?? identity?.phone,
+        profileName:
+            _cleanName(profile?.displayName).isNotEmpty
+                ? profile?.displayName
+                : _cleanName(matrixProfile?.$1).isNotEmpty
+                ? matrixProfile?.$1
+                : _cleanName(widget.fallbackName).isNotEmpty
+                ? widget.fallbackName
+                : identity?.profileName,
+        savedName: savedContact?.formattedName ?? identity?.savedName,
+        avatarUrl:
+            profile?.hasProfileImage == true
+                ? profile!.profileImage
+                : matrixProfile?.$2 ?? widget.fallbackAvatarUrl,
+      );
+      identity = await ContactIdentityCache.instance.findByMatrixId(
+        ownerUserId: ownerUserId,
+        matrixUserId: widget.uid!,
+      );
+    }
 
     if (!mounted) return;
     setState(() {
       _profile = profile;
       _savedContact = savedContact;
+      _identity = identity;
       _matrixDisplayName = matrixProfile?.$1;
       _matrixAvatarUrl = matrixProfile?.$2;
       _profileLoading = false;
@@ -132,7 +168,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   bool _looksLikePhone(String value) {
-    final stripped = value.trim().replaceAll(RegExp(r'[\s\-()]'), '');
+    final stripped = value.trim().replaceAll(RegExp(r'[\s\-()+]'), '');
+    if (stripped.length < 7 || stripped.length > 15) return false;
     return stripped.startsWith('+') || RegExp(r'^\d{7,}$').hasMatch(stripped);
   }
 
@@ -167,10 +204,14 @@ class _ProfileScreenState extends State<ProfileScreen>
   String _profileDisplayName() {
     return _cleanName(_savedContact?.formattedName).isNotEmpty
         ? _cleanName(_savedContact?.formattedName)
+        : _cleanName(_identity?.savedName).isNotEmpty
+        ? _cleanName(_identity?.savedName)
         : _cleanName(_profile?.displayName).isNotEmpty
         ? _cleanName(_profile?.displayName)
         : _cleanName(_matrixDisplayName).isNotEmpty
         ? _cleanName(_matrixDisplayName)
+        : _cleanName(_identity?.profileName).isNotEmpty
+        ? _cleanName(_identity?.profileName)
         : _cleanName(widget.fallbackName).isNotEmpty
         ? _cleanName(widget.fallbackName)
         : 'User';
@@ -180,6 +221,8 @@ class _ProfileScreenState extends State<ProfileScreen>
     final candidates = [
       _profile?.phone,
       _savedContact?.primaryPhone,
+      _identity?.phone,
+      _matrixDisplayName,
       widget.fallbackPhone,
       widget.fallbackName,
     ];
@@ -194,12 +237,15 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   String _formatPhone(String phone) {
     final digits = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    final digitsOnly = digits.replaceAll(RegExp(r'[^\d]'), '');
+    if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
     if (digits.startsWith('+256') && digits.length == 13) {
       return '${digits.substring(0, 4)} ${digits.substring(4, 7)} ${digits.substring(7, 10)} ${digits.substring(10)}';
     }
     if (digits.startsWith('+1') && digits.length == 12) {
       return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
     }
+    if (digits.isNotEmpty && !digits.startsWith('+')) return '+$digits';
     return phone;
   }
 

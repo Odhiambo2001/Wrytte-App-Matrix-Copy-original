@@ -48,9 +48,7 @@ class AuthService {
   AuthService._();
   static final AuthService instance = AuthService._();
 
-  final FlutterSecureStorage _storage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
   final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
 
   final Map<String, String> _pendingPhoneOtps = {};
@@ -94,13 +92,15 @@ class AuthService {
     String homeserver = _defaultHomeserver,
     int? generation,
     bool preferRegisterFirst = false,
+    bool forceFreshSession = false,
   }) {
     final cleanUserId = userId.trim();
     final inFlight = _matrixLoginInFlight;
     final inFlightIsCurrent =
         _matrixLoginInFlightGeneration == null ||
         _matrixLoginInFlightGeneration == _matrixBootstrapGeneration;
-    if (inFlight != null &&
+    if (!forceFreshSession &&
+        inFlight != null &&
         _matrixLoginInFlightUserId == cleanUserId &&
         inFlightIsCurrent) {
       apkLog('Matrix.auth', 'join in-flight login user_id="$cleanUserId"');
@@ -113,6 +113,7 @@ class AuthService {
       homeserver: homeserver,
       generation: generation,
       preferRegisterFirst: preferRegisterFirst,
+      forceFreshSession: forceFreshSession,
     );
     _matrixLoginInFlight = future;
     _matrixLoginInFlightUserId = cleanUserId;
@@ -132,6 +133,7 @@ class AuthService {
     required String homeserver,
     int? generation,
     required bool preferRegisterFirst,
+    required bool forceFreshSession,
   }) async {
     apkLog(
       'Matrix.auth',
@@ -159,6 +161,7 @@ class AuthService {
           username: userId,
           password: password,
           homeserver: homeserver,
+          forceFreshSession: forceFreshSession,
         );
         apkLog('Matrix.auth', 'register first success user_id="$userId"');
       } catch (e) {
@@ -177,6 +180,7 @@ class AuthService {
           username: userId,
           password: password,
           homeserver: homeserver,
+          forceFreshSession: forceFreshSession,
         );
         apkLog('Matrix.auth', 'login fallback success user_id="$userId"');
       }
@@ -187,6 +191,7 @@ class AuthService {
           username: userId,
           password: password,
           homeserver: homeserver,
+          forceFreshSession: forceFreshSession,
         );
         apkLog('Matrix.auth', 'login success user_id="$userId"');
       } catch (_) {
@@ -206,6 +211,7 @@ class AuthService {
           username: userId,
           password: password,
           homeserver: homeserver,
+          forceFreshSession: forceFreshSession,
         );
         apkLog('Matrix.auth', 'register success user_id="$userId"');
       }
@@ -462,11 +468,14 @@ class AuthService {
   Future<String?> getSavedPhone() async => _storage.read(key: _phoneKey);
   Future<String?> getCurrentUserId() async => _storage.read(key: _userIdKey);
   Future<String?> getToken() async => _storage.read(key: _tokenKey);
+  Future<DateTime?> getBackendTokenExpiry() async {
+    final expiryString = await _storage.read(key: _expiryKey);
+    return expiryString != null ? DateTime.tryParse(expiryString) : null;
+  }
+
   Future<String?> getValidBackendToken() async {
     final token = await getToken();
-    final expiryString = await _storage.read(key: _expiryKey);
-    final expiresAt =
-        expiryString != null ? DateTime.tryParse(expiryString) : null;
+    final expiresAt = await getBackendTokenExpiry();
     final isExpired =
         expiresAt != null &&
         expiresAt.isBefore(DateTime.now().add(const Duration(minutes: 2)));
@@ -740,9 +749,13 @@ class AuthService {
       debugPrint('[AuthService] Chat reset timeout/error during logout: $e');
     }
     try {
-      await logoutFromMatrix().timeout(const Duration(seconds: 3));
+      await MatrixAuthService.instance.clearStoredSession().timeout(
+        const Duration(seconds: 3),
+      );
     } catch (e) {
-      debugPrint('[AuthService] Matrix logout timeout/error; continuing: $e');
+      debugPrint(
+        '[AuthService] Matrix local session clear timeout/error; continuing: $e',
+      );
     }
     try {
       await _firebaseAuth.signOut();

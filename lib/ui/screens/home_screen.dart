@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/chats/conversations_screen.dart'; // ← this one
 import 'calls/calls_screen.dart';
@@ -15,22 +18,79 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  static const Duration _fallbackBackendRefreshInterval = Duration(minutes: 30);
+
   int _currentIndex = 1; // Default to Chats
   int _totalUnreadCount = 0;
+  Timer? _backendTokenTimer;
+  bool _backendRefreshInFlight = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Warm up the profile cache immediately so the bottom nav avatar
     // is ready on the very first frame — no visible delay.
     UserProfileService.instance.warmUp();
+    _refreshBackendTokenIfNeeded();
+    _scheduleBackendTokenRefresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _backendTokenTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshBackendTokenIfNeeded();
+      _scheduleBackendTokenRefresh();
+    } else {
+      _backendTokenTimer?.cancel();
+      _backendTokenTimer = null;
+    }
   }
 
   void _onTabTapped(int index) {
     setState(() {
       _currentIndex = index;
     });
+    _refreshBackendTokenIfNeeded();
+  }
+
+  Future<void> _refreshBackendTokenIfNeeded() async {
+    if (_backendRefreshInFlight) return;
+    _backendRefreshInFlight = true;
+    try {
+      await AuthService.instance.getValidBackendToken();
+    } catch (e) {
+      debugPrint('[HomeScreen] Backend token refresh/check skipped: $e');
+    } finally {
+      _backendRefreshInFlight = false;
+      if (mounted) _scheduleBackendTokenRefresh();
+    }
+  }
+
+  Future<void> _scheduleBackendTokenRefresh() async {
+    _backendTokenTimer?.cancel();
+    if (!mounted) return;
+
+    final expiresAt = await AuthService.instance.getBackendTokenExpiry();
+    if (!mounted) return;
+
+    final now = DateTime.now();
+    final delay =
+        expiresAt == null
+            ? _fallbackBackendRefreshInterval
+            : expiresAt.isAfter(now)
+            ? expiresAt.difference(now) + const Duration(seconds: 1)
+            : const Duration(minutes: 1);
+
+    _backendTokenTimer = Timer(delay, _refreshBackendTokenIfNeeded);
   }
 
   void _updateUnreadCount(int count) {

@@ -7,6 +7,7 @@ import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
@@ -386,6 +387,15 @@ class _NewContactPageState extends State<NewContactPage> {
         wrytteUserId: receiverId.isEmpty ? null : receiverId,
       );
       await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
+      if (receiverId.isNotEmpty) {
+        await ContactIdentityCache.instance.upsert(
+          ownerUserId: selfId,
+          matrixUserId: receiverId,
+          phone: _fullIdentifier,
+          profileName: widget.initialName,
+          savedName: contactName,
+        );
+      }
       ContactService.invalidateMatrixContactsCache();
       _contactService.invalidateCache();
       apkLog(

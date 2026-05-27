@@ -22,15 +22,15 @@ class MessageBubble extends StatelessWidget {
 
   // ── Voice note fields (null = plain text bubble) ───────────────────────────
   final bool isVoiceNote;
-  final int? voiceDuration;   // total seconds
-  final String? audioUrl;     // CDN URL from Matrix media upload
+  final int? voiceDuration; // total seconds
+  final String? audioUrl; // CDN URL from Matrix media upload
   final bool isForwarded;
   final bool isStarred;
   final bool isDeleted;
   final String? replyPreview;
   final String? replySender;
 
-  static const Color _blue     = Color(0xFF4DA3FF);
+  static const Color _blue = Color(0xFF4DA3FF);
   static const Color _incoming = Color(0xFF23262C);
   static const Color _readGreen = Color(0xFF4CAF50);
 
@@ -84,30 +84,33 @@ class MessageBubble extends StatelessWidget {
                 borderRadius: BorderRadius.only(
                   topLeft: const Radius.circular(18),
                   topRight: const Radius.circular(18),
-                  bottomLeft:
-                      Radius.circular(isMine ? 18 : (showTail ? 2 : 18)),
-                  bottomRight:
-                      Radius.circular(isMine ? (showTail ? 2 : 18) : 18),
+                  bottomLeft: Radius.circular(
+                    isMine ? 18 : (showTail ? 2 : 18),
+                  ),
+                  bottomRight: Radius.circular(
+                    isMine ? (showTail ? 2 : 18) : 18,
+                  ),
                 ),
               ),
               // ── Switch between voice player and text content ─────────────
-              child: isVoiceNote
-                  ? _VoiceNotePlayer(
-                      audioUrl: audioUrl ?? '',
-                      totalSeconds: voiceDuration ?? 0,
-                      isMine: isMine,
-                      timeWidget: timeWidget,
-                    )
-                  : _BubbleContent(
-                      content: content,
-                      timeWidget: timeWidget,
-                      isForwarded: isForwarded,
-                      isStarred: isStarred,
-                      isDeleted: isDeleted,
-                      replyPreview: replyPreview,
-                      replySender: replySender,
-                      isMine: isMine,
-                    ),
+              child:
+                  isVoiceNote
+                      ? _VoiceNotePlayer(
+                        audioUrl: audioUrl ?? '',
+                        totalSeconds: voiceDuration ?? 0,
+                        isMine: isMine,
+                        timeWidget: timeWidget,
+                      )
+                      : _BubbleContent(
+                        content: content,
+                        timeWidget: timeWidget,
+                        isForwarded: isForwarded,
+                        isStarred: isStarred,
+                        isDeleted: isDeleted,
+                        replyPreview: replyPreview,
+                        replySender: replySender,
+                        isMine: isMine,
+                      ),
             ),
           ),
 
@@ -145,19 +148,37 @@ class MessageBubble extends StatelessWidget {
   Widget _buildStatusIcon() {
     switch (status) {
       case MessageStatus.sending:
-        return Icon(Icons.access_time_rounded,
-            size: 13, color: Colors.white.withOpacity(0.55));
+        return Icon(
+          Icons.access_time_rounded,
+          size: 13,
+          color: Colors.white.withOpacity(0.55),
+        );
       case MessageStatus.sent:
-        return Icon(Icons.done,
-            size: 14, color: Colors.white.withOpacity(0.65));
+        return Icon(
+          Icons.done,
+          size: 14,
+          color: Colors.white.withOpacity(0.65),
+        );
       case MessageStatus.delivered:
-        return Icon(Icons.done_all,
-            size: 14, color: Colors.white.withOpacity(0.65));
+        return Icon(
+          Icons.done_all,
+          size: 14,
+          color: Colors.white.withOpacity(0.65),
+        );
       case MessageStatus.read:
         return const Icon(Icons.done_all, size: 14, color: _readGreen);
+      case MessageStatus.failed:
+        return const Icon(
+          Icons.error_outline,
+          size: 14,
+          color: Colors.redAccent,
+        );
       default:
-        return Icon(Icons.done_all,
-            size: 14, color: Colors.white.withOpacity(0.65));
+        return Icon(
+          Icons.done_all,
+          size: 14,
+          color: Colors.white.withOpacity(0.65),
+        );
     }
   }
 }
@@ -190,7 +211,7 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
   final FlutterSoundPlayer _player = FlutterSoundPlayer();
   bool _playerReady = false;
   bool _isPlaying = false;
-  int _elapsed = 0;           // seconds played so far
+  int _elapsed = 0; // seconds played so far
   Timer? _timer;
   StreamSubscription? _playerSub;
 
@@ -231,7 +252,11 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
           codec: Codec.aacADTS,
           whenFinished: () {
             _timer?.cancel();
-            if (mounted) setState(() { _isPlaying = false; _elapsed = 0; });
+            if (mounted)
+              setState(() {
+                _isPlaying = false;
+                _elapsed = 0;
+              });
           },
         );
       }
@@ -252,9 +277,10 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
 
   @override
   Widget build(BuildContext context) {
-    final double progress = widget.totalSeconds > 0
-        ? (_elapsed / widget.totalSeconds).clamp(0.0, 1.0)
-        : 0.0;
+    final double progress =
+        widget.totalSeconds > 0
+            ? (_elapsed / widget.totalSeconds).clamp(0.0, 1.0)
+            : 0.0;
 
     return SizedBox(
       width: 220,
@@ -329,9 +355,31 @@ class _WaveformBars extends StatelessWidget {
   const _WaveformBars({required this.progress});
 
   static const List<double> _heights = [
-    6, 10, 14, 8, 18, 12, 20, 10, 16, 8,
-    14, 18, 6, 12, 20, 10, 16, 8, 14, 18,
-    12, 6, 10, 16, 8,
+    6,
+    10,
+    14,
+    8,
+    18,
+    12,
+    20,
+    10,
+    16,
+    8,
+    14,
+    18,
+    6,
+    12,
+    20,
+    10,
+    16,
+    8,
+    14,
+    18,
+    12,
+    6,
+    10,
+    16,
+    8,
   ];
 
   @override
@@ -425,9 +473,10 @@ class _BubbleContent extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                     border: Border(
                       left: BorderSide(
-                        color: isMine
-                            ? Colors.white.withOpacity(0.8)
-                            : const Color(0xFF4DA3FF),
+                        color:
+                            isMine
+                                ? Colors.white.withOpacity(0.8)
+                                : const Color(0xFF4DA3FF),
                         width: 3,
                       ),
                     ),
@@ -480,7 +529,8 @@ class _BubbleContent extends StatelessWidget {
                         color: Colors.white.withOpacity(isDeleted ? 0.65 : 1),
                         fontSize: 15,
                         height: 1.35,
-                        fontStyle: isDeleted ? FontStyle.italic : FontStyle.normal,
+                        fontStyle:
+                            isDeleted ? FontStyle.italic : FontStyle.normal,
                       ),
                     ),
                     WidgetSpan(

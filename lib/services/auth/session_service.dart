@@ -36,13 +36,13 @@ class SessionService {
   }
 
   Future<void> logout() async {
-    await MatrixAuthService.instance.logout();
+    await MatrixAuthService.instance.clearStoredSession();
     await _storage.delete(key: _tokenKey);
     await _storage.delete(key: _userIdKey);
   }
 
   Future<void> clearAll() async {
-    await MatrixAuthService.instance.logout();
+    await MatrixAuthService.instance.clearStoredSession();
     await _storage.deleteAll();
   }
 }

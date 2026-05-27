@@ -57,6 +57,7 @@ class ChatMessage {
   final String? replyToMessageId;
   final String? replyToSenderId;
   final String? replyPreview;
+  final String? senderPhone;
   final bool isForwarded;
   final bool isStarred;
   final bool isDeletedForMe;
@@ -72,11 +73,12 @@ class ChatMessage {
     this.status = MessageStatus.sending,
     this.attachmentUrl,
     this.attachmentType,
-    this.voiceDuration,   // ← NEW
+    this.voiceDuration, // ← NEW
     this.unreadCount = 0,
     this.replyToMessageId,
     this.replyToSenderId,
     this.replyPreview,
+    this.senderPhone,
     this.isForwarded = false,
     this.isStarred = false,
     this.isDeletedForMe = false,
@@ -100,12 +102,15 @@ class ChatMessage {
       status: _statusFromString(json["status"]?.toString()),
       attachmentUrl: json["attachmentUrl"]?.toString(),
       attachmentType: json["attachmentType"]?.toString(),
-      voiceDuration: json["voiceDuration"] != null          // ← NEW
-          ? int.tryParse(json["voiceDuration"].toString())
-          : null,
+      voiceDuration:
+          json["voiceDuration"] !=
+                  null // ← NEW
+              ? int.tryParse(json["voiceDuration"].toString())
+              : null,
       replyToMessageId: json["replyToMessageId"]?.toString(),
       replyToSenderId: json["replyToSenderId"]?.toString(),
       replyPreview: json["replyPreview"]?.toString(),
+      senderPhone: json["senderPhone"]?.toString(),
       isForwarded: _boolFromJson(json["isForwarded"]),
       isStarred: _boolFromJson(json["isStarred"]),
       isDeletedForMe: _boolFromJson(json["isDeletedForMe"]),
@@ -128,7 +133,10 @@ class ChatMessage {
       conversationId: event.room.id,
       senderId: event.senderId,
       receiverId: event.room.directChatMatrixID ?? '',
-      content: event.redacted ? 'This message was deleted' : _stripReplyFallback(event.body),
+      content:
+          event.redacted
+              ? 'This message was deleted'
+              : _stripReplyFallback(event.body),
       timestamp: event.originServerTs,
       status: _statusFromMatrix(event.status),
       attachmentUrl: event.attachmentMxcUrl?.toString(),
@@ -137,6 +145,7 @@ class ChatMessage {
       replyToMessageId: event.inReplyToEventId(),
       replyToSenderId: _replySenderFromFallback(event.body),
       replyPreview: _replyPreviewFromFallback(event.body),
+      senderPhone: content['wrytte.sender_phone']?.toString(),
       isForwarded: content['wrytte.forwarded'] == true,
       isDeletedForEveryone: event.redacted,
     );
@@ -167,6 +176,7 @@ class ChatMessage {
       if (replyToMessageId != null) "replyToMessageId": replyToMessageId,
       if (replyToSenderId != null) "replyToSenderId": replyToSenderId,
       if (replyPreview != null) "replyPreview": replyPreview,
+      if (senderPhone != null) "senderPhone": senderPhone,
       "isForwarded": isForwarded,
       "isStarred": isStarred,
       "isDeletedForMe": isDeletedForMe,
@@ -186,10 +196,11 @@ class ChatMessage {
     MessageStatus? status,
     String? attachmentUrl,
     String? attachmentType,
-    int? voiceDuration,   // ← NEW
+    int? voiceDuration, // ← NEW
     String? replyToMessageId,
     String? replyToSenderId,
     String? replyPreview,
+    String? senderPhone,
     bool? isForwarded,
     bool? isStarred,
     bool? isDeletedForMe,
@@ -209,11 +220,11 @@ class ChatMessage {
       replyToMessageId: replyToMessageId ?? this.replyToMessageId,
       replyToSenderId: replyToSenderId ?? this.replyToSenderId,
       replyPreview: replyPreview ?? this.replyPreview,
+      senderPhone: senderPhone ?? this.senderPhone,
       isForwarded: isForwarded ?? this.isForwarded,
       isStarred: isStarred ?? this.isStarred,
       isDeletedForMe: isDeletedForMe ?? this.isDeletedForMe,
-      isDeletedForEveryone:
-          isDeletedForEveryone ?? this.isDeletedForEveryone,
+      isDeletedForEveryone: isDeletedForEveryone ?? this.isDeletedForEveryone,
     );
   }
 
@@ -258,11 +269,12 @@ String _stripReplyFallback(String body) {
 String? _replyPreviewFromFallback(String body) {
   if (!body.startsWith('> ')) return null;
   final firstBlock = body.split('\n\n').first;
-  final lines = firstBlock
-      .split('\n')
-      .map((line) => line.replaceFirst(RegExp(r'^> ?'), '').trim())
-      .where((line) => line.isNotEmpty)
-      .toList();
+  final lines =
+      firstBlock
+          .split('\n')
+          .map((line) => line.replaceFirst(RegExp(r'^> ?'), '').trim())
+          .where((line) => line.isNotEmpty)
+          .toList();
   if (lines.isEmpty) return null;
   final text = lines.join(' ');
   return text.length > 120 ? '${text.substring(0, 120)}...' : text;
