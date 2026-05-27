@@ -164,7 +164,9 @@ class _NewContactPageState extends State<NewContactPage> {
     final country = matches.first;
     var national = digits.substring(country.dialCode.length);
     if (national.isEmpty) return false;
-    if (!national.startsWith('0')) national = '0$national';
+    while (national.startsWith('0') && national.length > 1) {
+      national = national.substring(1);
+    }
 
     _selectedCountry = country;
     _codeCtrl.text = '+${country.dialCode}';

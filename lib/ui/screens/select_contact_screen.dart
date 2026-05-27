@@ -90,21 +90,6 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         return;
       }
 
-      final localContacts = await ContactLocalDb.loadContacts(
-        ownerUserId: currentUserId,
-      );
-
-      if (mounted && localContacts.isNotEmpty) {
-        setState(() {
-          _wrytteContacts = localContacts.where((c) => c.isOnWrytte).toList();
-          _nonWrytteContacts =
-              localContacts.where((c) => !c.isOnWrytte).toList();
-          _filteredWrytte = _wrytteContacts;
-          _filteredNonWrytte = _nonWrytteContacts;
-          _isLoading = false;
-        });
-      }
-
       final matrixContacts = await _contactService.getMatrixContacts(
         currentUserId,
       );
