@@ -60,6 +60,18 @@ class RealNumberService {
     final phone = _toFullInternational(fullPhone);
     debugPrint('[RealNumberService] registerRealPhone → "$phone"');
 
+    final existing = await _findExistingRegistration(phone);
+    if (existing != null) {
+      debugPrint(
+        '[RealNumberService] phone already exists before register; using login/session path userid="${existing.userId}"',
+      );
+      final existingResult = await _loginExistingRegistration(
+        existing,
+        phone: phone,
+      );
+      if (existingResult != null) return existingResult;
+    }
+
     final fields = <String, String>{
       'phone': phone,
       'code': code,
@@ -153,6 +165,66 @@ class RealNumberService {
       }
       rethrow; // 400, 401, 500, etc. bubble up normally
     }
+  }
+
+  Future<_ExistingRegistration?> _findExistingRegistration(String phone) async {
+    try {
+      final response = await ApiService.postMultipart('/api/Users/Search', {
+        'phoneNumbersC': _backendPhoneCandidates(phone).join('|'),
+      });
+      return _parseExistingRegistration(response, phone);
+    } catch (e) {
+      debugPrint('[RealNumberService] pre-register search skipped: $e');
+      return null;
+    }
+  }
+
+  Future<RealNumberRegisterResult?> _loginExistingRegistration(
+    _ExistingRegistration existing, {
+    required String phone,
+  }) async {
+    final archivedProfile = await AuthService.instance
+        .findArchivedProfileByPhone(phone);
+    final storedSecret = (await AuthService.instance.getStoredSecret())?.trim();
+    final secret =
+        existing.secret?.trim().isNotEmpty == true
+            ? existing.secret!.trim()
+            : storedSecret?.isNotEmpty == true
+            ? storedSecret!
+            : archivedProfile?.secret.trim() ?? '';
+
+    if (secret.isNotEmpty) {
+      return login_(secret: secret, phone: phone, userId: existing.userId);
+    }
+
+    if (existing.token?.trim().isNotEmpty == true &&
+        existing.userId.trim().isNotEmpty) {
+      await AuthService.instance.persistPhoneSession(
+        userId: existing.userId,
+        username: _resolveDisplayName(
+          existing.username ?? archivedProfile?.username ?? phone,
+          phone,
+        ),
+        phone: phone,
+        secret: '',
+        token: existing.token,
+        expiresAt: existing.expiresAt,
+      );
+      return RealNumberRegisterResult(
+        username: _resolveDisplayName(
+          existing.username ?? archivedProfile?.username ?? phone,
+          phone,
+        ),
+        userId: existing.userId,
+        secret: '',
+        isNewUser: false,
+      );
+    }
+
+    debugPrint(
+      '[RealNumberService] existing phone found but backend did not return token/secret; continuing register path',
+    );
+    return null;
   }
 
   // ---------------------------------------------------------------------------
@@ -360,6 +432,130 @@ class RealNumberService {
     return null;
   }
 
+  _ExistingRegistration? _parseExistingRegistration(
+    dynamic response,
+    String phone,
+  ) {
+    final targetDigits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (response is! Map) return null;
+    final raw = response['contacts'] ?? response['results'] ?? response;
+
+    if (raw is List) {
+      for (final item in raw.whereType<Map>()) {
+        final parsed = _existingFromMap(item, fallbackPhone: phone);
+        if (parsed != null && _samePhone(parsed.phone, targetDigits)) {
+          return parsed;
+        }
+      }
+    }
+
+    if (raw is Map) {
+      for (final entry in raw.entries) {
+        final value = entry.value;
+        if (value is Map) {
+          final parsed = _existingFromMap(
+            value,
+            fallbackPhone: entry.key.toString(),
+          );
+          if (parsed != null && _samePhone(parsed.phone, targetDigits)) {
+            return parsed;
+          }
+        }
+      }
+      final parsed = _existingFromMap(raw, fallbackPhone: phone);
+      if (parsed != null && _samePhone(parsed.phone, targetDigits)) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  _ExistingRegistration? _existingFromMap(
+    Map raw, {
+    required String fallbackPhone,
+  }) {
+    final userId = _stringValue(
+      raw['userid'] ?? raw['userId'] ?? raw['uid'] ?? raw['id'],
+    );
+    final matrixUserId = _stringValue(
+      raw['matrixUserId'] ?? raw['matrix_user_id'] ?? raw['mxid'],
+    );
+    final isRegistered =
+        raw['registered'] == true ||
+        raw['exists'] == true ||
+        raw['isOnWrytte'] == true ||
+        userId != null ||
+        matrixUserId != null;
+    if (!isRegistered) return null;
+
+    final resolvedUserId =
+        userId ?? _matrixLocalpart(matrixUserId ?? '').trim();
+    if (resolvedUserId.isEmpty) return null;
+
+    return _ExistingRegistration(
+      phone: _normalizePhone(
+        _stringValue(
+              raw['phone'] ??
+                  raw['phoneNumber'] ??
+                  raw['msisdn'] ??
+                  raw['identifier'],
+            ) ??
+            fallbackPhone,
+      ),
+      userId: resolvedUserId,
+      username: _stringValue(
+        raw['username'] ?? raw['name'] ?? raw['displayName'],
+      ),
+      secret: _stringValue(raw['secret']),
+      token: _stringValue(
+        raw['token'] ?? raw['auth_token'] ?? raw['authToken'],
+      ),
+      expiresAt: DateTime.tryParse(
+        _stringValue(raw['expires'] ?? raw['expiresAt'] ?? raw['expiry']) ?? '',
+      ),
+    );
+  }
+
+  bool _samePhone(String candidate, String targetDigits) {
+    final digits = candidate.replaceAll(RegExp(r'[^\d]'), '');
+    return digits == targetDigits ||
+        digits.endsWith(targetDigits) ||
+        targetDigits.endsWith(digits);
+  }
+
+  Iterable<String> _backendPhoneCandidates(String phone) sync* {
+    final normalized = _normalizePhone(phone);
+    final digits = normalized.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.isEmpty) return;
+    yield digits;
+    yield normalized;
+    if (digits.startsWith('254') && digits.length == 12) {
+      yield '0${digits.substring(3)}';
+    }
+  }
+
+  String _normalizePhone(String phone) {
+    var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleaned.startsWith('00') && cleaned.length > 4) {
+      cleaned = '+${cleaned.substring(2)}';
+    }
+    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    return cleaned;
+  }
+
+  String _matrixLocalpart(String value) {
+    final trimmed = value.trim();
+    if (trimmed.startsWith('@') && trimmed.contains(':')) {
+      return trimmed.substring(1, trimmed.indexOf(':'));
+    }
+    return trimmed;
+  }
+
+  String? _stringValue(Object? value) {
+    final string = value?.toString().trim();
+    return string == null || string.isEmpty ? null : string;
+  }
+
   // ---------------------------------------------------------------------------
   //  Convert any phone input to full international format e.g. 254748630243.
   //  Preserves country code using the countries list for dial-code detection.
@@ -416,4 +612,22 @@ class _PhoneParts {
   final String localNumber;
 
   const _PhoneParts({required this.areaCode, required this.localNumber});
+}
+
+class _ExistingRegistration {
+  final String phone;
+  final String userId;
+  final String? username;
+  final String? secret;
+  final String? token;
+  final DateTime? expiresAt;
+
+  const _ExistingRegistration({
+    required this.phone,
+    required this.userId,
+    this.username,
+    this.secret,
+    this.token,
+    this.expiresAt,
+  });
 }
