@@ -29,6 +29,7 @@ class ChatScreen extends StatefulWidget {
   final String currentUserId;
   final String title;
   final String? avatarUrl;
+  final List<ChatMessage> initialMessages;
 
   const ChatScreen({
     super.key,
@@ -37,6 +38,7 @@ class ChatScreen extends StatefulWidget {
     required this.currentUserId,
     required this.title,
     this.avatarUrl,
+    this.initialMessages = const [],
   });
 
   @override
@@ -59,6 +61,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _resolvedConversationId;
 
   bool _loadingOlder = false;
+  bool _loadingInitial = true;
   bool _hasMoreOlder = true;
 
   bool _isSending = false;
@@ -91,6 +94,9 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     _logger.addListener(_onNewLog);
+    if (widget.initialMessages.isNotEmpty) {
+      _mergeMessages(widget.initialMessages);
+    }
     _loadInitial();
     _loadReceiverProfile();
     _scrollCtrl.addListener(_onScroll);
@@ -259,6 +265,9 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       _matrixAvailable = false;
       apkLog('ChatScreen._loadInitial', ' connect() FAILED: $e');
+      if (mounted) {
+        setState(() => _loadingInitial = false);
+      }
       return; // Matrix unavailable; keep the chat usable with local messages.
     }
 
@@ -292,7 +301,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     if (!mounted) return;
-    setState(() => _mergeMessages(msgs));
+    setState(() {
+      _mergeMessages(msgs);
+      _loadingInitial = false;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
     _msgSub = _chat.messageStream.listen((msg) {
@@ -1274,7 +1286,7 @@ class _ChatScreenState extends State<ChatScreen> {
         Expanded(
           child: Stack(
             children: [
-              _messages.isEmpty
+              _messages.isEmpty && !_loadingInitial
                   ? Center(
                     child: Text(
                       'No messages yet.\nSay hello!',
@@ -1286,6 +1298,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ),
                   )
+                  : _messages.isEmpty
+                  ? const SizedBox.expand()
                   : ListView.builder(
                     controller: _scrollCtrl,
                     padding: const EdgeInsets.only(top: 12, bottom: 8),

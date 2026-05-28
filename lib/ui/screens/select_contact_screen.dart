@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/contact_components/contact_item.dart';
+import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
@@ -28,6 +29,7 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
   List<Contact> _filteredNonWrytte = [];
   bool _isLoading = true;
   String _error = '';
+  String? _openingContactId;
   double _searchBarProgress = 0.0;
 
   static const double _kSearchBarHeight = 60.0;
@@ -141,36 +143,66 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
   }
 
   void _navigateToChatScreen(Contact contact) async {
-    if (contact.wrytteUserId == null || contact.wrytteUserId!.isEmpty) return;
+    final receiverId = contact.wrytteUserId;
+    if (receiverId == null || receiverId.isEmpty) return;
+    if (_openingContactId != null) return;
 
+    setState(() => _openingContactId = receiverId);
     final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
-    final localConversationId = _generateConversationId(
-      currentUserId,
-      contact.wrytteUserId!,
-    );
-    final roomId =
-        await ChatService().getMatrixConversationId(contact.wrytteUserId!) ??
-        await ChatLocalDb.instance.findDirectConversationId(
-          selfUserId: currentUserId,
-          otherUserId: contact.wrytteUserId!,
-        );
-    final conversationId =
-        roomId != null && roomId.startsWith('!') ? roomId : localConversationId;
+    try {
+      final localConversationId = _generateConversationId(
+        currentUserId,
+        receiverId,
+      );
+      final chat = ChatService();
+      final roomId =
+          await chat.getMatrixConversationId(receiverId) ??
+          await ChatLocalDb.instance.findDirectConversationId(
+            selfUserId: currentUserId,
+            otherUserId: receiverId,
+          );
+      final conversationId =
+          roomId != null && roomId.startsWith('!')
+              ? roomId
+              : localConversationId;
+      final initialMessages = await _loadCachedMessagesBeforeOpening(
+        chat: chat,
+        conversationId: conversationId,
+      );
 
-    if (!mounted) return;
-    Navigator.pop(context);
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder:
-            (_) => ChatScreen(
-              conversationId: conversationId,
-              receiverId: contact.wrytteUserId!,
-              currentUserId: currentUserId,
-              title: contact.formattedName,
-            ),
-      ),
-    );
+      if (!mounted) return;
+      final navigator = Navigator.of(context);
+      final selectorRoute = ModalRoute.of(context);
+      navigator.push(
+        PageRouteBuilder(
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+          pageBuilder:
+              (_, __, ___) => ChatScreen(
+                conversationId: conversationId,
+                receiverId: receiverId,
+                currentUserId: currentUserId,
+                title: contact.formattedName,
+                initialMessages: initialMessages,
+              ),
+        ),
+      );
+      if (selectorRoute != null) {
+        navigator.removeRoute(selectorRoute);
+      }
+    } catch (e) {
+      debugPrint('[SelectContactScreen] open chat failed: $e');
+      if (mounted) {
+        setState(() => _openingContactId = null);
+      }
+    }
+  }
+
+  Future<List<ChatMessage>> _loadCachedMessagesBeforeOpening({
+    required ChatService chat,
+    required String conversationId,
+  }) async {
+    return chat.loadCachedMessages(conversationId);
   }
 
   Map<String, List<Contact>> _groupByAlphabet(List<Contact> contacts) {
