@@ -283,12 +283,10 @@ class ContactService {
         );
         return ContactLocalDb.loadContacts(ownerUserId: owner);
       }
-      await syncLocalContactsToMatrix(owner);
       final matrixContacts = await MatrixContactService.instance.loadContacts();
-      final localContacts = await ContactLocalDb.loadContacts(
-        ownerUserId: owner,
-      );
-      final contacts = _mergeContacts(matrixContacts, localContacts);
+      final contacts =
+          matrixContacts
+            ..sort((a, b) => a.formattedName.compareTo(b.formattedName));
       debugPrint('Loaded ${contacts.length} contacts');
       return contacts;
     } catch (e) {
@@ -575,23 +573,5 @@ class ContactService {
     final trimmed = userId.trim();
     if (trimmed.startsWith('@') && trimmed.contains(':')) return trimmed;
     return '@${_matrixLocalpart(trimmed)}:${MatrixConfig.serverName}';
-  }
-
-  List<Contact> _mergeContacts(
-    List<Contact> matrixContacts,
-    List<Contact> localContacts,
-  ) {
-    final merged = <String, Contact>{};
-    for (final contact in [...matrixContacts, ...localContacts]) {
-      final normalized = _normalizeContact(contact);
-      final key =
-          normalized.wrytteUserId?.isNotEmpty == true
-              ? normalized.wrytteUserId!
-              : normalized.primaryPhone;
-      if (key.isEmpty) continue;
-      merged[key] = normalized;
-    }
-    return merged.values.toList()
-      ..sort((a, b) => a.formattedName.compareTo(b.formattedName));
   }
 }

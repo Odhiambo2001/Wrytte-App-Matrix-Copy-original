@@ -382,6 +382,32 @@ class ChatLocalDb {
     }
   }
 
+  Future<void> replaceConversations(
+    List<ChatConversation> conversations,
+  ) async {
+    final database = await db;
+    await database.transaction((txn) async {
+      await txn.delete('conversations');
+      for (final c in conversations) {
+        await txn.insert('conversations', {
+          'id': c.id,
+          'participants': c.participants.join(','),
+          'otherUserId': c.otherUserId,
+          'lastMessage': c.lastMessage,
+          'lastMessageSenderId': c.lastMessageSenderId,
+          'lastMessageTime': c.lastMessageTime.millisecondsSinceEpoch,
+          'unreadCount': c.unreadCount,
+          'lastMessageType': c.lastMessageType,
+          'isArchived': c.isArchived ? 1 : 0,
+          'isMuted': c.isMuted ? 1 : 0,
+          'isPinned': c.isPinned ? 1 : 0,
+          'otherUserName': c.otherUserName,
+          'otherUserAvatar': c.otherUserAvatar,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
   /// Update name + avatar for a conversation after Matrix contact or profile enrichment.
   Future<void> updateConversationUserInfo({
     required String conversationId,

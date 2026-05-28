@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/backend/backend_realtime_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/chats/conversations_screen.dart'; // ← this one
 import 'calls/calls_screen.dart';
@@ -35,12 +36,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     UserProfileService.instance.warmUp();
     _refreshBackendTokenIfNeeded();
     _scheduleBackendTokenRefresh();
+    unawaited(BackendRealtimeService.instance.connect());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _backendTokenTimer?.cancel();
+    unawaited(BackendRealtimeService.instance.disconnect());
     super.dispose();
   }
 
@@ -49,9 +52,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _refreshBackendTokenIfNeeded();
       _scheduleBackendTokenRefresh();
+      unawaited(BackendRealtimeService.instance.connect());
     } else {
       _backendTokenTimer?.cancel();
       _backendTokenTimer = null;
+      unawaited(BackendRealtimeService.instance.disconnect());
     }
   }
 

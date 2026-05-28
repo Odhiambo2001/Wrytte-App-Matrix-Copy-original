@@ -117,7 +117,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     // Subscribe to Matrix conversation stream
     _convSub = _chat.conversationsStream.listen((incoming) async {
-      if (incoming.isEmpty && _conversations.isNotEmpty) return;
       final enriched = await _enrichNames(incoming);
       if (!mounted) return;
       setState(() => _conversations = enriched);
@@ -141,7 +140,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _loadLocalConversations() async {
     try {
-      final local = await ChatLocalDb.instance.loadConversations();
+      final local =
+          (await ChatLocalDb.instance.loadConversations())
+              .where((conv) => conv.lastMessage.trim().isNotEmpty)
+              .toList();
       final enriched = await _enrichNames(local);
       if (!mounted) return;
       setState(() => _conversations = enriched);

@@ -72,14 +72,12 @@ class WrytteApp extends StatelessWidget {
         '/auth_entry_screen':
             (context) => const ThemeWrapper(child: AuthEntryScreen()),
 
-        '/phone_auth':
-            (context) => const ThemeWrapper(child: PhoneAuthPage()),
+        '/phone_auth': (context) => const ThemeWrapper(child: PhoneAuthPage()),
 
         '/virtual_phone':
             (context) => const ThemeWrapper(child: VirtualNumberPage()),
 
-        '/sign_in':
-            (context) => const ThemeWrapper(child: SignInPage()),
+        '/sign_in': (context) => const ThemeWrapper(child: SignInPage()),
 
         '/otp_verification': (context) {
           final args =
@@ -105,8 +103,7 @@ class WrytteApp extends StatelessWidget {
           );
         },
 
-        '/login_otp_page':
-            (context) => const ThemeWrapper(child: SignInPage()),
+        '/login_otp_page': (context) => const ThemeWrapper(child: SignInPage()),
 
         '/login_email_verification_page': (context) {
           final args =
@@ -124,8 +121,7 @@ class WrytteApp extends StatelessWidget {
             (context) =>
                 const ThemeWrapper(child: AddProfilePage(isNewUser: true)),
 
-        '/home':
-            (context) => const ThemeWrapper(child: AuthWrapper()),
+        '/home': (context) => const ThemeWrapper(child: AuthWrapper()),
 
         'terms_privacy':
             (context) => const ThemeWrapper(child: TermsPrivacyPage()),
@@ -158,7 +154,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> _checkSession() async {
     try {
       final user = await AuthService.instance.getCurrentUser();
-      final loggedIn = user != null && user.isAuthenticated && !user.isExpired;
+      final loggedIn = user != null && user.isAuthenticated;
       final userId = user?.userId;
 
       if (loggedIn && userId != null && userId.isNotEmpty) {

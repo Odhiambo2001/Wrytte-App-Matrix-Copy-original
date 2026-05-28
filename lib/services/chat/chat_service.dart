@@ -307,6 +307,12 @@ class ChatService {
     }
   }
 
+  bool _isDisplayableMessage(ChatMessage? message) {
+    if (message == null) return false;
+    return message.content.trim().isNotEmpty ||
+        (message.attachmentUrl?.trim().isNotEmpty ?? false);
+  }
+
   Future<ChatMessage> sendMessage(ChatMessage message) async {
     try {
       return await _withMatrixTokenRetry('sendMessage', () async {
@@ -699,10 +705,18 @@ class ChatService {
     _conversationsMap
       ..clear()
       ..addEntries(
-        rooms.map((room) => MapEntry(room.id, _toConversation(room))),
+        rooms
+            .where((room) {
+              final last = room.lastEvent;
+              return last != null &&
+                  _isDisplayableMessage(ChatMessage.fromMatrixEvent(last));
+            })
+            .map((room) => MapEntry(room.id, _toConversation(room))),
       );
     unawaited(
-      ChatLocalDb.instance.saveConversations(_conversationsMap.values.toList()),
+      ChatLocalDb.instance.replaceConversations(
+        _conversationsMap.values.toList(),
+      ),
     );
     _emitConversations();
   }
@@ -727,6 +741,7 @@ class ChatService {
   }
 
   void _cacheMessage(ChatMessage message, {bool countUnread = true}) {
+    if (!_isDisplayableMessage(message)) return;
     final convId = message.conversationId;
     final currentUser =
         MatrixClientService.instance.client.userID ?? _currentUserId ?? '';

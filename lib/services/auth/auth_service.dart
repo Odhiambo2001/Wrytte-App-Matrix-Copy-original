@@ -452,14 +452,15 @@ class AuthService {
   // ---------------------------------------------------------------------------
   Future<AuthUser?> getCurrentUser() async {
     final token = await _storage.read(key: _tokenKey);
-    if (token == null) return null;
+    final userId = await _storage.read(key: _userIdKey) ?? '';
+    if ((token == null || token.isEmpty) && userId.isEmpty) return null;
 
     final expiryString = await _storage.read(key: _expiryKey);
     return AuthUser(
-      userId: await _storage.read(key: _userIdKey) ?? '',
+      userId: userId,
       username: await _storage.read(key: _usernameKey) ?? '',
       secret: await _storage.read(key: _secretKey) ?? '',
-      token: token,
+      token: token ?? '',
       phone: await _storage.read(key: _phoneKey),
       expiresAt: expiryString != null ? DateTime.tryParse(expiryString) : null,
     );
@@ -475,12 +476,9 @@ class AuthService {
 
   Future<String?> getValidBackendToken() async {
     final token = await getToken();
-    final expiresAt = await getBackendTokenExpiry();
-    final isExpired =
-        expiresAt != null &&
-        expiresAt.isBefore(DateTime.now().add(const Duration(minutes: 2)));
-    if (_looksLikeJwt(token) && !isExpired) return token;
-    return _refreshBackendToken();
+    final refreshed = await _refreshBackendToken();
+    if (refreshed != null && refreshed.trim().isNotEmpty) return refreshed;
+    return token;
   }
 
   Future<String?> getStoredSecret() async => _storage.read(key: _secretKey);
@@ -733,7 +731,7 @@ class AuthService {
 
   Future<bool> isLoggedIn() async {
     final user = await getCurrentUser();
-    return user != null && !user.isExpired && user.isAuthenticated;
+    return user != null && user.isAuthenticated;
   }
 
   User? get firebaseCurrentUser => _firebaseAuth.currentUser;

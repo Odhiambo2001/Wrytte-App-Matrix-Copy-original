@@ -15,7 +15,7 @@ class AuthUser {
     this.expiresAt,
   });
 
-  bool get isAuthenticated => token.isNotEmpty;
+  bool get isAuthenticated => userId.isNotEmpty || token.isNotEmpty;
 
   bool get isExpired =>
       expiresAt != null && expiresAt!.isBefore(DateTime.now());
