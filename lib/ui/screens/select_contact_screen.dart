@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:wrytte/components/contact_components/contact_item.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
+import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
@@ -142,10 +144,18 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
     if (contact.wrytteUserId == null || contact.wrytteUserId!.isEmpty) return;
 
     final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
-    final conversationId = _generateConversationId(
+    final localConversationId = _generateConversationId(
       currentUserId,
       contact.wrytteUserId!,
     );
+    final roomId =
+        await ChatService().getMatrixConversationId(contact.wrytteUserId!) ??
+        await ChatLocalDb.instance.findDirectConversationId(
+          selfUserId: currentUserId,
+          otherUserId: contact.wrytteUserId!,
+        );
+    final conversationId =
+        roomId != null && roomId.startsWith('!') ? roomId : localConversationId;
 
     if (!mounted) return;
     Navigator.pop(context);

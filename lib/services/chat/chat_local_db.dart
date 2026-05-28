@@ -423,6 +423,48 @@ class ChatLocalDb {
     );
   }
 
+  Future<void> migrateConversationId({
+    required String oldConversationId,
+    required ChatConversation roomConversation,
+  }) async {
+    if (oldConversationId.trim().isEmpty ||
+        oldConversationId == roomConversation.id) {
+      await saveConversations([roomConversation]);
+      return;
+    }
+
+    final database = await db;
+    await database.transaction((txn) async {
+      await txn.update(
+        'messages',
+        {'conversationId': roomConversation.id},
+        where: 'conversationId = ?',
+        whereArgs: [oldConversationId],
+      );
+      await txn.delete(
+        'conversations',
+        where: 'id = ?',
+        whereArgs: [oldConversationId],
+      );
+      await txn.insert('conversations', {
+        'id': roomConversation.id,
+        'participants': roomConversation.participants.join(','),
+        'otherUserId': roomConversation.otherUserId,
+        'lastMessage': roomConversation.lastMessage,
+        'lastMessageSenderId': roomConversation.lastMessageSenderId,
+        'lastMessageTime':
+            roomConversation.lastMessageTime.millisecondsSinceEpoch,
+        'unreadCount': roomConversation.unreadCount,
+        'lastMessageType': roomConversation.lastMessageType,
+        'isArchived': roomConversation.isArchived ? 1 : 0,
+        'isMuted': roomConversation.isMuted ? 1 : 0,
+        'isPinned': roomConversation.isPinned ? 1 : 0,
+        'otherUserName': roomConversation.otherUserName,
+        'otherUserAvatar': roomConversation.otherUserAvatar,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+  }
+
   /// Load all conversations from SQLite, newest first.
   /// Names and last messages are sanitized on read to strip any bad UTF-16
   /// that may have been written by a previous version of the app.

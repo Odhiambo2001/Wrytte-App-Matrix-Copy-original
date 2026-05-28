@@ -417,15 +417,10 @@ class _NewContactPageState extends State<NewContactPage> {
                 selfUserId: selfId,
                 otherUserId: receiverId,
               );
-      final conversationId = localRoomId ?? localConversationId;
+      var conversationId = localRoomId ?? localConversationId;
 
-      apkLog(
-        'NewContact.save',
-        'opening chat immediately conversation_id="$conversationId" local_room_id="$localRoomId" receiver="$receiverId"',
-      );
-
-      unawaited(
-        _saveContactAndResolveRoomAfterNavigation(
+      if (receiverId.isNotEmpty) {
+        final resolvedRoomId = await _saveContactAndResolveRoomAfterNavigation(
           selfId: selfId,
           firstName: firstName,
           lastName: lastName,
@@ -436,7 +431,30 @@ class _NewContactPageState extends State<NewContactPage> {
           token: widget.token,
           initialConversationId: conversationId,
           fallbackContactName: contactName,
-        ),
+        );
+        if (resolvedRoomId != null && resolvedRoomId.startsWith('!')) {
+          conversationId = resolvedRoomId;
+        }
+      } else {
+        unawaited(
+          _saveContactAndResolveRoomAfterNavigation(
+            selfId: selfId,
+            firstName: firstName,
+            lastName: lastName,
+            fullIdentifier: _fullIdentifier,
+            receiverId: receiverId,
+            isOnWrytte: _isRegisteredOnWrytte,
+            syncToPhone: _syncToPhone,
+            token: widget.token,
+            initialConversationId: conversationId,
+            fallbackContactName: contactName,
+          ),
+        );
+      }
+
+      apkLog(
+        'NewContact.save',
+        'opening chat with resolved conversation_id="$conversationId" local_room_id="$localRoomId" receiver="$receiverId"',
       );
 
       if (!mounted) return;
@@ -464,7 +482,7 @@ class _NewContactPageState extends State<NewContactPage> {
     }
   }
 
-  Future<void> _saveContactAndResolveRoomAfterNavigation({
+  Future<String?> _saveContactAndResolveRoomAfterNavigation({
     required String selfId,
     required String firstName,
     required String lastName,
@@ -513,10 +531,10 @@ class _NewContactPageState extends State<NewContactPage> {
         'NewContact.room',
         'background room skipped; contact has no Matrix receiver id',
       );
-      return;
+      return null;
     }
 
-    await _resolveMatrixRoomAfterSave(
+    return _resolveMatrixRoomAfterSave(
       selfId: selfId,
       receiverId: receiverId,
       initialConversationId: initialConversationId,
@@ -525,7 +543,7 @@ class _NewContactPageState extends State<NewContactPage> {
     );
   }
 
-  Future<void> _resolveMatrixRoomAfterSave({
+  Future<String?> _resolveMatrixRoomAfterSave({
     required String selfId,
     required String receiverId,
     required String initialConversationId,
@@ -581,7 +599,7 @@ class _NewContactPageState extends State<NewContactPage> {
           'NewContact.room',
           'background room resolve failed receiver="$receiverId" error="$e"',
         );
-        return;
+        return null;
       }
     }
 
@@ -590,11 +608,12 @@ class _NewContactPageState extends State<NewContactPage> {
         'NewContact.room',
         'background room resolve ended without room receiver="$receiverId"',
       );
-      return;
+      return null;
     }
 
-    await ChatLocalDb.instance.saveConversations([
-      ChatConversation(
+    await ChatLocalDb.instance.migrateConversationId(
+      oldConversationId: initialConversationId,
+      roomConversation: ChatConversation(
         id: roomId,
         participants: [selfId, receiverId],
         otherUserId: receiverId,
@@ -605,11 +624,12 @@ class _NewContactPageState extends State<NewContactPage> {
         otherUserName: contactName,
         otherUserAvatar: avatarUrl,
       ),
-    ]);
+    );
     apkLog(
       'NewContact.room',
-      'room cached room_id="$roomId" receiver="$receiverId"',
+      'room cached room_id="$roomId" receiver="$receiverId" old_id="$initialConversationId"',
     );
+    return roomId;
   }
 
   String _friendlyError(String raw) {

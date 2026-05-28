@@ -270,6 +270,16 @@ class _ChatScreenState extends State<ChatScreen> {
     final realConvId = await _resolveConversationId();
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
 
+    if (realConvId != widget.conversationId) {
+      final realCached = await _chat.loadCachedMessages(realConvId);
+      apkLog(
+        'ChatScreen._loadInitial',
+        'loaded ${realCached.length} local msgs for resolved "$realConvId"',
+      );
+      if (!mounted) return;
+      setState(() => _mergeMessages(realCached));
+    }
+
     await _chat.markConversationAsRead(realConvId);
 
     final msgs = await _chat.fetchMessageHistory(
