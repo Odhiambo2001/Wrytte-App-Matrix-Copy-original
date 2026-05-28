@@ -58,6 +58,7 @@ class ChatMessage {
   final String? replyToSenderId;
   final String? replyPreview;
   final String? senderPhone;
+  final String? senderName;
   final bool isForwarded;
   final bool isStarred;
   final bool isDeletedForMe;
@@ -79,6 +80,7 @@ class ChatMessage {
     this.replyToSenderId,
     this.replyPreview,
     this.senderPhone,
+    this.senderName,
     this.isForwarded = false,
     this.isStarred = false,
     this.isDeletedForMe = false,
@@ -111,6 +113,7 @@ class ChatMessage {
       replyToSenderId: json["replyToSenderId"]?.toString(),
       replyPreview: json["replyPreview"]?.toString(),
       senderPhone: json["senderPhone"]?.toString(),
+      senderName: json["senderName"]?.toString(),
       isForwarded: _boolFromJson(json["isForwarded"]),
       isStarred: _boolFromJson(json["isStarred"]),
       isDeletedForMe: _boolFromJson(json["isDeletedForMe"]),
@@ -146,6 +149,7 @@ class ChatMessage {
       replyToSenderId: _replySenderFromFallback(event.body),
       replyPreview: _replyPreviewFromFallback(event.body),
       senderPhone: content['wrytte.sender_phone']?.toString(),
+      senderName: content['wrytte.sender_name']?.toString(),
       isForwarded: content['wrytte.forwarded'] == true,
       isDeletedForEveryone: event.redacted,
     );
@@ -177,6 +181,7 @@ class ChatMessage {
       if (replyToSenderId != null) "replyToSenderId": replyToSenderId,
       if (replyPreview != null) "replyPreview": replyPreview,
       if (senderPhone != null) "senderPhone": senderPhone,
+      if (senderName != null) "senderName": senderName,
       "isForwarded": isForwarded,
       "isStarred": isStarred,
       "isDeletedForMe": isDeletedForMe,
@@ -201,6 +206,7 @@ class ChatMessage {
     String? replyToSenderId,
     String? replyPreview,
     String? senderPhone,
+    String? senderName,
     bool? isForwarded,
     bool? isStarred,
     bool? isDeletedForMe,
@@ -221,6 +227,7 @@ class ChatMessage {
       replyToSenderId: replyToSenderId ?? this.replyToSenderId,
       replyPreview: replyPreview ?? this.replyPreview,
       senderPhone: senderPhone ?? this.senderPhone,
+      senderName: senderName ?? this.senderName,
       isForwarded: isForwarded ?? this.isForwarded,
       isStarred: isStarred ?? this.isStarred,
       isDeletedForMe: isDeletedForMe ?? this.isDeletedForMe,

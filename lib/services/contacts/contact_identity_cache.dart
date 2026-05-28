@@ -167,6 +167,23 @@ class ContactIdentityCache {
 
   String? _clean(String? value) {
     final trimmed = value?.trim() ?? '';
-    return trimmed.isEmpty ? null : trimmed;
+    if (trimmed.isEmpty) return null;
+    final lowered = trimmed.toLowerCase();
+    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+      return null;
+    }
+    if (RegExp(
+      r'^\+?\d{6,}$',
+    ).hasMatch(trimmed.replaceAll(RegExp(r'[\s\-()+]'), ''))) {
+      return null;
+    }
+    final localpart =
+        trimmed.startsWith('@')
+            ? trimmed.substring(1).split(':').first
+            : trimmed.split(':').first;
+    if (RegExp(r'^[a-f0-9]{24,}$', caseSensitive: false).hasMatch(localpart)) {
+      return null;
+    }
+    return trimmed;
   }
 }

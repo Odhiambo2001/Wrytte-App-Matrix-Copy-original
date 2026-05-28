@@ -404,6 +404,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   String _cleanHumanName(String? value) {
     final trimmed = value?.trim() ?? '';
     if (trimmed.isEmpty) return '';
+    final lowered = trimmed.toLowerCase();
+    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+      return '';
+    }
     if (_looksLikePhone(trimmed) || _looksLikeMatrixId(trimmed)) return '';
     return trimmed;
   }

@@ -35,6 +35,7 @@ class ChatService {
 
   String? _currentUserId;
   String? _currentUserPhone;
+  String? _currentUserName;
   bool _isConnected = false;
   Future<void>? _connectFuture;
   StreamSubscription? _timelineSub;
@@ -82,6 +83,7 @@ class ChatService {
       _currentUserPhone = _normalizePhone(
         await AuthService.instance.getSavedPhone() ?? '',
       );
+      _currentUserName = await AuthService.instance.getCurrentUsername();
       if (_currentUserId == null || _currentUserId!.isEmpty) {
         throw Exception('User not authenticated');
       }
@@ -628,6 +630,7 @@ class ChatService {
     _connectFuture = null;
     _currentUserId = null;
     _currentUserPhone = null;
+    _currentUserName = null;
     _conversationsMap.clear();
     _messagesCache.clear();
     await _timelineSub?.cancel();
@@ -749,12 +752,19 @@ class ChatService {
         !_isOwnMessage(message, currentUser)
             ? _normalizePhone(message.senderPhone ?? '')
             : '';
-    if (incomingSenderPhone.isNotEmpty && _currentUserId != null) {
+    final incomingSenderName =
+        !_isOwnMessage(message, currentUser)
+            ? _cleanHumanName(message.senderName)
+            : '';
+    if (_currentUserId != null &&
+        (incomingSenderPhone.isNotEmpty || incomingSenderName.isNotEmpty)) {
       unawaited(
         ContactIdentityCache.instance.upsert(
           ownerUserId: _currentUserId!,
           matrixUserId: message.senderId,
-          phone: incomingSenderPhone,
+          phone: incomingSenderPhone.isNotEmpty ? incomingSenderPhone : null,
+          profileName:
+              incomingSenderName.isNotEmpty ? incomingSenderName : null,
         ),
       );
     }
@@ -931,6 +941,8 @@ class ChatService {
       if (message.isForwarded) 'wrytte.forwarded': true,
       if (_currentUserPhone?.isNotEmpty == true)
         'wrytte.sender_phone': _currentUserPhone,
+      if (_cleanHumanName(_currentUserName).isNotEmpty)
+        'wrytte.sender_name': _cleanHumanName(_currentUserName),
     };
 
     if (message.replyToMessageId != null) {
@@ -973,5 +985,24 @@ class ChatService {
     if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
     if (!cleaned.startsWith('+')) cleaned = '+$cleaned';
     return cleaned;
+  }
+
+  String _cleanHumanName(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.length < 2) return '';
+    final lowered = trimmed.toLowerCase();
+    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+      return '';
+    }
+    final phoneDigits = trimmed.replaceAll(RegExp(r'[\s\-()+]'), '');
+    if (RegExp(r'^\d{6,}$').hasMatch(phoneDigits)) return '';
+    final localpart =
+        trimmed.startsWith('@')
+            ? trimmed.substring(1).split(':').first
+            : trimmed.split(':').first;
+    if (RegExp(r'^[a-f0-9]{24,}$', caseSensitive: false).hasMatch(localpart)) {
+      return '';
+    }
+    return trimmed;
   }
 }

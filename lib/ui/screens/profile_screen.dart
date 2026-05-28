@@ -197,6 +197,10 @@ class _ProfileScreenState extends State<ProfileScreen>
   String _cleanName(String? value) {
     final trimmed = value?.trim() ?? '';
     if (trimmed.isEmpty) return '';
+    final lowered = trimmed.toLowerCase();
+    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+      return '';
+    }
     if (_looksLikePhone(trimmed) || _looksLikeMatrixId(trimmed)) return '';
     return trimmed;
   }
@@ -214,7 +218,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         ? _cleanName(_identity?.profileName)
         : _cleanName(widget.fallbackName).isNotEmpty
         ? _cleanName(widget.fallbackName)
-        : 'User';
+        : '';
   }
 
   String _profilePhone() {

@@ -421,6 +421,10 @@ class _ChatScreenState extends State<ChatScreen> {
   String _cleanDisplayName(String? value) {
     final trimmed = value?.trim() ?? '';
     if (trimmed.isEmpty || _looksLikePhone(trimmed)) return '';
+    final lowered = trimmed.toLowerCase();
+    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+      return '';
+    }
     if (trimmed.startsWith('@') && trimmed.contains(':')) return '';
     if (trimmed.startsWith('!') && trimmed.contains(':')) return '';
     if (RegExp(r'^[a-f0-9]{24,}$', caseSensitive: false).hasMatch(trimmed)) {
