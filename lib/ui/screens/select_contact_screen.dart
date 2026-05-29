@@ -97,6 +97,7 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
           _setContacts(cachedContacts);
           _isLoading = false;
         });
+        return;
       }
 
       final matrixContacts = await _contactService.getMatrixContacts(
