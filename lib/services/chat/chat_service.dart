@@ -382,7 +382,43 @@ class ChatService {
         content: 'Voice message',
         timestamp: DateTime.now(),
         status: MessageStatus.sent,
+        attachmentUrl: filePath,
         attachmentType: 'voice',
+        voiceDuration: durationSeconds,
+        senderPhone: _currentUserPhone,
+      );
+      _cacheMessage(local);
+      _messageController.add(local);
+    });
+  }
+
+  Future<void> sendVideoMessage({
+    required String receiverID,
+    required String filePath,
+    required int durationSeconds,
+  }) async {
+    await _withMatrixTokenRetry('sendVideoMessage', () async {
+      await _waitForConnection();
+      final room = await _directRoom(receiverID);
+      final bytes = await File(filePath).readAsBytes();
+      final file = mx.MatrixVideoFile(
+        bytes: bytes,
+        name: p.basename(filePath),
+        mimeType: 'video/mp4',
+        duration: durationSeconds * 1000,
+      );
+      final eventId = await room.sendFileEvent(file);
+      final local = ChatMessage(
+        id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        conversationId: room.id,
+        senderId:
+            MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
+        receiverId: _toMatrixUserId(receiverID),
+        content: 'Video message',
+        timestamp: DateTime.now(),
+        status: MessageStatus.sent,
+        attachmentUrl: filePath,
+        attachmentType: 'video',
         voiceDuration: durationSeconds,
         senderPhone: _currentUserPhone,
       );

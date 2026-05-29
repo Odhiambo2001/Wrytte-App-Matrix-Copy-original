@@ -22,6 +22,7 @@ class MessageBubble extends StatelessWidget {
 
   // ── Voice note fields (null = plain text bubble) ───────────────────────────
   final bool isVoiceNote;
+  final bool isVideoNote;
   final int? voiceDuration; // total seconds
   final String? audioUrl; // CDN URL from Matrix media upload
   final bool isForwarded;
@@ -43,6 +44,7 @@ class MessageBubble extends StatelessWidget {
     this.status,
     // voice note params
     this.isVoiceNote = false,
+    this.isVideoNote = false,
     this.voiceDuration,
     this.audioUrl,
     this.isForwarded = false,
@@ -99,6 +101,11 @@ class MessageBubble extends StatelessWidget {
                         audioUrl: audioUrl ?? '',
                         totalSeconds: voiceDuration ?? 0,
                         isMine: isMine,
+                        timeWidget: timeWidget,
+                      )
+                      : isVideoNote
+                      ? _VideoMessageBubble(
+                        totalSeconds: voiceDuration ?? 0,
                         timeWidget: timeWidget,
                       )
                       : _BubbleContent(
@@ -180,6 +187,80 @@ class MessageBubble extends StatelessWidget {
           color: Colors.white.withOpacity(0.65),
         );
     }
+  }
+}
+
+class _VideoMessageBubble extends StatelessWidget {
+  final int totalSeconds;
+  final Widget timeWidget;
+
+  const _VideoMessageBubble({
+    required this.totalSeconds,
+    required this.timeWidget,
+  });
+
+  String _fmt(int s) {
+    final m = (s ~/ 60).toString().padLeft(2, '0');
+    final sec = (s % 60).toString().padLeft(2, '0');
+    return '$m:$sec';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 210,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.play_arrow_rounded,
+                  color: Colors.white,
+                  size: 27,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Video message',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.92),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _fmt(totalSeconds),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.65),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.bottomRight,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: timeWidget,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

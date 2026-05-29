@@ -18,6 +18,7 @@ import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/calls/call_screen.dart';
+import 'package:wrytte/ui/screens/chats/video_message_recorder_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_input.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
@@ -645,6 +646,7 @@ class _ChatScreenState extends State<ChatScreen> {
       content: '',
       timestamp: DateTime.now(),
       status: MessageStatus.sending,
+      attachmentUrl: filePath,
       attachmentType: 'voice',
       voiceDuration: durationSeconds,
     );
@@ -668,6 +670,72 @@ class _ChatScreenState extends State<ChatScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to send voice note: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _recordAndSendVideoMessage() async {
+    final result = await Navigator.of(context).push<VideoMessageResult>(
+      MaterialPageRoute(
+        builder:
+            (_) => const VideoMessageRecorderScreen(
+              maxDuration: Duration(seconds: 60),
+            ),
+      ),
+    );
+    if (!mounted || result == null) return;
+    await _sendVideoNote(result.filePath, result.durationSeconds);
+  }
+
+  Future<void> _sendVideoNote(String filePath, int durationSeconds) async {
+    final normalisedReceiverId = _normaliseId(widget.receiverId);
+    final realConvId = await _resolveMatrixConversationIdForSend();
+    apkLog(
+      'ChatScreen._sendVideo',
+      'duration=${durationSeconds}s  receiver="$normalisedReceiverId"',
+    );
+
+    if (realConvId == null) {
+      apkLog('ChatScreen._sendVideo', 'Matrix room unavailable');
+      return;
+    }
+
+    final placeholderId = 'video_${DateTime.now().millisecondsSinceEpoch}';
+    final placeholder = ChatMessage(
+      id: placeholderId,
+      conversationId: realConvId,
+      senderId: widget.currentUserId,
+      receiverId: normalisedReceiverId,
+      content: 'Video message',
+      timestamp: DateTime.now(),
+      status: MessageStatus.sending,
+      attachmentUrl: filePath,
+      attachmentType: 'video',
+      voiceDuration: durationSeconds,
+    );
+
+    setState(() => _messages.add(placeholder));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+
+    try {
+      await _chat.sendVideoMessage(
+        receiverID: normalisedReceiverId,
+        filePath: filePath,
+        durationSeconds: durationSeconds,
+      );
+      if (mounted) {
+        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
+      }
+    } catch (e) {
+      apkLog('ChatScreen._sendVideo', ' ERROR: $e');
+      if (mounted) {
+        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send video message: $e'),
             backgroundColor: Colors.redAccent,
           ),
         );
@@ -1052,6 +1120,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 onSend: _send,
                 inputPillHeight: _kInputPillH,
                 onVoiceMessage: _sendVoiceNote,
+                onVideoMessage: _recordAndSendVideoMessage,
               ),
             ],
           ),
@@ -1336,6 +1405,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               showTail: showTail,
                               status: isMine ? msg.status : null,
                               isVoiceNote: msg.isVoiceNote,
+                              isVideoNote: msg.attachmentType == 'video',
                               voiceDuration: msg.voiceDuration,
                               audioUrl: msg.attachmentUrl,
                               isForwarded: msg.isForwarded,

@@ -142,7 +142,7 @@ class ChatMessage {
               : _stripReplyFallback(event.body),
       timestamp: event.originServerTs,
       status: _statusFromMatrix(event.status),
-      attachmentUrl: event.attachmentMxcUrl?.toString(),
+      attachmentUrl: _attachmentUrlFromMatrix(event),
       attachmentType: attachmentType,
       voiceDuration: duration,
       replyToMessageId: event.inReplyToEventId(),
@@ -307,6 +307,13 @@ String? _attachmentTypeFromMatrix(String msgType) {
     default:
       return null;
   }
+}
+
+String? _attachmentUrlFromMatrix(mx.Event event) {
+  final mxcUrl = event.attachmentMxcUrl;
+  if (mxcUrl == null) return null;
+  if (!mxcUrl.isScheme('mxc')) return mxcUrl.toString();
+  return mxcUrl.getDownloadLink(event.room.client).toString();
 }
 
 MessageStatus _statusFromMatrix(mx.EventStatus status) {
