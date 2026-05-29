@@ -23,6 +23,8 @@ const _kBg = Color(0xFF08090B);
 const _kCard = Color(0xFF23262C);
 const _kBlue = Color(0xFF4DA3FF);
 const _kDivider = Colors.white12;
+const _kMinPhoneLookupDigits = 8;
+const _kPhoneLookupDebounce = Duration(milliseconds: 500);
 
 // ─────────────────────────────────────────────────────────────────
 // Enum for the three possible lookup states
@@ -97,7 +99,11 @@ class _NewContactPageState extends State<NewContactPage> {
   bool get _canSave =>
       _firstNameCtrl.text.trim().isNotEmpty &&
       _selectedCountry != null &&
-      _numberCtrl.text.trim().length >= 4;
+      (_isWrytteIdMode
+          ? _numberCtrl.text.trim().length >= 4
+          : _phoneDigits.length >= _kMinPhoneLookupDigits);
+
+  String get _phoneDigits => _numberCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
 
   // ─────────────────────────────────────────────────────────────
   // Lifecycle
@@ -278,10 +284,15 @@ class _NewContactPageState extends State<NewContactPage> {
     });
     _debounce?.cancel();
 
-    final num = _numberCtrl.text.trim();
-    if (_selectedCountry == null || num.length < 4) return;
+    final digits = _phoneDigits;
+    if (_selectedCountry == null) return;
+    if (_isWrytteIdMode) {
+      if (_numberCtrl.text.trim().length < 4) return;
+    } else if (digits.length < _kMinPhoneLookupDigits) {
+      return;
+    }
 
-    _debounce = Timer(const Duration(milliseconds: 600), _lookupUser);
+    _debounce = Timer(_kPhoneLookupDebounce, _lookupUser);
   }
 
   Future<void> _lookupUser() async {

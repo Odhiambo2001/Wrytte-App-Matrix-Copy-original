@@ -12,6 +12,7 @@ class SignInPage extends StatefulWidget {
 class _SignInPageState extends State<SignInPage> {
   final TextEditingController _inputCtrl = TextEditingController();
   final FocusNode _focusNode = FocusNode();
+  static const int _minLoginDigits = 8;
 
   bool _isValid = false;
   bool _isLoading = false;
@@ -35,10 +36,7 @@ class _SignInPageState extends State<SignInPage> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => LoginOtpPage(
-            phoneNumber: phone,
-            userId: '',
-          ),
+          builder: (_) => LoginOtpPage(phoneNumber: phone, userId: ''),
         ),
       );
     } catch (e) {
@@ -158,7 +156,11 @@ class _SignInPageState extends State<SignInPage> {
                           ),
                           onChanged: (value) {
                             setState(() {
-                              _isValid = value.trim().isNotEmpty;
+                              _isValid =
+                                  value
+                                      .replaceAll(RegExp(r'[^\d]'), '')
+                                      .length >=
+                                  _minLoginDigits;
                               _errorMessage = null;
                             });
                           },
@@ -215,19 +217,20 @@ class _SignInPageState extends State<SignInPage> {
                               borderRadius: BorderRadius.circular(14),
                             ),
                           ),
-                          child: _isLoading
-                              ? const SizedBox(
-                                  height: 18,
-                                  width: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
+                          child:
+                              _isLoading
+                                  ? const SizedBox(
+                                    height: 18,
+                                    width: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                  : const Text(
+                                    "Next",
+                                    style: TextStyle(fontSize: 15),
                                   ),
-                                )
-                              : const Text(
-                                  "Next",
-                                  style: TextStyle(fontSize: 15),
-                                ),
                         ),
                       ),
 
