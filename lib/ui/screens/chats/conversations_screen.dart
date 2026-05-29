@@ -566,7 +566,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         }
 
         if (!mounted) return;
+        final initialMessages = await _chat.loadCachedMessages(conv.id);
 
+        if (!mounted) return;
         await Navigator.push(
           context,
           MaterialPageRoute(
@@ -577,6 +579,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   currentUserId: _currentUserId,
                   title: name,
                   avatarUrl: avatar,
+                  initialMessages: initialMessages,
                 ),
           ),
         );

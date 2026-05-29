@@ -62,23 +62,18 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
   void _onSearchChanged() {
     final query = _searchController.text.toLowerCase();
     setState(() {
-      _filteredWrytte =
-          _wrytteContacts
-              .where((c) => c.formattedName.toLowerCase().contains(query))
-              .toList();
-      _filteredNonWrytte =
-          _nonWrytteContacts
-              .where((c) => c.formattedName.toLowerCase().contains(query))
-              .toList();
+      _applyContactFilter(query);
     });
   }
 
   Future<void> _loadContacts() async {
     try {
-      setState(() {
-        _isLoading = true;
-        _error = '';
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = _wrytteContacts.isEmpty && _nonWrytteContacts.isEmpty;
+          _error = '';
+        });
+      }
 
       final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
       if (currentUserId.trim().isEmpty) {
@@ -94,6 +89,16 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         return;
       }
 
+      final cachedContacts = await ContactLocalDb.loadContacts(
+        ownerUserId: currentUserId,
+      );
+      if (cachedContacts.isNotEmpty && mounted) {
+        setState(() {
+          _setContacts(cachedContacts);
+          _isLoading = false;
+        });
+      }
+
       final matrixContacts = await _contactService.getMatrixContacts(
         currentUserId,
       );
@@ -105,11 +110,7 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
 
       if (mounted) {
         setState(() {
-          _wrytteContacts = matrixContacts.where((c) => c.isOnWrytte).toList();
-          _nonWrytteContacts =
-              matrixContacts.where((c) => !c.isOnWrytte).toList();
-          _filteredWrytte = _wrytteContacts;
-          _filteredNonWrytte = _nonWrytteContacts;
+          _setContacts(matrixContacts);
           _isLoading = false;
         });
       }
@@ -126,6 +127,23 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  void _setContacts(List<Contact> contacts) {
+    _wrytteContacts = contacts.where((c) => c.isOnWrytte).toList();
+    _nonWrytteContacts = contacts.where((c) => !c.isOnWrytte).toList();
+    _applyContactFilter(_searchController.text.toLowerCase());
+  }
+
+  void _applyContactFilter(String query) {
+    _filteredWrytte =
+        _wrytteContacts
+            .where((c) => c.formattedName.toLowerCase().contains(query))
+            .toList();
+    _filteredNonWrytte =
+        _nonWrytteContacts
+            .where((c) => c.formattedName.toLowerCase().contains(query))
+            .toList();
   }
 
   String _generateConversationId(String id1, String id2) {

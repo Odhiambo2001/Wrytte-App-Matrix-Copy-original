@@ -56,6 +56,7 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<ChatMessage>? _msgSub;
 
   final List<ChatMessage> _messages = [];
+  final List<ChatMessage> _initialStreamBuffer = [];
   final Map<String, String> _optimisticIdByContent = {};
 
   String? _resolvedConversationId;
@@ -303,6 +304,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     setState(() {
       _mergeMessages(msgs);
+      _mergeMessages(_initialStreamBuffer);
+      _initialStreamBuffer.clear();
       _loadingInitial = false;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -320,6 +323,10 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       if (_isMine(msg)) {
         unawaited(ChatLocalDb.instance.deleteDuplicateOutgoingEchoesFor(msg));
+      }
+      if (_loadingInitial) {
+        _initialStreamBuffer.add(msg);
+        return;
       }
       setState(() => _upsertMessage(msg));
       if (!_isMine(msg)) {
