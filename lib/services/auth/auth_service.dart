@@ -471,14 +471,28 @@ class AuthService {
   Future<String?> getToken() async => _storage.read(key: _tokenKey);
   Future<DateTime?> getBackendTokenExpiry() async {
     final expiryString = await _storage.read(key: _expiryKey);
-    return expiryString != null ? DateTime.tryParse(expiryString) : null;
+    final storedExpiry =
+        expiryString != null ? DateTime.tryParse(expiryString) : null;
+    if (storedExpiry != null) return storedExpiry;
+
+    return _jwtExpiry(await getToken());
   }
 
   Future<String?> getValidBackendToken() async {
     final token = await getToken();
+    if (_looksLikeJwt(token) && !await _isBackendTokenExpired()) {
+      return token;
+    }
+
     final refreshed = await _refreshBackendToken();
     if (refreshed != null && refreshed.trim().isNotEmpty) return refreshed;
     return token;
+  }
+
+  Future<bool> _isBackendTokenExpired() async {
+    final expiresAt = await getBackendTokenExpiry();
+    if (expiresAt == null) return false;
+    return !expiresAt.isAfter(DateTime.now());
   }
 
   Future<String?> getStoredSecret() async => _storage.read(key: _secretKey);
@@ -603,6 +617,26 @@ class AuthService {
   bool _looksLikeJwt(String? token) {
     if (token == null || token.trim().isEmpty) return false;
     return token.trim().split('.').length == 3;
+  }
+
+  DateTime? _jwtExpiry(String? token) {
+    if (!_looksLikeJwt(token)) return null;
+    try {
+      final payload = token!.trim().split('.')[1];
+      final decoded = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(payload))),
+      );
+      if (decoded is! Map) return null;
+      final rawExp = decoded['exp'];
+      final seconds =
+          rawExp is num
+              ? rawExp.toInt()
+              : int.tryParse(rawExp?.toString() ?? '');
+      if (seconds == null || seconds <= 0) return null;
+      return DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<Map<String, Object?>> _readProfileArchive() async {
