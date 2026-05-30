@@ -30,6 +30,10 @@ class VideoMessageRecorderScreen extends StatefulWidget {
 
 class _VideoMessageRecorderScreenState
     extends State<VideoMessageRecorderScreen> {
+  static const int _videoBitrate = 800000;
+  static const int _audioBitrate = 32000;
+  static const int _framesPerSecond = 20;
+
   CameraController? _controller;
   Timer? _timer;
   bool _initialising = true;
@@ -71,8 +75,11 @@ class _VideoMessageRecorderScreenState
       );
       final controller = CameraController(
         camera,
-        ResolutionPreset.medium,
+        ResolutionPreset.low,
         enableAudio: true,
+        fps: _framesPerSecond,
+        videoBitrate: _videoBitrate,
+        audioBitrate: _audioBitrate,
       );
       await controller.initialize();
       await controller.prepareForVideoRecording();

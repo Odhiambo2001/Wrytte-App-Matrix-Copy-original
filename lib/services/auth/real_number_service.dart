@@ -60,18 +60,6 @@ class RealNumberService {
     final phone = _toFullInternational(fullPhone);
     debugPrint('[RealNumberService] registerRealPhone → "$phone"');
 
-    final existing = await _findExistingRegistration(phone);
-    if (existing != null) {
-      debugPrint(
-        '[RealNumberService] phone already exists before register; using login/session path userid="${existing.userId}"',
-      );
-      final existingResult = await _loginExistingRegistration(
-        existing,
-        phone: phone,
-      );
-      if (existingResult != null) return existingResult;
-    }
-
     final fields = <String, String>{
       'phone': phone,
       'code': code,
@@ -92,13 +80,23 @@ class RealNumberService {
     } on ApiException catch (e) {
       if (e.statusCode == 409) {
         debugPrint(
-          '[RealNumberService] 409 — user exists, attempting login with stored secret',
+          '[RealNumberService] 409 — user exists, attempting local/archived recovery',
         );
 
+        final existing = await _findExistingRegistration(phone);
         final archivedProfile = await AuthService.instance
             .findArchivedProfileByPhone(phone);
         final storedSecret = await AuthService.instance.getStoredSecret();
         final archivedSecret = archivedProfile?.secret.trim() ?? '';
+        final existingSecret = existing?.secret?.trim() ?? '';
+
+        if (existingSecret.isNotEmpty) {
+          return login_(
+            secret: existingSecret,
+            phone: phone,
+            userId: existing?.userId,
+          );
+        }
 
         if (storedSecret != null && storedSecret.isNotEmpty) {
           // Login with stored secret — _handleRegisterResponse will
@@ -123,12 +121,14 @@ class RealNumberService {
         final localUserId = await AuthService.instance.getCurrentUserId();
         final localUsername = await AuthService.instance.getCurrentUsername();
         final existingUserId =
+            existing?.userId ??
             remoteProfile?.userId ??
             archivedProfile?.userId ??
             localUserId ??
             '';
         final existingUsername =
             _firstRealName([
+              existing?.username,
               remoteProfile?.username,
               archivedProfile?.username,
               localUsername,
@@ -177,54 +177,6 @@ class RealNumberService {
       debugPrint('[RealNumberService] pre-register search skipped: $e');
       return null;
     }
-  }
-
-  Future<RealNumberRegisterResult?> _loginExistingRegistration(
-    _ExistingRegistration existing, {
-    required String phone,
-  }) async {
-    final archivedProfile = await AuthService.instance
-        .findArchivedProfileByPhone(phone);
-    final storedSecret = (await AuthService.instance.getStoredSecret())?.trim();
-    final secret =
-        existing.secret?.trim().isNotEmpty == true
-            ? existing.secret!.trim()
-            : storedSecret?.isNotEmpty == true
-            ? storedSecret!
-            : archivedProfile?.secret.trim() ?? '';
-
-    if (secret.isNotEmpty) {
-      return login_(secret: secret, phone: phone, userId: existing.userId);
-    }
-
-    if (existing.token?.trim().isNotEmpty == true &&
-        existing.userId.trim().isNotEmpty) {
-      await AuthService.instance.persistPhoneSession(
-        userId: existing.userId,
-        username: _resolveDisplayName(
-          existing.username ?? archivedProfile?.username ?? phone,
-          phone,
-        ),
-        phone: phone,
-        secret: '',
-        token: existing.token,
-        expiresAt: existing.expiresAt,
-      );
-      return RealNumberRegisterResult(
-        username: _resolveDisplayName(
-          existing.username ?? archivedProfile?.username ?? phone,
-          phone,
-        ),
-        userId: existing.userId,
-        secret: '',
-        isNewUser: false,
-      );
-    }
-
-    debugPrint(
-      '[RealNumberService] existing phone found but backend did not return token/secret; continuing register path',
-    );
-    return null;
   }
 
   // ---------------------------------------------------------------------------
