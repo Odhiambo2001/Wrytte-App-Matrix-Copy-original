@@ -20,6 +20,7 @@ import 'package:wrytte/ui/widgets/theme_wrapper.dart';
 import 'package:wrytte/services/call_listener_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/notification_service.dart';
 
 import 'firebase_options.dart';
 import 'core/theme.dart';
@@ -208,6 +209,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   @override
   void dispose() {
     _callListener.stopListening();
+    unawaited(NotificationService.instance.stop());
     super.dispose();
   }
 
@@ -216,6 +218,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
     String nickname = '',
     String faceUrl = '',
   }) async {
+    unawaited(NotificationService.instance.start(currentUserId: userId));
+
     if (mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _callListener.startListening(context);
