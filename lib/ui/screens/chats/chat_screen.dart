@@ -69,6 +69,8 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isSending = false;
   bool _matrixAvailable = false;
 
+  static const double _bottomStickThreshold = 80.0;
+
   UserProfile? _receiverProfile;
   Contact? _savedContact;
   ContactIdentity? _receiverIdentity;
@@ -309,7 +311,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _initialStreamBuffer.clear();
       _loadingInitial = false;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
 
     _msgSub = _chat.messageStream.listen((msg) {
       if (msg.conversationId != realConvId) return;
@@ -329,11 +331,14 @@ class _ChatScreenState extends State<ChatScreen> {
         _initialStreamBuffer.add(msg);
         return;
       }
+      final shouldStayAtBottom = _isMine(msg) || _isAtBottom;
       setState(() => _upsertMessage(msg));
       if (!_isMine(msg)) {
         unawaited(_chat.markConversationAsRead(realConvId));
       }
-      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+      if (shouldStayAtBottom) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+      }
     });
   }
 
@@ -346,7 +351,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     if (!mounted) return;
     setState(() => _mergeMessages(msgs));
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
   }
 
   Future<void> _loadReceiverProfile() async {
@@ -555,7 +560,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     setState(() => _messages.add(optimistic));
     _optimisticIdByContent['${normalisedReceiverId}_$text'] = optimistic.id;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
 
     final realConvId = await _resolveMatrixConversationIdForSend();
 
@@ -652,7 +657,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     setState(() => _messages.add(placeholder));
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
 
     try {
       await _chat.sendVoiceMessage(
@@ -718,7 +723,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     setState(() => _messages.add(placeholder));
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
 
     try {
       await _chat.sendVideoMessage(
@@ -786,14 +791,17 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ─── SCROLL ────────────────────────────────────────────────────────────────
 
-  void _scrollToBottom() {
-    if (_scrollCtrl.hasClients) {
-      _scrollCtrl.animateTo(
-        _scrollCtrl.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
+  bool get _isAtBottom {
+    if (!_scrollCtrl.hasClients) return true;
+    final position = _scrollCtrl.position;
+    return position.maxScrollExtent - position.pixels <= _bottomStickThreshold;
+  }
+
+  void _jumpToBottom() {
+    if (!_scrollCtrl.hasClients) return;
+    final max = _scrollCtrl.position.maxScrollExtent;
+    if (max <= 0) return;
+    _scrollCtrl.jumpTo(max);
   }
 
   // ─── MESSAGE HELPERS ───────────────────────────────────────────────────────
