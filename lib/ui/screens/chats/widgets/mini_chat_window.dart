@@ -92,9 +92,11 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
     Navigator.pop(context);
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder:
-            (_) => ChatScreen(
+      PageRouteBuilder(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder:
+            (_, __, ___) => ChatScreen(
               conversationId: widget.conversationId,
               receiverId: widget.receiverId,
               currentUserId: widget.currentUserId,

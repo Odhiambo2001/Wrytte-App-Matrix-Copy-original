@@ -311,8 +311,12 @@ class _ChatScreenState extends State<ChatScreen> {
         'ChatScreen._loadInitial',
         'loaded ${realCached.length} local msgs for resolved "$realConvId"',
       );
+      await _migrateLocalConversationToRoom(realConvId, realCached);
       if (!mounted) return;
-      setState(() => _mergeMessages(realCached));
+      setState(() {
+        _normaliseMessagesToConversation(realConvId);
+        _mergeMessages(realCached);
+      });
     }
 
     await _chat.markConversationAsRead(realConvId);
@@ -374,6 +378,40 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     setState(() => _mergeMessages(msgs));
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+  }
+
+  Future<void> _migrateLocalConversationToRoom(
+    String roomId,
+    List<ChatMessage> roomCached,
+  ) async {
+    if (roomId == widget.conversationId) return;
+    final combined = <ChatMessage>[..._messages, ...roomCached]
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final latest =
+        combined.isNotEmpty
+            ? combined.last
+            : ChatMessage(
+              id: 'empty_$roomId',
+              conversationId: roomId,
+              senderId: '',
+              receiverId: widget.receiverId,
+              content: '',
+              timestamp: DateTime.now(),
+              status: MessageStatus.sent,
+            );
+    final roomConversation = ChatConversation.fromMessage(
+      latest.copyWith(conversationId: roomId),
+      widget.currentUserId,
+    ).copyWith(otherUserName: widget.title, otherUserAvatar: widget.avatarUrl);
+
+    await ChatLocalDb.instance.migrateConversationId(
+      oldConversationId: widget.conversationId,
+      roomConversation: roomConversation,
+    );
+    apkLog(
+      'ChatScreen._loadInitial',
+      'migrated local conversation "${widget.conversationId}" -> "$roomId"',
+    );
   }
 
   Future<void> _loadReceiverProfile() async {
@@ -485,7 +523,10 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;
     if (_scrollCtrl.position.maxScrollExtent <= 0) return;
-    if (_scrollCtrl.position.pixels <= 80 && !_loadingOlder && _hasMoreOlder) {
+    if (_scrollCtrl.position.pixels >=
+            _scrollCtrl.position.maxScrollExtent - 80 &&
+        !_loadingOlder &&
+        _hasMoreOlder) {
       _loadOlderMessages();
     }
   }
@@ -816,14 +857,12 @@ class _ChatScreenState extends State<ChatScreen> {
   bool get _isAtBottom {
     if (!_scrollCtrl.hasClients) return true;
     final position = _scrollCtrl.position;
-    return position.maxScrollExtent - position.pixels <= _bottomStickThreshold;
+    return position.pixels <= _bottomStickThreshold;
   }
 
   void _jumpToBottom() {
     if (!_scrollCtrl.hasClients) return;
-    final max = _scrollCtrl.position.maxScrollExtent;
-    if (max <= 0) return;
-    _scrollCtrl.jumpTo(max);
+    _scrollCtrl.jumpTo(0);
   }
 
   // ─── MESSAGE HELPERS ───────────────────────────────────────────────────────
@@ -834,6 +873,14 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _removeDuplicateOutgoingEchoes();
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+  }
+
+  void _normaliseMessagesToConversation(String conversationId) {
+    for (var i = 0; i < _messages.length; i++) {
+      final message = _messages[i];
+      if (message.conversationId != widget.conversationId) continue;
+      _messages[i] = message.copyWith(conversationId: conversationId);
+    }
   }
 
   void _upsertMessage(ChatMessage msg) {
@@ -923,6 +970,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isDuplicateOutgoingEcho(ChatMessage candidate, ChatMessage sent) {
     if (candidate.id == sent.id) return false;
     if (!_isMine(candidate) || !_isMine(sent)) return false;
+    if (!_isLocalOutgoingEchoId(candidate.id)) return false;
     if (candidate.content != sent.content) return false;
     final sameConversation =
         candidate.conversationId == sent.conversationId ||
@@ -931,9 +979,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!sameConversation) return false;
     final closeInTime =
         candidate.timestamp.difference(sent.timestamp).inSeconds.abs() < 60;
-    return closeInTime &&
-        (candidate.status == MessageStatus.sending ||
-            _isLocalOutgoingEchoId(candidate.id));
+    return closeInTime;
   }
 
   bool _isLocalOutgoingEchoId(String id) {
@@ -1419,13 +1465,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   ? const SizedBox.expand()
                   : ListView.builder(
                     controller: _scrollCtrl,
+                    reverse: true,
                     padding: const EdgeInsets.only(top: 12, bottom: 8),
                     physics: const BouncingScrollPhysics(),
                     itemCount: _messages.length,
                     itemBuilder: (context, index) {
-                      final msg = _messages[index];
+                      final messageIndex = _messages.length - 1 - index;
+                      final msg = _messages[messageIndex];
                       final isMine = _isMine(msg);
-                      final prev = index > 0 ? _messages[index - 1] : null;
+                      final prev =
+                          messageIndex > 0 ? _messages[messageIndex - 1] : null;
                       final showDate =
                           prev == null ||
                           !_isSameDay(prev.timestamp, msg.timestamp);

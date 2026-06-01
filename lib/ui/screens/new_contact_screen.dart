@@ -471,9 +471,11 @@ class _NewContactPageState extends State<NewContactPage> {
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder:
-              (_) => ChatScreen(
+        PageRouteBuilder(
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+          pageBuilder:
+              (_, __, ___) => ChatScreen(
                 conversationId: conversationId,
                 receiverId:
                     receiverId.isNotEmpty ? receiverId : _fullIdentifier,

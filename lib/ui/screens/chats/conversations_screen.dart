@@ -571,9 +571,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         if (!mounted) return;
         await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder:
-                (_) => ChatScreen(
+          PageRouteBuilder(
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
+            pageBuilder:
+                (_, __, ___) => ChatScreen(
                   conversationId: conv.id,
                   receiverId: conv.otherUserId,
                   currentUserId: _currentUserId,

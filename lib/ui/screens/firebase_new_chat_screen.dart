@@ -176,9 +176,11 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
     Navigator.pop(context);
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder:
-            (_) => ChatScreen(
+      PageRouteBuilder(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder:
+            (_, __, ___) => ChatScreen(
               conversationId: conversationId,
               receiverId: receiverId,
               currentUserId: currentUserId,
