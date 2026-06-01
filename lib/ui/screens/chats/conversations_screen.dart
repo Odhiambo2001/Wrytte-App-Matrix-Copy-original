@@ -594,41 +594,44 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Widget _buildChatsTab(double topPadding) {
     if (_conversations.isEmpty) {
-      return ListView(
-        controller: _scrollCtrl,
-        padding: EdgeInsets.only(top: topPadding, bottom: 120),
-        physics: const BouncingScrollPhysics(),
-        children: [
-          const SizedBox(height: 60),
-          Center(
-            child: Column(
-              children: [
-                Icon(
-                  Icons.chat_bubble_outline_rounded,
-                  size: 64,
-                  color: Colors.white.withValues(alpha: 0.12),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'No conversations yet',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.35),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
+      return ScrollConfiguration(
+        behavior: const _ConversationsScrollBehavior(),
+        child: ListView(
+          controller: _scrollCtrl,
+          padding: EdgeInsets.only(top: topPadding, bottom: 120),
+          physics: const BouncingScrollPhysics(),
+          children: [
+            const SizedBox(height: 60),
+            Center(
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.chat_bubble_outline_rounded,
+                    size: 64,
+                    color: Colors.white.withValues(alpha: 0.12),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Tap the pencil icon to start a new chat',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    fontSize: 13,
+                  const SizedBox(height: 16),
+                  Text(
+                    'No conversations yet',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.35),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tap the pencil icon to start a new chat',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     }
 
@@ -641,12 +644,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         await _chat.fetchConversations();
         await _retryEnrichment();
       },
-      child: ListView.builder(
-        controller: _scrollCtrl,
-        physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.only(top: topPadding, bottom: 120),
-        itemCount: _conversations.length,
-        itemBuilder: (_, i) => _buildTile(_conversations[i]),
+      child: ScrollConfiguration(
+        behavior: const _ConversationsScrollBehavior(),
+        child: ListView.builder(
+          controller: _scrollCtrl,
+          physics: const BouncingScrollPhysics(),
+          padding: EdgeInsets.only(top: topPadding, bottom: 120),
+          itemCount: _conversations.length,
+          itemBuilder: (_, i) => _buildTile(_conversations[i]),
+        ),
       ),
     );
   }
@@ -791,5 +797,27 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         ),
       ),
     );
+  }
+}
+
+class _ConversationsScrollBehavior extends ScrollBehavior {
+  const _ConversationsScrollBehavior();
+
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
+  }
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
   }
 }

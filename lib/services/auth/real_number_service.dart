@@ -59,6 +59,10 @@ class RealNumberService {
   }) async {
     final phone = _toFullInternational(fullPhone);
     debugPrint('[RealNumberService] registerRealPhone → "$phone"');
+    final existingBeforeRegister = await _checkRealPhoneExists(
+      phone: phone,
+      code: code,
+    );
 
     final fields = <String, String>{
       'phone': phone,
@@ -75,7 +79,7 @@ class RealNumberService {
       return _handleRegisterResponse(
         response,
         fallbackPhone: phone,
-        serverIndicatesNewUser: true,
+        serverIndicatesNewUser: existingBeforeRegister != true,
       );
     } on ApiException catch (e) {
       if (e.statusCode == 409) {
@@ -112,59 +116,58 @@ class RealNumberService {
           return login_(secret: archivedSecret, phone: phone);
         }
 
-        // No stored secret — user exists but this may be a fresh install or a
-        // local-storage reset. Rehydrate from secure local profile storage
-        // before falling back to the phone number.
-        final remoteProfile = await AuthService.instance.findUserProfileByPhone(
-          phone,
-        );
-        final localUserId = await AuthService.instance.getCurrentUserId();
-        final localUsername = await AuthService.instance.getCurrentUsername();
-        final existingUserId =
-            existing?.userId ??
-            remoteProfile?.userId ??
-            archivedProfile?.userId ??
-            localUserId ??
-            '';
-        final existingUsername =
-            _firstRealName([
-              existing?.username,
-              remoteProfile?.username,
-              archivedProfile?.username,
-              localUsername,
-            ]) ??
-            phone;
-        final displayName = _resolveDisplayName(existingUsername, phone);
-
-        if (existingUserId.isNotEmpty) {
-          await AuthService.instance.persistPhoneSession(
-            userId: existingUserId,
-            username: displayName,
-            phone: phone,
-            secret: '',
-          );
-        } else {
-          throw Exception(
-            'This phone already has an account, but the server did not return '
-            'the saved profile. Please sign in with the existing account '
-            'session or ask the backend to return userid, username, token, '
-            'and secret after OTP verification.',
-          );
-        }
-
-        debugPrint(
-          '[RealNumberService] 409 no secret — display name: "$displayName"',
-        );
-
-        return RealNumberRegisterResult(
-          username: displayName,
-          userId: existingUserId,
-          secret: '',
-          isNewUser: false,
+        throw Exception(
+          'This phone already has an account, but /auth/register/rpn returned '
+          '409 instead of returning the existing userid, token, secret, and '
+          'expires after OTP verification. Update the backend register/login '
+          'response for existing phone numbers.',
         );
       }
       rethrow; // 400, 401, 500, etc. bubble up normally
     }
+  }
+
+  Future<bool?> _checkRealPhoneExists({
+    required String phone,
+    required String code,
+  }) async {
+    final fields = <String, String>{'phone': phone, 'code': code};
+    for (final path in const [
+      '/auth/register/checkrpn',
+      '/api/auth/register/checkrpn',
+    ]) {
+      try {
+        final response = await ApiService.postMultipart(path, fields);
+        final exists = _parseExists(response);
+        if (exists != null) {
+          debugPrint('[RealNumberService] checkrpn exists=$exists');
+          return exists;
+        }
+      } catch (e) {
+        debugPrint('[RealNumberService] checkrpn $path failed: $e');
+      }
+    }
+    return null;
+  }
+
+  bool? _parseExists(dynamic response) {
+    if (response is bool) return response;
+    if (response is Map) {
+      for (final key in const [
+        'exists',
+        'value',
+        'isExists',
+        'isExisting',
+        'registered',
+      ]) {
+        final raw = response[key];
+        if (raw is bool) return raw;
+        final text = raw?.toString().trim().toLowerCase();
+        if (text == 'true') return true;
+        if (text == 'false') return false;
+      }
+    }
+    return null;
   }
 
   Future<_ExistingRegistration?> _findExistingRegistration(String phone) async {
@@ -289,10 +292,33 @@ class RealNumberService {
                 storedUserId ??
                 '')
             .trim();
+    final responseFirstName =
+        (map['FirstName'] ??
+                map['firstName'] ??
+                map['firstname'] ??
+                map['first_name'] ??
+                '')
+            .toString()
+            .trim();
+    final responseLastName =
+        (map['LastName'] ??
+                map['lastName'] ??
+                map['lastname'] ??
+                map['last_name'] ??
+                '')
+            .toString()
+            .trim();
+    final responseFullName =
+        [
+          responseFirstName,
+          responseLastName,
+        ].where((part) => part.trim().isNotEmpty).join(' ').trim();
     final rawUsername =
-        (map['username'] as String? ??
-                archivedProfile?.username ??
-                fallbackPhone)
+        (responseFullName.isNotEmpty
+                ? responseFullName
+                : map['username'] as String? ??
+                    archivedProfile?.username ??
+                    fallbackPhone)
             .trim();
     final secret = (map['secret'] as String? ?? '').trim();
     final token = (map['token'] as String? ?? '').trim();

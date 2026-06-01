@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
 class AddProfilePage extends StatefulWidget {
@@ -108,7 +109,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
 
     if (mounted) setState(() => _isSaving = true);
 
-    await AuthService.instance.updateStoredUsername(name);
+    await UserProfileService.instance.updateDisplayName(name);
     debugPrint('[AddProfilePage] Name saved locally: "$name"');
 
     // Re-persist the local session quickly; Matrix can finish in the background.

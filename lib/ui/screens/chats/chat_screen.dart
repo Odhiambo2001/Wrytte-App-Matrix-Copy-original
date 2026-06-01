@@ -46,6 +46,28 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
+class _ChatScrollBehavior extends ScrollBehavior {
+  const _ChatScrollBehavior();
+
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
+  }
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
+  }
+}
+
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
@@ -1106,91 +1128,102 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final double statusBarH = MediaQuery.of(context).padding.top;
+    final mediaQuery = MediaQuery.of(context);
+    final double statusBarH = mediaQuery.padding.top;
     final double appBarH = statusBarH + kToolbarHeight;
+    final double keyboardInset = mediaQuery.viewInsets.bottom;
 
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
       extendBodyBehindAppBar: true,
       extendBody: true,
-      body: Stack(
-        children: [
-          // ── main chat UI ──────────────────────────────────────────────────
-          Column(
-            children: [
-              SizedBox(height: appBarH),
-              Expanded(child: _buildMessageList()),
-              if (_replyingTo != null) _buildReplyComposerBanner(),
-              MessageInputField(
-                controller: _controller,
-                focusNode: _focusNode,
-                isSending: _isSending,
-                onSend: _send,
-                inputPillHeight: _kInputPillH,
-                onVoiceMessage: _sendVoiceNote,
-                onVideoMessage: _recordAndSendVideoMessage,
+      resizeToAvoidBottomInset: false,
+      body: ScrollConfiguration(
+        behavior: const _ChatScrollBehavior(),
+        child: Stack(
+          children: [
+            // ── main chat UI ────────────────────────────────────────────────
+            AnimatedPadding(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.only(bottom: keyboardInset),
+              child: Column(
+                children: [
+                  SizedBox(height: appBarH),
+                  Expanded(child: _buildMessageList()),
+                  if (_replyingTo != null) _buildReplyComposerBanner(),
+                  MessageInputField(
+                    controller: _controller,
+                    focusNode: _focusNode,
+                    isSending: _isSending,
+                    onSend: _send,
+                    inputPillHeight: _kInputPillH,
+                    onVoiceMessage: _sendVoiceNote,
+                    onVideoMessage: _recordAndSendVideoMessage,
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
 
-          // ── gradient behind app bar ───────────────────────────────────────
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: appBarH + 20,
-            child: IgnorePointer(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: const [0.0, 0.6, 1.0],
-                    colors: [
-                      const Color(0xFF08090B).withOpacity(0.95),
-                      const Color(0xFF08090B).withOpacity(0.75),
-                      const Color(0xFF08090B).withOpacity(0.0),
-                    ],
+            // ── gradient behind app bar ─────────────────────────────────────
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: appBarH + 20,
+              child: IgnorePointer(
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: const [0.0, 0.6, 1.0],
+                      colors: [
+                        const Color(0xFF08090B).withOpacity(0.95),
+                        const Color(0xFF08090B).withOpacity(0.75),
+                        const Color(0xFF08090B).withOpacity(0.0),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
 
-          // ── app bar ───────────────────────────────────────────────────────
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: _buildAppBar(statusBarH),
-          ),
+            // ── app bar ─────────────────────────────────────────────────────
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: _buildAppBar(statusBarH),
+            ),
 
-          // ── debug overlay ─────────────────────────────────────────────────
-          if (_showDebug) _buildDebugOverlay(appBarH),
+            // ── debug overlay ───────────────────────────────────────────────
+            if (_showDebug) _buildDebugOverlay(appBarH),
 
-          // ── debug toggle button ───────────────────────────────────────────
-          Positioned(
-            bottom: 120,
-            right: 12,
-            child: GestureDetector(
-              onTap: () => setState(() => _showDebug = !_showDebug),
-              child: Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color:
-                      _showDebug
-                          ? Colors.orangeAccent
-                          : Colors.grey.withOpacity(0.6),
-                  shape: BoxShape.circle,
-                ),
-                child: const Center(
-                  child: Text('🐛', style: TextStyle(fontSize: 18)),
+            // ── debug toggle button ─────────────────────────────────────────
+            Positioned(
+              bottom: 120 + keyboardInset,
+              right: 12,
+              child: GestureDetector(
+                onTap: () => setState(() => _showDebug = !_showDebug),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color:
+                        _showDebug
+                            ? Colors.orangeAccent
+                            : Colors.grey.withOpacity(0.6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Center(
+                    child: Text('🐛', style: TextStyle(fontSize: 18)),
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

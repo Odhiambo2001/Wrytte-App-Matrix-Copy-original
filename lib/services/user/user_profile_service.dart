@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/user/user_profile_api_service.dart';
 
 /// Production-grade local-only UserProfileService.
 /// Source of truth is FlutterSecureStorage via AuthService.
@@ -14,6 +15,8 @@ class UserProfileService {
   );
 
   static const _nameKey = 'username';
+  static const _firstNameKey = 'profile_first_name';
+  static const _lastNameKey = 'profile_last_name';
   static const _phoneKey = 'phone';
   static const _profileImageKey = 'profile_image';
   static const _bioKey = 'user_bio';
@@ -34,7 +37,7 @@ class UserProfileService {
       final uid = await AuthService.instance.getCurrentUserId();
       if (uid != null && uid.isNotEmpty && _cache!.uid == uid) return _cache;
     }
-    return _readFromStorage();
+    return _readFromStorage(forceRefresh: forceRefresh);
   }
 
   /// Persists an updated display name and invalidates the cache.
@@ -42,8 +45,15 @@ class UserProfileService {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return;
     await _storage.write(key: _nameKey, value: trimmed);
+    final parts = _splitName(trimmed);
+    await _storage.write(key: _firstNameKey, value: parts.$1);
+    await _storage.write(key: _lastNameKey, value: parts.$2);
     // Also keep AuthService in sync (it owns the same key)
     await AuthService.instance.updateStoredUsername(trimmed);
+    await _saveBackendProfileBestEffort({
+      'FirstName': parts.$1,
+      if (parts.$2.isNotEmpty) 'LastName': parts.$2,
+    });
     _cache = null;
     debugPrint('[UserProfileService] Display name updated: "$trimmed"');
   }
@@ -57,28 +67,52 @@ class UserProfileService {
   /// Persists a bio and invalidates the cache.
   Future<void> updateBio(String bio) async {
     await _storage.write(key: _bioKey, value: bio.trim());
+    await _saveBackendProfileBestEffort({'Bio': bio.trim()});
     _cache = null;
   }
 
   /// Convenience: update multiple fields in one write pass.
   Future<void> updateProfile({
     String? name,
+    String? firstName,
+    String? lastName,
     String? profileImage,
     String? bio,
     List<String>? links,
   }) async {
+    final backendFields = <String, String>{};
     if (name != null && name.trim().isNotEmpty) {
       await _storage.write(key: _nameKey, value: name.trim());
       await AuthService.instance.updateStoredUsername(name.trim());
+      final parts = _splitName(name.trim());
+      await _storage.write(key: _firstNameKey, value: firstName ?? parts.$1);
+      await _storage.write(key: _lastNameKey, value: lastName ?? parts.$2);
+      backendFields['FirstName'] = firstName?.trim() ?? parts.$1;
+      if ((lastName?.trim() ?? parts.$2).isNotEmpty) {
+        backendFields['LastName'] = lastName?.trim() ?? parts.$2;
+      }
+    } else {
+      if (firstName != null) {
+        await _storage.write(key: _firstNameKey, value: firstName.trim());
+        backendFields['FirstName'] = firstName.trim();
+      }
+      if (lastName != null) {
+        await _storage.write(key: _lastNameKey, value: lastName.trim());
+        backendFields['LastName'] = lastName.trim();
+      }
     }
     if (profileImage != null) {
       await _storage.write(key: _profileImageKey, value: profileImage.trim());
     }
     if (bio != null) {
       await _storage.write(key: _bioKey, value: bio.trim());
+      backendFields['Bio'] = bio.trim();
     }
     if (links != null) {
       await _storage.write(key: 'user_links', value: links.join('\n'));
+    }
+    if (backendFields.isNotEmpty) {
+      await _saveBackendProfileBestEffort(backendFields);
     }
     _cache = null;
   }
@@ -133,13 +167,38 @@ class UserProfileService {
   // PRIVATE
   // ─────────────────────────────────────────────────────────────────────────
 
-  Future<UserProfile?> _readFromStorage() async {
+  Future<UserProfile?> _readFromStorage({bool forceRefresh = false}) async {
     try {
       final uid = await AuthService.instance.getCurrentUserId();
       if (uid == null || uid.isEmpty) return null;
 
       final phone = _normalizePhone(await _storage.read(key: _phoneKey) ?? '');
       var name = await _storage.read(key: _nameKey) ?? '';
+      var firstName = await _storage.read(key: _firstNameKey) ?? '';
+      var lastName = await _storage.read(key: _lastNameKey) ?? '';
+      var bio = await _storage.read(key: _bioKey) ?? '';
+
+      if (forceRefresh || !_hasRealName(name)) {
+        final remote = await _readBackendProfileBestEffort();
+        if (remote.isNotEmpty) {
+          firstName = _field(remote, 'FirstName') ?? firstName;
+          lastName = _field(remote, 'LastName') ?? lastName;
+          bio = _field(remote, 'Bio') ?? bio;
+          final remoteName =
+              [
+                firstName,
+                lastName,
+              ].where((part) => part.trim().isNotEmpty).join(' ').trim();
+          if (_hasRealName(remoteName)) {
+            name = remoteName;
+            await _storage.write(key: _nameKey, value: name);
+            await _storage.write(key: _firstNameKey, value: firstName);
+            await _storage.write(key: _lastNameKey, value: lastName);
+            await AuthService.instance.updateStoredUsername(name);
+          }
+          await _storage.write(key: _bioKey, value: bio);
+        }
+      }
       if (!_hasRealName(name)) {
         await AuthService.instance.getValidBackendToken();
         name = await _storage.read(key: _nameKey) ?? name;
@@ -152,7 +211,6 @@ class UserProfileService {
         }
       }
       final profileImage = await _storage.read(key: _profileImageKey) ?? '';
-      final bio = await _storage.read(key: _bioKey) ?? '';
       final linksRaw = await _storage.read(key: 'user_links') ?? '';
 
       final profile = UserProfile(
@@ -208,5 +266,37 @@ class UserProfileService {
       r'^[a-f0-9]{24,}$',
       caseSensitive: false,
     ).hasMatch(localpart);
+  }
+
+  (String, String) _splitName(String value) {
+    final parts = value.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty) return ('', '');
+    return (parts.first, parts.length > 1 ? parts.sublist(1).join(' ') : '');
+  }
+
+  String? _field(Map<String, String> fields, String wanted) {
+    for (final entry in fields.entries) {
+      if (entry.key.toLowerCase() == wanted.toLowerCase()) {
+        return entry.value.trim();
+      }
+    }
+    return null;
+  }
+
+  Future<Map<String, String>> _readBackendProfileBestEffort() async {
+    try {
+      return await UserProfileApiService.instance.getProfile();
+    } catch (e) {
+      debugPrint('[UserProfileService] Backend profile get skipped: $e');
+      return const {};
+    }
+  }
+
+  Future<void> _saveBackendProfileBestEffort(Map<String, String> fields) async {
+    try {
+      await UserProfileApiService.instance.saveProfileFields(fields);
+    } catch (e) {
+      debugPrint('[UserProfileService] Backend profile save skipped: $e');
+    }
   }
 }

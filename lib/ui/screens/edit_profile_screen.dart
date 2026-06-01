@@ -152,6 +152,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       }
       await UserProfileService.instance.updateProfile(
         name: fullName,
+        firstName: firstName,
+        lastName: lastName,
         profileImage: newImageUrl,
         bio: bio,
         links: existingLinks,
