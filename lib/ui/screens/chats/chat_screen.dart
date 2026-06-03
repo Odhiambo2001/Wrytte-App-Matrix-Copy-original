@@ -363,6 +363,15 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() => _normaliseMessagesToConversation(realConvId));
     }
 
+    if (realConvId.startsWith('!')) {
+      final restored = await _chat.fetchMessageHistory(
+        conversationID: realConvId,
+      );
+      if (restored.isNotEmpty && mounted) {
+        setState(() => _replaceMessagesFromSharedCache(restored));
+      }
+    }
+
     await _chat.markConversationAsRead(realConvId);
 
     if (!mounted) return;

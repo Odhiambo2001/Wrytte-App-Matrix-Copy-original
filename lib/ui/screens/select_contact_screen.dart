@@ -313,7 +313,9 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
     );
     if (roomId != null && roomId.isNotEmpty) {
       selectedConversationId = roomId;
-      selectedMessages = await ChatService().loadCachedMessages(roomId);
+      final chat = ChatService();
+      await chat.fetchMessageHistory(conversationID: roomId);
+      selectedMessages = await chat.loadCachedMessages(roomId);
     }
 
     return _ContactChatOpenData(

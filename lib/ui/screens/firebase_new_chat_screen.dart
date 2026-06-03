@@ -225,7 +225,8 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
             ),
           );
           conversationId = roomId;
-          initialMessages = await ChatService().loadCachedMessages(roomId);
+          await chat.fetchMessageHistory(conversationID: roomId);
+          initialMessages = await chat.loadCachedMessages(roomId);
         }
       } catch (e) {
         debugPrint('[FirebaseNewChatScreen] Matrix room resolve failed: $e');
