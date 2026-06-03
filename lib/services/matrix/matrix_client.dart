@@ -198,11 +198,22 @@ class MatrixClientService {
       final dirs = await Future.wait([
         getApplicationSupportDirectory(),
         getApplicationDocumentsDirectory(),
+        getApplicationCacheDirectory(),
+        getTemporaryDirectory(),
       ]);
       for (final dir in dirs) {
-        final matrixDir = Directory(p.join(dir.path, 'matrix'));
-        if (await matrixDir.exists()) {
-          await matrixDir.delete(recursive: true);
+        for (final name in [
+          'matrix',
+          'matrix_media',
+          'matrix_sdk',
+          'hive',
+          'db',
+          'client',
+        ]) {
+          final child = Directory(p.join(dir.path, name));
+          if (await child.exists()) {
+            await child.delete(recursive: true);
+          }
         }
 
         final legacyDbBase = p.join(dir.path, MatrixConfig.localDatabaseFile);

@@ -801,11 +801,11 @@ class AuthService {
       );
     }
     try {
-      await MatrixClientService.instance.disposeCurrentClient().timeout(
+      await MatrixClientService.instance.deleteLocalStore().timeout(
         const Duration(seconds: 3),
       );
     } catch (e) {
-      debugPrint('[AuthService] Matrix client dispose failed: $e');
+      debugPrint('[AuthService] Matrix local store wipe failed: $e');
     }
     try {
       await ChatLocalDb.instance.deleteAllLocalDatabases().timeout(
