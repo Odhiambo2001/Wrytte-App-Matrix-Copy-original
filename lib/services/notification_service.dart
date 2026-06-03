@@ -7,6 +7,7 @@ import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/services/call_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/user_service.dart';
 
 class NotificationService {
   NotificationService._();
@@ -26,8 +27,10 @@ class NotificationService {
   StreamSubscription<CallData>? _callSub;
   StreamSubscription<RemoteMessage>? _foregroundPushSub;
   StreamSubscription<RemoteMessage>? _openedPushSub;
+  StreamSubscription<String>? _tokenRefreshSub;
   bool _initialized = false;
   String? _currentUserId;
+  String? _lastRegisteredToken;
 
   Future<void> initialize() async {
     if (_initialized || kIsWeb) return;
@@ -100,26 +103,59 @@ class NotificationService {
     _openedPushSub ??= FirebaseMessaging.onMessageOpenedApp.listen(
       _handleOpenedPush,
     );
+    _tokenRefreshSub ??= _messaging.onTokenRefresh.listen(
+      _registerFcmToken,
+      onError: (Object e) {
+        debugPrint('[NotificationService] FCM token refresh error: $e');
+      },
+    );
 
     final token = await _messaging.getToken();
     debugPrint('[NotificationService] FCM token: $token');
+    if (token != null && token.isNotEmpty) {
+      await _registerFcmToken(token);
+    }
+
+    final initialMessage = await _messaging.getInitialMessage();
+    if (initialMessage != null) {
+      _handleOpenedPush(initialMessage);
+    }
 
     unawaited(ChatService().connect());
   }
 
   Future<void> stop() async {
+    final token = _lastRegisteredToken ?? await _messaging.getToken();
+    if (token != null && token.isNotEmpty) {
+      await UserService().removeFcmToken(fcmToken: token);
+    }
     await _messageSub?.cancel();
     await _callSub?.cancel();
     await _foregroundPushSub?.cancel();
     await _openedPushSub?.cancel();
+    await _tokenRefreshSub?.cancel();
     _messageSub = null;
     _callSub = null;
     _foregroundPushSub = null;
     _openedPushSub = null;
+    _tokenRefreshSub = null;
     _currentUserId = null;
+    _lastRegisteredToken = null;
     _notifiedMessageIds.clear();
     _notifiedCallIds.clear();
     _notifiedRemoteIds.clear();
+  }
+
+  Future<void> _registerFcmToken(String token) async {
+    final cleaned = token.trim();
+    if (cleaned.isEmpty) return;
+    if (_lastRegisteredToken == cleaned) return;
+    try {
+      await UserService().updateFcmToken(cleaned);
+      _lastRegisteredToken = cleaned;
+    } catch (e) {
+      debugPrint('[NotificationService] FCM token registration failed: $e');
+    }
   }
 
   Future<void> showRemoteMessage(RemoteMessage message) async {

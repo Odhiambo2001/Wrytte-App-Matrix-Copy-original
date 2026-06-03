@@ -83,6 +83,47 @@ class ApiService {
     throw ApiException(response.statusCode, response.body);
   }
 
+  // DELETE (application/json)
+
+  static Future<dynamic> deleteJson(
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, dynamic>? queryParameters,
+    String? token,
+  }) async {
+    final uri = Uri.parse(
+      "$baseUrl$path",
+    ).replace(queryParameters: queryParameters);
+
+    final headers = {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      if (token != null && token.isNotEmpty) "Authorization": "Bearer $token",
+    };
+
+    debugPrint("➡️ DELETE JSON $uri");
+    debugPrint("📦 JSON BODY: ${_redactMap(body)}");
+
+    final request =
+        http.Request('DELETE', uri)
+          ..headers.addAll(headers)
+          ..body = jsonEncode(body ?? const <String, dynamic>{});
+
+    final streamedResponse = await request.send().timeout(
+      const Duration(seconds: 20),
+    );
+    final response = await http.Response.fromStream(streamedResponse);
+
+    debugPrint("⬅️ STATUS: ${response.statusCode}");
+    debugPrint("⬅️ RESPONSE: ${response.body}");
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return _safeDecode(response.body);
+    }
+
+    throw ApiException(response.statusCode, response.body);
+  }
+
   // POST (multipart/form-data)
 
   static Future<dynamic> postMultipart(
@@ -177,7 +218,8 @@ class ApiService {
     if (map == null) return null;
     return map.map((key, value) {
       final lowerKey = key.toLowerCase();
-      final shouldRedact = lowerKey.contains('secret') ||
+      final shouldRedact =
+          lowerKey.contains('secret') ||
           lowerKey.contains('token') ||
           lowerKey.contains('password');
       return MapEntry(key, shouldRedact ? '***' : value);

@@ -13,6 +13,7 @@ import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class StoredAuthProfile {
@@ -778,6 +779,13 @@ class AuthService {
   // ---------------------------------------------------------------------------
   Future<void> logout() async {
     _matrixBootstrapGeneration++;
+    try {
+      await NotificationService.instance.stop().timeout(
+        const Duration(seconds: 3),
+      );
+    } catch (e) {
+      debugPrint('[AuthService] notification stop failed: $e');
+    }
     try {
       await ChatService().reset().timeout(const Duration(seconds: 3));
     } catch (e) {

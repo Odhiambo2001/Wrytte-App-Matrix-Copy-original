@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart';
+import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
@@ -21,15 +24,15 @@ class UserService {
   }
 
   Future<Map<String, dynamic>> getUserData(String userId) async => {
-        'id': userId,
-        'uid': userId,
-        'name': userId,
-        'username': userId,
-        'profileImage': null,
-        'isOnline': false,
-        'phone': '',
-        'lastSeen': null,
-      };
+    'id': userId,
+    'uid': userId,
+    'name': userId,
+    'username': userId,
+    'profileImage': null,
+    'isOnline': false,
+    'phone': '',
+    'lastSeen': null,
+  };
 
   Future<List<Map<String, dynamic>>> getUsersData(List<String> userIds) async =>
       Future.wait(userIds.map(getUserData));
@@ -50,20 +53,16 @@ class UserService {
       final matrixUserId = client.userID;
       if (matrixUserId == null) return;
       if (name != null && name.trim().isNotEmpty) {
-        await client.setProfileField(
-          matrixUserId,
-          'm.displayname',
-          {'displayname': name.trim()},
-        );
+        await client.setProfileField(matrixUserId, 'm.displayname', {
+          'displayname': name.trim(),
+        });
       }
       if (profileImage != null &&
           profileImage.isNotEmpty &&
           profileImage.startsWith('mxc://')) {
-        await client.setProfileField(
-          matrixUserId,
-          'm.avatar_url',
-          {'avatar_url': profileImage},
-        );
+        await client.setProfileField(matrixUserId, 'm.avatar_url', {
+          'avatar_url': profileImage,
+        });
       }
     } catch (_) {}
   }
@@ -74,12 +73,14 @@ class UserService {
     List<String> phoneNumbers,
   ) async {
     return phoneNumbers
-        .map((phone) => {
-              'id': phone,
-              'uid': phone,
-              'phone': _normalizePhone(phone),
-              'name': _normalizePhone(phone),
-            })
+        .map(
+          (phone) => {
+            'id': phone,
+            'uid': phone,
+            'phone': _normalizePhone(phone),
+            'name': _normalizePhone(phone),
+          },
+        )
         .toList();
   }
 
@@ -97,16 +98,173 @@ class UserService {
 
   Future<String?> getUserIdByPhone(String phoneNumber) async => null;
 
-  Future<void> updateFcmToken(String fcmToken) async {}
+  Future<void> updateFcmToken(String fcmToken) async {
+    final cleanedToken = fcmToken.trim();
+    if (cleanedToken.isEmpty) return;
 
-  Future<void> removeFcmToken() async {}
+    final authToken = await AuthService.instance.getToken();
+    final userId = await AuthService.instance.getCurrentUserId();
+    if (authToken == null ||
+        authToken.isEmpty ||
+        userId == null ||
+        userId.isEmpty) {
+      debugPrint(
+        '[UserService] FCM token not registered: missing auth session',
+      );
+      return;
+    }
+
+    final body = await _fcmTokenBody(cleanedToken, userId: userId);
+    await _sendFirstSuccessful(
+      action: 'register FCM token',
+      requests: [
+        () => ApiService.postJson(
+          '/notifications/fcm-token',
+          body: body,
+          token: authToken,
+        ),
+        () => ApiService.postJson(
+          '/notification/fcm-token',
+          body: body,
+          token: authToken,
+        ),
+        () => ApiService.postJson(
+          '/users/fcm-token',
+          body: body,
+          token: authToken,
+        ),
+        () => ApiService.postJson(
+          '/auth/fcm-token',
+          body: body,
+          token: authToken,
+        ),
+        () => ApiService.postMultipart(
+          '/notifications/fcm-token',
+          body.map((key, value) => MapEntry(key, value?.toString() ?? '')),
+          token: authToken,
+        ),
+      ],
+    );
+  }
+
+  Future<void> removeFcmToken({String? fcmToken}) async {
+    final authToken = await AuthService.instance.getToken();
+    final userId = await AuthService.instance.getCurrentUserId();
+    if (authToken == null ||
+        authToken.isEmpty ||
+        userId == null ||
+        userId.isEmpty) {
+      return;
+    }
+
+    final body = await _fcmTokenBody(fcmToken?.trim() ?? '', userId: userId);
+    await _sendFirstSuccessful(
+      action: 'remove FCM token',
+      requests: [
+        () => ApiService.deleteJson(
+          '/notifications/fcm-token',
+          body: body,
+          token: authToken,
+        ),
+        () => ApiService.deleteJson(
+          '/notification/fcm-token',
+          body: body,
+          token: authToken,
+        ),
+        () => ApiService.deleteJson(
+          '/users/fcm-token',
+          body: body,
+          token: authToken,
+        ),
+        () => ApiService.postJson(
+          '/notifications/fcm-token/remove',
+          body: body,
+          token: authToken,
+        ),
+        () => ApiService.postJson(
+          '/auth/fcm-token/remove',
+          body: body,
+          token: authToken,
+        ),
+      ],
+    );
+  }
+
+  Future<Map<String, dynamic>> _fcmTokenBody(
+    String fcmToken, {
+    required String userId,
+  }) async {
+    final phone = await AuthService.instance.getSavedPhone() ?? '';
+    final matrixUserId = MatrixClientService.instance.userId ?? '';
+    final device = await _deviceInfo();
+    return {
+      'userId': userId,
+      'userid': userId,
+      'uid': userId,
+      'phone': phone,
+      'matrixUserId': matrixUserId,
+      'matrixuserid': matrixUserId,
+      'fcmToken': fcmToken,
+      'fcm_token': fcmToken,
+      'token': fcmToken,
+      'platform': defaultTargetPlatform.name,
+      ...device,
+    };
+  }
+
+  Future<Map<String, dynamic>> _deviceInfo() async {
+    if (kIsWeb) return const {'deviceId': 'web', 'deviceName': 'web'};
+    final plugin = DeviceInfoPlugin();
+    try {
+      switch (defaultTargetPlatform) {
+        case TargetPlatform.android:
+          final android = await plugin.androidInfo;
+          return {
+            'deviceId': android.id,
+            'deviceName': '${android.manufacturer} ${android.model}',
+            'deviceModel': android.model,
+            'osVersion': android.version.release,
+          };
+        case TargetPlatform.iOS:
+          final ios = await plugin.iosInfo;
+          return {
+            'deviceId': ios.identifierForVendor ?? '',
+            'deviceName': ios.name,
+            'deviceModel': ios.model,
+            'osVersion': ios.systemVersion,
+          };
+        default:
+          return {'deviceId': defaultTargetPlatform.name};
+      }
+    } catch (_) {
+      return {'deviceId': defaultTargetPlatform.name};
+    }
+  }
+
+  Future<void> _sendFirstSuccessful({
+    required String action,
+    required List<Future<dynamic> Function()> requests,
+  }) async {
+    Object? lastError;
+    for (final request in requests) {
+      try {
+        await request();
+        debugPrint('[UserService] $action succeeded');
+        return;
+      } catch (e) {
+        lastError = e;
+        if (e is ApiException && e.statusCode >= 500) rethrow;
+      }
+    }
+    debugPrint('[UserService] $action failed: $lastError');
+  }
 
   Future<Map<String, dynamic>> getPrivacySettings() async => {
-        'lastSeen': 'everyone',
-        'profilePhoto': 'everyone',
-        'about': 'everyone',
-        'readReceipts': true,
-      };
+    'lastSeen': 'everyone',
+    'profilePhoto': 'everyone',
+    'about': 'everyone',
+    'readReceipts': true,
+  };
 
   Future<void> updatePrivacySettings({
     String? lastSeen,
@@ -125,14 +283,13 @@ class UserService {
 
   Future<List<Map<String, dynamic>>> getWrytteContacts(
     List<String> phoneNumbers,
-  ) =>
-      searchUsersByPhone(phoneNumbers);
+  ) => searchUsersByPhone(phoneNumbers);
 
   Future<Map<String, dynamic>> getUserStatistics() async => {
-        'contacts': 0,
-        'chats': 0,
-        'messages': 0,
-      };
+    'contacts': 0,
+    'chats': 0,
+    'messages': 0,
+  };
 
   String _normalizePhone(String phone) {
     var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
