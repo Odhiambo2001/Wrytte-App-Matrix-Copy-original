@@ -3,7 +3,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
-import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
@@ -31,7 +30,7 @@ class MiniChatPreview extends StatefulWidget {
 class _MiniChatPreviewState extends State<MiniChatPreview> {
   final ChatService _chat = ChatService();
   final ScrollController _scrollController = ScrollController();
-  StreamSubscription<ChatMessage>? _messageSub;
+  StreamSubscription<List<ChatMessage>>? _messageSub;
 
   List<ChatMessage> _messages = [];
 
@@ -50,25 +49,18 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
   }
 
   void _listen() async {
-    List<ChatMessage> messages;
     try {
       await _chat.connect();
-      messages = await _chat.fetchMessageHistory(
-        conversationID: widget.conversationId,
-        count: 30,
-      );
+      await _chat.hydrateConversation(widget.conversationId);
     } catch (_) {
-      messages = await ChatLocalDb.instance.loadMessages(widget.conversationId);
+      await _chat.loadCachedMessages(widget.conversationId);
     }
-    if (mounted) {
-      setState(() => _messages = messages);
-      _scrollToBottom();
-    }
-    _messageSub = _chat.messageStream.listen((message) {
+
+    _messageSub = _chat.messagesStreamFor(widget.conversationId).listen((
+      messages,
+    ) {
       if (!mounted) return;
-      if (message.conversationId != widget.conversationId) return;
-      if (_messages.any((m) => m.id == message.id)) return;
-      setState(() => _messages.add(message));
+      setState(() => _messages = messages);
       _scrollToBottom();
     });
   }
@@ -93,8 +85,8 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
     Navigator.push(
       context,
       PageRouteBuilder(
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: Duration.zero,
+        transitionDuration: const Duration(milliseconds: 300),
+        reverseTransitionDuration: const Duration(milliseconds: 220),
         pageBuilder:
             (_, __, ___) => ChatScreen(
               conversationId: widget.conversationId,
@@ -103,6 +95,20 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
               title: widget.name,
               avatarUrl: widget.avatarUrl,
             ),
+        transitionsBuilder: (_, animation, __, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(1, 0),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          );
+        },
       ),
     );
   }

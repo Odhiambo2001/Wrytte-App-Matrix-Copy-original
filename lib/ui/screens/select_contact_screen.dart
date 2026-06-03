@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/contact_components/contact_item.dart';
+import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
@@ -10,6 +11,16 @@ import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
 
 import 'package:wrytte/services/contacts/contact_local_db.dart';
+
+class _ContactChatOpenData {
+  final String conversationId;
+  final List<ChatMessage> messages;
+
+  const _ContactChatOpenData({
+    required this.conversationId,
+    required this.messages,
+  });
+}
 
 class SelectContactScreen extends StatefulWidget {
   const SelectContactScreen({super.key});
@@ -162,53 +173,55 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
   }
 
   void _navigateToChatScreen(Contact contact) async {
+    FocusManager.instance.primaryFocus?.unfocus();
     final receiverId = contact.wrytteUserId;
     if (receiverId == null || receiverId.isEmpty) return;
     if (_openingContactId != null) return;
 
-    setState(() => _openingContactId = receiverId);
+    _openingContactId = receiverId;
     final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
-    try {
-      final localConversationId = _generateConversationId(
-        currentUserId,
-        receiverId,
+    if (_conversationKey(receiverId) == _conversationKey(currentUserId)) {
+      debugPrint(
+        '[SelectContactScreen] refused self contact open: $receiverId',
       );
-      final chat = ChatService();
-      final roomId =
-          await chat.getMatrixConversationId(receiverId) ??
-          await ChatLocalDb.instance.findDirectConversationId(
-            selfUserId: currentUserId,
-            otherUserId: receiverId,
-          );
-      final conversationId =
-          roomId != null && roomId.startsWith('!')
-              ? roomId
-              : localConversationId;
-      final initialMessages = await _loadCachedMessagesBeforeOpening(
-        chat: chat,
-        conversationId: conversationId,
+      _openingContactId = null;
+      return;
+    }
+    try {
+      final chatOpenData = await _resolveLocalChatOpenData(
+        currentUserId: currentUserId,
+        contact: contact,
       );
 
       if (!mounted) return;
-      final navigator = Navigator.of(context);
-      final selectorRoute = ModalRoute.of(context);
-      navigator.push(
+      Navigator.of(context).pushReplacement(
         PageRouteBuilder(
-          transitionDuration: Duration.zero,
-          reverseTransitionDuration: Duration.zero,
+          transitionDuration: const Duration(milliseconds: 300),
+          reverseTransitionDuration: const Duration(milliseconds: 220),
           pageBuilder:
               (_, __, ___) => ChatScreen(
-                conversationId: conversationId,
+                conversationId: chatOpenData.conversationId,
                 receiverId: receiverId,
                 currentUserId: currentUserId,
                 title: contact.formattedName,
-                initialMessages: initialMessages,
+                initialMessages: chatOpenData.messages,
               ),
+          transitionsBuilder: (_, animation, __, child) {
+            final curved = CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+              reverseCurve: Curves.easeInCubic,
+            );
+            return SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(1, 0),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            );
+          },
         ),
       );
-      if (selectorRoute != null) {
-        navigator.removeRoute(selectorRoute);
-      }
     } catch (e) {
       debugPrint('[SelectContactScreen] open chat failed: $e');
       if (mounted) {
@@ -217,11 +230,140 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
     }
   }
 
-  Future<List<ChatMessage>> _loadCachedMessagesBeforeOpening({
-    required ChatService chat,
-    required String conversationId,
+  Future<_ContactChatOpenData> _resolveLocalChatOpenData({
+    required String currentUserId,
+    required Contact contact,
   }) async {
-    return chat.loadCachedMessages(conversationId);
+    final receiverId = contact.wrytteUserId ?? '';
+    final localConversationId = _generateConversationId(
+      currentUserId,
+      receiverId,
+    );
+    final candidateIds = <String>{localConversationId};
+
+    final directId = await ChatLocalDb.instance.findDirectConversationId(
+      selfUserId: currentUserId,
+      otherUserId: receiverId,
+    );
+    if (directId != null && directId.isNotEmpty) {
+      candidateIds.add(directId);
+    }
+
+    final receiverKeys = <String>{
+      _conversationKey(receiverId),
+      _conversationKey(contact.primaryPhone),
+      for (final phone in contact.phones) _conversationKey(phone),
+    }..removeWhere((key) => key.isEmpty);
+    final selfKey = _conversationKey(currentUserId);
+
+    final messageConversationIds = await ChatLocalDb.instance
+        .findConversationIdsByMessageIdentity(
+          userIds: [receiverId],
+          phones: [contact.primaryPhone, ...contact.phones],
+        );
+    candidateIds.addAll(messageConversationIds);
+
+    final conversations = await ChatLocalDb.instance.loadConversations();
+    for (final conversation in conversations) {
+      final otherKey = _conversationKey(conversation.otherUserId);
+      final participantKeys =
+          conversation.participants.map(_conversationKey).toSet();
+      final matchesReceiver =
+          receiverKeys.contains(otherKey) ||
+          participantKeys.any(receiverKeys.contains);
+      final matchesSelf = selfKey.isEmpty || participantKeys.contains(selfKey);
+      if (matchesReceiver && (matchesSelf || conversation.id.startsWith('!'))) {
+        candidateIds.add(conversation.id);
+      }
+    }
+
+    var selectedConversationId = localConversationId;
+    var selectedMessages = const <ChatMessage>[];
+    DateTime? selectedLatest;
+
+    for (final candidateId in candidateIds) {
+      final messages = await ChatService().loadCachedMessages(candidateId);
+      final latest = messages.isEmpty ? null : messages.last.timestamp;
+      final shouldSelect =
+          messages.isNotEmpty && selectedMessages.isEmpty ||
+          messages.isNotEmpty &&
+              candidateId.startsWith('!') &&
+              !selectedConversationId.startsWith('!') ||
+          latest != null &&
+              (selectedLatest == null || latest.isAfter(selectedLatest));
+      if (shouldSelect) {
+        selectedConversationId = candidateId;
+        selectedMessages = messages;
+        selectedLatest = latest;
+      }
+    }
+
+    if (selectedConversationId.startsWith('!') && selectedMessages.isNotEmpty) {
+      return _ContactChatOpenData(
+        conversationId: selectedConversationId,
+        messages: selectedMessages,
+      );
+    }
+
+    final roomId = await _resolveMatrixRoomId(
+      currentUserId: currentUserId,
+      receiverId: receiverId,
+      localConversationId: selectedConversationId,
+      contact: contact,
+    );
+    if (roomId != null && roomId.isNotEmpty) {
+      selectedConversationId = roomId;
+      selectedMessages = await ChatService().loadCachedMessages(roomId);
+    }
+
+    return _ContactChatOpenData(
+      conversationId: selectedConversationId,
+      messages: selectedMessages,
+    );
+  }
+
+  Future<String?> _resolveMatrixRoomId({
+    required String currentUserId,
+    required String receiverId,
+    required String localConversationId,
+    required Contact contact,
+  }) async {
+    if (receiverId.trim().isEmpty) return null;
+    if (_conversationKey(receiverId) == _conversationKey(currentUserId)) {
+      debugPrint('[SelectContactScreen] refused self direct chat: $receiverId');
+      return null;
+    }
+    if (localConversationId.startsWith('!')) return localConversationId;
+
+    try {
+      final chat = ChatService();
+      await chat.connect();
+      final existingRoomId = await chat.findMatrixConversationId(receiverId);
+      final roomId =
+          existingRoomId != null && existingRoomId.isNotEmpty
+              ? existingRoomId
+              : await chat.getMatrixConversationId(receiverId);
+      if (roomId == null || roomId.isEmpty) return null;
+
+      await ChatLocalDb.instance.migrateConversationId(
+        oldConversationId: localConversationId,
+        roomConversation: ChatConversation(
+          id: roomId,
+          participants: [currentUserId, receiverId],
+          otherUserId: receiverId,
+          lastMessage: '',
+          lastMessageSenderId: '',
+          lastMessageTime: DateTime.now(),
+          unreadCount: 0,
+          otherUserName: contact.formattedName,
+          otherUserAvatar: contact.avatarUrl,
+        ),
+      );
+      return roomId;
+    } catch (e) {
+      debugPrint('[SelectContactScreen] Matrix room resolve failed: $e');
+      return null;
+    }
   }
 
   Map<String, List<Contact>> _groupByAlphabet(List<Contact> contacts) {

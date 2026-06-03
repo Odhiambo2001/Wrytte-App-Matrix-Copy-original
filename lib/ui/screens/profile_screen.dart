@@ -69,27 +69,26 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _loadProfile() async {
+    final uid = _validProfileUid(widget.uid);
     final profile =
-        widget.uid != null
-            ? await UserProfileService.instance.getProfileByUid(widget.uid!)
+        uid != null
+            ? await UserProfileService.instance.getProfileByUid(uid)
             : await UserProfileService.instance.getCurrentUserProfile();
-    final savedContact =
-        widget.uid != null ? await _findSavedContact(widget.uid!) : null;
-    final matrixProfile =
-        widget.uid != null ? await _loadMatrixProfile(widget.uid!) : null;
+    final savedContact = uid != null ? await _findSavedContact(uid) : null;
+    final matrixProfile = uid != null ? await _loadMatrixProfile(uid) : null;
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     var identity =
-        widget.uid != null && ownerUserId != null && ownerUserId.isNotEmpty
+        uid != null && ownerUserId != null && ownerUserId.isNotEmpty
             ? await ContactIdentityCache.instance.findByMatrixId(
               ownerUserId: ownerUserId,
-              matrixUserId: widget.uid!,
+              matrixUserId: uid,
             )
             : null;
 
-    if (widget.uid != null && ownerUserId != null && ownerUserId.isNotEmpty) {
+    if (uid != null && ownerUserId != null && ownerUserId.isNotEmpty) {
       await ContactIdentityCache.instance.upsert(
         ownerUserId: ownerUserId,
-        matrixUserId: widget.uid!,
+        matrixUserId: uid,
         phone: profile?.phone ?? widget.fallbackPhone ?? identity?.phone,
         profileName:
             _cleanName(profile?.displayName).isNotEmpty
@@ -107,7 +106,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       );
       identity = await ContactIdentityCache.instance.findByMatrixId(
         ownerUserId: ownerUserId,
-        matrixUserId: widget.uid!,
+        matrixUserId: uid,
       );
     }
 
@@ -151,6 +150,14 @@ class _ProfileScreenState extends State<ProfileScreen>
     } catch (_) {
       return null;
     }
+  }
+
+  String? _validProfileUid(String? uid) {
+    final trimmed = uid?.trim() ?? '';
+    if (trimmed.isEmpty) return null;
+    if (trimmed.startsWith('!')) return null;
+    if (trimmed.startsWith('@!')) return null;
+    return trimmed;
   }
 
   String _toMatrixUserId(String uid) {

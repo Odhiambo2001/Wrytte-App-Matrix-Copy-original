@@ -27,6 +27,12 @@ class MatrixChatService {
 
   List<Room> get rooms => MatrixClientService.instance.client.rooms;
 
+  void resetRuntimeState() {
+    _initialSyncComplete = false;
+    _syncAndJoinFuture = null;
+    _directRoomFutures.clear();
+  }
+
   Room? getRoomById(String roomId) {
     for (final room in MatrixClientService.instance.client.rooms) {
       if (room.id == roomId) return room;
@@ -207,7 +213,16 @@ class MatrixChatService {
         'Matrix.createRoom',
         'POST /_matrix/client/r0/createRoom user_id="${client.userID}" invite=["$matrixUserId"] is_direct=true target="$matrixUserId"',
       );
-      roomId = await client.startDirectChat(matrixUserId, waitForSync: false);
+      roomId = await client.startDirectChat(
+        matrixUserId,
+        waitForSync: false,
+        initialState: [
+          StateEvent(
+            content: {'history_visibility': HistoryVisibility.invited.text},
+            type: EventTypes.HistoryVisibility,
+          ),
+        ],
+      );
       apkLog(
         'Matrix.createRoom',
         'Creating new room roomID="$roomId" userID="${client.userID}" target="$matrixUserId"',
@@ -308,7 +323,7 @@ class MatrixChatService {
 
   Future<Timeline> getTimeline(
     String roomId, {
-    int limit = Room.defaultHistoryCount,
+    int? limit,
     void Function()? onUpdate,
   }) async {
     final room = getRoomById(roomId);
@@ -363,10 +378,20 @@ class MatrixChatService {
   }
 
   Future<void> _ensureDirectPeerInvited(Room room, String matrixUserId) async {
-    final participants = room.getParticipants([
+    var participants = room.getParticipants([
       Membership.join,
       Membership.invite,
     ]);
+    try {
+      participants = await room
+          .requestParticipants([Membership.join, Membership.invite], true, true)
+          .timeout(const Duration(seconds: 10));
+    } catch (e) {
+      apkLog(
+        'Matrix.invite',
+        'participant request failed room_id="${room.id}" target="$matrixUserId" error="$e"',
+      );
+    }
     User? peer;
     for (final participant in participants) {
       if (participant.id == matrixUserId) {
@@ -374,17 +399,23 @@ class MatrixChatService {
         break;
       }
     }
-    if (peer != null) {
+    if (peer != null && peer.membership == Membership.join) {
       apkLog(
         'Matrix.invite',
         'peer present room_id="${room.id}" target="$matrixUserId" membership="${peer.membership.name}"',
       );
       return;
     }
+    if (peer != null) {
+      apkLog(
+        'Matrix.invite',
+        'peer present but not joined; refreshing invite room_id="${room.id}" target="$matrixUserId" membership="${peer.membership.name}"',
+      );
+    }
 
     apkLog(
       'Matrix.invite',
-      'peer missing after createRoom; POST /_matrix/client/v3/rooms/${room.id}/invite target="$matrixUserId"',
+      'POST /_matrix/client/v3/rooms/${room.id}/invite target="$matrixUserId"',
     );
     try {
       await room.invite(matrixUserId).timeout(const Duration(seconds: 12));
@@ -392,12 +423,62 @@ class MatrixChatService {
         'Matrix.invite',
         'invite sent room_id="${room.id}" target="$matrixUserId"',
       );
+      await _waitForPeerMembership(room, matrixUserId);
     } catch (e) {
+      if (_looksLikeAlreadyInvitedOrJoined(e)) {
+        apkLog(
+          'Matrix.invite',
+          'invite already satisfied room_id="${room.id}" target="$matrixUserId" error="$e"',
+        );
+        return;
+      }
       apkLog(
         'Matrix.invite',
         'invite failed room_id="${room.id}" target="$matrixUserId" error="$e"',
       );
       rethrow;
     }
+  }
+
+  Future<void> _waitForPeerMembership(Room room, String matrixUserId) async {
+    final client = MatrixClientService.instance.client;
+    final deadline = DateTime.now().add(const Duration(seconds: 12));
+    Object? lastError;
+
+    while (DateTime.now().isBefore(deadline)) {
+      try {
+        await client
+            .waitForRoomInSync(room.id)
+            .timeout(const Duration(seconds: 3));
+        final participants = await room
+            .requestParticipants(
+              [Membership.join, Membership.invite],
+              true,
+              true,
+            )
+            .timeout(const Duration(seconds: 4));
+        for (final participant in participants) {
+          if (participant.id == matrixUserId) {
+            apkLog(
+              'Matrix.invite',
+              'peer membership confirmed room_id="${room.id}" target="$matrixUserId" membership="${participant.membership.name}"',
+            );
+            return;
+          }
+        }
+      } catch (e) {
+        lastError = e;
+      }
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    throw TimeoutException(
+      'Timed out waiting for $matrixUserId to appear as invited/joined in ${room.id}. Last error: $lastError',
+    );
+  }
+
+  bool _looksLikeAlreadyInvitedOrJoined(Object error) {
+    final raw = error.toString().toLowerCase();
+    return raw.contains('already') || raw.contains('membership');
   }
 }

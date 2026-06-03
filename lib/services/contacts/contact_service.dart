@@ -202,7 +202,9 @@ class ContactService {
     apkLog('Contact.save', 'Matrix session refresh start owner="$ownerUserId"');
 
     final expected = _toMatrixUserId(ownerUserId);
-    var client = await MatrixClientService.instance.ensureInitialized();
+    var client = await MatrixClientService.instance.ensureInitialized(
+      storeNamespace: ownerUserId,
+    );
     if (client.isLogged() && client.userID == expected) {
       final valid = await MatrixAuthService.instance.validateCurrentSession(
         expectedUserId: expected,
@@ -219,7 +221,9 @@ class ContactService {
         );
         return true;
       }
-      client = await MatrixClientService.instance.ensureInitialized();
+      client = await MatrixClientService.instance.ensureInitialized(
+        storeNamespace: ownerUserId,
+      );
     }
 
     if (client.isLogged() && client.userID != expected) {
@@ -232,7 +236,9 @@ class ContactService {
           const Duration(seconds: 5),
         );
         MatrixContactService.instance.clearCache();
-        client = await MatrixClientService.instance.ensureInitialized();
+        client = await MatrixClientService.instance.ensureInitialized(
+          storeNamespace: ownerUserId,
+        );
       } catch (e) {
         apkLog(
           'Contact.save',

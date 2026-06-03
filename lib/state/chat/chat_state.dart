@@ -11,7 +11,7 @@ class ChatState {
   final List<ChatMessage> _messages = [];
   final List<ChatConversation> _conversations = [];
 
-  StreamSubscription? _messageSub;
+  StreamSubscription? _activeMessagesSub;
   StreamSubscription? _conversationSub;
 
   final StreamController<List<ChatMessage>> _messagesController =
@@ -33,9 +33,9 @@ class ChatState {
     _loadingController.add(true);
     try {
       await _chatService.connect();
-      _messageSub ??= _chatService.messageStream.listen(_handleIncomingMessage);
-      _conversationSub ??=
-          _chatService.conversationsStream.listen(_handleConversations);
+      _conversationSub ??= _chatService.conversationsStream.listen(
+        _handleConversations,
+      );
       await _chatService.fetchConversations();
       _loadingController.add(false);
     } catch (e) {
@@ -46,17 +46,19 @@ class ChatState {
 
   Future<void> loadConversation(String conversationId) async {
     _activeConversationId = conversationId;
+    await _activeMessagesSub?.cancel();
+    _activeMessagesSub = _chatService.messagesStreamFor(conversationId).listen((
+      messages,
+    ) {
+      _messages
+        ..clear()
+        ..addAll(messages);
+      _messagesController.add(List.unmodifiable(_messages));
+    });
+    final messages = await _chatService.hydrateConversation(conversationId);
     _messages
       ..clear()
-      ..addAll(_chatService.getConversationMessages(conversationId));
-
-    if (_messages.isEmpty) {
-      _messages.addAll(
-        await _chatService.fetchMessageHistory(conversationID: conversationId),
-      );
-    }
-
-    _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      ..addAll(messages);
     _messagesController.add(List.unmodifiable(_messages));
   }
 
@@ -82,18 +84,12 @@ class ChatState {
   Future<void> disconnect() => _chatService.disconnect();
 
   void dispose() {
-    _messageSub?.cancel();
+    _activeMessagesSub?.cancel();
     _conversationSub?.cancel();
     _messagesController.close();
     _conversationsController.close();
     _loadingController.close();
     _errorController.close();
-  }
-
-  void _handleIncomingMessage(ChatMessage message) {
-    if (message.conversationId == _activeConversationId) {
-      _upsertMessage(message);
-    }
   }
 
   void _handleConversations(List<ChatConversation> conversations) {

@@ -30,6 +30,7 @@ class MessageBubble extends StatelessWidget {
   final bool isDeleted;
   final String? replyPreview;
   final String? replySender;
+  final bool animateOnMount;
 
   static const Color _blue = Color(0xFF4DA3FF);
   static const Color _incoming = Color(0xFF23262C);
@@ -52,6 +53,7 @@ class MessageBubble extends StatelessWidget {
     this.isDeleted = false,
     this.replyPreview,
     this.replySender,
+    this.animateOnMount = true,
   });
 
   static const double _tailW = 8.0;
@@ -61,69 +63,87 @@ class MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final Color bubbleColor = isMine ? _blue : _incoming;
     final Widget timeWidget = _buildTimeRow();
-
-    return Align(
-      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisAlignment:
-            isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
-        children: [
-          if (!isMine && showTail) _buildTail(bubbleColor, incoming: true),
-
-          Flexible(
-            child: Container(
-              margin: EdgeInsets.only(
-                left: (!isMine && showTail) ? 0 : (isMine ? 0 : _tailW),
-                right: (isMine && showTail) ? 0 : (isMine ? _tailW : 0),
-                top: showTail ? 6 : 2,
-                bottom: 2,
-              ),
-              padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-              decoration: BoxDecoration(
-                color: bubbleColor,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(18),
-                  topRight: const Radius.circular(18),
-                  bottomLeft: Radius.circular(
-                    isMine ? 18 : (showTail ? 2 : 18),
-                  ),
-                  bottomRight: Radius.circular(
-                    isMine ? (showTail ? 2 : 18) : 18,
-                  ),
-                ),
-              ),
-              // ── Switch between voice player and text content ─────────────
-              child:
-                  isVoiceNote
-                      ? _VoiceNotePlayer(
-                        audioUrl: audioUrl ?? '',
-                        totalSeconds: voiceDuration ?? 0,
-                        isMine: isMine,
-                        timeWidget: timeWidget,
-                      )
-                      : isVideoNote
-                      ? _VideoMessageBubble(
-                        totalSeconds: voiceDuration ?? 0,
-                        timeWidget: timeWidget,
-                      )
-                      : _BubbleContent(
-                        content: content,
-                        timeWidget: timeWidget,
-                        isForwarded: isForwarded,
-                        isStarred: isStarred,
-                        isDeleted: isDeleted,
-                        replyPreview: replyPreview,
-                        replySender: replySender,
-                        isMine: isMine,
-                      ),
-            ),
-          ),
-
-          if (isMine && showTail) _buildTail(bubbleColor, incoming: false),
-        ],
+    final bubble = Container(
+      margin: EdgeInsets.only(top: showTail ? 6 : 2, bottom: 2),
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+      decoration: BoxDecoration(
+        color: bubbleColor,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(18),
+          topRight: const Radius.circular(18),
+          bottomLeft: Radius.circular(isMine ? 18 : (showTail ? 2 : 18)),
+          bottomRight: Radius.circular(isMine ? (showTail ? 2 : 18) : 18),
+        ),
       ),
+      // ── Switch between voice player and text content ─────────────
+      child:
+          isVoiceNote
+              ? _VoiceNotePlayer(
+                audioUrl: audioUrl ?? '',
+                totalSeconds: voiceDuration ?? 0,
+                isMine: isMine,
+                timeWidget: timeWidget,
+              )
+              : isVideoNote
+              ? _VideoMessageBubble(
+                totalSeconds: voiceDuration ?? 0,
+                timeWidget: timeWidget,
+              )
+              : _BubbleContent(
+                content: content,
+                timeWidget: timeWidget,
+                isForwarded: isForwarded,
+                isStarred: isStarred,
+                isDeleted: isDeleted,
+                replyPreview: replyPreview,
+                replySender: replySender,
+                isMine: isMine,
+              ),
+    );
+
+    final maxBubbleWidth = MediaQuery.sizeOf(context).width * 0.78;
+    final tail =
+        showTail
+            ? _buildTail(bubbleColor, incoming: !isMine)
+            : const SizedBox(width: _tailW, height: _tailH);
+    final fixedBubbleSlot = SizedBox(
+      width: maxBubbleWidth,
+      child: Align(
+        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+        child: bubble,
+      ),
+    );
+
+    final messageRow = SizedBox(
+      width: double.infinity,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children:
+              isMine
+                  ? [const Spacer(), fixedBubbleSlot, tail]
+                  : [tail, fixedBubbleSlot, const Spacer()],
+        ),
+      ),
+    );
+    if (!animateOnMount) return messageRow;
+
+    const beginOffset = 24.0;
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 1, end: 0),
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) {
+        return Opacity(
+          opacity: 1 - (value * 0.08),
+          child: Transform.translate(
+            offset: Offset(beginOffset * value, 0),
+            child: child,
+          ),
+        );
+      },
+      child: messageRow,
     );
   }
 

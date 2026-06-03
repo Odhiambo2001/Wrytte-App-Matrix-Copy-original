@@ -366,136 +366,215 @@ class _NewContactPageState extends State<NewContactPage> {
   // ─────────────────────────────────────────────────────────────
   // Save — now fully wired to Matrix + device contacts
   // ─────────────────────────────────────────────────────────────
-  Future<void> _save() async {
-    if (!_canSave || _isSaving) return;
 
+  Future<void> _save() async {
+  if (!_canSave || _isSaving) return;
+
+  setState(() {
+    _isSaving = true;
+    _saveError = null;
+  });
+
+  try {
+    final String selfId = await AuthService.instance.getCurrentUserId() ?? '';
+    apkLog('NewContact.save', 'save tapped self="$selfId"');
+
+    final receiverId =
+        (await _resolveReceiverIdForSave(widget.token))?.trim() ?? '';
+
+    if (_matrixLocalpart(receiverId) == selfId) {
+      throw StateError('You cannot add your own Wrytte account as a contact.');
+    }
+    if (_isRegisteredOnWrytte && receiverId.isEmpty) {
+      throw StateError(
+        'This Wrytte contact has no Matrix user ID yet. Try again shortly.',
+      );
+    }
+
+    final firstName = _firstNameCtrl.text.trim();
+    final lastName = _lastNameCtrl.text.trim();
+    final contactName = _displayName(firstName, lastName, _fullIdentifier);
+
+    // ── 1. Save locally ──────────────────────────────────────────
+    final localContact = Contact(
+      displayName: contactName,
+      phones: [_fullIdentifier],
+      isOnWrytte: _isRegisteredOnWrytte || receiverId.isNotEmpty,
+      wrytteUserId: receiverId.isEmpty ? null : receiverId,
+    );
+    await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
+    if (receiverId.isNotEmpty) {
+      await ContactIdentityCache.instance.upsert(
+        ownerUserId: selfId,
+        matrixUserId: receiverId,
+        phone: _fullIdentifier,
+        profileName: widget.initialName,
+        savedName: contactName,
+      );
+    }
+    ContactService.invalidateMatrixContactsCache();
+    _contactService.invalidateCache();
+
+    // ── 2. Build a fallback local conversation ID ────────────────
+    final ids = [
+      _conversationKey(selfId),
+      _conversationKey(receiverId.isNotEmpty ? receiverId : _fullIdentifier),
+    ]..sort();
+    final localConversationId = 'si_${ids[0]}_${ids[1]}';
+
+    // ── 3. AWAIT room creation + invite BEFORE navigating ───────
+    String conversationId = localConversationId;
+
+    if (receiverId.isNotEmpty) {
+      apkLog('NewContact.save', 'awaiting Matrix room creation receiver="$receiverId"');
+
+      final roomId = await _resolveMatrixRoomAfterSave(
+        selfId: selfId,
+        receiverId: receiverId,
+        initialConversationId: localConversationId,
+        contactName: contactName,
+        avatarUrl: null,
+      );
+
+      if (roomId != null && roomId.isNotEmpty) {
+        conversationId = roomId;
+        apkLog('NewContact.save', 'room confirmed room_id="$conversationId"');
+      } else {
+        apkLog('NewContact.save', 'room creation failed; using local id');
+      }
+    }
+
+    // ── 4. Background: save to Matrix server + phone contacts ────
+    unawaited(
+      _saveContactInBackground(
+        selfId: selfId,
+        firstName: firstName,
+        lastName: lastName,
+        fullIdentifier: _fullIdentifier,
+        receiverId: receiverId,
+        isOnWrytte: _isRegisteredOnWrytte,
+        syncToPhone: _syncToPhone,
+        token: widget.token,
+      ),
+    );
+
+    // ── 5. Navigate AFTER room is confirmed ─────────────────────
+    apkLog('NewContact.save',
+        'navigating with confirmed conversation_id="$conversationId" receiver="$receiverId"');
+
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 300),
+        reverseTransitionDuration: const Duration(milliseconds: 220),
+        pageBuilder:
+            (_, __, ___) => ChatScreen(
+              conversationId: conversationId,
+              receiverId: receiverId.isNotEmpty ? receiverId : _fullIdentifier,
+              currentUserId: selfId,
+              title: contactName,
+            ),
+        transitionsBuilder: (_, animation, __, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(1, 0),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          );
+        },
+      ),
+    );
+  } catch (e) {
+    debugPrint('Save contact error: $e');
+    apkLog('NewContact.save', 'save FAILED error="$e"');
+    if (!mounted) return;
     setState(() {
-      _isSaving = true;
-      _saveError = null;
+      _isSaving = false;
+      _saveError = _friendlyError(e.toString());
     });
+  }
+}
+
+  Future<String?> _resolveReceiverIdForSave(String fallbackToken) async {
+    final existing = _resolvedUserId?.trim();
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    final identifier = _fullIdentifier;
+    if (identifier.isEmpty) return null;
+    if (!_isWrytteIdMode && _phoneDigits.length < _kMinPhoneLookupDigits) {
+      return null;
+    }
+    if (_isWrytteIdMode && _numberCtrl.text.trim().length < 4) return null;
+
+    final freshToken =
+        await AuthService.instance.getMatrixAccessToken() ?? fallbackToken;
+    apkLog(
+      'NewContact.lookup',
+      'save forcing final lookup identifier="$identifier" state=$_lookupState',
+    );
 
     try {
-      final String selfId = await AuthService.instance.getCurrentUserId() ?? '';
-      apkLog(
-        'NewContact.save',
-        'save tapped self="$selfId" name="${_firstNameCtrl.text.trim()} ${_lastNameCtrl.text.trim()}" identifier="$_fullIdentifier" resolvedUserId="$_resolvedUserId" lookupState=$_lookupState',
-      );
-      debugPrint('🧑 selfUserId in _save: $selfId');
-      debugPrint('identifier=$_fullIdentifier');
-      debugPrint('resolvedUserId=$_resolvedUserId');
-      if (_matrixLocalpart(_resolvedUserId) == selfId) {
-        throw StateError(
-          'You cannot add your own Wrytte account as a contact.',
+      final Map<String, String> result;
+      if (_isWrytteIdMode) {
+        result = await _searchService.searchUsersByPhones(
+          phoneNumbersC: identifier,
+          token: freshToken,
         );
-      }
-
-      final firstName = _firstNameCtrl.text.trim();
-      final lastName = _lastNameCtrl.text.trim();
-      final contactName = _displayName(firstName, lastName, _fullIdentifier);
-      final receiverId = _resolvedUserId ?? '';
-      final localContact = Contact(
-        displayName: contactName,
-        phones: [_fullIdentifier],
-        isOnWrytte: _isRegisteredOnWrytte || receiverId.isNotEmpty,
-        wrytteUserId: receiverId.isEmpty ? null : receiverId,
-      );
-      await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
-      if (receiverId.isNotEmpty) {
-        await ContactIdentityCache.instance.upsert(
-          ownerUserId: selfId,
-          matrixUserId: receiverId,
-          phone: _fullIdentifier,
-          profileName: widget.initialName,
-          savedName: contactName,
-        );
-      }
-      ContactService.invalidateMatrixContactsCache();
-      _contactService.invalidateCache();
-      apkLog(
-        'NewContact.save',
-        'local contact saved before navigation self="$selfId" name="$contactName" receiver="$receiverId"',
-      );
-
-      final ids = [
-        _conversationKey(selfId),
-        _conversationKey(receiverId.isNotEmpty ? receiverId : _fullIdentifier),
-      ]..sort();
-      final localConversationId = 'si_${ids[0]}_${ids[1]}';
-      final localRoomId =
-          receiverId.isEmpty
-              ? null
-              : await ChatLocalDb.instance.findDirectConversationId(
-                selfUserId: selfId,
-                otherUserId: receiverId,
-              );
-      var conversationId = localRoomId ?? localConversationId;
-
-      if (receiverId.isNotEmpty) {
-        final resolvedRoomId = await _saveContactAndResolveRoomAfterNavigation(
-          selfId: selfId,
-          firstName: firstName,
-          lastName: lastName,
-          fullIdentifier: _fullIdentifier,
-          receiverId: receiverId,
-          isOnWrytte: _isRegisteredOnWrytte,
-          syncToPhone: _syncToPhone,
-          token: widget.token,
-          initialConversationId: conversationId,
-          fallbackContactName: contactName,
-        );
-        if (resolvedRoomId != null && resolvedRoomId.startsWith('!')) {
-          conversationId = resolvedRoomId;
-        }
       } else {
-        unawaited(
-          _saveContactAndResolveRoomAfterNavigation(
-            selfId: selfId,
-            firstName: firstName,
-            lastName: lastName,
-            fullIdentifier: _fullIdentifier,
-            receiverId: receiverId,
-            isOnWrytte: _isRegisteredOnWrytte,
-            syncToPhone: _syncToPhone,
-            token: widget.token,
-            initialConversationId: conversationId,
-            fallbackContactName: contactName,
-          ),
+        result = await _searchService.searchUsersByPhones(
+          phoneNumbersA: [identifier],
+          token: freshToken,
         );
       }
 
-      apkLog(
-        'NewContact.save',
-        'opening chat with resolved conversation_id="$conversationId" local_room_id="$localRoomId" receiver="$receiverId"',
-      );
+      final lookupValue =
+          result[identifier] ??
+          result[_normalizeIdentifier(identifier)] ??
+          result[_digitsOnly(identifier)];
 
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        PageRouteBuilder(
-          transitionDuration: Duration.zero,
-          reverseTransitionDuration: Duration.zero,
-          pageBuilder:
-              (_, __, ___) => ChatScreen(
-                conversationId: conversationId,
-                receiverId:
-                    receiverId.isNotEmpty ? receiverId : _fullIdentifier,
-                currentUserId: selfId,
-                title: contactName,
-              ),
-        ),
+      final matrixUserId =
+          lookupValue == UserSearchService.registeredWithoutMatrixId
+              ? null
+              : lookupValue?.trim();
+
+      if (mounted) {
+        setState(() {
+          _lookupState =
+              lookupValue != null && lookupValue.isNotEmpty
+                  ? _LookupState.found
+                  : _LookupState.notFound;
+          _resolvedUserId =
+              matrixUserId == null || matrixUserId.isEmpty
+                  ? null
+                  : matrixUserId;
+          _isRegisteredOnWrytte = lookupValue != null && lookupValue.isNotEmpty;
+          _lookupError = null;
+        });
+      } else {
+        _resolvedUserId =
+            matrixUserId == null || matrixUserId.isEmpty ? null : matrixUserId;
+        _isRegisteredOnWrytte = lookupValue != null && lookupValue.isNotEmpty;
+      }
+
+      apkLog(
+        'NewContact.lookup',
+        'save final lookup resolved="$matrixUserId" registered=$_isRegisteredOnWrytte',
       );
+      return matrixUserId == null || matrixUserId.isEmpty ? null : matrixUserId;
     } catch (e) {
-      debugPrint('Save contact error: $e');
-      apkLog('NewContact.save', 'save FAILED error="$e"');
-      if (!mounted) return;
-      setState(() {
-        _isSaving = false;
-        _saveError = _friendlyError(e.toString());
-      });
+      apkLog('NewContact.lookup', 'save final lookup FAILED error="$e"');
+      return existing;
     }
   }
 
-  Future<String?> _saveContactAndResolveRoomAfterNavigation({
+  Future<void> _saveContactInBackground({
     required String selfId,
     required String firstName,
     required String lastName,
@@ -504,16 +583,11 @@ class _NewContactPageState extends State<NewContactPage> {
     required bool isOnWrytte,
     required bool syncToPhone,
     required String token,
-    required String initialConversationId,
-    required String fallbackContactName,
   }) async {
     apkLog(
       'NewContact.save',
-      'background contact save start self="$selfId" receiver="$receiverId" initial="$initialConversationId"',
+      'background contact save start self="$selfId" receiver="$receiverId"',
     );
-
-    String contactName = fallbackContactName;
-    String? avatarUrl;
 
     try {
       apkLog('NewContact.save', 'background Matrix connect before save');
@@ -529,8 +603,6 @@ class _NewContactPageState extends State<NewContactPage> {
         token: await AuthService.instance.getMatrixAccessToken() ?? token,
         selfUserId: selfId,
       );
-      contactName = saved.formattedName;
-      avatarUrl = saved.avatarUrl;
       apkLog(
         'NewContact.save',
         'background contact save success name="${saved.formattedName}" wrytteUserId="${saved.wrytteUserId}" phone="${saved.primaryPhone}"',
@@ -538,22 +610,6 @@ class _NewContactPageState extends State<NewContactPage> {
     } catch (e) {
       apkLog('NewContact.save', 'background contact save FAILED error="$e"');
     }
-
-    if (receiverId.isEmpty) {
-      apkLog(
-        'NewContact.room',
-        'background room skipped; contact has no Matrix receiver id',
-      );
-      return null;
-    }
-
-    return _resolveMatrixRoomAfterSave(
-      selfId: selfId,
-      receiverId: receiverId,
-      initialConversationId: initialConversationId,
-      contactName: contactName,
-      avatarUrl: avatarUrl,
-    );
   }
 
   Future<String?> _resolveMatrixRoomAfterSave({
@@ -623,6 +679,7 @@ class _NewContactPageState extends State<NewContactPage> {
       );
       return null;
     }
+    
 
     await ChatLocalDb.instance.migrateConversationId(
       oldConversationId: initialConversationId,

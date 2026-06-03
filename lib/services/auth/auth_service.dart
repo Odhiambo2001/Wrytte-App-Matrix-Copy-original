@@ -8,6 +8,7 @@ import 'package:matrix/matrix.dart' as mx;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/auth/api_service.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
@@ -99,11 +100,13 @@ class AuthService {
     final inFlightIsCurrent =
         _matrixLoginInFlightGeneration == null ||
         _matrixLoginInFlightGeneration == _matrixBootstrapGeneration;
-    if (!forceFreshSession &&
-        inFlight != null &&
+    if (inFlight != null &&
         _matrixLoginInFlightUserId == cleanUserId &&
         inFlightIsCurrent) {
-      apkLog('Matrix.auth', 'join in-flight login user_id="$cleanUserId"');
+      apkLog(
+        'Matrix.auth',
+        'join in-flight login user_id="$cleanUserId" force_fresh=$forceFreshSession',
+      );
       return inFlight;
     }
 
@@ -788,6 +791,26 @@ class AuthService {
       debugPrint(
         '[AuthService] Matrix local session clear timeout/error; continuing: $e',
       );
+    }
+    try {
+      await MatrixClientService.instance.disposeCurrentClient().timeout(
+        const Duration(seconds: 3),
+      );
+    } catch (e) {
+      debugPrint('[AuthService] Matrix client dispose failed: $e');
+    }
+    try {
+      await ChatLocalDb.instance.deleteAllLocalDatabases().timeout(
+        const Duration(seconds: 3),
+      );
+    } catch (e) {
+      debugPrint('[AuthService] chat local database wipe failed: $e');
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_profileArchiveKey);
+    } catch (e) {
+      debugPrint('[AuthService] profile archive clear failed: $e');
     }
     try {
       await _firebaseAuth.signOut();

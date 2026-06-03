@@ -11,6 +11,13 @@ String _userKey(String value) {
 
 bool _sameUser(String a, String b) => _userKey(a) == _userKey(b);
 
+bool _validMatrixUserId(String? value) {
+  final trimmed = value?.trim() ?? '';
+  if (!trimmed.startsWith('@')) return false;
+  if (trimmed.startsWith('@!')) return false;
+  return trimmed.split(':').length == 2 && trimmed.split(':').last.isNotEmpty;
+}
+
 class ChatConversation {
   final String id;
   final List<String> participants;
@@ -78,8 +85,17 @@ class ChatConversation {
   }
 
   factory ChatConversation.fromMatrixRoom(mx.Room room, String currentUserId) {
-    final otherId = room.directChatMatrixID ?? room.id;
     final last = room.lastEvent;
+    final directUserId = room.directChatMatrixID;
+    final otherId =
+        _validMatrixUserId(directUserId) &&
+                !_sameUser(directUserId!, currentUserId)
+            ? directUserId
+            : last != null &&
+                _validMatrixUserId(last.senderId) &&
+                !_sameUser(last.senderId, currentUserId)
+            ? last.senderId
+            : room.id;
     return ChatConversation(
       id: room.id,
       participants: [currentUserId, otherId],
@@ -87,7 +103,8 @@ class ChatConversation {
       lastMessage: last?.body ?? '',
       lastMessageSenderId: last?.senderId ?? '',
       lastMessageTime: last?.originServerTs ?? DateTime.now(),
-      unreadCount: room.notificationCount,
+      unreadCount:
+          last != null && !_sameUser(last.senderId, currentUserId) ? 1 : 0,
       otherUserName: room.displayname,
       otherUserAvatar: room.avatar?.toString(),
     );

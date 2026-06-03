@@ -76,7 +76,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final ChatService _chat = ChatService();
   final CallService _call = CallService.instance;
 
-  StreamSubscription<ChatMessage>? _msgSub;
+  StreamSubscription<List<ChatMessage>>? _messagesSub;
 
   final List<ChatMessage> _messages = [];
   final List<ChatMessage> _initialStreamBuffer = [];
@@ -97,6 +97,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Contact? _savedContact;
   ContactIdentity? _receiverIdentity;
   ChatMessage? _replyingTo;
+  double? _stableStatusBarH;
+  late final String _stableHeaderName;
+  late final String? _stableHeaderAvatarUrl;
 
   // ── debug overlay ──────────────────────────────────────────────────────────
   bool _showDebug = false;
@@ -111,6 +114,9 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _stableHeaderName = _initialHeaderName();
+    _stableHeaderAvatarUrl =
+        widget.avatarUrl?.trim().isNotEmpty == true ? widget.avatarUrl : null;
     apkLog(
       'ChatScreen',
       '── initState ──  '
@@ -118,25 +124,40 @@ class _ChatScreenState extends State<ChatScreen> {
           'receiverId="${widget.receiverId}"  '
           'currentUserId="${widget.currentUserId}"',
     );
+    if (_isSelfConversation) {
+      _logSelfConversationBlocked('open');
+    }
 
     _logger.addListener(_onNewLog);
     if (widget.initialMessages.isNotEmpty) {
       _mergeMessages(widget.initialMessages);
     }
+    _focusNode.addListener(_onInputFocusChanged);
     _loadInitial();
     _loadReceiverProfile();
     _scrollCtrl.addListener(_onScroll);
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _stableStatusBarH ??= MediaQuery.viewPaddingOf(context).top;
+  }
+
+  @override
   void dispose() {
     _logger.removeListener(_onNewLog);
-    _msgSub?.cancel();
+    _messagesSub?.cancel();
     _controller.dispose();
+    _focusNode.removeListener(_onInputFocusChanged);
     _scrollCtrl.dispose();
     _debugScrollCtrl.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _onInputFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onNewLog() {
@@ -153,6 +174,31 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── RESOLVE CONVERSATION ID ───────────────────────────────────────────────
 
   String _normaliseId(String id) => id.trim();
+
+  bool get _isSelfConversation {
+    final self = _matrixLocalpart(widget.currentUserId);
+    final receiver = _matrixLocalpart(widget.receiverId);
+    return self.isNotEmpty && receiver.isNotEmpty && self == receiver;
+  }
+
+  void _logSelfConversationBlocked(String action) {
+    apkLog(
+      'ChatScreen.self',
+      '$action blocked: receiver is current user '
+          'current="${_matrixLocalpart(widget.currentUserId)}" '
+          'receiver="${_matrixLocalpart(widget.receiverId)}"',
+    );
+  }
+
+  void _showSelfConversationError() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('This contact is linked to your own account.'),
+        backgroundColor: Colors.redAccent,
+      ),
+    );
+  }
 
   bool _looksLikePhone(String value) {
     final stripped = value.trim().replaceAll(RegExp(r'[\s\-()+]'), '');
@@ -246,6 +292,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<String?> _resolveMatrixConversationIdForSend() async {
+    if (_isSelfConversation) {
+      _logSelfConversationBlocked('resolve/send room');
+      return null;
+    }
+
     if (widget.conversationId.startsWith('!')) {
       _resolvedConversationId = widget.conversationId;
       return widget.conversationId;
@@ -280,7 +331,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadInitial() async {
     _matrixAvailable = false;
-    await _loadLocalMessages();
+    _hasMoreOlder = false;
+    await _hydrateAndSubscribe(widget.conversationId);
 
     apkLog('ChatScreen._loadInitial', 'calling chat.connect()…');
 
@@ -306,78 +358,46 @@ class _ChatScreenState extends State<ChatScreen> {
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
 
     if (realConvId != widget.conversationId) {
-      final realCached = await _chat.loadCachedMessages(realConvId);
-      apkLog(
-        'ChatScreen._loadInitial',
-        'loaded ${realCached.length} local msgs for resolved "$realConvId"',
-      );
-      await _migrateLocalConversationToRoom(realConvId, realCached);
+      await _migrateLocalConversationToRoom(realConvId, const []);
       if (!mounted) return;
-      setState(() {
-        _normaliseMessagesToConversation(realConvId);
-        _mergeMessages(realCached);
-      });
+      setState(() => _normaliseMessagesToConversation(realConvId));
     }
 
     await _chat.markConversationAsRead(realConvId);
 
-    final msgs = await _chat.fetchMessageHistory(
-      conversationID: realConvId,
-      count: 40,
-    );
-    apkLog(
-      'ChatScreen._loadInitial',
-      'fetchMessageHistory returned ${msgs.length} msgs',
-    );
-
     if (!mounted) return;
     setState(() {
-      _mergeMessages(msgs);
       _mergeMessages(_initialStreamBuffer);
       _initialStreamBuffer.clear();
       _loadingInitial = false;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
 
-    _msgSub = _chat.messageStream.listen((msg) {
-      if (msg.conversationId != realConvId) return;
-      if (!mounted) return;
-      apkLog(
-        'ChatScreen.msgStream',
-        'new msg id=${msg.id}  convId=${msg.conversationId}',
-      );
-      if (_isMine(msg) && _isLocalOutgoingEchoId(msg.id)) {
-        apkLog('ChatScreen.reconcile', 'skip local outgoing echo id=${msg.id}');
-        return;
-      }
-      if (_isMine(msg)) {
-        unawaited(ChatLocalDb.instance.deleteDuplicateOutgoingEchoesFor(msg));
-      }
-      if (_loadingInitial) {
-        _initialStreamBuffer.add(msg);
-        return;
-      }
-      final shouldStayAtBottom = _isMine(msg) || _isAtBottom;
-      setState(() => _upsertMessage(msg));
-      if (!_isMine(msg)) {
-        unawaited(_chat.markConversationAsRead(realConvId));
-      }
-      if (shouldStayAtBottom) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
-      }
-    });
+    await _hydrateAndSubscribe(realConvId);
   }
 
-  Future<void> _loadLocalMessages() async {
-    final convId = await _resolveConversationId();
-    final msgs = await _chat.loadCachedMessages(convId);
+  Future<void> _hydrateAndSubscribe(String convId) async {
+    final msgs = await _chat.hydrateConversation(convId);
     apkLog(
-      'ChatScreen._loadLocalMessages',
-      'loaded ${msgs.length} local msgs for "$convId"',
+      'ChatScreen._hydrateAndSubscribe',
+      'hydrated ${msgs.length} msgs for "$convId"',
     );
-    if (!mounted) return;
-    setState(() => _mergeMessages(msgs));
-    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    if (mounted) {
+      setState(() => _replaceMessagesFromSharedCache(msgs));
+      if (_receiverProfile == null && _receiverIdentity == null) {
+        unawaited(_loadReceiverProfile());
+      }
+    }
+
+    await _messagesSub?.cancel();
+    _messagesSub = _chat.messagesStreamFor(convId).listen((messages) {
+      if (!mounted) return;
+      apkLog('ChatScreen.roomStream', 'room="$convId" msgs=${messages.length}');
+      setState(() => _replaceMessagesFromSharedCache(messages));
+      final currentConv = _resolvedConversationId ?? widget.conversationId;
+      if (convId == currentConv && messages.any((m) => !_isMine(m))) {
+        unawaited(_chat.markConversationAsRead(convId));
+      }
+    });
   }
 
   Future<void> _migrateLocalConversationToRoom(
@@ -416,26 +436,28 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadReceiverProfile() async {
     final ownerUserId = await AuthService.instance.getCurrentUserId();
+    final profileUid = _profilePeerId();
+    if (profileUid == null) return;
     final profile = await UserProfileService.instance.getProfileByUid(
-      widget.receiverId,
+      profileUid,
     );
     final saved =
         ownerUserId == null || ownerUserId.isEmpty
             ? null
-            : await _findSavedContact(ownerUserId, widget.receiverId);
+            : await _findSavedContact(ownerUserId, profileUid);
     var identity =
         ownerUserId == null || ownerUserId.isEmpty
             ? null
             : await ContactIdentityCache.instance.findByMatrixId(
               ownerUserId: ownerUserId,
-              matrixUserId: widget.receiverId,
+              matrixUserId: profileUid,
             );
 
     if (ownerUserId != null && ownerUserId.isNotEmpty) {
-      final fallbackPhone = _firstPhoneFrom([widget.receiverId, widget.title]);
+      final fallbackPhone = _firstPhoneFrom([profileUid, widget.title]);
       await ContactIdentityCache.instance.upsert(
         ownerUserId: ownerUserId,
-        matrixUserId: widget.receiverId,
+        matrixUserId: profileUid,
         phone: profile?.phone ?? fallbackPhone,
         profileName: profile?.displayName,
         savedName: saved?.formattedName,
@@ -446,7 +468,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       identity = await ContactIdentityCache.instance.findByMatrixId(
         ownerUserId: ownerUserId,
-        matrixUserId: widget.receiverId,
+        matrixUserId: profileUid,
       );
     }
 
@@ -456,6 +478,20 @@ class _ChatScreenState extends State<ChatScreen> {
       _savedContact = saved;
       _receiverIdentity = identity;
     });
+  }
+
+  String? _profilePeerId() {
+    for (final candidate in [
+      _receiverIdentity?.matrixUserId,
+      widget.receiverId,
+      ..._messagePeerIdentifiers(),
+    ]) {
+      final value = candidate?.trim() ?? '';
+      if (_isValidMatrixUserId(value) && !_isOwnMatrixId(value)) {
+        return value;
+      }
+    }
+    return null;
   }
 
   Future<Contact?> _findSavedContact(String ownerUserId, String uid) async {
@@ -471,26 +507,18 @@ class _ChatScreenState extends State<ChatScreen> {
     return null;
   }
 
-  String _chatDisplayName() {
-    final savedName = _cleanDisplayName(_savedContact?.formattedName);
-    if (savedName.isNotEmpty) return savedName;
+  String _initialHeaderName() {
+    final cleanTitle = _cleanDisplayName(widget.title);
+    if (cleanTitle.isNotEmpty) return cleanTitle;
 
-    final cachedSaved = _cleanDisplayName(_receiverIdentity?.savedName);
-    if (cachedSaved.isNotEmpty) return cachedSaved;
-
-    final cachedPhone = _extractPhone(_receiverIdentity?.phone);
-    if (cachedPhone.isNotEmpty) return _formatPhone(cachedPhone);
-
-    for (final candidate in [
-      widget.title,
-      widget.receiverId,
-      ..._messagePeerIdentifiers(),
-    ]) {
+    for (final candidate in [widget.title, widget.receiverId]) {
       final phone = _phoneFromIdentifier(candidate);
       if (phone.isNotEmpty) return _formatPhone(phone);
     }
 
-    return '';
+    final trimmedTitle = widget.title.trim();
+    if (trimmedTitle.isNotEmpty) return trimmedTitle;
+    return widget.receiverId.trim();
   }
 
   Iterable<String> _messagePeerIdentifiers() sync* {
@@ -523,64 +551,20 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;
     if (_scrollCtrl.position.maxScrollExtent <= 0) return;
-    if (_scrollCtrl.position.pixels >=
-            _scrollCtrl.position.maxScrollExtent - 80 &&
-        !_loadingOlder &&
-        _hasMoreOlder) {
+    final nearOldest =
+        _scrollCtrl.position.pixels >=
+        _scrollCtrl.position.maxScrollExtent - 80;
+    if (nearOldest && !_loadingOlder && _hasMoreOlder) {
       _loadOlderMessages();
     }
   }
 
   Future<void> _loadOlderMessages() async {
     if (_loadingOlder || !_hasMoreOlder) return;
-    if (!_matrixAvailable) {
-      setState(() => _hasMoreOlder = false);
-      return;
-    }
-    setState(() => _loadingOlder = true);
-
-    final realConvId = await _resolveConversationId();
-
-    try {
-      final older = await _chat.fetchMessageHistory(
-        conversationID: realConvId,
-        count: 40,
-      );
-
-      if (older.isEmpty) {
-        setState(() {
-          _hasMoreOlder = false;
-          _loadingOlder = false;
-        });
-        return;
-      }
-
-      final previousMaxScrollExtent =
-          _scrollCtrl.hasClients ? _scrollCtrl.position.maxScrollExtent : 0.0;
-      setState(() {
-        final existingIds = _messages.map((m) => m.id).toSet();
-        final newOnes =
-            older.where((m) => !existingIds.contains(m.id)).toList();
-        if (newOnes.isEmpty) {
-          _hasMoreOlder = false;
-        }
-        _messages.insertAll(0, newOnes);
-        _loadingOlder = false;
-      });
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollCtrl.hasClients) {
-          final addedExtent =
-              _scrollCtrl.position.maxScrollExtent - previousMaxScrollExtent;
-          if (addedExtent > 0) {
-            _scrollCtrl.jumpTo(_scrollCtrl.position.pixels + addedExtent);
-          }
-        }
-      });
-    } catch (e) {
-      apkLog('ChatScreen.loadOlder', ' ERROR: $e');
-      if (mounted) setState(() => _loadingOlder = false);
-    }
+    setState(() {
+      _hasMoreOlder = false;
+      _loadingOlder = false;
+    });
   }
 
   // ─── SEND TEXT ─────────────────────────────────────────────────────────────
@@ -595,6 +579,11 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     if (text.isEmpty || _isSending) return;
+    if (_isSelfConversation) {
+      _logSelfConversationBlocked('send');
+      _showSelfConversationError();
+      return;
+    }
 
     _controller.clear();
     final reply = _replyingTo;
@@ -693,6 +682,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendVoiceNote(String filePath, int durationSeconds) async {
+    if (_isSelfConversation) {
+      _logSelfConversationBlocked('send voice note');
+      _showSelfConversationError();
+      return;
+    }
+
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final realConvId = await _resolveMatrixConversationIdForSend();
     apkLog(
@@ -759,6 +754,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendVideoNote(String filePath, int durationSeconds) async {
+    if (_isSelfConversation) {
+      _logSelfConversationBlocked('send video note');
+      _showSelfConversationError();
+      return;
+    }
+
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final realConvId = await _resolveMatrixConversationIdForSend();
     apkLog(
@@ -814,6 +815,12 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── CALL ──────────────────────────────────────────────────────────────────
 
   Future<void> _startCall(CallType type) async {
+    if (_isSelfConversation) {
+      _logSelfConversationBlocked('start call');
+      _showSelfConversationError();
+      return;
+    }
+
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final displayName = widget.title;
 
@@ -856,8 +863,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool get _isAtBottom {
     if (!_scrollCtrl.hasClients) return true;
-    final position = _scrollCtrl.position;
-    return position.pixels <= _bottomStickThreshold;
+    return _scrollCtrl.position.pixels <= _bottomStickThreshold;
+  }
+
+  bool get _shouldLiftShortConversation {
+    return _messages.isNotEmpty && _messages.length <= 4;
   }
 
   void _jumpToBottom() {
@@ -874,6 +884,24 @@ class _ChatScreenState extends State<ChatScreen> {
     _removeDuplicateOutgoingEchoes();
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
+
+  void _replaceMessagesFromSharedCache(List<ChatMessage> incoming) {
+    final optimistic = _messages.where(_isLocalOutgoingEcho).toList();
+    _messages
+      ..clear()
+      ..addAll(incoming)
+      ..addAll(
+        optimistic.where(
+          (candidate) =>
+              !incoming.any((m) => _isDuplicateOutgoingEcho(candidate, m)),
+        ),
+      );
+    _removeDuplicateOutgoingEchoes();
+    _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+  }
+
+  bool _isLocalOutgoingEcho(ChatMessage message) =>
+      _isMine(message) && _isLocalOutgoingEchoId(message.id);
 
   void _normaliseMessagesToConversation(String conversationId) {
     for (var i = 0; i < _messages.length; i++) {
@@ -1175,100 +1203,78 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
-    final double statusBarH = mediaQuery.padding.top;
+    final double statusBarH = _stableStatusBarH ?? mediaQuery.viewPadding.top;
     final double appBarH = statusBarH + kToolbarHeight;
-    final double keyboardInset = mediaQuery.viewInsets.bottom;
+    final double keyboardInset =
+        _focusNode.hasFocus ? mediaQuery.viewInsets.bottom : 0.0;
 
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
-      extendBodyBehindAppBar: true,
       extendBody: true,
       resizeToAvoidBottomInset: false,
-      body: ScrollConfiguration(
-        behavior: const _ChatScrollBehavior(),
-        child: Stack(
-          children: [
-            // ── main chat UI ────────────────────────────────────────────────
-            AnimatedPadding(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              padding: EdgeInsets.only(bottom: keyboardInset),
-              child: Column(
+      body: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: const SystemUiOverlayStyle(
+          statusBarColor: Color(0xFF08090B),
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
+        ),
+        child: ScrollConfiguration(
+          behavior: const _ChatScrollBehavior(),
+          child: Stack(
+            children: [
+              Column(
                 children: [
-                  SizedBox(height: appBarH),
-                  Expanded(child: _buildMessageList()),
-                  if (_replyingTo != null) _buildReplyComposerBanner(),
-                  MessageInputField(
-                    controller: _controller,
-                    focusNode: _focusNode,
-                    isSending: _isSending,
-                    onSend: _send,
-                    inputPillHeight: _kInputPillH,
-                    onVoiceMessage: _sendVoiceNote,
-                    onVideoMessage: _recordAndSendVideoMessage,
+                  _buildAppBar(statusBarH),
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.only(bottom: keyboardInset),
+                      child: Column(
+                        children: [
+                          Expanded(child: _buildMessageList()),
+                          if (_replyingTo != null) _buildReplyComposerBanner(),
+                          MessageInputField(
+                            controller: _controller,
+                            focusNode: _focusNode,
+                            isSending: _isSending,
+                            onSend: _send,
+                            inputPillHeight: _kInputPillH,
+                            onVoiceMessage: _sendVoiceNote,
+                            onVideoMessage: _recordAndSendVideoMessage,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ],
               ),
-            ),
 
-            // ── gradient behind app bar ─────────────────────────────────────
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              height: appBarH + 20,
-              child: IgnorePointer(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      stops: const [0.0, 0.6, 1.0],
-                      colors: [
-                        const Color(0xFF08090B).withOpacity(0.95),
-                        const Color(0xFF08090B).withOpacity(0.75),
-                        const Color(0xFF08090B).withOpacity(0.0),
-                      ],
+              // ── debug overlay ─────────────────────────────────────────────
+              if (_showDebug) _buildDebugOverlay(appBarH),
+
+              // ── debug toggle button ───────────────────────────────────────
+              Positioned(
+                bottom: 120 + keyboardInset,
+                right: 12,
+                child: GestureDetector(
+                  onTap: () => setState(() => _showDebug = !_showDebug),
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color:
+                          _showDebug
+                              ? Colors.orangeAccent
+                              : Colors.grey.withOpacity(0.6),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Center(
+                      child: Text('🐛', style: TextStyle(fontSize: 18)),
                     ),
                   ),
                 ),
               ),
-            ),
-
-            // ── app bar ─────────────────────────────────────────────────────
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: _buildAppBar(statusBarH),
-            ),
-
-            // ── debug overlay ───────────────────────────────────────────────
-            if (_showDebug) _buildDebugOverlay(appBarH),
-
-            // ── debug toggle button ─────────────────────────────────────────
-            Positioned(
-              bottom: 120 + keyboardInset,
-              right: 12,
-              child: GestureDetector(
-                onTap: () => setState(() => _showDebug = !_showDebug),
-                child: Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color:
-                        _showDebug
-                            ? Colors.orangeAccent
-                            : Colors.grey.withOpacity(0.6),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Center(
-                    child: Text('🐛', style: TextStyle(fontSize: 18)),
-                  ),
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1466,19 +1472,32 @@ class _ChatScreenState extends State<ChatScreen> {
                   : ListView.builder(
                     controller: _scrollCtrl,
                     reverse: true,
-                    padding: const EdgeInsets.only(top: 12, bottom: 8),
-                    physics: const BouncingScrollPhysics(),
-                    itemCount: _messages.length,
+                    padding: const EdgeInsets.only(top: 150, bottom: 12),
+                    physics: const ClampingScrollPhysics(),
+                    itemCount:
+                        _messages.length +
+                        (_shouldLiftShortConversation ? 1 : 0),
                     itemBuilder: (context, index) {
-                      final messageIndex = _messages.length - 1 - index;
-                      final msg = _messages[messageIndex];
+                      if (_shouldLiftShortConversation && index == 0) {
+                        return const SizedBox(height: 96);
+                      }
+
+                      final adjustedIndex =
+                          index - (_shouldLiftShortConversation ? 1 : 0);
+                      final msgIndex = _messages.length - 1 - adjustedIndex;
+                      final msg = _messages[msgIndex];
                       final isMine = _isMine(msg);
-                      final prev =
-                          messageIndex > 0 ? _messages[messageIndex - 1] : null;
+                      final previousChronological =
+                          msgIndex > 0 ? _messages[msgIndex - 1] : null;
                       final showDate =
-                          prev == null ||
-                          !_isSameDay(prev.timestamp, msg.timestamp);
-                      final showTail = prev == null || _isMine(prev) != isMine;
+                          previousChronological == null ||
+                          !_isSameDay(
+                            previousChronological.timestamp,
+                            msg.timestamp,
+                          );
+                      final showTail =
+                          previousChronological == null ||
+                          _isMine(previousChronological) != isMine;
                       return Column(
                         children: [
                           if (showDate)
@@ -1486,6 +1505,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               _formatDateDivider(msg.timestamp),
                             ),
                           GestureDetector(
+                            key: ValueKey(msg.id),
                             behavior: HitTestBehavior.opaque,
                             onLongPress: () => _showMessageActions(msg),
                             child: MessageBubble(
@@ -1503,6 +1523,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               isDeleted: msg.isDeleted,
                               replyPreview: msg.replyPreview,
                               replySender: msg.replyToSenderId,
+                              animateOnMount: true,
                             ),
                           ),
                         ],
@@ -1535,7 +1556,7 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── APP BAR ───────────────────────────────────────────────────────────────
 
   Widget _buildAppBar(double statusBarH) {
-    final displayName = _chatDisplayName();
+    final displayName = _stableHeaderName;
     final fallbackPhone =
         (_receiverIdentity?.phone?.trim().isNotEmpty == true)
             ? _receiverIdentity!.phone!.trim()
@@ -1548,144 +1569,159 @@ class _ChatScreenState extends State<ChatScreen> {
         _receiverIdentity?.profileName?.trim().isNotEmpty == true
             ? _receiverIdentity!.profileName!.trim()
             : widget.title;
-    return Padding(
-      padding: EdgeInsets.only(top: statusBarH),
-      child: SizedBox(
-        height: kToolbarHeight,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              _glassPill(
-                width: _kHeaderPillH,
-                height: _kHeaderPillH,
-                child: const Icon(
-                  Icons.arrow_back_ios_new,
-                  color: Colors.white,
-                  size: 16,
-                ),
-                onTap: () => Navigator.pop(context),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder:
-                            (_) => ProfileScreen(
-                              uid: widget.receiverId,
-                              fallbackName: profileFallbackName,
-                              fallbackPhone:
-                                  fallbackPhone.isNotEmpty
-                                      ? fallbackPhone
-                                      : null,
-                              fallbackAvatarUrl: widget.avatarUrl,
-                            ),
+    final avatarUrl = _stableHeaderAvatarUrl;
+
+    return SizedBox(
+      height: statusBarH + kToolbarHeight,
+      child: DecoratedBox(
+        decoration: const BoxDecoration(color: Color(0xFF08090B)),
+        child: Column(
+          children: [
+            SizedBox(height: statusBarH),
+            SizedBox(
+              height: kToolbarHeight,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    _glassPill(
+                      width: _kHeaderPillH,
+                      height: _kHeaderPillH,
+                      child: const Icon(
+                        Icons.arrow_back_ios_new,
+                        color: Colors.white,
+                        size: 16,
                       ),
-                    );
-                    if (mounted) _loadReceiverProfile();
-                  },
-                  child: SizedBox(
-                    height: _kHeaderPillH,
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        Positioned.fill(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(24),
-                            child: BackdropFilter(
-                              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: const Color(
-                                    0xFF23262C,
-                                  ).withOpacity(0.30),
-                                  borderRadius: BorderRadius.circular(24),
-                                  border: Border.all(
-                                    color: const Color(0xFF23262C),
-                                    width: 1.0,
+                      onTap: () => Navigator.pop(context),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () async {
+                          final profileUid = _profilePeerId();
+                          if (profileUid == null) return;
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder:
+                                  (_) => ProfileScreen(
+                                    uid: profileUid,
+                                    fallbackName: profileFallbackName,
+                                    fallbackPhone:
+                                        fallbackPhone.isNotEmpty
+                                            ? fallbackPhone
+                                            : null,
+                                    fallbackAvatarUrl: widget.avatarUrl,
+                                  ),
+                            ),
+                          );
+                          if (mounted) _loadReceiverProfile();
+                        },
+                        child: SizedBox(
+                          height: _kHeaderPillH,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF15181D),
+                              borderRadius: BorderRadius.circular(24),
+                              border: Border.all(
+                                color: const Color(0xFF23262C),
+                                width: 1.0,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: _kHeaderPillH,
+                                  height: _kHeaderPillH,
+                                  child: Center(
+                                    child: UserAvatar(
+                                      size: _kHeaderPillH,
+                                      imageUrl: avatarUrl,
+                                      name: displayName,
+                                    ),
                                   ),
                                 ),
-                              ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      SizedBox(
+                                        height: 18,
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            displayName,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 15,
+                                              height: 1.0,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                            maxLines: 1,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      SizedBox(
+                                        height: 14,
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            'Online',
+                                            style: TextStyle(
+                                              color: Colors.white.withOpacity(
+                                                0.5,
+                                              ),
+                                              fontSize: 12,
+                                              height: 1.0,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                            maxLines: 1,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                              ],
                             ),
                           ),
                         ),
-                        Positioned(
-                          left: 2,
-                          top: -2,
-                          bottom: -2,
-                          child: AspectRatio(
-                            aspectRatio: 1,
-                            child: UserAvatar(
-                              size: _kHeaderPillH + 12,
-                              imageUrl:
-                                  _receiverProfile?.hasProfileImage == true
-                                      ? _receiverProfile!.profileImage
-                                      : widget.avatarUrl,
-                              name: displayName,
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          left: _kHeaderPillH + 14,
-                          top: 0,
-                          bottom: 0,
-                          right: 12,
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                displayName,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                'Online',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.5),
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    _glassPill(
+                      width: _kHeaderPillH,
+                      height: _kHeaderPillH,
+                      child: const Icon(
+                        Icons.videocam_outlined,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      onTap: () => _startCall(CallType.video),
+                    ),
+                    const SizedBox(width: 8),
+                    _glassPill(
+                      width: _kHeaderPillH,
+                      height: _kHeaderPillH,
+                      child: const Icon(
+                        Icons.call_outlined,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      onTap: () => _startCall(CallType.voice),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              _glassPill(
-                width: _kHeaderPillH,
-                height: _kHeaderPillH,
-                child: const Icon(
-                  Icons.videocam_outlined,
-                  color: Colors.white,
-                  size: 20,
-                ),
-                onTap: () => _startCall(CallType.video),
-              ),
-              const SizedBox(width: 8),
-              _glassPill(
-                width: _kHeaderPillH,
-                height: _kHeaderPillH,
-                child: const Icon(
-                  Icons.call_outlined,
-                  color: Colors.white,
-                  size: 20,
-                ),
-                onTap: () => _startCall(CallType.voice),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -1702,6 +1738,16 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     return false;
   }
+
+  bool _isValidMatrixUserId(String value) {
+    final trimmed = value.trim();
+    if (!trimmed.startsWith('@')) return false;
+    if (trimmed.startsWith('@!')) return false;
+    return trimmed.split(':').length == 2 && trimmed.split(':').last.isNotEmpty;
+  }
+
+  bool _isOwnMatrixId(String value) =>
+      _matrixLocalpart(value) == _matrixLocalpart(widget.currentUserId);
 
   bool _isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;

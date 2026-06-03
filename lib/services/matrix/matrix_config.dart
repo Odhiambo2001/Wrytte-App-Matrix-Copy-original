@@ -16,6 +16,7 @@ class MatrixConfig {
   static const appServiceName = 'Wrytte';
   static const localDatabaseName = 'wrytte_matrix';
   static const localDatabaseFile = 'wrytte_matrix.sqlite';
+  static const historyPageSize = 3000;
 
   static const localMediaMaxBytes = 512 * 1024 * 1024;
   static const localMediaTtl = Duration(days: 30);

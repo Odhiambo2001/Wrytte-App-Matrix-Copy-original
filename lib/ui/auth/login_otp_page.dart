@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
 class LoginOtpPage extends StatefulWidget {
@@ -22,6 +22,7 @@ class _LoginOtpPageState extends State<LoginOtpPage>
     with SingleTickerProviderStateMixin {
   final TextEditingController _otpController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
+  final RealNumberService _realNumberService = RealNumberService();
 
   bool _isLoading = false;
   String? _errorMessage;
@@ -91,23 +92,19 @@ class _LoginOtpPageState extends State<LoginOtpPage>
         setState(() {
           _isLoading = false;
           //_errorMessage = 'Invalid code. Please try again.';
-          _errorMessage = 'Incorrect code. Please enter the correct 6-digit code.';
+          _errorMessage =
+              'Incorrect code. Please enter the correct 6-digit code.';
           _otpController.clear();
         });
         return;
       }
 
-      String resolvedUserId = widget.userId;
-
-      try {
-        final user = await AuthService.instance.authenticatePhone(
-          phone: widget.phoneNumber,
-          code: enteredCode,
-        );
-        resolvedUserId = user.userId;
-      } catch (_) {
-        resolvedUserId = widget.userId;
-      }
+      final result = await _realNumberService.registerRealPhone(
+        fullPhone: widget.phoneNumber,
+        code: enteredCode,
+        login: true,
+      );
+      final resolvedUserId = result.userId;
 
       if (!mounted) return;
 
@@ -309,19 +306,20 @@ class _LoginOtpPageState extends State<LoginOtpPage>
                 children: [
                   TextButton(
                     onPressed: _canResend && !_isLoading ? _resendCode : null,
-                    child: _isLoading
-                        ? const SizedBox(
-                            height: 14,
-                            width: 14,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white54,
+                    child:
+                        _isLoading
+                            ? const SizedBox(
+                              height: 14,
+                              width: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white54,
+                              ),
+                            )
+                            : const Text(
+                              "Resend SMS",
+                              style: TextStyle(color: Colors.white54),
                             ),
-                          )
-                        : const Text(
-                            "Resend SMS",
-                            style: TextStyle(color: Colors.white54),
-                          ),
                   ),
                   const Text(
                     "Activate via call",

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
@@ -16,11 +17,15 @@ class NotificationService {
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
+  final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   final Set<String> _notifiedMessageIds = <String>{};
   final Set<String> _notifiedCallIds = <String>{};
+  final Set<String> _notifiedRemoteIds = <String>{};
 
   StreamSubscription<ChatMessage>? _messageSub;
   StreamSubscription<CallData>? _callSub;
+  StreamSubscription<RemoteMessage>? _foregroundPushSub;
+  StreamSubscription<RemoteMessage>? _openedPushSub;
   bool _initialized = false;
   String? _currentUserId;
 
@@ -72,6 +77,13 @@ class NotificationService {
             >();
     await iosPlugin?.requestPermissions(alert: true, badge: true, sound: true);
 
+    await _messaging.requestPermission(alert: true, badge: true, sound: true);
+    await _messaging.setForegroundNotificationPresentationOptions(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+
     _initialized = true;
   }
 
@@ -82,6 +94,15 @@ class NotificationService {
 
     _messageSub ??= ChatService().messageStream.listen(_showMessage);
     _callSub ??= CallService.instance.incomingCallStream.listen(_showCall);
+    _foregroundPushSub ??= FirebaseMessaging.onMessage.listen(
+      showRemoteMessage,
+    );
+    _openedPushSub ??= FirebaseMessaging.onMessageOpenedApp.listen(
+      _handleOpenedPush,
+    );
+
+    final token = await _messaging.getToken();
+    debugPrint('[NotificationService] FCM token: $token');
 
     unawaited(ChatService().connect());
   }
@@ -89,11 +110,74 @@ class NotificationService {
   Future<void> stop() async {
     await _messageSub?.cancel();
     await _callSub?.cancel();
+    await _foregroundPushSub?.cancel();
+    await _openedPushSub?.cancel();
     _messageSub = null;
     _callSub = null;
+    _foregroundPushSub = null;
+    _openedPushSub = null;
     _currentUserId = null;
     _notifiedMessageIds.clear();
     _notifiedCallIds.clear();
+    _notifiedRemoteIds.clear();
+  }
+
+  Future<void> showRemoteMessage(RemoteMessage message) async {
+    await initialize();
+    if (kIsWeb) return;
+
+    final id = _remoteId(message);
+    if (!_notifiedRemoteIds.add(id) || !_notifiedMessageIds.add(id)) return;
+
+    final notification = message.notification;
+    final data = message.data;
+    final title =
+        notification?.title ??
+        _firstNonEmpty([
+          data['title'],
+          data['senderName'],
+          data['sender_name'],
+          data['senderPhone'],
+          data['sender_phone'],
+        ]) ??
+        'New message';
+    final body =
+        notification?.body ??
+        _firstNonEmpty([
+          data['body'],
+          data['message'],
+          data['content'],
+          data['preview'],
+        ]) ??
+        'New message';
+    final conversationId =
+        _firstNonEmpty([data['conversationId'], data['conversation_id']]) ?? '';
+
+    await _plugin.show(
+      id.hashCode,
+      title,
+      body,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _messageChannelId,
+          'Messages',
+          channelDescription: 'Incoming chat message notifications',
+          importance: Importance.max,
+          priority: Priority.high,
+          category: AndroidNotificationCategory.message,
+          ticker: 'New message',
+          playSound: true,
+          enableVibration: true,
+          visibility: NotificationVisibility.public,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentSound: true,
+          presentBadge: true,
+        ),
+      ),
+      payload: conversationId.isEmpty ? 'message' : 'message:$conversationId',
+    );
   }
 
   Future<void> _showMessage(ChatMessage message) async {
@@ -203,5 +287,32 @@ class NotificationService {
       if (cleaned != null && cleaned.isNotEmpty) return cleaned;
     }
     return 'New message';
+  }
+
+  String _remoteId(RemoteMessage message) {
+    return _firstNonEmpty([
+          message.messageId,
+          message.data['event_id'],
+          message.data['eventId'],
+          message.data['message_id'],
+          message.data['messageId'],
+          message.data['conversationId'],
+          message.data['conversation_id'],
+        ]) ??
+        DateTime.now().microsecondsSinceEpoch.toString();
+  }
+
+  String? _firstNonEmpty(Iterable<Object?> values) {
+    for (final value in values) {
+      final text = value?.toString().trim();
+      if (text != null && text.isNotEmpty) return text;
+    }
+    return null;
+  }
+
+  void _handleOpenedPush(RemoteMessage message) {
+    debugPrint(
+      '[NotificationService] notification opened data=${message.data}',
+    );
   }
 }

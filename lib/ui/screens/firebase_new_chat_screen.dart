@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/contact_components/firebase_new_chat_item.dart';
+import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
+import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
@@ -167,18 +170,75 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
             : contact.primaryPhone;
 
     if (receiverId.isEmpty) return;
+    if (_conversationKey(receiverId) == _conversationKey(currentUserId)) {
+      debugPrint(
+        '[FirebaseNewChatScreen] refused self contact open: $receiverId',
+      );
+      return;
+    }
 
     final ids = [_conversationKey(currentUserId), _conversationKey(receiverId)]
       ..sort();
-    final conversationId = 'si_${ids[0]}_${ids[1]}';
+    var conversationId = 'si_${ids[0]}_${ids[1]}';
+    var initialMessages = await ChatService().loadCachedMessages(
+      conversationId,
+    );
+
+    final localRoomId = await _findLocalRoomConversationId(
+      currentUserId: currentUserId,
+      receiverId: receiverId,
+      contact: contact,
+    );
+    if (localRoomId != null && localRoomId.isNotEmpty) {
+      final roomMessages = await ChatService().loadCachedMessages(localRoomId);
+      if (roomMessages.isNotEmpty) {
+        conversationId = localRoomId;
+        initialMessages = roomMessages;
+      }
+    }
+
+    if (contact.wrytteUserId != null &&
+        contact.wrytteUserId!.isNotEmpty &&
+        _conversationKey(receiverId) != _conversationKey(currentUserId) &&
+        !(conversationId.startsWith('!') && initialMessages.isNotEmpty)) {
+      try {
+        final chat = ChatService();
+        await chat.connect();
+        final existingRoomId = await chat.findMatrixConversationId(receiverId);
+        final roomId =
+            existingRoomId != null && existingRoomId.isNotEmpty
+                ? existingRoomId
+                : await chat.getMatrixConversationId(receiverId);
+        if (roomId != null && roomId.isNotEmpty) {
+          await ChatLocalDb.instance.migrateConversationId(
+            oldConversationId: conversationId,
+            roomConversation: ChatConversation(
+              id: roomId,
+              participants: [currentUserId, receiverId],
+              otherUserId: receiverId,
+              lastMessage: '',
+              lastMessageSenderId: '',
+              lastMessageTime: DateTime.now(),
+              unreadCount: 0,
+              otherUserName: _sanitize(contact.formattedName),
+              otherUserAvatar: contact.avatarUrl,
+            ),
+          );
+          conversationId = roomId;
+          initialMessages = await ChatService().loadCachedMessages(roomId);
+        }
+      } catch (e) {
+        debugPrint('[FirebaseNewChatScreen] Matrix room resolve failed: $e');
+      }
+    }
 
     if (!mounted) return;
     Navigator.pop(context);
     Navigator.push(
       context,
       PageRouteBuilder(
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: Duration.zero,
+        transitionDuration: const Duration(milliseconds: 300),
+        reverseTransitionDuration: const Duration(milliseconds: 220),
         pageBuilder:
             (_, __, ___) => ChatScreen(
               conversationId: conversationId,
@@ -186,9 +246,45 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
               currentUserId: currentUserId,
               title: _sanitize(contact.formattedName),
               avatarUrl: contact.avatarUrl,
+              initialMessages: initialMessages,
             ),
+        transitionsBuilder: (_, animation, __, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(1, 0),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          );
+        },
       ),
     );
+  }
+
+  Future<String?> _findLocalRoomConversationId({
+    required String currentUserId,
+    required String receiverId,
+    required Contact contact,
+  }) async {
+    final directId = await ChatLocalDb.instance.findDirectConversationId(
+      selfUserId: currentUserId,
+      otherUserId: receiverId,
+    );
+    if (directId != null && directId.startsWith('!')) return directId;
+
+    final ids = await ChatLocalDb.instance.findConversationIdsByMessageIdentity(
+      userIds: [receiverId],
+      phones: [contact.primaryPhone, ...contact.phones],
+    );
+    for (final id in ids) {
+      if (id.startsWith('!')) return id;
+    }
+    return null;
   }
 
   String _conversationKey(String value) {

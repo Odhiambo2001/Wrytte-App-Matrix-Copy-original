@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
@@ -48,7 +50,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -98,7 +100,8 @@ class ChatLocalDb {
             isMuted              INTEGER NOT NULL DEFAULT 0,
             isPinned             INTEGER NOT NULL DEFAULT 0,
             otherUserName        TEXT,
-            otherUserAvatar      TEXT
+            otherUserAvatar      TEXT,
+            lastReadTime         INTEGER
           )
         ''');
 
@@ -147,6 +150,14 @@ class ChatLocalDb {
         }
         if (oldVersion < 4) {
           await _addColumnIfMissing(db, 'messages', 'senderName', 'TEXT');
+        }
+        if (oldVersion < 5) {
+          await _addColumnIfMissing(
+            db,
+            'conversations',
+            'lastReadTime',
+            'INTEGER',
+          );
         }
       },
     );
@@ -368,6 +379,13 @@ class ChatLocalDb {
           existing.isNotEmpty
               ? existing.first['otherUserAvatar'] as String?
               : null;
+      final existingLastReadTime =
+          existing.isNotEmpty ? existing.first['lastReadTime'] as int? : null;
+      final nextLastReadTime =
+          existingLastReadTime ??
+          (c.unreadCount == 0
+              ? c.lastMessageTime.millisecondsSinceEpoch
+              : null);
 
       await database.insert('conversations', {
         'id': c.id,
@@ -384,6 +402,7 @@ class ChatLocalDb {
         // Keep existing cached name/avatar — don't overwrite with null
         'otherUserName': c.otherUserName ?? existingName,
         'otherUserAvatar': c.otherUserAvatar ?? existingAvatar,
+        'lastReadTime': nextLastReadTime,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
@@ -392,6 +411,14 @@ class ChatLocalDb {
     List<ChatConversation> conversations,
   ) async {
     final database = await db;
+    final existingRows = await database.query(
+      'conversations',
+      columns: ['id', 'lastReadTime'],
+    );
+    final existingLastReadTimes = <String, int?>{
+      for (final row in existingRows)
+        row['id'] as String: row['lastReadTime'] as int?,
+    };
     await database.transaction((txn) async {
       await txn.delete('conversations');
       for (final c in conversations) {
@@ -409,6 +436,11 @@ class ChatLocalDb {
           'isPinned': c.isPinned ? 1 : 0,
           'otherUserName': c.otherUserName,
           'otherUserAvatar': c.otherUserAvatar,
+          'lastReadTime':
+              existingLastReadTimes[c.id] ??
+              (c.unreadCount == 0
+                  ? c.lastMessageTime.millisecondsSinceEpoch
+                  : null),
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
@@ -440,6 +472,15 @@ class ChatLocalDb {
     }
 
     final database = await db;
+    final existing = await database.query(
+      'conversations',
+      columns: ['lastReadTime'],
+      where: 'id = ?',
+      whereArgs: [oldConversationId],
+      limit: 1,
+    );
+    final existingLastReadTime =
+        existing.isNotEmpty ? existing.first['lastReadTime'] as int? : null;
     await database.transaction((txn) async {
       await txn.update(
         'messages',
@@ -467,6 +508,7 @@ class ChatLocalDb {
         'isPinned': roomConversation.isPinned ? 1 : 0,
         'otherUserName': roomConversation.otherUserName,
         'otherUserAvatar': roomConversation.otherUserAvatar,
+        'lastReadTime': existingLastReadTime,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     });
   }
@@ -507,6 +549,46 @@ class ChatLocalDb {
     return fallback?.id;
   }
 
+  Future<List<String>> findConversationIdsByMessageIdentity({
+    Iterable<String> userIds = const [],
+    Iterable<String> phones = const [],
+  }) async {
+    final identityKeys = <String>{
+      ...userIds.map(_conversationPeerKey),
+      ...phones.map(_conversationPeerKey),
+    }..removeWhere((key) => key.isEmpty);
+    if (identityKeys.isEmpty) return const [];
+
+    final database = await db;
+    final rows = await database.query(
+      'messages',
+      columns: ['conversationId', 'senderId', 'receiverId', 'senderPhone'],
+      orderBy: 'timestamp DESC',
+    );
+
+    final ids = <String>[];
+    for (final row in rows) {
+      final senderId = _conversationPeerKey(row['senderId'] as String? ?? '');
+      final receiverId = _conversationPeerKey(
+        row['receiverId'] as String? ?? '',
+      );
+      final senderPhone = _conversationPeerKey(
+        row['senderPhone'] as String? ?? '',
+      );
+      final matches =
+          identityKeys.contains(senderId) ||
+          identityKeys.contains(receiverId) ||
+          identityKeys.contains(senderPhone);
+      if (!matches) continue;
+
+      final conversationId = row['conversationId'] as String? ?? '';
+      if (conversationId.isNotEmpty && !ids.contains(conversationId)) {
+        ids.add(conversationId);
+      }
+    }
+    return ids;
+  }
+
   ChatConversation _rowToConversation(Map<String, dynamic> row) {
     final participantsRaw = row['participants'] as String? ?? '';
     final participants =
@@ -539,12 +621,58 @@ class ChatLocalDb {
 
   Future<void> markConversationRead(String conversationId) async {
     final database = await db;
+    final rows = await database.query(
+      'messages',
+      columns: ['timestamp'],
+      where: 'conversationId = ? AND isDeletedForMe = ?',
+      whereArgs: [conversationId, 0],
+      orderBy: 'timestamp DESC',
+      limit: 1,
+    );
+    final latestMessageTime =
+        rows.isNotEmpty ? rows.first['timestamp'] as int : null;
+    final readTime = latestMessageTime ?? DateTime.now().millisecondsSinceEpoch;
     await database.update(
       'conversations',
-      {'unreadCount': 0},
+      {'unreadCount': 0, 'lastReadTime': readTime},
       where: 'id = ?',
       whereArgs: [conversationId],
     );
+  }
+
+  Future<void> markConversationReadAt(
+    String conversationId,
+    DateTime readAt,
+  ) async {
+    final database = await db;
+    await database.update(
+      'conversations',
+      {'unreadCount': 0, 'lastReadTime': readAt.millisecondsSinceEpoch},
+      where: 'id = ?',
+      whereArgs: [conversationId],
+    );
+  }
+
+  Future<Map<String, DateTime>> loadConversationReadMarkers() async {
+    final database = await db;
+    final rows = await database.query(
+      'conversations',
+      columns: ['id', 'lastReadTime', 'unreadCount', 'lastMessageTime'],
+    );
+    final markers = <String, DateTime>{};
+    for (final row in rows) {
+      final id = row['id'] as String? ?? '';
+      if (id.isEmpty) continue;
+      final lastReadTime = row['lastReadTime'] as int?;
+      final unreadCount = row['unreadCount'] as int? ?? 0;
+      final lastMessageTime = row['lastMessageTime'] as int? ?? 0;
+      final markerTime =
+          lastReadTime ?? (unreadCount == 0 ? lastMessageTime : null);
+      if (markerTime != null && markerTime > 0) {
+        markers[id] = DateTime.fromMillisecondsSinceEpoch(markerTime);
+      }
+    }
+    return markers;
   }
 
   // ── Clear cached user names — call once to flush stale data ───────────────
@@ -580,5 +708,23 @@ class ChatLocalDb {
     final database = await db;
     await database.delete('messages');
     await database.delete('conversations');
+  }
+
+  Future<void> deleteAllLocalDatabases() async {
+    final current = _db;
+    _db = null;
+    _ownerId = null;
+    await current?.close();
+
+    final dbPath = await getDatabasesPath();
+    final dir = Directory(dbPath);
+    if (!await dir.exists()) return;
+
+    await for (final entity in dir.list()) {
+      if (entity is! File) continue;
+      final name = basename(entity.path);
+      if (!name.startsWith('wrytte_chat_') || !name.endsWith('.db')) continue;
+      await deleteDatabase(entity.path);
+    }
   }
 }

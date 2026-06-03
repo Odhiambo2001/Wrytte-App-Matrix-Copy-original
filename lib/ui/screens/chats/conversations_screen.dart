@@ -572,8 +572,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         await Navigator.push(
           context,
           PageRouteBuilder(
-            transitionDuration: Duration.zero,
-            reverseTransitionDuration: Duration.zero,
+            transitionDuration: const Duration(milliseconds: 300),
+            reverseTransitionDuration: const Duration(milliseconds: 220),
             pageBuilder:
                 (_, __, ___) => ChatScreen(
                   conversationId: conv.id,
@@ -583,6 +583,20 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   avatarUrl: avatar,
                   initialMessages: initialMessages,
                 ),
+            transitionsBuilder: (_, animation, __, child) {
+              final curved = CurvedAnimation(
+                parent: animation,
+                curve: Curves.easeOutCubic,
+                reverseCurve: Curves.easeInCubic,
+              );
+              return SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(1, 0),
+                  end: Offset.zero,
+                ).animate(curved),
+                child: child,
+              );
+            },
           ),
         );
         if (mounted) await _loadLocalConversations();

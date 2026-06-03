@@ -36,7 +36,10 @@ class MatrixAuthService {
 
   Future<Client> _restore() async {
     apkLog('Matrix.auth', 'restore start');
-    final client = await MatrixClientService.instance.ensureInitialized();
+    final storedUserId = await _storage.read(key: matrixUserIdKey);
+    final client = await MatrixClientService.instance.ensureInitialized(
+      storeNamespace: storedUserId,
+    );
     if (client.isLogged()) {
       apkLog(
         'Matrix.auth',
@@ -45,18 +48,17 @@ class MatrixAuthService {
       return client;
     }
 
-    final userId = await _storage.read(key: matrixUserIdKey);
     final token = await _storage.read(key: matrixAccessTokenKey);
     final homeserver = await _storage.read(key: matrixHomeserverKey);
     final deviceId = await _storage.read(key: matrixDeviceIdKey);
-    if (userId == null || token == null || homeserver == null) {
+    if (storedUserId == null || token == null || homeserver == null) {
       apkLog('Matrix.auth', 'restore no stored Matrix session');
       return client;
     }
 
     apkLog(
       'Matrix.auth',
-      'restore credentials user_id="$userId" homeserver="$homeserver"',
+      'restore credentials user_id="$storedUserId" homeserver="$homeserver"',
     );
     if (client.isLogged()) {
       apkLog(
@@ -67,7 +69,7 @@ class MatrixAuthService {
     }
     await MatrixClientService.instance.initWithCredentials(
       homeserver: Uri.parse(homeserver),
-      userId: userId,
+      userId: storedUserId,
       accessToken: token,
       deviceId: deviceId,
     );
@@ -89,7 +91,9 @@ class MatrixAuthService {
       'Matrix.auth',
       'resolve homeserver input="${homeserver ?? username}"',
     );
-    var client = await MatrixClientService.instance.ensureInitialized();
+    var client = await MatrixClientService.instance.ensureInitialized(
+      storeNamespace: username,
+    );
     if (forceFreshSession && client.isLogged()) {
       apkLog(
         'Matrix.auth',
@@ -97,7 +101,9 @@ class MatrixAuthService {
       );
       await MatrixClientService.instance.clearLocalSession();
       MatrixContactService.instance.clearCache();
-      client = await MatrixClientService.instance.ensureInitialized();
+      client = await MatrixClientService.instance.ensureInitialized(
+        storeNamespace: username,
+      );
     }
     final baseUri = await _discovery
         .resolveHomeserver(userIdOrDomain: homeserver ?? username)
@@ -147,7 +153,9 @@ class MatrixAuthService {
       'Matrix.auth',
       'resolve homeserver for register input="${homeserver ?? username}"',
     );
-    var client = await MatrixClientService.instance.ensureInitialized();
+    var client = await MatrixClientService.instance.ensureInitialized(
+      storeNamespace: username,
+    );
     if (forceFreshSession && client.isLogged()) {
       apkLog(
         'Matrix.auth',
@@ -155,7 +163,9 @@ class MatrixAuthService {
       );
       await MatrixClientService.instance.clearLocalSession();
       MatrixContactService.instance.clearCache();
-      client = await MatrixClientService.instance.ensureInitialized();
+      client = await MatrixClientService.instance.ensureInitialized(
+        storeNamespace: username,
+      );
     }
     final baseUri = await _discovery
         .resolveHomeserver(userIdOrDomain: homeserver ?? username)
