@@ -6,10 +6,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart' as mx;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wrytte/models/chat_models/chat_conversation.dart';
+import 'package:wrytte/models/chat_models/chat_message.dart';
+import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/contacts/contact_local_db.dart';
+import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
@@ -198,26 +203,40 @@ class AuthService {
           forceFreshSession: forceFreshSession,
         );
         apkLog('Matrix.auth', 'login success user_id="$userId"');
-      } catch (_) {
-        if (!await _isCurrentMatrixBootstrap(userId, generation)) {
-          debugPrint(
-            '[AuthService] Matrix register skipped for stale user $userId.',
+      } catch (e) {
+        final current =
+            MatrixClientService.instance.isInitialized
+                ? MatrixClientService.instance.client
+                : null;
+        final expectedMatrixUserId = '@$userId:${MatrixConfig.serverName}';
+        if (current?.isLogged() == true &&
+            current?.userID == expectedMatrixUserId) {
+          await MatrixAuthService.instance.persistCurrentSession();
+          apkLog(
+            'Matrix.auth',
+            'login response usable despite post-login error user_id="$userId" error="$e"',
           );
-          apkLog('Matrix.auth', 'register skipped stale user_id="$userId"');
-          return;
+        } else {
+          if (!await _isCurrentMatrixBootstrap(userId, generation)) {
+            debugPrint(
+              '[AuthService] Matrix register skipped for stale user $userId.',
+            );
+            apkLog('Matrix.auth', 'register skipped stale user_id="$userId"');
+            return;
+          }
+          // Account may not exist yet on this server — register it.
+          apkLog(
+            'Matrix.auth',
+            'login failed; register request user_id="$userId" error="$e"',
+          );
+          await MatrixAuthService.instance.register(
+            username: userId,
+            password: password,
+            homeserver: homeserver,
+            forceFreshSession: forceFreshSession,
+          );
+          apkLog('Matrix.auth', 'register success user_id="$userId"');
         }
-        // Account may not exist yet on this server — register it.
-        apkLog(
-          'Matrix.auth',
-          'login failed; register request user_id="$userId"',
-        );
-        await MatrixAuthService.instance.register(
-          username: userId,
-          password: password,
-          homeserver: homeserver,
-          forceFreshSession: forceFreshSession,
-        );
-        apkLog('Matrix.auth', 'register success user_id="$userId"');
       }
     }
 
@@ -505,6 +524,81 @@ class AuthService {
   Future<String?> getMatrixAccessToken() async =>
       _storage.read(key: MatrixAuthService.matrixAccessTokenKey);
   Future<String?> getChatToken() async => getMatrixAccessToken();
+
+  Future<void> persistLoginPayloadCache({
+    required Map<String, dynamic> payload,
+    required String ownerUserId,
+    String? displayName,
+  }) async {
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return;
+
+    final avatar = _extractString(payload, const [
+      'AvatarImg',
+      'avatarImg',
+      'avatar',
+      'avatarUrl',
+      'image',
+      'profileImage',
+      'profile_image',
+      'ProfileImage',
+    ]);
+    final writes = <Future<void>>[];
+    if (avatar.isNotEmpty) {
+      writes.add(
+        _storage.write(
+          key: 'profile_image',
+          value: _resolveBackendAssetUrl(avatar),
+        ),
+      );
+    }
+
+    final contacts = _extractContacts(payload);
+    if (contacts.isNotEmpty) {
+      writes.add(ContactLocalDb.saveContacts(contacts, ownerUserId: owner));
+      ContactService.invalidateMatrixContactsCache();
+    }
+
+    final restoredMessages = _extractChatMessages(payload, owner);
+    if (restoredMessages.isNotEmpty) {
+      writes.add(ChatLocalDb.instance.saveMessages(restoredMessages));
+    }
+
+    final restoredConversations = _extractChatConversations(payload, owner);
+    if (restoredConversations.isNotEmpty) {
+      writes.add(ChatLocalDb.instance.saveConversations(restoredConversations));
+    }
+
+    final name = displayName?.trim() ?? '';
+    if (_hasRealProfileName(name)) {
+      final parts = name.split(RegExp(r'\s+'));
+      writes.add(_storage.write(key: 'profile_first_name', value: parts.first));
+      writes.add(
+        _storage.write(
+          key: 'profile_last_name',
+          value: parts.length > 1 ? parts.sublist(1).join(' ') : '',
+        ),
+      );
+    }
+
+    if (writes.isEmpty) return;
+    await Future.wait(writes);
+    if (contacts.isNotEmpty) {
+      final materialized = await ChatLocalDb.instance
+          .materializeContactConversations(
+            ownerUserId: owner,
+            contacts: contacts,
+          );
+      if (materialized > 0) {
+        debugPrint(
+          '[AuthService] materialized $materialized contact-backed conversations',
+        );
+      }
+    }
+    debugPrint(
+      '[AuthService] hydrated login payload cache contacts=${contacts.length} messages=${restoredMessages.length} conversations=${restoredConversations.length} avatar=${avatar.isNotEmpty}',
+    );
+  }
 
   Future<StoredAuthProfile?> findArchivedProfileByPhone(String phone) async {
     final archive = await _readProfileArchive();
@@ -807,13 +901,9 @@ class AuthService {
     } catch (e) {
       debugPrint('[AuthService] Matrix local store wipe failed: $e');
     }
-    try {
-      await ChatLocalDb.instance.deleteAllLocalDatabases().timeout(
-        const Duration(seconds: 3),
-      );
-    } catch (e) {
-      debugPrint('[AuthService] chat local database wipe failed: $e');
-    }
+    // Keep the per-user chat SQLite cache on normal logout. The database name
+    // is keyed by user id, so the same account can show its saved chat history
+    // immediately after logging back in while other accounts remain isolated.
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_profileArchiveKey);
@@ -889,6 +979,360 @@ class AuthService {
     if (cleaned.startsWith('00')) cleaned = '+${cleaned.substring(2)}';
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
     return cleaned;
+  }
+
+  String _resolveBackendAssetUrl(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final uri = Uri.tryParse(trimmed);
+    if (uri != null && uri.hasScheme) return trimmed;
+    if (trimmed.startsWith('/')) return '${ApiService.baseUrl}$trimmed';
+    return '${ApiService.baseUrl}/$trimmed';
+  }
+
+  String _extractString(Map<String, dynamic> source, List<String> keys) {
+    for (final key in keys) {
+      if (!source.containsKey(key)) continue;
+      final value = source[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty && value.toLowerCase() != 'null') return value;
+    }
+    return '';
+  }
+
+  List<Contact> _extractContacts(Map<String, dynamic> payload) {
+    final raw =
+        payload['contacts'] ??
+        payload['Contacts'] ??
+        payload['savedContacts'] ??
+        payload['SavedContacts'];
+    if (raw is! List) return const [];
+
+    final contacts = <Contact>[];
+    for (final entry in raw) {
+      final contact = _contactFromLoginPayload(entry);
+      if (contact != null) contacts.add(contact);
+    }
+    return contacts;
+  }
+
+  List<ChatConversation> _extractChatConversations(
+    Map<String, dynamic> payload,
+    String ownerUserId,
+  ) {
+    final raw =
+        payload['chats'] ??
+        payload['Chats'] ??
+        payload['conversations'] ??
+        payload['Conversations'];
+    if (raw is! List) return const [];
+
+    final conversations = <ChatConversation>[];
+    for (final entry in raw) {
+      final conversation = _conversationFromLoginPayload(entry, ownerUserId);
+      if (conversation != null) conversations.add(conversation);
+    }
+    return conversations;
+  }
+
+  ChatConversation? _conversationFromLoginPayload(
+    Object? entry,
+    String ownerUserId,
+  ) {
+    if (entry is! Map) return null;
+    final map = entry.map((key, value) => MapEntry(key.toString(), value));
+    final id = _extractString(map, const [
+      'conversationId',
+      'conversationID',
+      'roomId',
+      'RoomId',
+      'id',
+      'Id',
+    ]);
+    final otherUserId = _extractString(map, const [
+      'otherUserId',
+      'OtherUserId',
+      'receiverId',
+      'ReceiverId',
+      'wrytteUserId',
+      'WrytteUserId',
+      'matrixUserId',
+      'MatrixUserId',
+    ]);
+    final lastMessage = _extractString(map, const [
+      'lastMessage',
+      'LastMessage',
+      'message',
+      'Message',
+      'body',
+      'Body',
+    ]);
+    if (id.isEmpty || otherUserId.isEmpty) return null;
+
+    final lastSender = _extractString(map, const [
+      'lastMessageSenderId',
+      'lastMessageSender',
+      'senderId',
+      'SenderId',
+    ]);
+    final lastTime = _extractDateTime(map, const [
+      'lastMessageTime',
+      'LastMessageTime',
+      'timestamp',
+      'Timestamp',
+      'createdAt',
+      'CreatedAt',
+    ]);
+    final otherName = _extractString(map, const [
+      'otherUserName',
+      'OtherUserName',
+      'displayName',
+      'name',
+      'Name',
+    ]);
+    final otherAvatar = _extractString(map, const [
+      'otherUserAvatar',
+      'OtherUserAvatar',
+      'avatarUrl',
+      'AvatarUrl',
+      'avatar',
+      'AvatarImg',
+    ]);
+
+    return ChatConversation(
+      id: id,
+      participants: [ownerUserId, otherUserId],
+      otherUserId: otherUserId,
+      lastMessage: lastMessage,
+      lastMessageSenderId: lastSender,
+      lastMessageTime: lastTime ?? DateTime.now(),
+      unreadCount: int.tryParse(map['unreadCount']?.toString() ?? '') ?? 0,
+      lastMessageType:
+          _extractString(map, const [
+                'lastMessageType',
+                'messageType',
+              ]).isNotEmpty
+              ? _extractString(map, const ['lastMessageType', 'messageType'])
+              : 'text',
+      otherUserName: otherName.isEmpty ? null : otherName,
+      otherUserAvatar:
+          otherAvatar.isEmpty ? null : _resolveBackendAssetUrl(otherAvatar),
+    );
+  }
+
+  List<ChatMessage> _extractChatMessages(
+    Map<String, dynamic> payload,
+    String ownerUserId,
+  ) {
+    final buckets = <Object?>[
+      payload['messages'],
+      payload['Messages'],
+      payload['chatMessages'],
+      payload['ChatMessages'],
+    ];
+    final chats =
+        payload['chats'] ??
+        payload['Chats'] ??
+        payload['conversations'] ??
+        payload['Conversations'];
+    if (chats is List) {
+      for (final chat in chats) {
+        if (chat is! Map) continue;
+        buckets
+          ..add(chat['messages'])
+          ..add(chat['Messages']);
+      }
+    }
+
+    final messages = <ChatMessage>[];
+    for (final bucket in buckets) {
+      if (bucket is! List) continue;
+      for (final entry in bucket) {
+        final message = _messageFromLoginPayload(entry, ownerUserId);
+        if (message != null) messages.add(message);
+      }
+    }
+    return messages;
+  }
+
+  ChatMessage? _messageFromLoginPayload(Object? entry, String ownerUserId) {
+    if (entry is! Map) return null;
+    final map = entry.map((key, value) => MapEntry(key.toString(), value));
+    final conversationId = _extractString(map, const [
+      'conversationId',
+      'conversationID',
+      'roomId',
+      'RoomId',
+      'chatId',
+      'ChatId',
+    ]);
+    final senderId = _extractString(map, const [
+      'senderId',
+      'SenderId',
+      'from',
+      'From',
+    ]);
+    final receiverId = _extractString(map, const [
+      'receiverId',
+      'ReceiverId',
+      'to',
+      'To',
+    ]);
+    final content = _extractString(map, const [
+      'content',
+      'Content',
+      'message',
+      'Message',
+      'body',
+      'Body',
+      'text',
+      'Text',
+    ]);
+    if (conversationId.isEmpty || senderId.isEmpty || receiverId.isEmpty) {
+      return null;
+    }
+
+    final id = _extractString(map, const [
+      'id',
+      'Id',
+      'messageId',
+      'MessageId',
+      'eventId',
+      'EventId',
+    ]);
+    return ChatMessage(
+      id:
+          id.isNotEmpty
+              ? id
+              : 'restore_${conversationId}_${senderId}_${map['timestamp'] ?? DateTime.now().millisecondsSinceEpoch}',
+      conversationId: conversationId,
+      senderId: senderId,
+      receiverId: receiverId,
+      content: content,
+      timestamp:
+          _extractDateTime(map, const [
+            'timestamp',
+            'Timestamp',
+            'createdAt',
+            'CreatedAt',
+            'sentAt',
+            'SentAt',
+          ]) ??
+          DateTime.now(),
+      status: senderId == ownerUserId ? MessageStatus.sent : MessageStatus.read,
+      attachmentUrl: _nullableExtractString(map, const [
+        'attachmentUrl',
+        'AttachmentUrl',
+        'mediaUrl',
+        'MediaUrl',
+      ]),
+      attachmentType: _nullableExtractString(map, const [
+        'attachmentType',
+        'AttachmentType',
+        'messageType',
+        'MessageType',
+      ]),
+      senderPhone: _nullableExtractString(map, const [
+        'senderPhone',
+        'SenderPhone',
+        'phone',
+        'Phone',
+      ]),
+      senderName: _nullableExtractString(map, const [
+        'senderName',
+        'SenderName',
+        'displayName',
+      ]),
+    );
+  }
+
+  DateTime? _extractDateTime(Map<String, dynamic> source, List<String> keys) {
+    final raw = _extractString(source, keys);
+    if (raw.isEmpty) return null;
+    final asInt = int.tryParse(raw);
+    if (asInt != null && asInt > 0) {
+      return DateTime.fromMillisecondsSinceEpoch(
+        asInt < 10000000000 ? asInt * 1000 : asInt,
+      );
+    }
+    return DateTime.tryParse(raw);
+  }
+
+  String? _nullableExtractString(
+    Map<String, dynamic> source,
+    List<String> keys,
+  ) {
+    final value = _extractString(source, keys);
+    return value.isEmpty ? null : value;
+  }
+
+  Contact? _contactFromLoginPayload(Object? entry) {
+    if (entry is! Map) return null;
+    final map = entry.map((key, value) => MapEntry(key.toString(), value));
+    final displayName = _extractString(map, const [
+      'displayName',
+      'name',
+      'Name',
+      'username',
+      'Username',
+      'profileName',
+      'ProfileName',
+    ]);
+    final phone = _extractString(map, const [
+      'phone',
+      'Phone',
+      'primaryPhone',
+      'PrimaryPhone',
+      'number',
+      'Number',
+    ]);
+    final phones =
+        <String>[
+          if (phone.isNotEmpty) _normalizePhone(phone),
+          ..._extractPhoneList(map['phones'] ?? map['Phones']),
+        ].where((value) => value.isNotEmpty).toSet().toList();
+    final wrytteUserId = _extractString(map, const [
+      'wrytteUserId',
+      'WrytteUserId',
+      'userid',
+      'userId',
+      'UserId',
+      'matrixUserId',
+      'MatrixUserId',
+    ]);
+    final avatar = _extractString(map, const [
+      'avatarUrl',
+      'AvatarUrl',
+      'avatar',
+      'AvatarImg',
+      'image',
+      'profileImage',
+    ]);
+
+    if (displayName.isEmpty && phones.isEmpty && wrytteUserId.isEmpty) {
+      return null;
+    }
+    return Contact(
+      displayName:
+          displayName.isNotEmpty
+              ? displayName
+              : phones.isNotEmpty
+              ? phones.first
+              : wrytteUserId,
+      phones: phones,
+      avatarUrl: avatar.isEmpty ? null : _resolveBackendAssetUrl(avatar),
+      wrytteUserId: wrytteUserId.isEmpty ? null : wrytteUserId,
+      isOnWrytte: true,
+      isSaved: true,
+    );
+  }
+
+  List<String> _extractPhoneList(Object? raw) {
+    if (raw is! List) return const [];
+    return raw
+        .map((value) => _normalizePhone(value?.toString() ?? ''))
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList();
   }
 
   bool _looksLikePhone(String value) {

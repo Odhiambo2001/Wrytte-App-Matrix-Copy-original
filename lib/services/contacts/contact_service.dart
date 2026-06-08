@@ -10,7 +10,6 @@ import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/contacts/contact_directory_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
-import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
@@ -29,6 +28,7 @@ class ContactService {
 
   static void preloadContacts(String ownerUserId, ContactService service) {
     service.getMatrixContacts(ownerUserId).then((contacts) {
+      if (contacts.isEmpty) return;
       _matrixContactsCache = contacts;
       _matrixContactsCacheOwner = ownerUserId;
     });
@@ -36,12 +36,15 @@ class ContactService {
 
   Future<List<Contact>> getMatrixContactsCached(String ownerUserId) async {
     if (_matrixContactsCache != null &&
-        _matrixContactsCacheOwner == ownerUserId) {
+        _matrixContactsCacheOwner == ownerUserId &&
+        _matrixContactsCache!.isNotEmpty) {
       return _matrixContactsCache!;
     }
     final contacts = await getMatrixContacts(ownerUserId);
-    _matrixContactsCache = contacts;
-    _matrixContactsCacheOwner = ownerUserId;
+    if (contacts.isNotEmpty) {
+      _matrixContactsCache = contacts;
+      _matrixContactsCacheOwner = ownerUserId;
+    }
     return contacts;
   }
 
@@ -127,160 +130,62 @@ class ContactService {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Save contact through Matrix account data only.
+  // Matrix account data is the restore source that survives uninstall when
+  // the backend login payload does not include saved contacts.
   // ──────────────────────────────────────────────────────────────────────
   Future<void> saveContactToMatrix({
     required String ownerUserId,
     required Contact contact,
   }) async {
-    try {
-      final matrixReady = await _ensureMatrixContactSession(ownerUserId);
-      if (!matrixReady) {
-        apkLog(
-          'Contact.save',
-          'Matrix account-data save skipped; session not ready owner="$ownerUserId"',
-        );
-        return;
-      }
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return;
+
+    final matrixReady = await _ensureMatrixContactSession(owner);
+    if (!matrixReady) {
       apkLog(
         'Contact.save',
-        'Matrix account-data save start owner="$ownerUserId" name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}" phone="${contact.primaryPhone}"',
+        'Matrix account-data save skipped; session not ready owner="$owner"',
       );
-      await MatrixContactService.instance
-          .saveContact(_normalizeContact(contact))
-          .timeout(const Duration(seconds: 15));
-      apkLog(
-        'Contact.save',
-        'Matrix account-data save done owner="$ownerUserId" name="${contact.formattedName}"',
-      );
-      debugPrint(
-        '✅ Contact saved to Matrix account data: ${contact.displayName}',
-      );
-    } catch (e, stack) {
-      if (_isUnknownMatrixToken(e)) {
-        apkLog(
-          'Contact.save',
-          'Matrix account-data save got M_UNKNOWN_TOKEN; refreshing Matrix session owner="$ownerUserId"',
-        );
-        final refreshed = await _refreshMatrixSessionForContactSave(
-          ownerUserId,
-        );
-        if (!refreshed) {
-          apkLog(
-            'Contact.save',
-            'Matrix account-data retry skipped; session not ready owner="$ownerUserId"',
-          );
-          return;
-        }
-        apkLog(
-          'Contact.save',
-          'Matrix account-data save retry start owner="$ownerUserId" name="${contact.formattedName}"',
-        );
-        try {
-          await MatrixContactService.instance
-              .saveContact(_normalizeContact(contact))
-              .timeout(const Duration(seconds: 15));
-          apkLog(
-            'Contact.save',
-            'Matrix account-data save retry done owner="$ownerUserId" name="${contact.formattedName}"',
-          );
-        } catch (retryError) {
-          apkLog(
-            'Contact.save',
-            'Matrix account-data save retry failed; local contact kept owner="$ownerUserId" error="$retryError"',
-          );
-        }
-        return;
-      }
-      debugPrint('🔴 Contact save FAILED: $e');
-      debugPrint('🔴 Stack: $stack');
-      rethrow;
+      return;
     }
-  }
 
-  Future<bool> _refreshMatrixSessionForContactSave(String ownerUserId) async {
-    apkLog('Contact.save', 'Matrix session refresh start owner="$ownerUserId"');
-
-    final expected = _toMatrixUserId(ownerUserId);
-    var client = await MatrixClientService.instance.ensureInitialized(
-      storeNamespace: ownerUserId,
+    await MatrixContactService.instance.saveContact(
+      contact.copyWith(isSaved: true),
     );
-    if (client.isLogged() && client.userID == expected) {
-      final valid = await MatrixAuthService.instance.validateCurrentSession(
-        expectedUserId: expected,
-      );
-      if (!valid) {
-        apkLog(
-          'Contact.save',
-          'Matrix session refresh required; token invalid owner="$ownerUserId"',
-        );
-      } else {
-        apkLog(
-          'Contact.save',
-          'Matrix session refresh skipped; already ready owner="$ownerUserId"',
-        );
-        return true;
-      }
-      client = await MatrixClientService.instance.ensureInitialized(
-        storeNamespace: ownerUserId,
-      );
-    }
-
-    if (client.isLogged() && client.userID != expected) {
-      apkLog(
-        'Contact.save',
-        'Matrix session mismatch before refresh current="${client.userID}" expected="$expected"',
-      );
-      try {
-        await MatrixClientService.instance.clearLocalSession().timeout(
-          const Duration(seconds: 5),
-        );
-        MatrixContactService.instance.clearCache();
-        client = await MatrixClientService.instance.ensureInitialized(
-          storeNamespace: ownerUserId,
-        );
-      } catch (e) {
-        apkLog(
-          'Contact.save',
-          'Matrix session mismatch clear failed owner="$ownerUserId" error="$e"',
-        );
-        return false;
-      }
-    }
-
-    final storedName =
-        (await AuthService.instance.getCurrentUsername())?.trim();
-    final nickname =
-        storedName != null && storedName.isNotEmpty ? storedName : ownerUserId;
-    await AuthService.instance
-        .loginToMatrix(
-          userId: ownerUserId,
-          nickname: nickname,
-          forceFreshSession: true,
-        )
-        .timeout(const Duration(seconds: 75));
-    client = MatrixClientService.instance.client;
-    if (!client.isLogged() || client.userID != expected) {
-      apkLog(
-        'Contact.save',
-        'Matrix session refresh not ready owner="$ownerUserId" current="${client.userID}" expected="$expected"',
-      );
-      return false;
-    }
-    MatrixContactService.instance.clearCache();
-    apkLog('Contact.save', 'Matrix session refresh done owner="$ownerUserId"');
-    return true;
+    invalidateMatrixContactsCache();
+    apkLog(
+      'Contact.save',
+      'Matrix account-data save done owner="$owner" name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}"',
+    );
   }
-
-  bool _isUnknownMatrixToken(Object error) =>
-      MatrixAuthService.isUnknownToken(error);
 
   // ──────────────────────────────────────────────────────────────────────
-  // Fetch contacts saved by this user from Matrix account data.
+  // Fetch contacts saved by this user. Active flow is backend/local cache.
+  // Matrix account data is imported only for old users with no local cache.
   // ──────────────────────────────────────────────────────────────────────
   Future<List<Contact>> getMatrixContacts(String ownerUserId) async {
     final owner = ownerUserId.trim();
     if (owner.isEmpty) return [];
+    final localContacts = await ContactLocalDb.loadSavedContacts(
+      ownerUserId: owner,
+    );
+    if (localContacts.isNotEmpty) {
+      return localContacts
+        ..sort((a, b) => a.formattedName.compareTo(b.formattedName));
+    }
+
+    final recoveredContacts = await ContactLocalDb.loadRecoverableContacts(
+      ownerUserId: owner,
+    );
+    if (recoveredContacts.isNotEmpty) {
+      await ContactLocalDb.saveContacts(recoveredContacts, ownerUserId: owner);
+      apkLog(
+        'Contact.recover',
+        'recovered ${recoveredContacts.length} contacts into owner="$owner"',
+      );
+      return recoveredContacts;
+    }
+
     try {
       final matrixReady = await _ensureMatrixContactSession(owner);
       if (!matrixReady) {
@@ -292,7 +197,12 @@ class ContactService {
       final matrixContacts = await MatrixContactService.instance.loadContacts();
       final contacts =
           matrixContacts
+              .map((contact) => contact.copyWith(isSaved: true))
+              .toList()
             ..sort((a, b) => a.formattedName.compareTo(b.formattedName));
+      if (contacts.isNotEmpty) {
+        await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
+      }
       debugPrint('Loaded ${contacts.length} contacts');
       return contacts;
     } catch (e) {
@@ -465,7 +375,7 @@ class ContactService {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Save a manually-entered contact through Matrix account data first.
+  // Save a manually-entered contact through backend/local contact flow.
   // ──────────────────────────────────────────────────────────────────────
   Future<Contact> saveManualContact({
     required String firstName,
@@ -493,6 +403,7 @@ class ContactService {
       phones: [_normalizePhone(fullIdentifier)],
       isOnWrytte: isWrytteContact,
       wrytteUserId: wrytteUserId,
+      isSaved: true,
     );
 
     if (selfUserId != null && selfUserId.isNotEmpty) {
@@ -507,15 +418,25 @@ class ContactService {
       }
       apkLog(
         'Contact.save',
-        'local cache save done before Matrix owner="$selfUserId" name="${contact.formattedName}"',
+        'local cache save done owner="$selfUserId" name="${contact.formattedName}"',
+      );
+
+      unawaited(
+        saveContactToMatrix(
+          ownerUserId: selfUserId,
+          contact: contact,
+        ).catchError((e) {
+          apkLog(
+            'Contact.save',
+            'Matrix account-data save failed owner="$selfUserId" name="${contact.formattedName}" error="$e"',
+          );
+        }),
       );
 
       invalidateCache();
       invalidateMatrixContactsCache();
-
-      await saveContactToMatrix(ownerUserId: selfUserId, contact: contact);
     } else {
-      throw StateError('Cannot save Matrix contact without a signed-in user.');
+      throw StateError('Cannot save contact without a signed-in user.');
     }
 
     apkLog(
@@ -541,38 +462,38 @@ class ContactService {
     return trimmed;
   }
 
-  Contact _normalizeContact(Contact contact) {
-    return contact.copyWith(
-      phones:
-          contact.phones
-              .map(_normalizePhone)
-              .where((phone) => phone.isNotEmpty)
-              .toSet()
-              .toList(),
-    );
-  }
-
   Future<void> syncLocalContactsToMatrix(String ownerUserId) async {
-    if (!await _ensureMatrixContactSession(ownerUserId)) return;
-    final localContacts = await ContactLocalDb.loadContacts(
-      ownerUserId: ownerUserId,
-    );
-    if (localContacts.isEmpty) return;
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return;
 
-    for (final contact in localContacts) {
-      try {
-        await MatrixContactService.instance.saveContact(
-          _normalizeContact(contact),
-        );
-      } on StateError catch (e) {
-        debugPrint('Matrix contact sync not ready: $e');
-        return;
-      } catch (e) {
-        debugPrint(
-          'Matrix contact sync failed for ${contact.formattedName}: $e',
-        );
-      }
+    final contacts = await ContactLocalDb.loadSavedContacts(ownerUserId: owner);
+    if (contacts.isEmpty) {
+      apkLog(
+        'Contact.sync',
+        'Matrix contact sync skipped; no local saved contacts owner="$owner"',
+      );
+      return;
     }
+
+    final matrixReady = await _ensureMatrixContactSession(owner);
+    if (!matrixReady) {
+      apkLog(
+        'Contact.sync',
+        'Matrix contact sync skipped; session not ready owner="$owner"',
+      );
+      return;
+    }
+
+    for (final contact in contacts) {
+      await MatrixContactService.instance.saveContact(
+        contact.copyWith(isSaved: true),
+      );
+    }
+    invalidateMatrixContactsCache();
+    apkLog(
+      'Contact.sync',
+      'Matrix contact sync done owner="$owner" contacts=${contacts.length}',
+    );
   }
 
   String _toMatrixUserId(String userId) {

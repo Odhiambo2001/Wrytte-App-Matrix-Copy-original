@@ -20,7 +20,8 @@ class FirebaseNewChatItem extends StatelessWidget {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           leading: UserAvatar(
             size: 44,
-            imageUrl: user.hasProfileImage ? user.profileImage : null,
+            imageUrl:
+                user.profileImage.trim().isNotEmpty ? user.profileImage : null,
             name: user.displayName,
           ),
           title: Text(

@@ -111,7 +111,12 @@ class _LoginOtpPageState extends State<LoginOtpPage>
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(
-          builder: (_) => HomeScreen(currentUserId: resolvedUserId),
+          builder:
+              (_) => HomeScreen(
+                currentUserId: resolvedUserId,
+                initialProfileName: result.username,
+                initialPhone: widget.phoneNumber,
+              ),
         ),
         (_) => false,
       );

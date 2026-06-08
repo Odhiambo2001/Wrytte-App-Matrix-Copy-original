@@ -96,6 +96,7 @@ class _LoginEmailVerificationPageState extends State<LoginEmailVerificationPage>
 
       /// Navigate to Home
       final currentUser = await AuthService.instance.getCurrentUser();
+      if (!mounted) return;
 
       if (currentUser != null) {
         Navigator.pushAndRemoveUntil(
@@ -105,6 +106,8 @@ class _LoginEmailVerificationPageState extends State<LoginEmailVerificationPage>
                 (_) => HomeScreen(
                   currentUserId:
                       currentUser.userId, // Pass the logged-in user ID
+                  initialProfileName: currentUser.username,
+                  initialPhone: currentUser.phone,
                 ),
           ),
           (_) => false,

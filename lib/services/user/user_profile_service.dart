@@ -1,6 +1,13 @@
+import 'dart:io';
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
+import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/user/user_profile_api_service.dart';
 
@@ -10,9 +17,7 @@ class UserProfileService {
   UserProfileService._();
   static final UserProfileService instance = UserProfileService._();
 
-  final FlutterSecureStorage _storage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   static const _nameKey = 'username';
   static const _firstNameKey = 'profile_first_name';
@@ -20,9 +25,17 @@ class UserProfileService {
   static const _phoneKey = 'phone';
   static const _profileImageKey = 'profile_image';
   static const _bioKey = 'user_bio';
+  static const _localProfileImagePrefix = 'profile_image_local_path_';
+  static const _pendingProfileImagePrefix = 'profile_image_pending_upload_';
 
   // In-memory cache — survives the widget lifecycle, cleared on logout
   UserProfile? _cache;
+  DateTime? _lastPendingAvatarAttemptAt;
+  final Map<String, UserProfile> _publicProfileCache = {};
+  final Map<String, Future<UserProfile?>> _publicProfileInFlight = {};
+  final Set<String> _publicProfileMisses = {};
+  final StreamController<UserProfile?> _profileController =
+      StreamController<UserProfile?>.broadcast();
 
   // ─────────────────────────────────────────────────────────────────────────
   // PUBLIC API
@@ -60,8 +73,54 @@ class UserProfileService {
 
   /// Persists a profile image URL and invalidates the cache.
   Future<void> updateProfileImage(String url) async {
-    await _storage.write(key: _profileImageKey, value: url.trim());
+    await _storage.write(
+      key: _profileImageKey,
+      value: _resolveAvatarUrl(url.trim()),
+    );
     _cache = null;
+    await _refreshAndNotify();
+  }
+
+  Future<String> uploadProfileImage(File file) async {
+    final uid = await AuthService.instance.getCurrentUserId();
+    if (uid == null || uid.isEmpty) {
+      throw Exception('Not authenticated.');
+    }
+
+    final localPath = await _cacheProfileImageFile(uid, file);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_localProfileImageKey(uid), localPath);
+    await prefs.setString(_pendingProfileImageKey(uid), localPath);
+    _cache = null;
+    await _refreshAndNotify();
+
+    try {
+      final uploadedPath = await UserProfileApiService.instance
+          .uploadAvatarImage(File(localPath));
+      final avatarUrl = _resolveAvatarUrl(uploadedPath);
+      if (avatarUrl.isEmpty) {
+        throw Exception('Avatar upload completed without an image URL.');
+      }
+      await _storage.write(key: _profileImageKey, value: avatarUrl);
+      await prefs.remove(_pendingProfileImageKey(uid));
+      _cache = null;
+      await _refreshAndNotify(forceRefresh: true);
+      return avatarUrl;
+    } catch (e) {
+      _lastPendingAvatarAttemptAt = DateTime.now();
+      debugPrint('[UserProfileService] Avatar upload pending: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> syncPendingAvatarUpload() async {
+    final uid = await AuthService.instance.getCurrentUserId();
+    if (uid == null || uid.isEmpty) return;
+    final uploaded = await _syncPendingAvatarUploadForUid(uid);
+    if (uploaded) {
+      _cache = null;
+      await _refreshAndNotify(forceRefresh: true);
+    }
   }
 
   /// Persists a bio and invalidates the cache.
@@ -69,6 +128,7 @@ class UserProfileService {
     await _storage.write(key: _bioKey, value: bio.trim());
     await _saveBackendProfileBestEffort({'Bio': bio.trim()});
     _cache = null;
+    await _refreshAndNotify(forceRefresh: true);
   }
 
   /// Convenience: update multiple fields in one write pass.
@@ -102,7 +162,10 @@ class UserProfileService {
       }
     }
     if (profileImage != null) {
-      await _storage.write(key: _profileImageKey, value: profileImage.trim());
+      await _storage.write(
+        key: _profileImageKey,
+        value: _resolveAvatarUrl(profileImage.trim()),
+      );
     }
     if (bio != null) {
       await _storage.write(key: _bioKey, value: bio.trim());
@@ -115,6 +178,7 @@ class UserProfileService {
       await _saveBackendProfileBestEffort(backendFields);
     }
     _cache = null;
+    await _refreshAndNotify(forceRefresh: true);
   }
 
   /// Stream that emits the current user's profile immediately from cache,
@@ -127,37 +191,86 @@ class UserProfileService {
       yield _cache;
     }
 
-    // Then yield a fresh read from secure storage
-    final fresh = await _readFromStorage();
+    // Then yield a local-only read. Network/profile refresh must not block
+    // avatar paint in the bottom nav.
+    final fresh = await _readFromStorage(allowBackendRefresh: false);
     if (fresh != null) yield fresh;
+    unawaited(_refreshAndNotify(forceRefresh: true));
+    yield* _profileController.stream;
   }
 
   /// Warm the cache on app start — call from main.dart after auth restore.
   Future<void> warmUp() async {
-    _cache = await _readFromStorage();
+    _cache = await _readFromStorage(allowBackendRefresh: false);
+    _profileController.add(_cache);
+    unawaited(_syncPendingAvatarAndRefresh());
   }
 
   /// Fetches another user's profile by their UID.
   /// For the current user, delegates to [getCurrentUserProfile].
   /// For other users, returns a minimal stub built from what we know locally
   /// (contacts, Matrix display name, etc.) — extend as your contact store grows.
-  Future<UserProfile?> getProfileByUid(String uid) async {
+  Future<UserProfile?> getProfileByUid(String uid, {String? phone}) async {
     final currentUid = await AuthService.instance.getCurrentUserId();
 
     // If it's the current user, use the full local profile
-    if (currentUid != null && currentUid == uid) {
-      return getCurrentUserProfile();
+    if (currentUid != null &&
+        _matrixLocalpart(currentUid) == _matrixLocalpart(uid)) {
+      return getCurrentUserProfile(forceRefresh: true);
     }
 
-    // For other users we don't have a local store yet — return null so the
-    // caller falls back to the widget.title / avatarUrl it already has.
-    // Wire this up to your contacts DB when ready.
-    return null;
+    final cacheKey = _publicProfileCacheKey(uid, phone);
+    final cached = _publicProfileCache[cacheKey];
+    if (cached != null) return cached;
+    if (_publicProfileMisses.contains(cacheKey)) return null;
+
+    final pending = _publicProfileInFlight[cacheKey];
+    if (pending != null) return pending;
+
+    final future = _getProfileByUidRemote(uid, phone: phone);
+    _publicProfileInFlight[cacheKey] = future;
+    return future.whenComplete(() {
+      if (identical(_publicProfileInFlight[cacheKey], future)) {
+        _publicProfileInFlight.remove(cacheKey);
+      }
+    });
+  }
+
+  Future<UserProfile?> _getProfileByUidRemote(
+    String uid, {
+    String? phone,
+  }) async {
+    final cacheKey = _publicProfileCacheKey(uid, phone);
+    final remote = await _readPublicBackendProfileBestEffort(uid, phone: phone);
+    if (remote.isEmpty) {
+      final fallback = _fallbackPublicProfile(uid, phone: phone);
+      _publicProfileCache[cacheKey] = fallback;
+      return fallback;
+    }
+    if (!_matchesRequestedPublicProfile(remote, uid: uid, phone: phone)) {
+      debugPrint(
+        '[UserProfileService] rejected unverified public profile for "$uid"',
+      );
+      final fallback = _fallbackPublicProfile(uid, phone: phone);
+      _publicProfileCache[cacheKey] = fallback;
+      return fallback;
+    }
+    final profile = _profileFromBackendFields(
+      uid,
+      remote,
+      fallbackPhone: phone,
+    );
+    _publicProfileCache[cacheKey] = profile;
+    return profile;
   }
 
   /// Wipe cache on logout.
   void clearCache() {
     _cache = null;
+    _publicProfileCache.clear();
+    _publicProfileInFlight.clear();
+    _publicProfileMisses.clear();
+    _profileController.add(null);
   }
 
   // Expose cached value synchronously for widgets that need it immediately
@@ -167,7 +280,10 @@ class UserProfileService {
   // PRIVATE
   // ─────────────────────────────────────────────────────────────────────────
 
-  Future<UserProfile?> _readFromStorage({bool forceRefresh = false}) async {
+  Future<UserProfile?> _readFromStorage({
+    bool forceRefresh = false,
+    bool allowBackendRefresh = true,
+  }) async {
     try {
       final uid = await AuthService.instance.getCurrentUserId();
       if (uid == null || uid.isEmpty) return null;
@@ -177,13 +293,27 @@ class UserProfileService {
       var firstName = await _storage.read(key: _firstNameKey) ?? '';
       var lastName = await _storage.read(key: _lastNameKey) ?? '';
       var bio = await _storage.read(key: _bioKey) ?? '';
+      var profileImage = await _storage.read(key: _profileImageKey) ?? '';
+      var localProfileImagePath = await _readLocalProfileImagePath(uid);
 
-      if (forceRefresh || !_hasRealName(name)) {
+      if (forceRefresh) {
+        final uploaded = await _syncPendingAvatarUploadForUid(uid);
+        if (uploaded) {
+          profileImage = await _storage.read(key: _profileImageKey) ?? '';
+          localProfileImagePath = await _readLocalProfileImagePath(uid);
+        }
+      }
+
+      if (allowBackendRefresh &&
+          (forceRefresh || !_hasRealName(name) || profileImage.isEmpty)) {
         final remote = await _readBackendProfileBestEffort();
         if (remote.isNotEmpty) {
           firstName = _field(remote, 'FirstName') ?? firstName;
           lastName = _field(remote, 'LastName') ?? lastName;
           bio = _field(remote, 'Bio') ?? bio;
+          profileImage = _resolveAvatarUrl(
+            _field(remote, 'AvatarImg') ?? profileImage,
+          );
           final remoteName =
               [
                 firstName,
@@ -197,6 +327,15 @@ class UserProfileService {
             await AuthService.instance.updateStoredUsername(name);
           }
           await _storage.write(key: _bioKey, value: bio);
+          if (profileImage.isNotEmpty) {
+            await _storage.write(key: _profileImageKey, value: profileImage);
+            if (localProfileImagePath.isEmpty) {
+              localProfileImagePath = await _cacheRemoteAvatarBestEffort(
+                uid,
+                profileImage,
+              );
+            }
+          }
         }
       }
       if (!_hasRealName(name)) {
@@ -210,7 +349,6 @@ class UserProfileService {
           await _storage.write(key: _nameKey, value: name);
         }
       }
-      final profileImage = await _storage.read(key: _profileImageKey) ?? '';
       final linksRaw = await _storage.read(key: 'user_links') ?? '';
 
       final profile = UserProfile(
@@ -220,6 +358,7 @@ class UserProfileService {
         phone: phone,
         bio: bio,
         profileImage: profileImage,
+        localProfileImagePath: localProfileImagePath,
         links:
             linksRaw
                 .split('\n')
@@ -229,6 +368,7 @@ class UserProfileService {
       );
 
       _cache = profile;
+      _profileController.add(profile);
       return profile;
     } catch (e) {
       debugPrint('[UserProfileService] _readFromStorage error: $e');
@@ -243,6 +383,14 @@ class UserProfileService {
     }
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
     return cleaned;
+  }
+
+  String _matrixLocalpart(String value) {
+    final trimmed = value.trim();
+    if (trimmed.startsWith('@') && trimmed.contains(':')) {
+      return trimmed.substring(1, trimmed.indexOf(':'));
+    }
+    return trimmed;
   }
 
   bool _looksLikePhone(String value) {
@@ -283,6 +431,220 @@ class UserProfileService {
     return null;
   }
 
+  String _resolveAvatarUrl(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final uri = Uri.tryParse(trimmed);
+    if (uri != null && uri.hasScheme) return trimmed;
+    if (trimmed.startsWith('/')) return '${ApiService.baseUrl}$trimmed';
+    return '${ApiService.baseUrl}/$trimmed';
+  }
+
+  String _localProfileImageKey(String uid) =>
+      '$_localProfileImagePrefix${_matrixLocalpart(uid)}';
+
+  String _pendingProfileImageKey(String uid) =>
+      '$_pendingProfileImagePrefix${_matrixLocalpart(uid)}';
+
+  Future<String> _readLocalProfileImagePath(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    final path = prefs.getString(_localProfileImageKey(uid))?.trim() ?? '';
+    if (path.isEmpty) return '';
+    return File(path).existsSync() ? path : '';
+  }
+
+  Future<String> _cacheProfileImageFile(String uid, File source) async {
+    final supportDir = await getApplicationSupportDirectory();
+    final avatarDir = Directory('${supportDir.path}/profile_avatars');
+    if (!avatarDir.existsSync()) {
+      await avatarDir.create(recursive: true);
+    }
+    final ext = _imageExtension(source.path);
+    final safeUid = _matrixLocalpart(
+      uid,
+    ).replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    final destination = File('${avatarDir.path}/$safeUid$ext');
+    if (source.path == destination.path) return destination.path;
+    await source.copy(destination.path);
+    return destination.path;
+  }
+
+  String _imageExtension(String path) {
+    final lower = path.toLowerCase();
+    for (final ext in const ['.jpg', '.jpeg', '.png', '.webp']) {
+      if (lower.endsWith(ext)) return ext;
+    }
+    return '.jpg';
+  }
+
+  Future<String> _cacheRemoteAvatarBestEffort(String uid, String url) async {
+    try {
+      final uri = Uri.tryParse(url);
+      if (uri == null || !uri.hasScheme) return '';
+      final token = await AuthService.instance.getValidBackendToken();
+      final response = await http
+          .get(
+            uri,
+            headers: {
+              if (token != null && token.trim().isNotEmpty)
+                'Authorization': 'Bearer ${token.trim()}',
+            },
+          )
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode < 200 || response.statusCode >= 300) return '';
+      if (response.bodyBytes.isEmpty) return '';
+      final supportDir = await getApplicationSupportDirectory();
+      final avatarDir = Directory('${supportDir.path}/profile_avatars');
+      if (!avatarDir.existsSync()) {
+        await avatarDir.create(recursive: true);
+      }
+      final safeUid = _matrixLocalpart(
+        uid,
+      ).replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+      final file = File('${avatarDir.path}/$safeUid-remote.jpg');
+      await file.writeAsBytes(response.bodyBytes, flush: true);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_localProfileImageKey(uid), file.path);
+      return file.path;
+    } catch (e) {
+      debugPrint('[UserProfileService] Remote avatar cache skipped: $e');
+      return '';
+    }
+  }
+
+  Future<bool> _syncPendingAvatarUploadForUid(String uid) async {
+    final lastAttempt = _lastPendingAvatarAttemptAt;
+    if (lastAttempt != null &&
+        DateTime.now().difference(lastAttempt) < const Duration(seconds: 30)) {
+      return false;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final pendingPath = prefs.getString(_pendingProfileImageKey(uid)) ?? '';
+    if (pendingPath.trim().isEmpty) return false;
+    final file = File(pendingPath);
+    if (!file.existsSync()) {
+      await prefs.remove(_pendingProfileImageKey(uid));
+      return false;
+    }
+    try {
+      _lastPendingAvatarAttemptAt = DateTime.now();
+      final uploadedPath = await UserProfileApiService.instance
+          .uploadAvatarImage(file);
+      final avatarUrl = _resolveAvatarUrl(uploadedPath);
+      if (avatarUrl.isEmpty) return false;
+      await _storage.write(key: _profileImageKey, value: avatarUrl);
+      await prefs.remove(_pendingProfileImageKey(uid));
+      return true;
+    } catch (e) {
+      debugPrint(
+        '[UserProfileService] Pending avatar upload retry skipped: $e',
+      );
+      return false;
+    }
+  }
+
+  UserProfile _profileFromBackendFields(
+    String uid,
+    Map<String, String> fields, {
+    String? fallbackPhone,
+  }) {
+    final firstName = _field(fields, 'FirstName') ?? '';
+    final lastName = _field(fields, 'LastName') ?? '';
+    final joinedName =
+        [
+          firstName,
+          lastName,
+        ].where((part) => part.trim().isNotEmpty).join(' ').trim();
+    final displayName =
+        _field(fields, 'DisplayName') ??
+        _field(fields, 'displayName') ??
+        _field(fields, 'Name') ??
+        _field(fields, 'name') ??
+        _field(fields, 'Username') ??
+        joinedName;
+    final avatar =
+        _field(fields, 'AvatarImg') ??
+        _field(fields, 'avatarImg') ??
+        _field(fields, 'AvatarUrl') ??
+        _field(fields, 'avatarUrl') ??
+        _field(fields, 'ProfileImage') ??
+        '';
+
+    return UserProfile(
+      uid: uid,
+      name: displayName.trim(),
+      username: displayName.trim(),
+      phone: _normalizePhone(
+        _field(fields, 'Phone') ??
+            _field(fields, 'phone') ??
+            fallbackPhone ??
+            '',
+      ),
+      bio: _field(fields, 'Bio') ?? _field(fields, 'bio') ?? '',
+      profileImage: _resolveAvatarUrl(avatar),
+      links:
+          [
+                _field(fields, 'Link'),
+                _field(fields, 'link'),
+                _field(fields, 'Website'),
+                _field(fields, 'website'),
+              ]
+              .whereType<String>()
+              .where((link) => link.trim().isNotEmpty)
+              .toList(),
+    );
+  }
+
+  UserProfile _fallbackPublicProfile(String uid, {String? phone}) {
+    final localpart = _matrixLocalpart(uid);
+    return UserProfile(
+      uid: uid,
+      name: '',
+      username: '',
+      phone: _normalizePhone(phone ?? ''),
+      bio: '',
+      profileImage: _resolveAvatarUrl('/usrimg/$localpart/avatar_img.jpg'),
+      links: const [],
+    );
+  }
+
+  bool _matchesRequestedPublicProfile(
+    Map<String, String> fields, {
+    required String uid,
+    String? phone,
+  }) {
+    final targetLocalpart = _matrixLocalpart(uid);
+    final idFields = [
+      'UserId',
+      'userid',
+      'userId',
+      'Uid',
+      'uid',
+      'Id',
+      'id',
+      'MatrixUserId',
+      'matrixUserId',
+      'maxtrixUserId',
+    ];
+    for (final key in idFields) {
+      final value = _field(fields, key);
+      if (value == null || value.isEmpty) continue;
+      if (_matrixLocalpart(value) == targetLocalpart) return true;
+    }
+
+    final requestedPhone = _normalizePhone(phone ?? '');
+    final returnedPhone = _normalizePhone(
+      _field(fields, 'Phone') ?? _field(fields, 'phone') ?? '',
+    );
+    if (requestedPhone.isNotEmpty &&
+        returnedPhone.isNotEmpty &&
+        requestedPhone == returnedPhone) {
+      return true;
+    }
+
+    return false;
+  }
+
   Future<Map<String, String>> _readBackendProfileBestEffort() async {
     try {
       return await UserProfileApiService.instance.getProfile();
@@ -290,6 +652,41 @@ class UserProfileService {
       debugPrint('[UserProfileService] Backend profile get skipped: $e');
       return const {};
     }
+  }
+
+  Future<UserProfile?> _refreshAndNotify({bool forceRefresh = false}) async {
+    final fresh = await _readFromStorage(forceRefresh: forceRefresh);
+    _profileController.add(fresh);
+    return fresh;
+  }
+
+  Future<void> _syncPendingAvatarAndRefresh() async {
+    try {
+      await syncPendingAvatarUpload();
+      await _refreshAndNotify(forceRefresh: true);
+    } catch (e) {
+      debugPrint('[UserProfileService] Warmup avatar refresh skipped: $e');
+    }
+  }
+
+  Future<Map<String, String>> _readPublicBackendProfileBestEffort(
+    String uid, {
+    String? phone,
+  }) async {
+    try {
+      return await UserProfileApiService.instance.getPublicProfile(
+        userId: uid,
+        matrixUserId: uid,
+        phone: phone,
+      );
+    } catch (e) {
+      debugPrint('[UserProfileService] Public backend profile get skipped: $e');
+      return const {};
+    }
+  }
+
+  String _publicProfileCacheKey(String uid, String? phone) {
+    return '${_matrixLocalpart(uid).toLowerCase()}|${_normalizePhone(phone ?? '')}';
   }
 
   Future<void> _saveBackendProfileBestEffort(Map<String, String> fields) async {

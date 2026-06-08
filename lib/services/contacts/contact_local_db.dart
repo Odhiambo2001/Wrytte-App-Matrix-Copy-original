@@ -27,6 +27,7 @@ class ContactLocalDb {
                 'avatar': c.avatarUrl,
                 'wrytteUserId': c.wrytteUserId,
                 'isOnWrytte': c.isOnWrytte,
+                'isSaved': c.isSaved,
               }),
             )
             .toList();
@@ -48,8 +49,54 @@ class ContactLocalDb {
         avatarUrl: json['avatar'],
         wrytteUserId: json['wrytteUserId'],
         isOnWrytte: json['isOnWrytte'] ?? false,
+        isSaved: json['isSaved'] ?? false,
       );
     }).toList();
+  }
+
+  static Future<List<Contact>> loadSavedContacts({
+    required String ownerUserId,
+  }) async {
+    return (await loadContacts(
+      ownerUserId: ownerUserId,
+    )).where((contact) => contact.isSaved).toList();
+  }
+
+  static Future<List<Contact>> loadRecoverableContacts({
+    required String ownerUserId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentKey = _keyForOwner(ownerUserId);
+    final contactsByKey = <String, Contact>{};
+
+    for (final key in prefs.getKeys()) {
+      if (!key.startsWith('${_key}_') || key == currentKey) continue;
+      final data = prefs.getStringList(key) ?? const <String>[];
+      for (final raw in data) {
+        try {
+          final json = jsonDecode(raw);
+          final contact = Contact(
+            displayName: json['name'],
+            phones:
+                List<String>.from(
+                  json['phones'] ?? const <String>[],
+                ).map(_normalizePhone).toList(),
+            avatarUrl: json['avatar'],
+            wrytteUserId: json['wrytteUserId'],
+            isOnWrytte: json['isOnWrytte'] ?? false,
+            isSaved: json['isSaved'] ?? false,
+          );
+          if (!contact.isSaved) continue;
+          final key = _dedupeKey(contact);
+          if (key.isNotEmpty) contactsByKey[key] = contact;
+        } catch (_) {
+          // Ignore corrupted old entries; they should not block recovery.
+        }
+      }
+    }
+
+    return contactsByKey.values.toList()
+      ..sort((a, b) => a.formattedName.compareTo(b.formattedName));
   }
 
   static Future<void> addContact(
@@ -83,5 +130,14 @@ class ContactLocalDb {
     }
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
     return cleaned;
+  }
+
+  static String _dedupeKey(Contact contact) {
+    final wrytteId = contact.wrytteUserId?.trim();
+    if (wrytteId != null && wrytteId.isNotEmpty) return 'w:$wrytteId';
+    final phone = contact.phones
+        .map(_normalizePhone)
+        .firstWhere((phone) => phone.isNotEmpty, orElse: () => '');
+    return phone.isEmpty ? '' : 'p:$phone';
   }
 }

@@ -30,13 +30,18 @@ import 'package:flutter_native_splash/flutter_native_splash.dart';
 const _systemBarColor = Colors.transparent;
 
 void apkLog(String tag, String message) {
-  print('[$tag] $message');
+  debugPrint('[$tag] $message');
 }
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await _ensureFirebaseInitialized();
   await NotificationService.instance.showRemoteMessage(message);
+}
+
+Future<void> _ensureFirebaseInitialized() async {
+  if (Firebase.apps.isNotEmpty) return;
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 }
 
 Future<void> main() async {
@@ -44,7 +49,7 @@ Future<void> main() async {
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
   await Hive.initFlutter();
 
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await _ensureFirebaseInitialized();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   unawaited(MatrixClientService.instance.ensureInitialized());
@@ -151,6 +156,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
   bool _isLoggedIn = false;
   bool _needsProfile = false;
   String? _currentUserId;
+  String? _currentUsername;
+  String? _currentPhone;
 
   final CallListenerService _callListener = CallListenerService();
 
@@ -167,13 +174,10 @@ class _AuthWrapperState extends State<AuthWrapper> {
       final userId = user?.userId;
 
       if (loggedIn && userId != null && userId.isNotEmpty) {
-        _initServicesInBackground(
-          userId: userId,
-          nickname: user?.username ?? userId,
-        );
+        _initServicesInBackground(userId: userId, nickname: user.username);
 
         final profile = await AuthService.instance.hydrateStoredProfile(userId);
-        final name = profile?.username ?? user?.username ?? '';
+        final name = profile?.username ?? user.username;
         final needsProfile =
             name.isEmpty ||
             name.trim().length < 2 ||
@@ -183,6 +187,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
           setState(() {
             _isLoggedIn = loggedIn;
             _currentUserId = userId;
+            _currentUsername = name;
+            _currentPhone = user.phone;
             _needsProfile = needsProfile;
             _checking = false;
           });
@@ -224,7 +230,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> _initServicesInBackground({
     required String userId,
     String nickname = '',
-    String faceUrl = '',
   }) async {
     unawaited(NotificationService.instance.start(currentUserId: userId));
 
@@ -250,6 +255,10 @@ class _AuthWrapperState extends State<AuthWrapper> {
       return const AddProfilePage(isNewUser: false);
     }
 
-    return HomeScreen(currentUserId: _currentUserId!);
+    return HomeScreen(
+      currentUserId: _currentUserId!,
+      initialProfileName: _currentUsername,
+      initialPhone: _currentPhone,
+    );
   }
 }

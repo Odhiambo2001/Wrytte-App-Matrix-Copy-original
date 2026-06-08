@@ -117,49 +117,56 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(
-            builder: (_) => HomeScreen(currentUserId: result.userId),
+            builder:
+                (_) => HomeScreen(
+                  currentUserId: result.userId,
+                  initialProfileName: result.username,
+                  initialPhone: widget.phoneNumber,
+                ),
           ),
           (_) => false,
         );
       }
-  } catch (e) {
-  HapticFeedback.heavyImpact();
-  _shakeController.forward(from: 0);
+    } catch (e) {
+      HapticFeedback.heavyImpact();
+      _shakeController.forward(from: 0);
 
-  if (!mounted) return;
+      if (!mounted) return;
 
-  // Convert raw API errors into user friendly messages
-  String friendlyMessage;
-  final raw = e.toString().toLowerCase();
+      // Convert raw API errors into user friendly messages
+      String friendlyMessage;
+      final raw = e.toString().toLowerCase();
 
-  if (raw.contains('invalid') ||
-      raw.contains('incorrect') ||
-      raw.contains('wrong') ||
-      raw.contains('code') ||
-      raw.contains('forbidden') ||
-      raw.contains('401') ||
-      raw.contains('400')) {
-    friendlyMessage = 'Incorrect code. Please enter the correct 6-digit code.';
-  } else if (raw.contains('network') ||
-             raw.contains('socket') ||
-             raw.contains('timeout') ||
-             raw.contains('connection')) {
-    friendlyMessage = 'No internet connection. Please check your network and try again.';
-  } else if (raw.contains('not found') || raw.contains('404')) {
-    friendlyMessage = 'Account not found. Please check your phone number.';
-  } else {
-    friendlyMessage = 'Something went wrong. Please try again.';
-  }
+      if (raw.contains('invalid') ||
+          raw.contains('incorrect') ||
+          raw.contains('wrong') ||
+          raw.contains('code') ||
+          raw.contains('forbidden') ||
+          raw.contains('401') ||
+          raw.contains('400')) {
+        friendlyMessage =
+            'Incorrect code. Please enter the correct 6-digit code.';
+      } else if (raw.contains('network') ||
+          raw.contains('socket') ||
+          raw.contains('timeout') ||
+          raw.contains('connection')) {
+        friendlyMessage =
+            'No internet connection. Please check your network and try again.';
+      } else if (raw.contains('not found') || raw.contains('404')) {
+        friendlyMessage = 'Account not found. Please check your phone number.';
+      } else {
+        friendlyMessage = 'Something went wrong. Please try again.';
+      }
 
-  setState(() {
-    _errorMessage = friendlyMessage;
-    _otpController.clear();
-  });
+      setState(() {
+        _errorMessage = friendlyMessage;
+        _otpController.clear();
+      });
 
-    debugPrint('OTP ERROR: $e');
-  } finally {
-    if (mounted) setState(() => _isLoading = false);
-  }
+      debugPrint('OTP ERROR: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _resendCode() async {

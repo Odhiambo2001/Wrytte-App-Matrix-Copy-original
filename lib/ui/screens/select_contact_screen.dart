@@ -527,9 +527,9 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
                     end: Alignment.bottomCenter,
                     stops: const [0.0, 0.6, 1.0],
                     colors: [
-                      const Color(0xFF08090B).withOpacity(0.95),
-                      const Color(0xFF08090B).withOpacity(0.75),
-                      const Color(0xFF08090B).withOpacity(0.0),
+                      const Color(0xFF08090B).withValues(alpha: 0.95),
+                      const Color(0xFF08090B).withValues(alpha: 0.75),
+                      const Color(0xFF08090B).withValues(alpha: 0.0),
                     ],
                   ),
                 ),

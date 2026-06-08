@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/utils/countries.dart';
 
 // =============================================================================
@@ -76,8 +79,12 @@ class RealNumberService {
         '/auth/register/rpn',
         fields,
       );
+      final restoreResponse =
+          existingBeforeRegister == true
+              ? await _loginRestorePayloadFromRegisterResponse(response, phone)
+              : response;
       return _handleRegisterResponse(
-        response,
+        restoreResponse,
         fallbackPhone: phone,
         serverIndicatesNewUser: existingBeforeRegister != true,
       );
@@ -253,6 +260,42 @@ class RealNumberService {
     );
   }
 
+  Future<dynamic> _loginRestorePayloadFromRegisterResponse(
+    dynamic registerResponse,
+    String phone,
+  ) async {
+    if (registerResponse is! Map) return registerResponse;
+    final map = Map<String, dynamic>.from(registerResponse);
+    final secret = (map['secret'] ?? '').toString().trim();
+    if (secret.isEmpty) return registerResponse;
+
+    final userId =
+        (map['userid'] ?? map['userId'] ?? map['uid'] ?? '').toString().trim();
+    try {
+      final loginResponse = await ApiService.postMultipart('/auth/login', {
+        'secret': secret,
+        'phone': phone,
+        if (userId.isNotEmpty) 'userid': userId,
+      });
+      if (loginResponse is! Map) return registerResponse;
+      final merged = <String, dynamic>{
+        ...map,
+        ...Map<String, dynamic>.from(loginResponse),
+      };
+      debugPrint(
+        '[RealNumberService] existing account restore payload fetched '
+        'contacts=${_listLength(merged['contacts'] ?? merged['Contacts'])} '
+        'chats=${_listLength(merged['chats'] ?? merged['Chats'] ?? merged['conversations'] ?? merged['Conversations'])}',
+      );
+      return merged;
+    } catch (e) {
+      debugPrint('[RealNumberService] restore login payload skipped: $e');
+      return registerResponse;
+    }
+  }
+
+  int _listLength(Object? value) => value is List ? value.length : 0;
+
   // ---------------------------------------------------------------------------
   //  Parse register/login response, resolve the real display name from
   //  local storage, and persist the session.
@@ -360,6 +403,17 @@ class RealNumberService {
       expiresAt: expiresAt,
       preferMatrixRegisterFirst: serverIndicatesNewUser,
     );
+    await AuthService.instance.persistLoginPayloadCache(
+      payload: map,
+      ownerUserId: userId,
+      displayName: displayName,
+    );
+    await _restoreProfileInBackground().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        debugPrint('[RealNumberService] profile restore timed out');
+      },
+    );
 
     return RealNumberRegisterResult(
       username: displayName,
@@ -367,6 +421,16 @@ class RealNumberService {
       secret: secret.isNotEmpty ? secret : archivedProfile?.secret ?? '',
       isNewUser: isNewUser,
     );
+  }
+
+  Future<void> _restoreProfileInBackground() async {
+    try {
+      await UserProfileService.instance.getCurrentUserProfile(
+        forceRefresh: true,
+      );
+    } catch (e) {
+      debugPrint('[RealNumberService] profile restore skipped: $e');
+    }
   }
 
   // ---------------------------------------------------------------------------

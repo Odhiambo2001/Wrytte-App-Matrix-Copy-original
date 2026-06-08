@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:wrytte/components/contact_components/firebase_new_chat_item.dart';
+import 'package:wrytte/components/contact_components/contact_item.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
-import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
@@ -76,73 +76,61 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
   }
 
   Future<void> _loadMyContacts() async {
+    var localContacts = const <Contact>[];
     try {
       final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
+      if (currentUserId.isNotEmpty) {
+        localContacts = await ContactLocalDb.loadSavedContacts(
+          ownerUserId: currentUserId,
+        );
+        if (localContacts.isNotEmpty && mounted) {
+          _showContacts(localContacts);
+        }
+      }
 
       if (currentUserId.isNotEmpty) {
-        final matrixContacts = await _contactService.getMatrixContactsCached(
+        final contacts = await _contactService.getMatrixContactsCached(
           currentUserId,
         );
 
-        matrixContacts.sort(
+        contacts.sort(
           (a, b) => a.formattedName.toLowerCase().compareTo(
             b.formattedName.toLowerCase(),
           ),
         );
 
         if (mounted) {
-          setState(() {
-            _allContacts = matrixContacts;
-            _filteredContacts = matrixContacts;
-            _isLoading = false;
-          });
+          _showContacts(contacts);
         }
       } else {
         if (mounted) setState(() => _isLoading = false);
       }
 
-      final wrytteContacts = await _contactService.getWrytteContactsOptimized();
-
-      if (!mounted) return;
-
       final currentUserId2 =
           await AuthService.instance.getCurrentUserId() ?? '';
-      final matrixContacts = await _contactService.getMatrixContacts(
-        currentUserId2,
-      );
+      final savedContacts =
+          currentUserId2.isNotEmpty
+              ? await _contactService.getMatrixContacts(currentUserId2)
+              : localContacts;
+      final contacts = savedContacts;
 
-      final seenPhones = <String>{};
-      final merged = <Contact>[];
-
-      for (final c in wrytteContacts) {
-        for (final p in c.phones) {
-          seenPhones.add(p);
-        }
-        merged.add(c);
-      }
-
-      for (final c in matrixContacts) {
-        final alreadySeen = c.phones.any((p) => seenPhones.contains(p));
-        if (!alreadySeen) {
-          seenPhones.addAll(c.phones);
-          merged.add(c);
-        }
-      }
-
-      merged.sort(
+      contacts.sort(
         (a, b) => a.formattedName.toLowerCase().compareTo(
           b.formattedName.toLowerCase(),
         ),
       );
 
       if (mounted) {
-        setState(() {
-          _allContacts = merged;
-          _filteredContacts = merged;
-        });
+        _showContacts(contacts);
       }
     } catch (e) {
       debugPrint('[FirebaseNewChatScreen] contact refresh failed: $e');
+      final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
+      if (localContacts.isEmpty && currentUserId.isNotEmpty) {
+        localContacts = await ContactLocalDb.loadSavedContacts(
+          ownerUserId: currentUserId,
+        );
+      }
       final message = e.toString();
       final isDirectoryLookupFailure =
           message.contains('User search error') ||
@@ -150,12 +138,45 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
           message.contains('Wrytte contact search timed out') ||
           message.contains('ContactDirectoryUnavailable');
       if (mounted) {
-        setState(() {
-          _error = isDirectoryLookupFailure ? '' : message;
-          _isLoading = false;
-        });
+        if (localContacts.isNotEmpty) {
+          _showContacts(localContacts);
+        } else {
+          setState(() {
+            _error = isDirectoryLookupFailure ? '' : message;
+            _isLoading = false;
+          });
+        }
       }
     }
+  }
+
+  void _showContacts(List<Contact> contacts) {
+    final sorted = List<Contact>.from(contacts)..sort(
+      (a, b) => a.formattedName.toLowerCase().compareTo(
+        b.formattedName.toLowerCase(),
+      ),
+    );
+    debugPrint(
+      '[FirebaseNewChatScreen] showing contacts=${sorted.length} '
+      'summary="${sorted.map((c) => '${c.formattedName}:avatar=${(c.avatarUrl?.trim().isNotEmpty ?? false)}').join('|')}"',
+    );
+    setState(() {
+      _allContacts = sorted;
+      _filteredContacts =
+          _searchController.text.trim().isEmpty
+              ? sorted
+              : sorted
+                  .where(
+                    (c) =>
+                        _sanitize(c.formattedName).toLowerCase().contains(
+                          _searchController.text.toLowerCase(),
+                        ) ||
+                        c.primaryPhone.contains(_searchController.text),
+                  )
+                  .toList();
+      _error = '';
+      _isLoading = false;
+    });
   }
 
   Future<void> _navigateToChat(Contact contact) async {
@@ -372,16 +393,8 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
       slivers.add(
         SliverList(
           delegate: SliverChildBuilderDelegate(
-            (_, i) => FirebaseNewChatItem(
-              user: UserProfile(
-                uid: entry.value[i].wrytteUserId ?? '',
-                name: _sanitize(entry.value[i].formattedName),
-                username: _sanitize(entry.value[i].formattedName),
-                phone: entry.value[i].primaryPhone,
-                bio: '',
-                profileImage: entry.value[i].avatarUrl ?? '',
-                links: const [],
-              ),
+            (_, i) => ContactItem(
+              contact: entry.value[i],
               onTap: () => _navigateToChat(entry.value[i]),
             ),
             childCount: entry.value.length,
@@ -440,9 +453,9 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
                     end: Alignment.bottomCenter,
                     stops: const [0.0, 0.6, 1.0],
                     colors: [
-                      const Color(0xFF08090B).withOpacity(0.95),
-                      const Color(0xFF08090B).withOpacity(0.75),
-                      const Color(0xFF08090B).withOpacity(0.0),
+                      const Color(0xFF08090B).withValues(alpha: 0.95),
+                      const Color(0xFF08090B).withValues(alpha: 0.75),
+                      const Color(0xFF08090B).withValues(alpha: 0.0),
                     ],
                   ),
                 ),

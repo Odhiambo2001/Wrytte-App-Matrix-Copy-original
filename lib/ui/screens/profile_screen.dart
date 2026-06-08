@@ -59,6 +59,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: _tabs.length, vsync: this);
+    _seedCurrentProfileFromCache();
     _loadProfile();
   }
 
@@ -70,12 +71,6 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _loadProfile() async {
     final uid = _validProfileUid(widget.uid);
-    final profile =
-        uid != null
-            ? await UserProfileService.instance.getProfileByUid(uid)
-            : await UserProfileService.instance.getCurrentUserProfile();
-    final savedContact = uid != null ? await _findSavedContact(uid) : null;
-    final matrixProfile = uid != null ? await _loadMatrixProfile(uid) : null;
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     var identity =
         uid != null && ownerUserId != null && ownerUserId.isNotEmpty
@@ -84,12 +79,28 @@ class _ProfileScreenState extends State<ProfileScreen>
               matrixUserId: uid,
             )
             : null;
+    final savedContact = uid != null ? await _findSavedContact(uid) : null;
+    final fallbackPhone =
+        widget.fallbackPhone ??
+        savedContact?.primaryPhone ??
+        identity?.phone ??
+        _extractPhone(widget.fallbackName);
+    final profile =
+        uid != null
+            ? await UserProfileService.instance.getProfileByUid(
+              uid,
+              phone: fallbackPhone,
+            )
+            : await UserProfileService.instance.getCurrentUserProfile(
+              forceRefresh: true,
+            );
+    final matrixProfile = uid != null ? await _loadMatrixProfile(uid) : null;
 
     if (uid != null && ownerUserId != null && ownerUserId.isNotEmpty) {
       await ContactIdentityCache.instance.upsert(
         ownerUserId: ownerUserId,
         matrixUserId: uid,
-        phone: profile?.phone ?? widget.fallbackPhone ?? identity?.phone,
+        phone: profile?.phone ?? fallbackPhone,
         profileName:
             _cleanName(profile?.displayName).isNotEmpty
                 ? profile?.displayName
@@ -119,6 +130,22 @@ class _ProfileScreenState extends State<ProfileScreen>
       _matrixAvatarUrl = matrixProfile?.$2;
       _profileLoading = false;
     });
+  }
+
+  void _seedCurrentProfileFromCache() {
+    if (_isOtherUser) return;
+    final cached = UserProfileService.instance.cachedProfile;
+    if (cached == null || !_hasRenderableProfile(cached)) return;
+    _profile = cached;
+    _profileLoading = false;
+  }
+
+  bool _hasRenderableProfile(UserProfile profile) {
+    return _cleanName(profile.displayName).isNotEmpty ||
+        profile.phone.trim().isNotEmpty ||
+        profile.hasProfileImage ||
+        profile.localProfileImagePath.trim().isNotEmpty ||
+        profile.bio.trim().isNotEmpty;
   }
 
   Future<Contact?> _findSavedContact(String uid) async {
@@ -315,8 +342,10 @@ class _ProfileScreenState extends State<ProfileScreen>
     final double statusBarHeight = MediaQuery.of(context).padding.top;
     final double topBarHeight = statusBarHeight + kToolbarHeight;
 
-    final String displayName = _profileLoading ? '...' : _profileDisplayName();
-    final String phone = _profileLoading ? '' : _profilePhone();
+    final hasProfile = _profile != null;
+    final String displayName =
+        _profileLoading && !hasProfile ? '' : _profileDisplayName();
+    final String phone = _profileLoading && !hasProfile ? '' : _profilePhone();
     final String bioText = _profile?.bio ?? '';
     final List<String> links = _profile?.links ?? [];
 
@@ -337,7 +366,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                         SizedBox(height: topBarHeight + 20),
 
                         // ── Avatar ──────────────────────────────────────────
-                        _profileLoading
+                        _profileLoading && !hasProfile
                             ? _buildAvatarShimmer(100)
                             : UserAvatar(
                               size: 100,
@@ -346,20 +375,25 @@ class _ProfileScreenState extends State<ProfileScreen>
                                       ? _profile!.profileImage
                                       : (_matrixAvatarUrl ??
                                           widget.fallbackAvatarUrl),
+                              localImagePath:
+                                  _isOtherUser
+                                      ? null
+                                      : _profile?.localProfileImagePath,
                               name: displayName,
                             ),
 
                         const SizedBox(height: 12),
 
                         // ── Name ────────────────────────────────────────────
-                        Text(
-                          displayName,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w600,
+                        if (displayName.isNotEmpty)
+                          Text(
+                            displayName,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                        ),
 
                         const SizedBox(height: 4),
 
@@ -463,9 +497,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                     end: Alignment.bottomCenter,
                     stops: const [0.0, 0.6, 1.0],
                     colors: [
-                      const Color(0xFF08090B).withOpacity(0.95),
-                      const Color(0xFF08090B).withOpacity(0.75),
-                      const Color(0xFF08090B).withOpacity(0.0),
+                      const Color(0xFF08090B).withValues(alpha: 0.95),
+                      const Color(0xFF08090B).withValues(alpha: 0.75),
+                      const Color(0xFF08090B).withValues(alpha: 0.0),
                     ],
                   ),
                 ),
@@ -518,7 +552,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => const EditProfileScreen(),
+                                  builder:
+                                      (_) => EditProfileScreen(
+                                        initialProfile: _profile,
+                                      ),
                                 ),
                               );
                             },
@@ -589,7 +626,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             Text(
               label,
               style: TextStyle(
-                color: Colors.white.withOpacity(0.75),
+                color: Colors.white.withValues(alpha: 0.75),
                 fontSize: 12,
                 fontWeight: FontWeight.w400,
               ),
@@ -669,12 +706,16 @@ class _ProfileScreenState extends State<ProfileScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, size: 52, color: Colors.white.withOpacity(0.15)),
+                Icon(
+                  icon,
+                  size: 52,
+                  color: Colors.white.withValues(alpha: 0.15),
+                ),
                 const SizedBox(height: 12),
                 Text(
                   label,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.35),
+                    color: Colors.white.withValues(alpha: 0.35),
                     fontSize: 15,
                     fontWeight: FontWeight.w500,
                   ),
@@ -854,7 +895,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            color: const Color(0xFF23262C).withOpacity(0.30),
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: const Color(0xFF23262C)),
           ),
@@ -876,7 +917,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           height: 44,
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
-            color: const Color(0xFF23262C).withOpacity(0.30),
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: const Color(0xFF23262C)),
           ),

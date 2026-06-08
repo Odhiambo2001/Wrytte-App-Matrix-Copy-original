@@ -368,139 +368,148 @@ class _NewContactPageState extends State<NewContactPage> {
   // ─────────────────────────────────────────────────────────────
 
   Future<void> _save() async {
-  if (!_canSave || _isSaving) return;
+    if (!_canSave || _isSaving) return;
 
-  setState(() {
-    _isSaving = true;
-    _saveError = null;
-  });
-
-  try {
-    final String selfId = await AuthService.instance.getCurrentUserId() ?? '';
-    apkLog('NewContact.save', 'save tapped self="$selfId"');
-
-    final receiverId =
-        (await _resolveReceiverIdForSave(widget.token))?.trim() ?? '';
-
-    if (_matrixLocalpart(receiverId) == selfId) {
-      throw StateError('You cannot add your own Wrytte account as a contact.');
-    }
-    if (_isRegisteredOnWrytte && receiverId.isEmpty) {
-      throw StateError(
-        'This Wrytte contact has no Matrix user ID yet. Try again shortly.',
-      );
-    }
-
-    final firstName = _firstNameCtrl.text.trim();
-    final lastName = _lastNameCtrl.text.trim();
-    final contactName = _displayName(firstName, lastName, _fullIdentifier);
-
-    // ── 1. Save locally ──────────────────────────────────────────
-    final localContact = Contact(
-      displayName: contactName,
-      phones: [_fullIdentifier],
-      isOnWrytte: _isRegisteredOnWrytte || receiverId.isNotEmpty,
-      wrytteUserId: receiverId.isEmpty ? null : receiverId,
-    );
-    await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
-    if (receiverId.isNotEmpty) {
-      await ContactIdentityCache.instance.upsert(
-        ownerUserId: selfId,
-        matrixUserId: receiverId,
-        phone: _fullIdentifier,
-        profileName: widget.initialName,
-        savedName: contactName,
-      );
-    }
-    ContactService.invalidateMatrixContactsCache();
-    _contactService.invalidateCache();
-
-    // ── 2. Build a fallback local conversation ID ────────────────
-    final ids = [
-      _conversationKey(selfId),
-      _conversationKey(receiverId.isNotEmpty ? receiverId : _fullIdentifier),
-    ]..sort();
-    final localConversationId = 'si_${ids[0]}_${ids[1]}';
-
-    // ── 3. AWAIT room creation + invite BEFORE navigating ───────
-    String conversationId = localConversationId;
-
-    if (receiverId.isNotEmpty) {
-      apkLog('NewContact.save', 'awaiting Matrix room creation receiver="$receiverId"');
-
-      final roomId = await _resolveMatrixRoomAfterSave(
-        selfId: selfId,
-        receiverId: receiverId,
-        initialConversationId: localConversationId,
-        contactName: contactName,
-        avatarUrl: null,
-      );
-
-      if (roomId != null && roomId.isNotEmpty) {
-        conversationId = roomId;
-        apkLog('NewContact.save', 'room confirmed room_id="$conversationId"');
-      } else {
-        apkLog('NewContact.save', 'room creation failed; using local id');
-      }
-    }
-
-    // ── 4. Background: save to Matrix server + phone contacts ────
-    unawaited(
-      _saveContactInBackground(
-        selfId: selfId,
-        firstName: firstName,
-        lastName: lastName,
-        fullIdentifier: _fullIdentifier,
-        receiverId: receiverId,
-        isOnWrytte: _isRegisteredOnWrytte,
-        syncToPhone: _syncToPhone,
-        token: widget.token,
-      ),
-    );
-
-    // ── 5. Navigate AFTER room is confirmed ─────────────────────
-    apkLog('NewContact.save',
-        'navigating with confirmed conversation_id="$conversationId" receiver="$receiverId"');
-
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 300),
-        reverseTransitionDuration: const Duration(milliseconds: 220),
-        pageBuilder:
-            (_, __, ___) => ChatScreen(
-              conversationId: conversationId,
-              receiverId: receiverId.isNotEmpty ? receiverId : _fullIdentifier,
-              currentUserId: selfId,
-              title: contactName,
-            ),
-        transitionsBuilder: (_, animation, __, child) {
-          final curved = CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-            reverseCurve: Curves.easeInCubic,
-          );
-          return SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(1, 0),
-              end: Offset.zero,
-            ).animate(curved),
-            child: child,
-          );
-        },
-      ),
-    );
-  } catch (e) {
-    debugPrint('Save contact error: $e');
-    apkLog('NewContact.save', 'save FAILED error="$e"');
-    if (!mounted) return;
     setState(() {
-      _isSaving = false;
-      _saveError = _friendlyError(e.toString());
+      _isSaving = true;
+      _saveError = null;
     });
+
+    try {
+      final String selfId = await AuthService.instance.getCurrentUserId() ?? '';
+      apkLog('NewContact.save', 'save tapped self="$selfId"');
+
+      final receiverId =
+          (await _resolveReceiverIdForSave(widget.token))?.trim() ?? '';
+
+      if (_matrixLocalpart(receiverId) == selfId) {
+        throw StateError(
+          'You cannot add your own Wrytte account as a contact.',
+        );
+      }
+      if (_isRegisteredOnWrytte && receiverId.isEmpty) {
+        throw StateError(
+          'This Wrytte contact has no Matrix user ID yet. Try again shortly.',
+        );
+      }
+
+      final firstName = _firstNameCtrl.text.trim();
+      final lastName = _lastNameCtrl.text.trim();
+      final contactName = _displayName(firstName, lastName, _fullIdentifier);
+
+      // ── 1. Save locally ──────────────────────────────────────────
+      final localContact = Contact(
+        displayName: contactName,
+        phones: [_fullIdentifier],
+        isOnWrytte: _isRegisteredOnWrytte || receiverId.isNotEmpty,
+        wrytteUserId: receiverId.isEmpty ? null : receiverId,
+        isSaved: true,
+      );
+      await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
+      if (receiverId.isNotEmpty) {
+        await ContactIdentityCache.instance.upsert(
+          ownerUserId: selfId,
+          matrixUserId: receiverId,
+          phone: _fullIdentifier,
+          profileName: widget.initialName,
+          savedName: contactName,
+        );
+      }
+      ContactService.invalidateMatrixContactsCache();
+      _contactService.invalidateCache();
+
+      // ── 2. Build a fallback local conversation ID ────────────────
+      final ids = [
+        _conversationKey(selfId),
+        _conversationKey(receiverId.isNotEmpty ? receiverId : _fullIdentifier),
+      ]..sort();
+      final localConversationId = 'si_${ids[0]}_${ids[1]}';
+
+      // ── 3. AWAIT room creation + invite BEFORE navigating ───────
+      String conversationId = localConversationId;
+
+      if (receiverId.isNotEmpty) {
+        apkLog(
+          'NewContact.save',
+          'awaiting Matrix room creation receiver="$receiverId"',
+        );
+
+        final roomId = await _resolveMatrixRoomAfterSave(
+          selfId: selfId,
+          receiverId: receiverId,
+          initialConversationId: localConversationId,
+          contactName: contactName,
+          avatarUrl: null,
+        );
+
+        if (roomId != null && roomId.isNotEmpty) {
+          conversationId = roomId;
+          apkLog('NewContact.save', 'room confirmed room_id="$conversationId"');
+        } else {
+          apkLog('NewContact.save', 'room creation failed; using local id');
+        }
+      }
+
+      // ── 4. Background: save to Matrix server + phone contacts ────
+      unawaited(
+        _saveContactInBackground(
+          selfId: selfId,
+          firstName: firstName,
+          lastName: lastName,
+          fullIdentifier: _fullIdentifier,
+          receiverId: receiverId,
+          isOnWrytte: _isRegisteredOnWrytte,
+          syncToPhone: _syncToPhone,
+          token: widget.token,
+        ),
+      );
+
+      // ── 5. Navigate AFTER room is confirmed ─────────────────────
+      apkLog(
+        'NewContact.save',
+        'navigating with confirmed conversation_id="$conversationId" receiver="$receiverId"',
+      );
+
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 300),
+          reverseTransitionDuration: const Duration(milliseconds: 220),
+          pageBuilder:
+              (_, __, ___) => ChatScreen(
+                conversationId: conversationId,
+                receiverId:
+                    receiverId.isNotEmpty ? receiverId : _fullIdentifier,
+                currentUserId: selfId,
+                title: contactName,
+              ),
+          transitionsBuilder: (_, animation, __, child) {
+            final curved = CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+              reverseCurve: Curves.easeInCubic,
+            );
+            return SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(1, 0),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            );
+          },
+        ),
+      );
+    } catch (e) {
+      debugPrint('Save contact error: $e');
+      apkLog('NewContact.save', 'save FAILED error="$e"');
+      if (!mounted) return;
+      setState(() {
+        _isSaving = false;
+        _saveError = _friendlyError(e.toString());
+      });
+    }
   }
-}
 
   Future<String?> _resolveReceiverIdForSave(String fallbackToken) async {
     final existing = _resolvedUserId?.trim();
@@ -679,7 +688,6 @@ class _NewContactPageState extends State<NewContactPage> {
       );
       return null;
     }
-    
 
     await ChatLocalDb.instance.migrateConversationId(
       oldConversationId: initialConversationId,

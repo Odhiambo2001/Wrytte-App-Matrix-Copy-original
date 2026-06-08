@@ -125,6 +125,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     _profile?.hasProfileImage == true
                                         ? _profile!.profileImage
                                         : null,
+                                localImagePath: _profile?.localProfileImagePath,
                                 name: _profile?.displayName,
                               ),
                           const SizedBox(width: 14),

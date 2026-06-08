@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/backend/backend_realtime_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
@@ -13,7 +14,15 @@ import '../widgets/bottom_nav_bar.dart';
 
 class HomeScreen extends StatefulWidget {
   final String currentUserId;
-  const HomeScreen({super.key, required this.currentUserId});
+  final String? initialProfileName;
+  final String? initialPhone;
+
+  const HomeScreen({
+    super.key,
+    required this.currentUserId,
+    this.initialProfileName,
+    this.initialPhone,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -24,19 +33,82 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   int _currentIndex = 1; // Default to Chats
   int _totalUnreadCount = 0;
+  late final List<Widget> _screens;
   Timer? _backendTokenTimer;
   bool _backendRefreshInFlight = false;
+  UserProfile? _bottomNavProfile;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Warm up the profile cache immediately so the bottom nav avatar
-    // is ready on the very first frame — no visible delay.
-    UserProfileService.instance.warmUp();
+    final cached = UserProfileService.instance.cachedProfile;
+    if (_isDisplayReadyProfile(cached)) {
+      _bottomNavProfile = cached;
+    } else {
+      final initialProfile = _initialSessionProfile();
+      if (_isDisplayReadyProfile(initialProfile)) {
+        _bottomNavProfile = initialProfile;
+      }
+    }
+    unawaited(_primeBottomNavProfile());
     _refreshBackendTokenIfNeeded();
     _scheduleBackendTokenRefresh();
     unawaited(BackendRealtimeService.instance.connect());
+    _screens = [
+      const ShopsScreen(),
+      ConversationsScreen(
+        onUnreadCountUpdated: _updateUnreadCount,
+        currentUserId: widget.currentUserId,
+      ),
+      const PostScreen(),
+      const CallsScreen(),
+      const SettingsScreen(),
+    ];
+  }
+
+  Future<void> _primeBottomNavProfile() async {
+    final cached = UserProfileService.instance.cachedProfile;
+    if (_isDisplayReadyProfile(cached)) {
+      setState(() {
+        _bottomNavProfile = cached;
+      });
+      unawaited(UserProfileService.instance.warmUp());
+      return;
+    }
+
+    final profile = await UserProfileService.instance.getCurrentUserProfile(
+      forceRefresh: true,
+    );
+    if (!mounted) return;
+    setState(() {
+      _bottomNavProfile = _isDisplayReadyProfile(profile) ? profile : null;
+    });
+  }
+
+  bool _isDisplayReadyProfile(UserProfile? profile) {
+    if (profile == null) return false;
+    final name = profile.displayName.trim();
+    return name.isNotEmpty && !_looksLikePhone(name);
+  }
+
+  UserProfile? _initialSessionProfile() {
+    final name = widget.initialProfileName?.trim() ?? '';
+    if (name.isEmpty || _looksLikePhone(name)) return null;
+    return UserProfile(
+      uid: widget.currentUserId,
+      name: name,
+      username: name,
+      phone: widget.initialPhone?.trim() ?? '',
+      bio: '',
+      profileImage: '',
+      links: const [],
+    );
+  }
+
+  bool _looksLikePhone(String value) {
+    final stripped = value.trim().replaceAll(RegExp(r'[\s\-()+]'), '');
+    return stripped.length >= 7 && RegExp(r'^\d+$').hasMatch(stripped);
   }
 
   @override
@@ -106,29 +178,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Widget _buildCurrentScreen() {
-    switch (_currentIndex) {
-      case 0:
-        return const ShopsScreen();
-      case 1:
-        return ConversationsScreen(
-          onUnreadCountUpdated: _updateUnreadCount,
-          currentUserId: widget.currentUserId,
-        );
-      case 2:
-        return const PostScreen();
-      case 3:
-        return const CallsScreen();
-      case 4:
-        return const SettingsScreen();
-      default:
-        return ConversationsScreen(
-          onUnreadCountUpdated: _updateUnreadCount,
-          currentUserId: widget.currentUserId,
-        );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -142,7 +191,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // Background layer
           Container(color: const Color(0xFF08090B)),
           // Screen content
-          Positioned.fill(child: _buildCurrentScreen()),
+          Positioned.fill(
+            child: IndexedStack(index: _currentIndex, children: _screens),
+          ),
         ],
       ),
       // FLOATING GLASS NAV
@@ -150,6 +201,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         currentIndex: _currentIndex,
         onTap: _onTabTapped,
         totalUnreadCount: _totalUnreadCount,
+        initialProfile: _bottomNavProfile,
       ),
     );
   }

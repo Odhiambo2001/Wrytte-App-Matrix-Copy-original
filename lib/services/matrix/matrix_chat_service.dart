@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:matrix/matrix.dart';
 import 'package:path/path.dart' as p;
+import 'package:wrytte/services/file_upload_limits.dart';
 
 import 'matrix_auth_service.dart';
 import 'matrix_client.dart';
@@ -313,6 +314,11 @@ class MatrixChatService {
     final room = getRoomById(roomId);
     if (room == null) throw StateError('Unknown Matrix room: $roomId');
     final file = File(filePath);
+    await FileUploadLimits.validatePath(
+      filePath,
+      maxBytes: FileUploadLimits.chatFileMaxBytes,
+      label: 'Attachment',
+    );
     final matrixFile = MatrixFile.fromMimeType(
       bytes: await file.readAsBytes(),
       name: p.basename(filePath),
@@ -331,14 +337,14 @@ class MatrixChatService {
     return room.getTimeline(limit: limit, onUpdate: onUpdate);
   }
 
-  Future<void> markRead(String roomId) async {
+  Future<void> markRead(String roomId, {String? eventId}) async {
     final room = getRoomById(roomId);
-    final eventId = room?.lastEvent?.eventId;
-    if (room == null || eventId == null || eventId.isEmpty) return;
+    final readEventId = eventId ?? room?.lastEvent?.eventId;
+    if (room == null || readEventId == null || readEventId.isEmpty) return;
     await MatrixClientService.instance.client.setReadMarker(
       roomId,
-      mFullyRead: eventId,
-      mRead: eventId,
+      mFullyRead: readEventId,
+      mRead: readEventId,
     );
   }
 

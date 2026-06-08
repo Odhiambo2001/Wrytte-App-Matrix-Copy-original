@@ -123,7 +123,8 @@ class MatrixAuthService {
       'Matrix.auth',
       'password login response user_id="${client.userID}" device_id="${client.deviceID}"',
     );
-    if (!client.isLogged()) {
+    final current = MatrixClientService.instance.client;
+    if (!current.isLogged() || current.userID != response.userId) {
       await MatrixClientService.instance.initWithCredentials(
         homeserver: _stripTrailingSlash(baseUri),
         userId: response.userId,
@@ -238,7 +239,11 @@ class MatrixAuthService {
   }
 
   Future<bool> validateCurrentSession({String? expectedUserId}) async {
-    final client = await restore();
+    final client =
+        MatrixClientService.instance.isInitialized &&
+                MatrixClientService.instance.client.isLogged()
+            ? MatrixClientService.instance.client
+            : await restore();
     if (!client.isLogged()) return false;
     try {
       final owner = await client.getTokenOwner().timeout(
@@ -285,6 +290,10 @@ class MatrixAuthService {
       accessToken: accessToken,
       deviceId: deviceId,
     );
+  }
+
+  Future<void> persistCurrentSession() async {
+    await _persist(MatrixClientService.instance.client);
   }
 
   Future<void> _persist(Client client) async {

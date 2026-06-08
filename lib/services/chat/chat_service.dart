@@ -10,6 +10,7 @@ import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
+import 'package:wrytte/services/file_upload_limits.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
@@ -61,6 +62,7 @@ class ChatService {
   final Map<String, ChatConversation> _conversationsMap = {};
   final Map<String, List<ChatMessage>> _messagesCache = {};
   final Set<String> _readConversationIds = {};
+  final Set<String> _activeReadConversationIds = {};
   final Map<String, DateTime> _lastReadAtByConversation = {};
 
   bool get isConnected => _isConnected;
@@ -350,7 +352,10 @@ class ChatService {
   Future<void> _finishConnectionWarmup() async {
     try {
       await MatrixChatService.instance.ensureSyncedAndAutoJoinInvites();
-      await _syncLocalContactsToMatrix();
+      final userId = _currentUserId;
+      if (userId != null && userId.isNotEmpty) {
+        unawaited(ContactService().syncLocalContactsToMatrix(userId));
+      }
       await restoreAllRoomHistoryFromServer();
       _refreshConversationsFromRooms();
       _refreshAllMessageStatuses();
@@ -435,6 +440,24 @@ class ChatService {
               .toList()
             ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
+      final latestRestoredAt =
+          messages.isNotEmpty ? messages.last.timestamp : null;
+      final serverReadAt = _serverReadTimeForRoom(room, messages);
+      final restoredReadAt =
+          latestRestoredAt == null
+              ? serverReadAt
+              : serverReadAt == null || latestRestoredAt.isAfter(serverReadAt)
+              ? latestRestoredAt
+              : serverReadAt;
+      if (restoredReadAt != null) {
+        _readConversationIds.add(room.id);
+        _lastReadAtByConversation[room.id] = restoredReadAt;
+        await ChatLocalDb.instance.markConversationReadAt(
+          room.id,
+          restoredReadAt,
+        );
+      }
+
       for (final message in messages) {
         _cacheMessage(message, countUnread: false);
       }
@@ -495,16 +518,6 @@ class ChatService {
     }
   }
 
-  Future<void> _syncLocalContactsToMatrix() async {
-    final ownerUserId = _currentUserId;
-    if (ownerUserId == null || ownerUserId.isEmpty) return;
-    try {
-      await ContactService().syncLocalContactsToMatrix(ownerUserId);
-    } catch (e) {
-      debugPrint('[ChatService] Matrix contact sync skipped: $e');
-    }
-  }
-
   bool _isDisplayableMessage(ChatMessage? message) {
     if (message == null) return false;
     return message.content.trim().isNotEmpty ||
@@ -558,6 +571,11 @@ class ChatService {
     await _withMatrixTokenRetry('sendVoiceMessage', () async {
       await _waitForConnection();
       final room = await _directRoom(receiverID);
+      await FileUploadLimits.validatePath(
+        filePath,
+        maxBytes: FileUploadLimits.voiceMessageMaxBytes,
+        label: 'Voice message',
+      );
       final bytes = await File(filePath).readAsBytes();
       final file = mx.MatrixAudioFile(
         bytes: bytes,
@@ -596,6 +614,11 @@ class ChatService {
     await _withMatrixTokenRetry('sendVideoMessage', () async {
       await _waitForConnection();
       final room = await _directRoom(receiverID);
+      await FileUploadLimits.validatePath(
+        filePath,
+        maxBytes: FileUploadLimits.videoMessageMaxBytes,
+        label: 'Video message',
+      );
       final bytes = await File(filePath).readAsBytes();
       final file = mx.MatrixVideoFile(
         bytes: bytes,
@@ -658,25 +681,55 @@ class ChatService {
   Future<void> markConversationAsRead(String conversationId) async {
     try {
       await _withMatrixTokenRetry('markConversationAsRead', () async {
-        await MatrixChatService.instance.markRead(conversationId);
-      });
-      final current = _conversationsMap[conversationId];
-      if (current != null) {
-        final readAt = _latestKnownMessageTime(conversationId);
-        _lastReadAtByConversation[conversationId] = readAt;
-        _readConversationIds.add(conversationId);
-        _conversationsMap[conversationId] = current.copyWith(unreadCount: 0);
-        _emitConversations();
-        await ChatLocalDb.instance.markConversationReadAt(
+        await MatrixChatService.instance.markRead(
           conversationId,
-          readAt,
+          eventId: _latestKnownMessageId(conversationId),
         );
-      } else {
-        await ChatLocalDb.instance.markConversationRead(conversationId);
-      }
+      });
     } catch (e) {
       debugPrint('[ChatService] markConversationAsRead error: $e');
     }
+
+    final current = _conversationsMap[conversationId];
+    if (current != null) {
+      final readAt = _latestKnownMessageTime(conversationId);
+      _lastReadAtByConversation[conversationId] = readAt;
+      _readConversationIds.add(conversationId);
+      _conversationsMap[conversationId] = current.copyWith(unreadCount: 0);
+      _emitConversations();
+      await ChatLocalDb.instance.markConversationReadAt(conversationId, readAt);
+    } else {
+      await ChatLocalDb.instance.markConversationRead(conversationId);
+    }
+  }
+
+  void activateConversationRead(String conversationId) {
+    final id = conversationId.trim();
+    if (id.isEmpty) return;
+
+    _activeReadConversationIds.add(id);
+    _readConversationIds.add(id);
+
+    final readAt = DateTime.now();
+    _lastReadAtByConversation[id] = readAt;
+
+    final current = _conversationsMap[id];
+    if (current == null) {
+      unawaited(ChatLocalDb.instance.markConversationReadAt(id, readAt));
+      return;
+    }
+
+    if (current.unreadCount != 0) {
+      _conversationsMap[id] = current.copyWith(unreadCount: 0);
+      _emitConversations();
+    }
+    unawaited(ChatLocalDb.instance.markConversationReadAt(id, readAt));
+  }
+
+  void deactivateConversationRead(String conversationId) {
+    final id = conversationId.trim();
+    if (id.isEmpty) return;
+    _activeReadConversationIds.remove(id);
   }
 
   List<ChatMessage> getConversationMessages(String conversationId) {
@@ -686,6 +739,10 @@ class ChatService {
         ).where((message) => !message.isDeletedForMe).toList();
     messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return messages;
+  }
+
+  List<ChatMessage> cachedMessagesFor(String conversationId) {
+    return getConversationMessages(conversationId);
   }
 
   Future<List<ChatMessage>> loadCachedMessages(String conversationId) async {
@@ -714,15 +771,46 @@ class ChatService {
       ..clear()
       ..addAll(await ChatLocalDb.instance.loadConversationReadMarkers());
     final conversations = await ChatLocalDb.instance.loadConversations();
+    apkLog(
+      'ChatService.local',
+      'hydrated local conversations=${conversations.length}',
+    );
     for (final conversation in conversations) {
-      if (conversation.unreadCount == 0) {
-        _readConversationIds.add(conversation.id);
-        _lastReadAtByConversation.putIfAbsent(
-          conversation.id,
-          () => conversation.lastMessageTime,
-        );
-      }
+      final restoredRead = conversation.copyWith(unreadCount: 0);
+      _readConversationIds.add(restoredRead.id);
+      _lastReadAtByConversation[restoredRead.id] = restoredRead.lastMessageTime;
+      _conversationsMap.putIfAbsent(restoredRead.id, () => restoredRead);
+      unawaited(
+        ChatLocalDb.instance.markConversationReadAt(
+          restoredRead.id,
+          restoredRead.lastMessageTime,
+        ),
+      );
+    }
+    _emitConversations();
+    for (final conversation in conversations) {
       await loadCachedMessages(conversation.id);
+      if (conversation.id.startsWith('!')) {
+        await _syncLocalReadMarkerToMatrix(conversation.id);
+      }
+    }
+    _emitConversations();
+  }
+
+  Future<void> _syncLocalReadMarkerToMatrix(String conversationId) async {
+    final eventId = _latestKnownMessageId(conversationId);
+    if (eventId == null || eventId.isEmpty) return;
+    try {
+      await MatrixChatService.instance.markRead(
+        conversationId,
+        eventId: eventId,
+      );
+      apkLog(
+        'ChatService.read',
+        'synced local read marker room_id="$conversationId" event_id="$eventId"',
+      );
+    } catch (e) {
+      debugPrint('[ChatService] local read marker sync skipped: $e');
     }
   }
 
@@ -872,6 +960,7 @@ class ChatService {
     _conversationsMap.clear();
     _messagesCache.clear();
     _readConversationIds.clear();
+    _activeReadConversationIds.clear();
     _lastReadAtByConversation.clear();
     MatrixChatService.instance.resetRuntimeState();
     for (final controller in _roomMessagesControllers.values) {
@@ -918,7 +1007,12 @@ class ChatService {
 
   ChatConversation _toConversation(mx.Room room) {
     final client = MatrixClientService.instance.client;
-    final otherId = _roomPeerMatrixId(room, client.userID) ?? room.id;
+    final existing = _conversationsMap[room.id];
+    final otherId =
+        _roomPeerMatrixId(room, client.userID) ??
+        _usableConversationPeer(existing, client.userID) ??
+        _fallbackPeerFromCachedMessages(room.id, client.userID) ??
+        room.id;
     final last = room.lastEvent;
     final lastMessage = last == null ? null : ChatMessage.fromMatrixEvent(last);
     final incomingSenderPhone =
@@ -927,6 +1021,12 @@ class ChatService {
                 _isOwnMessage(lastMessage, client.userID!)
             ? ''
             : _normalizePhone(lastMessage.senderPhone ?? '');
+    final cachedName =
+        existing == null ? '' : _cleanHumanName(existing.otherUserName);
+    final roomName = room.getLocalizedDisplayname();
+    final shouldUseRoomName =
+        !roomName.toLowerCase().startsWith('group with ') &&
+        !_isOwnMatrixId(roomName, client.userID);
     return ChatConversation(
       id: room.id,
       participants: [if (client.userID != null) client.userID!, otherId],
@@ -938,13 +1038,47 @@ class ChatService {
       otherUserName:
           incomingSenderPhone.isNotEmpty
               ? incomingSenderPhone
-              : room.getLocalizedDisplayname(),
-      otherUserAvatar: room.avatar?.toString(),
+              : cachedName.isNotEmpty
+              ? cachedName
+              : shouldUseRoomName
+              ? roomName
+              : existing?.otherUserName,
+      otherUserAvatar: room.avatar?.toString() ?? existing?.otherUserAvatar,
     );
+  }
+
+  String? _usableConversationPeer(ChatConversation? conversation, String? me) {
+    final peer = conversation?.otherUserId.trim() ?? '';
+    if (peer.isEmpty || peer.startsWith('!') || peer.startsWith('@!')) {
+      return null;
+    }
+    if (_isOwnMatrixId(peer, me)) return null;
+    return peer;
+  }
+
+  String? _fallbackPeerFromCachedMessages(String roomId, String? me) {
+    final cached = _messagesCache[roomId];
+    if (cached == null || cached.isEmpty) return null;
+    for (final message in cached.reversed) {
+      final sender = message.senderId.trim();
+      if (_isValidMatrixUserId(sender) && !_isOwnMatrixId(sender, me)) {
+        return sender;
+      }
+      final receiver = message.receiverId.trim();
+      if (_isValidMatrixUserId(receiver) && !_isOwnMatrixId(receiver, me)) {
+        return receiver;
+      }
+      final phone = _normalizePhone(message.senderPhone ?? '');
+      if (phone.isNotEmpty && !_isOwnMatrixId(message.senderId, me)) {
+        return phone;
+      }
+    }
+    return null;
   }
 
   int _displayableUnreadCountForRoom(mx.Room room, String? currentUser) {
     if (currentUser == null || currentUser.isEmpty) return 0;
+    if (_activeReadConversationIds.contains(room.id)) return 0;
     final readAt = _lastReadAtByConversation[room.id];
 
     final cached = _messagesCache[room.id];
@@ -970,6 +1104,33 @@ class ChatService {
     return 1;
   }
 
+  DateTime? _serverReadTimeForRoom(mx.Room room, List<ChatMessage> messages) {
+    if (messages.isEmpty) return null;
+    final eventIds =
+        <String>[
+          room.receiptState.global.latestOwnReceipt?.eventId ?? '',
+          room.receiptState.mainThread?.latestOwnReceipt?.eventId ?? '',
+          room.fullyRead,
+        ].where((eventId) => eventId.isNotEmpty).toList();
+
+    for (final eventId in eventIds) {
+      final index = messages.indexWhere((message) => message.id == eventId);
+      if (index == -1) continue;
+      var readAt = messages[index].timestamp;
+      for (var i = 0; i <= index; i += 1) {
+        final candidate = messages[i].timestamp;
+        if (candidate.isAfter(readAt)) readAt = candidate;
+      }
+      return readAt;
+    }
+
+    final receiptTs = room.receiptState.global.latestOwnReceipt?.ts;
+    if (receiptTs != null && receiptTs > 0) {
+      return DateTime.fromMillisecondsSinceEpoch(receiptTs);
+    }
+    return null;
+  }
+
   void _refreshConversationsFromRooms() {
     final rooms = MatrixClientService.instance.client.rooms;
     apkLog(
@@ -980,23 +1141,102 @@ class ChatService {
     for (final room in rooms) {
       _cacheRoomIdentity(room);
     }
+    final merged = Map<String, ChatConversation>.from(_conversationsMap);
+    var restoredFromCache = 0;
+    var refreshedFromMatrix = 0;
+    for (final room in rooms) {
+      final existing = merged[room.id];
+      final lastMessage =
+          room.lastEvent == null
+              ? null
+              : ChatMessage.fromMatrixEvent(room.lastEvent!);
+      final hasDisplayableMatrixLast = _isDisplayableMessage(lastMessage);
+      final hasCachedPreview = existing?.lastMessage.trim().isNotEmpty == true;
+      final hasCachedMessages = (_messagesCache[room.id] ??
+              const <ChatMessage>[])
+          .any(_isDisplayableMessage);
+
+      if (!hasDisplayableMatrixLast &&
+          !hasCachedPreview &&
+          !hasCachedMessages) {
+        continue;
+      }
+
+      final matrixConversation = _toConversation(room);
+      merged.removeWhere(
+        (id, conversation) =>
+            id != room.id &&
+            !id.startsWith('!') &&
+            _matrixLocalpart(conversation.otherUserId) ==
+                _matrixLocalpart(matrixConversation.otherUserId),
+      );
+      merged[room.id] =
+          existing == null
+              ? matrixConversation
+              : _preferImmediateConversation(existing, matrixConversation);
+      if (hasDisplayableMatrixLast) {
+        refreshedFromMatrix += 1;
+      } else {
+        restoredFromCache += 1;
+      }
+    }
+
     _conversationsMap
       ..clear()
-      ..addEntries(
-        rooms
-            .where((room) {
-              final last = room.lastEvent;
-              return last != null &&
-                  _isDisplayableMessage(ChatMessage.fromMatrixEvent(last));
-            })
-            .map((room) => MapEntry(room.id, _toConversation(room))),
-      );
+      ..addAll(merged);
+    apkLog(
+      'ChatService.rooms',
+      'merged conversations total=${_conversationsMap.length} matrix=$refreshedFromMatrix cached=$restoredFromCache',
+    );
     unawaited(
       ChatLocalDb.instance.replaceConversations(
         _conversationsMap.values.toList(),
       ),
     );
     _emitConversations();
+  }
+
+  ChatConversation _preferImmediateConversation(
+    ChatConversation cached,
+    ChatConversation incoming,
+  ) {
+    final incomingHasMessage = incoming.lastMessage.trim().isNotEmpty;
+    final cachedHasMessage = cached.lastMessage.trim().isNotEmpty;
+    final unreadCount = _mergedUnreadCount(cached, incoming);
+    if (!incomingHasMessage && cachedHasMessage) {
+      return cached.copyWith(
+        unreadCount: unreadCount,
+        otherUserId:
+            incoming.otherUserId.startsWith('!')
+                ? cached.otherUserId
+                : incoming.otherUserId,
+        participants:
+            incoming.otherUserId.startsWith('!')
+                ? cached.participants
+                : incoming.participants,
+        otherUserName: incoming.otherUserName ?? cached.otherUserName,
+        otherUserAvatar: incoming.otherUserAvatar ?? cached.otherUserAvatar,
+      );
+    }
+    return incoming.copyWith(
+      unreadCount: unreadCount,
+      otherUserName: incoming.otherUserName ?? cached.otherUserName,
+      otherUserAvatar: incoming.otherUserAvatar ?? cached.otherUserAvatar,
+    );
+  }
+
+  int _mergedUnreadCount(ChatConversation cached, ChatConversation incoming) {
+    if (_activeReadConversationIds.contains(cached.id) ||
+        _activeReadConversationIds.contains(incoming.id) ||
+        cached.unreadCount == 0 ||
+        _readConversationIds.contains(cached.id)) {
+      return 0;
+    }
+    final readAt = _lastReadAtByConversation[cached.id];
+    if (readAt != null && !incoming.lastMessageTime.isAfter(readAt)) {
+      return 0;
+    }
+    return incoming.unreadCount;
   }
 
   void _cacheRoomIdentity(mx.Room room) {
@@ -1111,6 +1351,7 @@ class ChatService {
     final shouldCountUnread =
         isNewMessage &&
         countUnread &&
+        !_activeReadConversationIds.contains(convId) &&
         !_isOwnMessage(message, currentUser) &&
         _isAfterReadMarker(message, convId);
     if (shouldCountUnread) {
@@ -1162,12 +1403,43 @@ class ChatService {
     final existingIndex = messages.indexWhere((m) => m.id == message.id);
     if (existingIndex == -1) {
       messages.add(message);
+      _removeDuplicateOutgoingEchoes(messages, canonical: message);
       messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
       return true;
     }
     messages[existingIndex] = message;
+    _removeDuplicateOutgoingEchoes(messages, canonical: message);
     messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return false;
+  }
+
+  void _removeDuplicateOutgoingEchoes(
+    List<ChatMessage> messages, {
+    required ChatMessage canonical,
+  }) {
+    if (_isLocalOutgoingEchoId(canonical.id)) return;
+    final currentUser =
+        MatrixClientService.instance.isInitialized
+            ? MatrixClientService.instance.userId ?? _currentUserId ?? ''
+            : _currentUserId ?? '';
+    if (!_isOwnMessage(canonical, currentUser)) return;
+    messages.removeWhere((candidate) {
+      if (candidate.id == canonical.id) return false;
+      if (!_isOwnMessage(candidate, currentUser)) return false;
+      if (!_isLocalOutgoingEchoId(candidate.id)) return false;
+      if (candidate.content != canonical.content) return false;
+      final sameConversation =
+          candidate.conversationId == canonical.conversationId;
+      if (!sameConversation) return false;
+      final closeInTime =
+          candidate.timestamp.difference(canonical.timestamp).inSeconds.abs() <
+          60;
+      return closeInTime;
+    });
+  }
+
+  bool _isLocalOutgoingEchoId(String id) {
+    return id.startsWith('opt_') || id.startsWith('Wrytte-');
   }
 
   DateTime _latestKnownMessageTime(String conversationId) {
@@ -1182,6 +1454,17 @@ class ChatService {
     }
     final conversation = _conversationsMap[conversationId];
     return conversation?.lastMessageTime ?? DateTime.now();
+  }
+
+  String? _latestKnownMessageId(String conversationId) {
+    final cached = _messagesCache[conversationId];
+    if (cached == null || cached.isEmpty) return null;
+    for (final message in cached.reversed) {
+      if (!message.isDeletedForMe && _isDisplayableMessage(message)) {
+        return message.id;
+      }
+    }
+    return null;
   }
 
   bool _isAfterReadMarker(ChatMessage message, String conversationId) {

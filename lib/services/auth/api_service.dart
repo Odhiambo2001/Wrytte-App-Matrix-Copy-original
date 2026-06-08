@@ -129,12 +129,14 @@ class ApiService {
   static Future<dynamic> postMultipart(
     String path,
     Map<String, String> fields, {
+    List<http.MultipartFile> files = const [],
     String? token,
   }) async {
     final uri = Uri.parse("$baseUrl$path");
 
     final request = http.MultipartRequest("POST", uri);
     request.fields.addAll(fields);
+    request.files.addAll(files);
 
     if (token != null) {
       request.headers["Authorization"] = "Bearer $token";
@@ -142,6 +144,9 @@ class ApiService {
 
     debugPrint("➡️ POST MULTIPART $uri");
     debugPrint("📦 FIELDS: ${_redactMap(fields)}");
+    if (files.isNotEmpty) {
+      debugPrint("📎 FILES: ${files.map((file) => file.field).join(', ')}");
+    }
 
     final streamedResponse = await request.send().timeout(
       const Duration(seconds: 20),

@@ -5,6 +5,7 @@ import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
+import 'package:wrytte/models/contact_model.dart';
 
 /// Local SQLite cache for fast startup and offline chat access.
 /// Matrix/Dendrite remains the canonical message store; this cache mirrors
@@ -226,6 +227,34 @@ class ChatLocalDb {
   /// Save a single message — used on optimistic send and on receive.
   Future<void> saveMessage(ChatMessage message) => saveMessages([message]);
 
+  Future<bool> hasMessage(String messageId) async {
+    final id = messageId.trim();
+    if (id.isEmpty) return false;
+    final database = await db;
+    final rows = await database.query(
+      'messages',
+      columns: ['id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<Set<String>> loadRecentMessageIds({int limit = 1000}) async {
+    final database = await db;
+    final rows = await database.query(
+      'messages',
+      columns: ['id'],
+      orderBy: 'timestamp DESC',
+      limit: limit,
+    );
+    return rows
+        .map((row) => row['id']?.toString().trim() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toSet();
+  }
+
   Future<void> deleteDuplicateOutgoingEchoesFor(ChatMessage canonical) async {
     if (_isLocalOutgoingEchoId(canonical.id)) return;
 
@@ -386,6 +415,11 @@ class ChatLocalDb {
           (c.unreadCount == 0
               ? c.lastMessageTime.millisecondsSinceEpoch
               : null);
+      final effectiveUnreadCount =
+          nextLastReadTime != null &&
+                  nextLastReadTime >= c.lastMessageTime.millisecondsSinceEpoch
+              ? 0
+              : c.unreadCount;
 
       await database.insert('conversations', {
         'id': c.id,
@@ -394,7 +428,7 @@ class ChatLocalDb {
         'lastMessage': c.lastMessage,
         'lastMessageSenderId': c.lastMessageSenderId,
         'lastMessageTime': c.lastMessageTime.millisecondsSinceEpoch,
-        'unreadCount': c.unreadCount,
+        'unreadCount': effectiveUnreadCount,
         'lastMessageType': c.lastMessageType,
         'isArchived': c.isArchived ? 1 : 0,
         'isMuted': c.isMuted ? 1 : 0,
@@ -422,6 +456,16 @@ class ChatLocalDb {
     await database.transaction((txn) async {
       await txn.delete('conversations');
       for (final c in conversations) {
+        final nextLastReadTime =
+            existingLastReadTimes[c.id] ??
+            (c.unreadCount == 0
+                ? c.lastMessageTime.millisecondsSinceEpoch
+                : null);
+        final effectiveUnreadCount =
+            nextLastReadTime != null &&
+                    nextLastReadTime >= c.lastMessageTime.millisecondsSinceEpoch
+                ? 0
+                : c.unreadCount;
         await txn.insert('conversations', {
           'id': c.id,
           'participants': c.participants.join(','),
@@ -429,18 +473,14 @@ class ChatLocalDb {
           'lastMessage': c.lastMessage,
           'lastMessageSenderId': c.lastMessageSenderId,
           'lastMessageTime': c.lastMessageTime.millisecondsSinceEpoch,
-          'unreadCount': c.unreadCount,
+          'unreadCount': effectiveUnreadCount,
           'lastMessageType': c.lastMessageType,
           'isArchived': c.isArchived ? 1 : 0,
           'isMuted': c.isMuted ? 1 : 0,
           'isPinned': c.isPinned ? 1 : 0,
           'otherUserName': c.otherUserName,
           'otherUserAvatar': c.otherUserAvatar,
-          'lastReadTime':
-              existingLastReadTimes[c.id] ??
-              (c.unreadCount == 0
-                  ? c.lastMessageTime.millisecondsSinceEpoch
-                  : null),
+          'lastReadTime': nextLastReadTime,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
@@ -522,7 +562,202 @@ class ChatLocalDb {
       'conversations',
       orderBy: 'lastMessageTime DESC',
     );
-    return rows.map(_rowToConversation).toList();
+    final conversations = rows.map(_rowToConversation).toList();
+    final hydrated = await _hydrateConversationPreviewsFromMessages(
+      database,
+      conversations,
+    );
+    final rebuilt = await _rebuildConversationsFromCachedMessages(database);
+    if (rebuilt.isEmpty) return hydrated;
+    if (hydrated.isEmpty) return rebuilt;
+
+    final byId = <String, ChatConversation>{
+      for (final conversation in hydrated) conversation.id: conversation,
+    };
+    for (final conversation in rebuilt) {
+      final existing = byId[conversation.id];
+      byId[conversation.id] =
+          existing == null || existing.lastMessage.trim().isEmpty
+              ? conversation.copyWith(
+                otherUserName: existing?.otherUserName,
+                otherUserAvatar: existing?.otherUserAvatar,
+              )
+              : existing;
+    }
+    final merged =
+        byId.values.toList()
+          ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
+    return merged;
+  }
+
+  Future<List<ChatConversation>> _hydrateConversationPreviewsFromMessages(
+    Database database,
+    List<ChatConversation> conversations,
+  ) async {
+    if (conversations.isEmpty) return conversations;
+
+    final hydrated = <ChatConversation>[];
+    var changed = false;
+    for (final conversation in conversations) {
+      if (conversation.lastMessage.trim().isNotEmpty) {
+        hydrated.add(conversation);
+        continue;
+      }
+
+      final latest = await database.query(
+        'messages',
+        where: 'conversationId = ? AND isDeletedForMe = ?',
+        whereArgs: [conversation.id, 0],
+        orderBy: 'timestamp DESC',
+        limit: 1,
+      );
+      if (latest.isEmpty) {
+        hydrated.add(conversation);
+        continue;
+      }
+
+      final message = _rowToMessage(latest.first);
+      final repaired = conversation.copyWith(
+        lastMessage: message.content,
+        lastMessageSenderId: message.senderId,
+        lastMessageTime: message.timestamp,
+        lastMessageType: message.attachmentType ?? conversation.lastMessageType,
+      );
+      hydrated.add(repaired);
+      changed = true;
+
+      await database.update(
+        'conversations',
+        {
+          'lastMessage': message.content,
+          'lastMessageSenderId': message.senderId,
+          'lastMessageTime': message.timestamp.millisecondsSinceEpoch,
+          'lastMessageType': message.attachmentType ?? repaired.lastMessageType,
+        },
+        where: 'id = ?',
+        whereArgs: [conversation.id],
+      );
+    }
+
+    if (!changed) return conversations;
+    hydrated.sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
+    return hydrated;
+  }
+
+  Future<List<ChatConversation>> _rebuildConversationsFromCachedMessages(
+    Database database,
+  ) async {
+    final rows = await database.rawQuery('''
+      SELECT m.*
+      FROM messages m
+      INNER JOIN (
+        SELECT conversationId, MAX(timestamp) AS maxTimestamp
+        FROM messages
+        WHERE isDeletedForMe = 0
+        GROUP BY conversationId
+      ) latest
+        ON latest.conversationId = m.conversationId
+       AND latest.maxTimestamp = m.timestamp
+      WHERE m.isDeletedForMe = 0
+      ORDER BY m.timestamp DESC
+    ''');
+    if (rows.isEmpty) return const [];
+
+    final ownerId = _ownerId ?? await _currentOwnerId();
+    final conversations = <ChatConversation>[];
+    for (final row in rows) {
+      final message = _rowToMessage(row);
+      final existingRows = await database.query(
+        'conversations',
+        columns: [
+          'lastReadTime',
+          'unreadCount',
+          'otherUserName',
+          'otherUserAvatar',
+        ],
+        where: 'id = ?',
+        whereArgs: [message.conversationId],
+        limit: 1,
+      );
+      final existing =
+          existingRows.isNotEmpty ? existingRows.first : <String, Object?>{};
+      final lastReadTime = existing['lastReadTime'] as int?;
+      final wasMarkedRead = (existing['unreadCount'] as int? ?? 0) == 0;
+      final isAlreadyRead =
+          lastReadTime != null
+              ? message.timestamp.millisecondsSinceEpoch <= lastReadTime
+              : wasMarkedRead;
+      final conversation = ChatConversation.fromMessage(
+        message,
+        ownerId,
+      ).copyWith(
+        unreadCount: isAlreadyRead ? 0 : null,
+        otherUserName: existing['otherUserName'] as String?,
+        otherUserAvatar: existing['otherUserAvatar'] as String?,
+      );
+      conversations.add(
+        await _repairConversationPeerFromMessages(
+          database,
+          conversation,
+          ownerId,
+        ),
+      );
+    }
+    await saveConversations(conversations);
+    return conversations;
+  }
+
+  Future<ChatConversation> _repairConversationPeerFromMessages(
+    Database database,
+    ChatConversation conversation,
+    String ownerId,
+  ) async {
+    final currentPeer = _conversationPeerKey(conversation.otherUserId);
+    if (currentPeer.isNotEmpty &&
+        currentPeer != _conversationPeerKey(ownerId) &&
+        !conversation.otherUserId.startsWith('!')) {
+      return conversation;
+    }
+
+    final rows = await database.query(
+      'messages',
+      where: 'conversationId = ? AND isDeletedForMe = ?',
+      whereArgs: [conversation.id, 0],
+      orderBy: 'timestamp DESC',
+    );
+
+    for (final row in rows) {
+      final message = _rowToMessage(row);
+      final senderKey = _conversationPeerKey(message.senderId);
+      final receiverKey = _conversationPeerKey(message.receiverId);
+      final ownerKey = _conversationPeerKey(ownerId);
+      final senderPhone = _normalizedPhone(message.senderPhone ?? '');
+      final senderName = _sanitize(message.senderName ?? '').trim();
+
+      String peer = '';
+      String? peerName;
+      if (senderKey.isNotEmpty && senderKey != ownerKey) {
+        peer = message.senderId;
+        peerName = senderName.isNotEmpty ? senderName : senderPhone;
+      } else if (receiverKey.isNotEmpty && receiverKey != ownerKey) {
+        peer = message.receiverId;
+      } else if (senderPhone.isNotEmpty && senderKey != ownerKey) {
+        peer = senderPhone;
+        peerName = senderName.isNotEmpty ? senderName : senderPhone;
+      }
+
+      if (peer.trim().isEmpty || peer.startsWith('!')) continue;
+      return conversation.copyWith(
+        participants: [ownerId, peer],
+        otherUserId: peer,
+        otherUserName:
+            peerName?.trim().isNotEmpty == true
+                ? peerName
+                : conversation.otherUserName,
+      );
+    }
+
+    return conversation;
   }
 
   Future<String?> findDirectConversationId({
@@ -589,6 +824,46 @@ class ChatLocalDb {
     return ids;
   }
 
+  Future<int> materializeContactConversations({
+    required String ownerUserId,
+    required List<Contact> contacts,
+  }) async {
+    final owner = _conversationPeerKey(ownerUserId);
+    if (owner.isEmpty || contacts.isEmpty) return 0;
+
+    var savedCount = 0;
+    for (final contact in contacts) {
+      final ids = await findConversationIdsByMessageIdentity(
+        userIds: [
+          if (contact.wrytteUserId?.trim().isNotEmpty == true)
+            contact.wrytteUserId!.trim(),
+        ],
+        phones: contact.phones,
+      );
+
+      for (final conversationId in ids) {
+        final messages = await loadMessages(conversationId);
+        final visible =
+            messages.where((message) => !message.isDeletedForMe).toList()
+              ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        if (visible.isEmpty) continue;
+
+        final latest = visible.last;
+        final conversation = await _repairConversationPeerFromMessages(
+          await db,
+          ChatConversation.fromMessage(latest, ownerUserId).copyWith(
+            otherUserName: contact.formattedName,
+            otherUserAvatar: contact.avatarUrl,
+          ),
+          ownerUserId,
+        );
+        await saveConversations([conversation]);
+        savedCount += 1;
+      }
+    }
+    return savedCount;
+  }
+
   ChatConversation _rowToConversation(Map<String, dynamic> row) {
     final participantsRaw = row['participants'] as String? ?? '';
     final participants =
@@ -597,6 +872,13 @@ class ChatLocalDb {
     // Sanitize every user-supplied text field to strip lone surrogates
     final rawName = row['otherUserName'] as String?;
     final rawLastMessage = row['lastMessage'] as String;
+    final lastMessageTime = row['lastMessageTime'] as int;
+    final lastReadTime = row['lastReadTime'] as int?;
+    final storedUnreadCount = row['unreadCount'] as int;
+    final unreadCount =
+        lastReadTime != null && lastReadTime >= lastMessageTime
+            ? 0
+            : storedUnreadCount;
 
     return ChatConversation(
       id: row['id'] as String,
@@ -604,10 +886,8 @@ class ChatLocalDb {
       otherUserId: row['otherUserId'] as String,
       lastMessage: _sanitize(rawLastMessage),
       lastMessageSenderId: row['lastMessageSenderId'] as String? ?? '',
-      lastMessageTime: DateTime.fromMillisecondsSinceEpoch(
-        row['lastMessageTime'] as int,
-      ),
-      unreadCount: row['unreadCount'] as int,
+      lastMessageTime: DateTime.fromMillisecondsSinceEpoch(lastMessageTime),
+      unreadCount: unreadCount,
       lastMessageType: row['lastMessageType'] as String? ?? 'text',
       isArchived: (row['isArchived'] as int? ?? 0) == 1,
       isMuted: (row['isMuted'] as int? ?? 0) == 1,
@@ -692,6 +972,17 @@ class ChatLocalDb {
       return trimmed.substring(1, trimmed.indexOf(':'));
     }
     return trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
+  }
+
+  String _normalizedPhone(String value) {
+    var cleaned = value.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleaned.isEmpty) return '';
+    if (cleaned.startsWith('00') && cleaned.length > 4) {
+      cleaned = '+${cleaned.substring(2)}';
+    }
+    final digitsOnly = cleaned.replaceAll(RegExp(r'[^\d]'), '');
+    if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
+    return cleaned.startsWith('+') ? cleaned : '+$cleaned';
   }
 
   bool _isLocalOutgoingEchoId(String id) {

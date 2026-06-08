@@ -16,6 +16,9 @@ import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/calls/call_screen.dart';
 import 'package:wrytte/ui/screens/chats/video_message_recorder_screen.dart';
@@ -91,14 +94,10 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isSending = false;
   bool _matrixAvailable = false;
 
-  static const double _bottomStickThreshold = 80.0;
-
   UserProfile? _receiverProfile;
-  Contact? _savedContact;
   ContactIdentity? _receiverIdentity;
   ChatMessage? _replyingTo;
   double? _stableStatusBarH;
-  late final String _stableHeaderName;
   late final String? _stableHeaderAvatarUrl;
 
   // ── debug overlay ──────────────────────────────────────────────────────────
@@ -114,7 +113,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    _stableHeaderName = _initialHeaderName();
+    _chat.activateConversationRead(widget.conversationId);
     _stableHeaderAvatarUrl =
         widget.avatarUrl?.trim().isNotEmpty == true ? widget.avatarUrl : null;
     apkLog(
@@ -131,6 +130,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _logger.addListener(_onNewLog);
     if (widget.initialMessages.isNotEmpty) {
       _mergeMessages(widget.initialMessages);
+      _loadingInitial = false;
     }
     _focusNode.addListener(_onInputFocusChanged);
     _loadInitial();
@@ -146,6 +146,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _chat.deactivateConversationRead(widget.conversationId);
+    final resolvedConversationId = _resolvedConversationId;
+    if (resolvedConversationId != null &&
+        resolvedConversationId != widget.conversationId) {
+      _chat.deactivateConversationRead(resolvedConversationId);
+    }
     _logger.removeListener(_onNewLog);
     _messagesSub?.cancel();
     _controller.dispose();
@@ -256,6 +262,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (widget.conversationId.startsWith('!')) {
       _resolvedConversationId = widget.conversationId;
+      _chat.activateConversationRead(widget.conversationId);
       apkLog(
         'ChatScreen._resolveConv',
         'used passedConvId → "$_resolvedConversationId"',
@@ -283,6 +290,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     _resolvedConversationId = matrixConversationId;
+    _chat.activateConversationRead(matrixConversationId);
     apkLog(
       'ChatScreen._resolveConv',
       'Matrix direct room -> "$_resolvedConversationId"',
@@ -299,6 +307,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (widget.conversationId.startsWith('!')) {
       _resolvedConversationId = widget.conversationId;
+      _chat.activateConversationRead(widget.conversationId);
       return widget.conversationId;
     }
 
@@ -324,6 +333,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return null;
     }
     _resolvedConversationId = matrixConversationId;
+    _chat.activateConversationRead(matrixConversationId);
     return matrixConversationId;
   }
 
@@ -355,6 +365,7 @@ class _ChatScreenState extends State<ChatScreen> {
     ); // use actual flag
 
     final realConvId = await _resolveConversationId();
+    _chat.activateConversationRead(realConvId);
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
 
     if (realConvId != widget.conversationId) {
@@ -373,6 +384,14 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     await _chat.markConversationAsRead(realConvId);
+    await NotificationService.instance.clearConversationNotifications(
+      realConvId,
+    );
+    if (realConvId != widget.conversationId) {
+      await NotificationService.instance.clearConversationNotifications(
+        widget.conversationId,
+      );
+    }
 
     if (!mounted) return;
     setState(() {
@@ -390,7 +409,7 @@ class _ChatScreenState extends State<ChatScreen> {
       'ChatScreen._hydrateAndSubscribe',
       'hydrated ${msgs.length} msgs for "$convId"',
     );
-    if (mounted) {
+    if (mounted && (msgs.isNotEmpty || _messages.isEmpty)) {
       setState(() => _replaceMessagesFromSharedCache(msgs));
       if (_receiverProfile == null && _receiverIdentity == null) {
         unawaited(_loadReceiverProfile());
@@ -401,10 +420,14 @@ class _ChatScreenState extends State<ChatScreen> {
     _messagesSub = _chat.messagesStreamFor(convId).listen((messages) {
       if (!mounted) return;
       apkLog('ChatScreen.roomStream', 'room="$convId" msgs=${messages.length}');
+      if (messages.isEmpty && _messages.isNotEmpty) return;
       setState(() => _replaceMessagesFromSharedCache(messages));
       final currentConv = _resolvedConversationId ?? widget.conversationId;
       if (convId == currentConv && messages.any((m) => !_isMine(m))) {
         unawaited(_chat.markConversationAsRead(convId));
+        unawaited(
+          NotificationService.instance.clearConversationNotifications(convId),
+        );
       }
     });
   }
@@ -447,9 +470,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     final profileUid = _profilePeerId();
     if (profileUid == null) return;
+    final fallbackPhone = _firstPhoneFrom([profileUid, widget.title]);
     final profile = await UserProfileService.instance.getProfileByUid(
       profileUid,
+      phone: fallbackPhone,
     );
+    final matrixProfile = await _loadMatrixProfile(profileUid);
     final saved =
         ownerUserId == null || ownerUserId.isEmpty
             ? null
@@ -463,17 +489,19 @@ class _ChatScreenState extends State<ChatScreen> {
             );
 
     if (ownerUserId != null && ownerUserId.isNotEmpty) {
-      final fallbackPhone = _firstPhoneFrom([profileUid, widget.title]);
       await ContactIdentityCache.instance.upsert(
         ownerUserId: ownerUserId,
         matrixUserId: profileUid,
         phone: profile?.phone ?? fallbackPhone,
-        profileName: profile?.displayName,
+        profileName:
+            _cleanDisplayName(profile?.displayName).isNotEmpty
+                ? profile?.displayName
+                : matrixProfile?.$1,
         savedName: saved?.formattedName,
         avatarUrl:
             profile?.hasProfileImage == true
                 ? profile!.profileImage
-                : widget.avatarUrl,
+                : matrixProfile?.$2 ?? widget.avatarUrl,
       );
       identity = await ContactIdentityCache.instance.findByMatrixId(
         ownerUserId: ownerUserId,
@@ -484,9 +512,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     setState(() {
       _receiverProfile = profile;
-      _savedContact = saved;
       _receiverIdentity = identity;
     });
+    await _persistResolvedReceiverInfo();
   }
 
   String? _profilePeerId() {
@@ -516,6 +544,21 @@ class _ChatScreenState extends State<ChatScreen> {
     return null;
   }
 
+  Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
+    try {
+      if (!MatrixClientService.instance.isLoggedIn) return null;
+      final matrixUserId = _toMatrixUserId(uid);
+      final profile = await MatrixClientService.instance.client
+          .getProfileFromUserId(
+            matrixUserId,
+            timeout: const Duration(seconds: 5),
+          );
+      return (profile.displayName, profile.avatarUrl?.toString());
+    } catch (_) {
+      return null;
+    }
+  }
+
   String _initialHeaderName() {
     final cleanTitle = _cleanDisplayName(widget.title);
     if (cleanTitle.isNotEmpty) return cleanTitle;
@@ -528,6 +571,49 @@ class _ChatScreenState extends State<ChatScreen> {
     final trimmedTitle = widget.title.trim();
     if (trimmedTitle.isNotEmpty) return trimmedTitle;
     return widget.receiverId.trim();
+  }
+
+  String get _resolvedHeaderName {
+    final savedName = _cleanDisplayName(_receiverIdentity?.savedName);
+    if (savedName.isNotEmpty) return savedName;
+
+    final profileName = _cleanDisplayName(_receiverIdentity?.profileName);
+    if (profileName.isNotEmpty) return profileName;
+
+    final remoteName = _cleanDisplayName(_receiverProfile?.displayName);
+    if (remoteName.isNotEmpty) return remoteName;
+
+    final initial = _initialHeaderName();
+    final cleanInitial = _cleanDisplayName(initial);
+    if (cleanInitial.isNotEmpty) return cleanInitial;
+
+    final phone = _firstPhoneFrom([
+      _receiverIdentity?.phone,
+      widget.receiverId,
+      widget.title,
+      ..._messagePeerIdentifiers(),
+    ]);
+    if (phone.isNotEmpty) return _formatPhone(phone);
+
+    return 'Wrytte user';
+  }
+
+  Future<void> _persistResolvedReceiverInfo() async {
+    final name = _resolvedHeaderName.trim();
+    final avatar =
+        _receiverProfile?.hasProfileImage == true
+            ? _receiverProfile!.profileImage
+            : widget.avatarUrl;
+    if (name.isEmpty && (avatar ?? '').trim().isEmpty) return;
+    try {
+      await ChatLocalDb.instance.updateConversationUserInfo(
+        conversationId: _resolvedConversationId ?? widget.conversationId,
+        name: name,
+        avatar: avatar,
+      );
+    } catch (e) {
+      debugPrint('[ChatScreen] receiver info persist skipped: $e');
+    }
   }
 
   Iterable<String> _messagePeerIdentifiers() sync* {
@@ -870,11 +956,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ─── SCROLL ────────────────────────────────────────────────────────────────
 
-  bool get _isAtBottom {
-    if (!_scrollCtrl.hasClients) return true;
-    return _scrollCtrl.position.pixels <= _bottomStickThreshold;
-  }
-
   bool get _shouldLiftShortConversation {
     return _messages.isNotEmpty && _messages.length <= 4;
   }
@@ -976,6 +1057,12 @@ class _ChatScreenState extends State<ChatScreen> {
       return trimmed.substring(1, trimmed.indexOf(':'));
     }
     return trimmed;
+  }
+
+  String _toMatrixUserId(String value) {
+    final trimmed = value.trim();
+    if (trimmed.startsWith('@') && trimmed.contains(':')) return trimmed;
+    return '@${_matrixLocalpart(trimmed)}:${MatrixConfig.serverName}';
   }
 
   void _replaceOptimisticMessage(String optimisticId, ChatMessage sent) {
@@ -1565,7 +1652,7 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── APP BAR ───────────────────────────────────────────────────────────────
 
   Widget _buildAppBar(double statusBarH) {
-    final displayName = _stableHeaderName;
+    final displayName = _resolvedHeaderName;
     final fallbackPhone =
         (_receiverIdentity?.phone?.trim().isNotEmpty == true)
             ? _receiverIdentity!.phone!.trim()
@@ -1578,7 +1665,10 @@ class _ChatScreenState extends State<ChatScreen> {
         _receiverIdentity?.profileName?.trim().isNotEmpty == true
             ? _receiverIdentity!.profileName!.trim()
             : widget.title;
-    final avatarUrl = _stableHeaderAvatarUrl;
+    final avatarUrl =
+        _receiverProfile?.hasProfileImage == true
+            ? _receiverProfile!.profileImage
+            : _stableHeaderAvatarUrl;
 
     return SizedBox(
       height: statusBarH + kToolbarHeight,
@@ -1621,7 +1711,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                         fallbackPhone.isNotEmpty
                                             ? fallbackPhone
                                             : null,
-                                    fallbackAvatarUrl: widget.avatarUrl,
+                                    fallbackAvatarUrl: avatarUrl,
                                   ),
                             ),
                           );

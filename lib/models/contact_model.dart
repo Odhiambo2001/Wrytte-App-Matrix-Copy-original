@@ -6,6 +6,7 @@ class Contact {
   final String? wrytteUserId;
   final String? databaseName;
   final bool isRecent;
+  final bool isSaved;
 
   Contact({
     required this.displayName,
@@ -15,6 +16,7 @@ class Contact {
     this.wrytteUserId,
     this.databaseName,
     this.isRecent = false,
+    this.isSaved = false,
   });
 
   String get formattedName => displayName ?? 'Unknown';
@@ -29,6 +31,7 @@ class Contact {
     String? wrytteUserId,
     String? databaseName,
     bool? isRecent,
+    bool? isSaved,
   }) {
     return Contact(
       displayName: displayName ?? this.displayName,
@@ -38,6 +41,7 @@ class Contact {
       wrytteUserId: wrytteUserId ?? this.wrytteUserId,
       databaseName: databaseName ?? this.databaseName,
       isRecent: isRecent ?? this.isRecent,
+      isSaved: isSaved ?? this.isSaved,
     );
   }
 
@@ -56,6 +60,7 @@ class Contact {
       'wrytteUserId': wrytteUserId,
       'databaseName': databaseName,
       'isRecent': isRecent,
+      'isSaved': isSaved,
     };
   }
 
@@ -69,6 +74,7 @@ class Contact {
       wrytteUserId: map['wrytteUserId'],
       databaseName: map['databaseName'],
       isRecent: map['isRecent'] ?? false,
+      isSaved: map['isSaved'] ?? false,
     );
   }
 

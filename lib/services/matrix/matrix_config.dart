@@ -14,6 +14,9 @@ class MatrixConfig {
   );
 
   static const appServiceName = 'Wrytte';
+  static const pushAppId = 'com.example.wrytte';
+  static const pushGatewayUrl =
+      'https://wryttedev.azurewebsites.net/_matrix/push/v1/notify';
   static const localDatabaseName = 'wrytte_matrix';
   static const localDatabaseFile = 'wrytte_matrix.sqlite';
   static const historyPageSize = 3000;

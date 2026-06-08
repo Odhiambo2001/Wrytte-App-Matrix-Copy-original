@@ -1,10 +1,15 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:wrytte/services/auth/api_service.dart';
+import 'package:wrytte/services/auth/auth_service.dart';
 
-class UserAvatar extends StatelessWidget {
+class UserAvatar extends StatefulWidget {
   final double size;
   final ImageProvider? image;
   final String? imageUrl;
+  final String? localImagePath;
   final String? name;
   final VoidCallback? onTap;
   final String? heroTag;
@@ -14,38 +19,74 @@ class UserAvatar extends StatelessWidget {
     this.size = 40.0,
     this.image,
     this.imageUrl,
+    this.localImagePath,
     this.name,
     this.onTap,
     this.heroTag,
   });
 
   @override
+  State<UserAvatar> createState() => _UserAvatarState();
+}
+
+class _UserAvatarState extends State<UserAvatar> {
+  late Future<String?> _tokenFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _tokenFuture = AuthService.instance.getValidBackendToken();
+  }
+
+  @override
+  void didUpdateWidget(covariant UserAvatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageUrl != widget.imageUrl) {
+      _tokenFuture = AuthService.instance.getValidBackendToken();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     Widget avatarWidget;
 
-    if (image != null) {
-      avatarWidget = _buildFromImageProvider(image!);
-    } else if (imageUrl != null && imageUrl!.isNotEmpty) {
+    final localFile = _localImageFile();
+
+    if (widget.image != null) {
+      avatarWidget = _buildFromImageProvider(widget.image!);
+    } else if (localFile != null) {
       avatarWidget = ClipOval(
-        child: CachedNetworkImage(
-          imageUrl: imageUrl!,
-          width: size,
-          height: size,
+        child: Image.file(
+          localFile,
+          width: widget.size,
+          height: widget.size,
           fit: BoxFit.cover,
-          placeholder: (context, url) => _buildPlaceholder(),
-          errorWidget: (context, url, error) => _buildPlaceholder(),
+          errorBuilder: (context, error, stackTrace) {
+            debugPrint(
+              '[UserAvatar] local image load failed path="${localFile.path}" error=$error',
+            );
+            return _buildNetworkOrPlaceholder();
+          },
         ),
       );
+    } else if (widget.imageUrl != null && widget.imageUrl!.isNotEmpty) {
+      avatarWidget = _buildNetworkOrPlaceholder();
     } else {
       avatarWidget = _buildPlaceholder();
     }
 
     final wrapped = GestureDetector(
-      onTap: onTap,
-      child: SizedBox(width: size, height: size, child: avatarWidget),
+      onTap: widget.onTap,
+      child: SizedBox(
+        width: widget.size,
+        height: widget.size,
+        child: avatarWidget,
+      ),
     );
 
-    return heroTag != null ? Hero(tag: heroTag!, child: wrapped) : wrapped;
+    return widget.heroTag != null
+        ? Hero(tag: widget.heroTag!, child: wrapped)
+        : wrapped;
   }
 
   Widget _buildFromImageProvider(ImageProvider provider) {
@@ -57,9 +98,62 @@ class UserAvatar extends StatelessWidget {
     );
   }
 
+  File? _localImageFile() {
+    final path = widget.localImagePath?.trim() ?? '';
+    if (path.isEmpty) return null;
+    final file = File(path);
+    return file.existsSync() ? file : null;
+  }
+
+  Widget _buildNetworkOrPlaceholder() {
+    final url = _resolveImageUrl(widget.imageUrl);
+    if (url.isEmpty) return _buildPlaceholder();
+    return FutureBuilder<String?>(
+      future: _tokenFuture,
+      builder: (context, snapshot) {
+        return ClipOval(
+          child: CachedNetworkImage(
+            imageUrl: url,
+            httpHeaders: _authHeaders(snapshot.data),
+            width: widget.size,
+            height: widget.size,
+            fit: BoxFit.cover,
+            placeholder: (context, url) => _buildPlaceholder(),
+            errorWidget: (context, url, error) {
+              debugPrint(
+                '[UserAvatar] image load failed url="$url" error=$error',
+              );
+              return _buildPlaceholder();
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  String _resolveImageUrl(String? raw) {
+    final url = raw?.trim() ?? '';
+    if (url.isEmpty) return '';
+    if (url.startsWith('/')) return '${ApiService.baseUrl}$url';
+    return url;
+  }
+
+  Map<String, String>? _authHeaders(String? token) {
+    final clean = token?.trim() ?? '';
+    if (clean.isEmpty) return null;
+    final rawUrl = widget.imageUrl?.trim() ?? '';
+    final uri = Uri.tryParse(rawUrl);
+    final isWrytteImage =
+        rawUrl.startsWith('/usrimg/') ||
+        uri?.host.toLowerCase() == 'wryttedev.azurewebsites.net' ||
+        uri?.host.toLowerCase() == 'wrytte.com';
+    if (!isWrytteImage) return null;
+    return {'Authorization': 'Bearer $clean'};
+  }
+
   Widget _buildPlaceholder() {
     // Show initials if name is available, otherwise icon
-    final initials = _getInitials(name);
+    final initials = _getInitials(widget.name);
 
     return Container(
       decoration: const BoxDecoration(
@@ -73,14 +167,14 @@ class UserAvatar extends StatelessWidget {
                   initials,
                   style: TextStyle(
                     color: const Color(0xFF4DA3FF),
-                    fontSize: size * 0.36,
+                    fontSize: widget.size * 0.36,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 0.5,
                   ),
                 )
                 : Icon(
                   Icons.person,
-                  size: size * 0.5,
+                  size: widget.size * 0.5,
                   color: const Color(0xFF4DA3FF),
                 ),
       ),

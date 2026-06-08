@@ -11,6 +11,7 @@ class BottomNavBar extends StatefulWidget {
   final Function(int) onTap;
   final int totalUnreadCount;
   final Widget? userAvatar;
+  final UserProfile? initialProfile;
 
   const BottomNavBar({
     super.key,
@@ -18,6 +19,7 @@ class BottomNavBar extends StatefulWidget {
     required this.onTap,
     required this.totalUnreadCount,
     this.userAvatar,
+    this.initialProfile,
   });
 
   @override
@@ -32,15 +34,30 @@ class _BottomNavBarState extends State<BottomNavBar> {
   void initState() {
     super.initState();
 
+    final initial =
+        widget.initialProfile ?? UserProfileService.instance.cachedProfile;
+    _profile = _isDisplayReadyProfile(initial) ? initial : null;
+
     // Subscribe to profile changes; the service validates that cached data
     // belongs to the currently signed-in account before emitting it.
     _profileSub = UserProfileService.instance
         .getCurrentUserProfileStream()
         .listen((profile) {
-          if (mounted && profile != null) {
+          if (mounted && _isDisplayReadyProfile(profile)) {
             setState(() => _profile = profile);
           }
         });
+  }
+
+  @override
+  void didUpdateWidget(covariant BottomNavBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialProfile == oldWidget.initialProfile) return;
+    final initial =
+        widget.initialProfile ?? UserProfileService.instance.cachedProfile;
+    if (_isDisplayReadyProfile(initial)) {
+      _profile = initial;
+    }
   }
 
   @override
@@ -61,8 +78,8 @@ class _BottomNavBarState extends State<BottomNavBar> {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  const Color(0xFF0F1013).withOpacity(0.0),
-                  const Color(0xFF0F1013).withOpacity(0.80),
+                  const Color(0xFF0F1013).withValues(alpha: 0.0),
+                  const Color(0xFF0F1013).withValues(alpha: 0.80),
                 ],
               ),
             ),
@@ -79,7 +96,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
                 filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                 child: Container(
                   decoration: BoxDecoration(
-                    color: const Color(0xFF23262C).withOpacity(0.30),
+                    color: const Color(0xFF23262C).withValues(alpha: 0.30),
                     borderRadius: BorderRadius.circular(30),
                     border: Border.all(
                       color: const Color(0xFF23262C),
@@ -87,7 +104,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.25),
+                        color: Colors.black.withValues(alpha: 0.25),
                         blurRadius: 30,
                         offset: const Offset(0, 10),
                       ),
@@ -147,10 +164,12 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                       : 'assets/svg/chat_icon.svg',
                                   height: 26,
                                   width: 26,
-                                  color:
-                                      widget.currentIndex == 1
-                                          ? Colors.white
-                                          : const Color(0xFF7A7A7A),
+                                  colorFilter: ColorFilter.mode(
+                                    widget.currentIndex == 1
+                                        ? Colors.white
+                                        : const Color(0xFF7A7A7A),
+                                    BlendMode.srcIn,
+                                  ),
                                 ),
                                 if (widget.totalUnreadCount > 0)
                                   Positioned(
@@ -236,7 +255,8 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                   _profile?.hasProfileImage == true
                                       ? _profile!.profileImage
                                       : null,
-                              name: _profile?.displayName,
+                              localImagePath: _profile?.localProfileImagePath,
+                              name: _profileNameForAvatar(),
                             ),
                           ),
                           label: _profileTabLabel(),
@@ -254,11 +274,33 @@ class _BottomNavBarState extends State<BottomNavBar> {
   }
 
   String _profileTabLabel() {
-    final name = _profile?.displayName.trim() ?? '';
-    if (name.isEmpty) return 'You';
+    final name = _profileDisplayName();
+    if (name.isEmpty) return 'Profile';
     final firstName = name.split(RegExp(r'\s+')).first;
     if (firstName.length <= 10) return firstName;
     return '${firstName.substring(0, 10)}...';
+  }
+
+  String? _profileNameForAvatar() {
+    final name = _profileDisplayName();
+    return name.isEmpty ? null : name;
+  }
+
+  String _profileDisplayName() {
+    final name = _profile?.displayName.trim() ?? '';
+    if (name.isEmpty || _looksLikePhone(name)) return '';
+    return name;
+  }
+
+  bool _looksLikePhone(String value) {
+    final stripped = value.trim().replaceAll(RegExp(r'[\s\-()+]'), '');
+    return stripped.length >= 7 && RegExp(r'^\d+$').hasMatch(stripped);
+  }
+
+  bool _isDisplayReadyProfile(UserProfile? profile) {
+    if (profile == null) return false;
+    final name = profile.displayName.trim();
+    return name.isNotEmpty && !_looksLikePhone(name);
   }
 }
 
@@ -279,7 +321,7 @@ class _NavIcon extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.12),
+          color: Colors.white.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(20),
         ),
         child: child,

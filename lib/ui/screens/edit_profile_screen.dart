@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:wrytte/components/user_avatar.dart';
@@ -9,7 +8,9 @@ import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/auth_entry_screen.dart';
 
 class EditProfileScreen extends StatefulWidget {
-  const EditProfileScreen({super.key});
+  final UserProfile? initialProfile;
+
+  const EditProfileScreen({super.key, this.initialProfile});
 
   @override
   State<EditProfileScreen> createState() => _EditProfileScreenState();
@@ -32,25 +33,28 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   UserProfile? _profile;
   String? _currentImageUrl;
+  String? _currentLocalImagePath;
+  int _avatarCacheRevision = 0;
 
   @override
   void initState() {
     super.initState();
+    _seedProfile(
+      widget.initialProfile ?? UserProfileService.instance.cachedProfile,
+    );
     _loadProfile();
   }
 
   Future<void> _loadProfile() async {
-    setState(() => _isLoading = true);
-    final profile = await UserProfileService.instance.getCurrentUserProfile();
+    if (_profile == null) {
+      setState(() => _isLoading = true);
+    }
+    final profile = await UserProfileService.instance.getCurrentUserProfile(
+      forceRefresh: true,
+    );
     if (!mounted) return;
     if (profile != null) {
-      final nameParts = profile.name.trim().split(RegExp(r'\s+'));
-      _firstNameController.text = nameParts.isNotEmpty ? nameParts[0] : '';
-      _lastNameController.text =
-          nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
-      _bioController.text = profile.bio;
-      _linkController.text = profile.links.isNotEmpty ? profile.links[0] : '';
-      _currentImageUrl = profile.hasProfileImage ? profile.profileImage : null;
+      _applyProfile(profile);
     }
     setState(() {
       _profile = profile;
@@ -58,9 +62,38 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     });
   }
 
+  void _seedProfile(UserProfile? profile) {
+    if (profile == null) return;
+    _applyProfile(profile);
+    _profile = profile;
+    _isLoading = false;
+  }
+
+  void _applyProfile(UserProfile profile) {
+    final nameParts = profile.name.trim().split(RegExp(r'\s+'));
+    _firstNameController.text = nameParts.isNotEmpty ? nameParts[0] : '';
+    _lastNameController.text =
+        nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
+    _bioController.text = profile.bio;
+    _linkController.text = profile.links.isNotEmpty ? profile.links[0] : '';
+    _currentImageUrl = profile.hasProfileImage ? profile.profileImage : null;
+    _currentLocalImagePath =
+        profile.localProfileImagePath.trim().isNotEmpty
+            ? profile.localProfileImagePath
+            : null;
+    if (_currentImageUrl != null) {
+      _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
+    }
+  }
+
   Future<void> _pickImage(ImageSource source) async {
-    final picked = await _picker.pickImage(source: source, imageQuality: 85);
-    if (picked != null) setState(() => _pickedImageFile = File(picked.path));
+    try {
+      final picked = await _picker.pickImage(source: source, imageQuality: 85);
+      if (picked == null) return;
+      setState(() => _pickedImageFile = File(picked.path));
+    } catch (_) {
+      _showSnack('Could not select photo.', isError: true);
+    }
   }
 
   void _showImageOptions() {
@@ -100,20 +133,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
-  Future<String?> _uploadProfileImage(File file) async {
-    try {
-      final uid = await AuthService.instance.getCurrentUserId();
-      if (uid == null || uid.isEmpty) return null;
-      final ref = FirebaseStorage.instance.ref().child(
-        'user_profile_images/$uid.jpg',
-      );
-      await ref.putFile(file);
-      return await ref.getDownloadURL();
-    } catch (e) {
-      return null;
-    }
-  }
-
   Future<void> _save() async {
     if (_isSaving) return;
     final uid = await AuthService.instance.getCurrentUserId();
@@ -124,12 +143,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() => _isSaving = true);
     try {
       String? newImageUrl = _currentImageUrl;
+      var avatarUploadPending = false;
       if (_pickedImageFile != null) {
-        newImageUrl = await _uploadProfileImage(_pickedImageFile!);
-        if (newImageUrl == null) {
-          _showSnack('Failed to upload photo.', isError: true);
-          setState(() => _isSaving = false);
-          return;
+        try {
+          newImageUrl = await UserProfileService.instance.uploadProfileImage(
+            _pickedImageFile!,
+          );
+        } catch (e) {
+          avatarUploadPending = true;
+          debugPrint('[EditProfile] Avatar upload queued: $e');
         }
       }
       final firstName = _firstNameController.text.trim();
@@ -158,20 +180,38 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         bio: bio,
         links: existingLinks,
       );
-      await UserProfileService.instance.getCurrentUserProfile(
-        forceRefresh: true,
-      );
+      final refreshedProfile = await UserProfileService.instance
+          .getCurrentUserProfile(forceRefresh: true);
+      final displayImageUrl =
+          newImageUrl?.trim().isNotEmpty == true
+              ? newImageUrl
+              : refreshedProfile?.profileImage;
       if (!mounted) return;
       setState(() {
-        _currentImageUrl = newImageUrl;
-        _pickedImageFile = null;
+        _profile = refreshedProfile ?? _profile;
+        _currentImageUrl =
+            displayImageUrl?.trim().isNotEmpty == true ? displayImageUrl : null;
+        _currentLocalImagePath =
+            refreshedProfile?.localProfileImagePath.trim().isNotEmpty == true
+                ? refreshedProfile!.localProfileImagePath
+                : _currentLocalImagePath;
+        if (_currentImageUrl != null) {
+          _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
+        }
+        if (_currentLocalImagePath != null) {
+          _pickedImageFile = null;
+        }
         _isSaving = false;
       });
-      _showSnack('Profile updated successfully.');
+      _showSnack(
+        avatarUploadPending
+            ? 'Profile saved. Photo will upload when internet is back.'
+            : 'Profile updated successfully.',
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _isSaving = false);
-      _showSnack('Failed to save. Try again.', isError: true);
+      _showSnack(e.toString(), isError: true);
     }
   }
 
@@ -242,6 +282,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
+  String? _cacheBustedAvatarUrl(String? url) {
+    final raw = url?.trim() ?? '';
+    if (raw.isEmpty) return null;
+    if (_avatarCacheRevision <= 0) return raw;
+    final uri = Uri.tryParse(raw);
+    if (uri == null || !uri.hasScheme) return raw;
+    final params = Map<String, String>.from(uri.queryParameters);
+    params['v'] = _avatarCacheRevision.toString();
+    return uri.replace(queryParameters: params).toString();
+  }
+
   // ── BUILD ──────────────────────────────────────────────────────────────────
 
   @override
@@ -267,7 +318,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               onTap: _showImageOptions,
               child: UserAvatar(
                 size: 100,
-                imageUrl: _currentImageUrl,
+                imageUrl: _cacheBustedAvatarUrl(_currentImageUrl),
+                localImagePath: _currentLocalImagePath,
                 name: _profile?.displayName,
               ),
             );

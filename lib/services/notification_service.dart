@@ -1,12 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:matrix/matrix.dart' as mx;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/services/call_service.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user_service.dart';
 
 class NotificationService {
@@ -15,6 +20,8 @@ class NotificationService {
 
   static const _messageChannelId = 'wrytte_messages';
   static const _callChannelId = 'wrytte_calls';
+  static const _conversationNotificationIdsKey =
+      'wrytte_conversation_notification_ids';
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
@@ -22,6 +29,8 @@ class NotificationService {
   final Set<String> _notifiedMessageIds = <String>{};
   final Set<String> _notifiedCallIds = <String>{};
   final Set<String> _notifiedRemoteIds = <String>{};
+  final Map<String, Set<int>> _notificationIdsByConversation = {};
+  final Map<String, DateTime> _readMarkersByConversation = {};
 
   StreamSubscription<ChatMessage>? _messageSub;
   StreamSubscription<CallData>? _callSub;
@@ -31,6 +40,8 @@ class NotificationService {
   bool _initialized = false;
   String? _currentUserId;
   String? _lastRegisteredToken;
+  DateTime? _localMessageNotificationsStartedAt;
+  bool _matrixPusherReady = false;
 
   Future<void> initialize() async {
     if (_initialized || kIsWeb) return;
@@ -92,8 +103,10 @@ class NotificationService {
 
   Future<void> start({required String currentUserId}) async {
     _currentUserId = currentUserId;
+    _localMessageNotificationsStartedAt = DateTime.now();
     await initialize();
     if (kIsWeb) return;
+    await _seedNotificationStateFromLocalDb();
 
     _messageSub ??= ChatService().messageStream.listen(_showMessage);
     _callSub ??= CallService.instance.incomingCallStream.listen(_showCall);
@@ -121,12 +134,13 @@ class NotificationService {
       _handleOpenedPush(initialMessage);
     }
 
-    unawaited(ChatService().connect());
+    unawaited(_connectAndRegisterMatrixPusher(token));
   }
 
   Future<void> stop() async {
     final token = _lastRegisteredToken ?? await _messaging.getToken();
     if (token != null && token.isNotEmpty) {
+      await _removeMatrixPusher(token);
       await UserService().removeFcmToken(fcmToken: token);
     }
     await _messageSub?.cancel();
@@ -141,20 +155,88 @@ class NotificationService {
     _tokenRefreshSub = null;
     _currentUserId = null;
     _lastRegisteredToken = null;
+    _localMessageNotificationsStartedAt = null;
+    _matrixPusherReady = false;
     _notifiedMessageIds.clear();
     _notifiedCallIds.clear();
     _notifiedRemoteIds.clear();
+    _notificationIdsByConversation.clear();
+    _readMarkersByConversation.clear();
+    unawaited(_saveConversationNotificationIds());
   }
 
   Future<void> _registerFcmToken(String token) async {
     final cleaned = token.trim();
     if (cleaned.isEmpty) return;
-    if (_lastRegisteredToken == cleaned) return;
     try {
-      await UserService().updateFcmToken(cleaned);
-      _lastRegisteredToken = cleaned;
+      if (_lastRegisteredToken != cleaned) {
+        await UserService().updateFcmToken(cleaned);
+        _lastRegisteredToken = cleaned;
+      }
+      if (_matrixPusherReady) {
+        await _registerMatrixPusher(cleaned);
+      }
     } catch (e) {
       debugPrint('[NotificationService] FCM token registration failed: $e');
+    }
+  }
+
+  Future<void> _connectAndRegisterMatrixPusher(String? token) async {
+    try {
+      await ChatService().connect();
+      _matrixPusherReady = true;
+      final cleaned = token?.trim();
+      if (cleaned != null && cleaned.isNotEmpty) {
+        await _registerMatrixPusher(cleaned);
+      }
+    } catch (e) {
+      debugPrint('[NotificationService] Matrix push connect failed: $e');
+    }
+  }
+
+  Future<void> _registerMatrixPusher(String token) async {
+    try {
+      if (!MatrixClientService.instance.isLoggedIn) {
+        debugPrint(
+          '[NotificationService] Matrix pusher skipped: Matrix not logged in',
+        );
+        return;
+      }
+      final client = MatrixClientService.instance.client;
+      await client
+          .postPusher(
+            mx.Pusher(
+              appId: MatrixConfig.pushAppId,
+              pushkey: token,
+              appDisplayName: 'Wrytte',
+              deviceDisplayName: client.deviceID ?? 'Wrytte device',
+              kind: 'http',
+              lang: 'en',
+              data: mx.PusherData(
+                url: Uri.parse(MatrixConfig.pushGatewayUrl),
+                format: 'event_id_only',
+              ),
+            ),
+            append: true,
+          )
+          .timeout(const Duration(seconds: 10));
+      debugPrint('[NotificationService] Matrix pusher registered');
+    } catch (e) {
+      debugPrint('[NotificationService] Matrix pusher registration failed: $e');
+    }
+  }
+
+  Future<void> _removeMatrixPusher(String token) async {
+    try {
+      if (!MatrixClientService.instance.isLoggedIn) return;
+      await MatrixClientService.instance.client
+          .deletePusher(
+            mx.PusherId(appId: MatrixConfig.pushAppId, pushkey: token),
+          )
+          .timeout(const Duration(seconds: 10));
+      debugPrint('[NotificationService] Matrix pusher removed');
+    } catch (e) {
+      debugPrint('[NotificationService] Matrix pusher removal failed: $e');
     }
   }
 
@@ -163,6 +245,7 @@ class NotificationService {
     if (kIsWeb) return;
 
     final id = _remoteId(message);
+    if (await _shouldIgnoreRemoteMessage(message, id)) return;
     if (!_notifiedRemoteIds.add(id) || !_notifiedMessageIds.add(id)) return;
 
     final notification = message.notification;
@@ -189,8 +272,11 @@ class NotificationService {
     final conversationId =
         _firstNonEmpty([data['conversationId'], data['conversation_id']]) ?? '';
 
+    final notificationId = id.hashCode;
+    _trackConversationNotification(conversationId, notificationId);
+
     await _plugin.show(
-      id.hashCode,
+      notificationId,
       title,
       body,
       const NotificationDetails(
@@ -225,6 +311,7 @@ class NotificationService {
 
     final matrixUserId = MatrixClientService.instance.userId ?? '';
     if (_isOwnSender(message.senderId, matrixUserId)) return;
+    if (await _shouldIgnoreLocalMessage(message)) return;
 
     final sender = _displayName(
       message.senderName,
@@ -233,8 +320,11 @@ class NotificationService {
     );
     final preview = _messagePreview(message);
 
+    final notificationId = message.id.hashCode;
+    _trackConversationNotification(message.conversationId, notificationId);
+
     await _plugin.show(
-      message.id.hashCode,
+      notificationId,
       sender,
       preview,
       const NotificationDetails(
@@ -307,6 +397,98 @@ class NotificationService {
     return false;
   }
 
+  Future<void> clearConversationNotifications(String conversationId) async {
+    final cleaned = conversationId.trim();
+    if (cleaned.isEmpty || kIsWeb) return;
+    await _loadConversationNotificationIds();
+    final ids = _notificationIdsByConversation.remove(cleaned);
+    if (ids == null || ids.isEmpty) return;
+    for (final id in ids) {
+      await _plugin.cancel(id);
+    }
+    await _saveConversationNotificationIds();
+  }
+
+  void _trackConversationNotification(String conversationId, int id) {
+    final cleaned = conversationId.trim();
+    if (cleaned.isEmpty) return;
+    _notificationIdsByConversation.putIfAbsent(cleaned, () => <int>{}).add(id);
+    unawaited(_saveConversationNotificationIds());
+  }
+
+  Future<void> _loadConversationNotificationIds() async {
+    if (_notificationIdsByConversation.isNotEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_conversationNotificationIdsKey);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      for (final entry in decoded.entries) {
+        final conversationId = entry.key.toString().trim();
+        if (conversationId.isEmpty || entry.value is! List) continue;
+        final ids =
+            (entry.value as List)
+                .map((value) => int.tryParse(value.toString()))
+                .whereType<int>()
+                .toSet();
+        if (ids.isNotEmpty) {
+          _notificationIdsByConversation[conversationId] = ids;
+        }
+      }
+    } catch (e) {
+      debugPrint('[NotificationService] notification id cache read failed: $e');
+    }
+  }
+
+  Future<void> _saveConversationNotificationIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_notificationIdsByConversation.isEmpty) {
+        await prefs.remove(_conversationNotificationIdsKey);
+        return;
+      }
+      final encoded = jsonEncode(
+        _notificationIdsByConversation.map(
+          (key, value) => MapEntry(key, value.toList()),
+        ),
+      );
+      await prefs.setString(_conversationNotificationIdsKey, encoded);
+    } catch (e) {
+      debugPrint('[NotificationService] notification id cache save failed: $e');
+    }
+  }
+
+  Future<void> _seedNotificationStateFromLocalDb() async {
+    try {
+      _readMarkersByConversation
+        ..clear()
+        ..addAll(await ChatLocalDb.instance.loadConversationReadMarkers());
+      _notifiedMessageIds.addAll(
+        await ChatLocalDb.instance.loadRecentMessageIds(),
+      );
+    } catch (e) {
+      debugPrint('[NotificationService] local notification seed skipped: $e');
+    }
+  }
+
+  Future<bool> _shouldIgnoreLocalMessage(ChatMessage message) async {
+    if (!_isLiveIncomingMessage(message)) return true;
+    final readAt = _readMarkersByConversation[message.conversationId];
+    if (readAt != null && !message.timestamp.isAfter(readAt)) return true;
+    return false;
+  }
+
+  bool _isLiveIncomingMessage(ChatMessage message) {
+    final startedAt = _localMessageNotificationsStartedAt;
+    if (startedAt == null) return false;
+
+    // Matrix replays timeline/history during login and reinstall restore.
+    // Those messages can be old and already read, so they must update chat UI
+    // without producing fresh local notifications.
+    return !message.timestamp.isBefore(startedAt);
+  }
+
   String _messagePreview(ChatMessage message) {
     if (message.attachmentType == 'voice') return 'Voice message';
     if (message.attachmentType == 'video') return 'Video message';
@@ -336,6 +518,76 @@ class NotificationService {
           message.data['conversation_id'],
         ]) ??
         DateTime.now().microsecondsSinceEpoch.toString();
+  }
+
+  Future<bool> _shouldIgnoreRemoteMessage(
+    RemoteMessage message,
+    String id,
+  ) async {
+    final data = message.data;
+    final unread = int.tryParse(
+      _firstNonEmpty([
+            data['unread'],
+            data['unreadCount'],
+            data['unread_count'],
+            data['counts.unread'],
+          ]) ??
+          '',
+    );
+    if (unread != null && unread <= 0) return true;
+
+    final eventId =
+        _firstNonEmpty([
+          data['event_id'],
+          data['eventId'],
+          data['message_id'],
+          data['messageId'],
+          id,
+        ]) ??
+        '';
+    if (eventId.isEmpty) return false;
+
+    try {
+      final conversationId =
+          _firstNonEmpty([data['conversationId'], data['conversation_id']]) ??
+          '';
+      final eventTime = _remoteEventTime(data);
+      final readAt = _readMarkersByConversation[conversationId];
+      if (eventTime != null && readAt != null && !eventTime.isAfter(readAt)) {
+        debugPrint(
+          '[NotificationService] remote push ignored; event already read id="$eventId"',
+        );
+        return true;
+      }
+      if (await ChatLocalDb.instance.hasMessage(eventId)) {
+        debugPrint(
+          '[NotificationService] remote push ignored; event already cached id="$eventId"',
+        );
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[NotificationService] remote read check skipped: $e');
+    }
+    return false;
+  }
+
+  DateTime? _remoteEventTime(Map<String, dynamic> data) {
+    final raw = _firstNonEmpty([
+      data['origin_server_ts'],
+      data['originServerTs'],
+      data['timestamp'],
+      data['ts'],
+      data['sent_at'],
+      data['sentAt'],
+    ]);
+    if (raw == null) return null;
+    final millis = int.tryParse(raw);
+    if (millis != null) {
+      return DateTime.fromMillisecondsSinceEpoch(
+        millis < 1000000000000 ? millis * 1000 : millis,
+      );
+    }
+    return DateTime.tryParse(raw);
   }
 
   String? _firstNonEmpty(Iterable<Object?> values) {

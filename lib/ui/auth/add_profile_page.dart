@@ -93,8 +93,20 @@ class _AddProfilePageState extends State<AddProfilePage> {
 
   Future<void> _navigateHome(String uid) async {
     if (!mounted) return;
+    final currentUser = await AuthService.instance.getCurrentUser();
+    if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => HomeScreen(currentUserId: uid)),
+      MaterialPageRoute(
+        builder:
+            (_) => HomeScreen(
+              currentUserId: uid,
+              initialProfileName:
+                  _nicknameController.text.trim().isNotEmpty
+                      ? _nicknameController.text.trim()
+                      : currentUser?.username,
+              initialPhone: currentUser?.phone,
+            ),
+      ),
       (route) => false,
     );
   }
