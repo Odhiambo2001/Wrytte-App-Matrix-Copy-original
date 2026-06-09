@@ -334,20 +334,27 @@ class AuthService {
       expiresAt: expiresAt,
     );
 
-    // Do not block onboarding on Matrix. A slow/unreachable homeserver must not
-    // trap the user on the OTP screen after Wrytte auth has succeeded.
     if (secret.trim().isNotEmpty) {
       final generation = ++_matrixBootstrapGeneration;
-      await _tryLoginToMatrix(
-        userId: userId,
-        nickname: nameToSave,
-        generation: generation,
-        preferRegisterFirst: preferMatrixRegisterFirst,
-      ).timeout(
-        matrixBootstrapTimeout,
-        onTimeout: () {
-          debugPrint('[AuthService] Matrix bootstrap timed out; continuing.');
-        },
+      unawaited(
+        _tryLoginToMatrix(
+              userId: userId,
+              nickname: nameToSave,
+              generation: generation,
+              preferRegisterFirst: preferMatrixRegisterFirst,
+            )
+            .then((_) => ChatService().connect())
+            .timeout(
+              matrixBootstrapTimeout,
+              onTimeout: () {
+                debugPrint(
+                  '[AuthService] Matrix bootstrap timed out; continuing.',
+                );
+              },
+            )
+            .catchError((e) {
+              debugPrint('[AuthService] Matrix/chat bootstrap skipped: $e');
+            }),
       );
     }
   }

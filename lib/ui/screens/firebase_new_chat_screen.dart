@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/contact_components/contact_item.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
@@ -76,77 +78,52 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
   }
 
   Future<void> _loadMyContacts() async {
-    var localContacts = const <Contact>[];
     try {
       final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
-      if (currentUserId.isNotEmpty) {
-        localContacts = await ContactLocalDb.loadSavedContacts(
-          ownerUserId: currentUserId,
-        );
-        if (localContacts.isNotEmpty && mounted) {
-          _showContacts(localContacts);
-        }
-      }
-
-      if (currentUserId.isNotEmpty) {
-        final contacts = await _contactService.getMatrixContactsCached(
-          currentUserId,
-        );
-
-        contacts.sort(
-          (a, b) => a.formattedName.toLowerCase().compareTo(
-            b.formattedName.toLowerCase(),
-          ),
-        );
-
-        if (mounted) {
-          _showContacts(contacts);
-        }
-      } else {
+      if (currentUserId.isEmpty) {
         if (mounted) setState(() => _isLoading = false);
+        return;
       }
 
-      final currentUserId2 =
-          await AuthService.instance.getCurrentUserId() ?? '';
-      final savedContacts =
-          currentUserId2.isNotEmpty
-              ? await _contactService.getMatrixContacts(currentUserId2)
-              : localContacts;
-      final contacts = savedContacts;
-
-      contacts.sort(
-        (a, b) => a.formattedName.toLowerCase().compareTo(
-          b.formattedName.toLowerCase(),
-        ),
-      );
-
+      final immediateContacts = await _loadImmediateContacts(currentUserId);
       if (mounted) {
-        _showContacts(contacts);
+        _showContacts(immediateContacts);
       }
+      unawaited(_refreshContactsInBackground(currentUserId));
+    } catch (e) {
+      debugPrint('[FirebaseNewChatScreen] contact load failed: $e');
+      if (mounted) {
+        setState(() {
+          _error = '';
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<List<Contact>> _loadImmediateContacts(String ownerUserId) async {
+    final saved = await ContactLocalDb.loadSavedContacts(
+      ownerUserId: ownerUserId,
+    );
+    if (saved.isNotEmpty) return saved;
+
+    final cached = await ContactLocalDb.loadContacts(ownerUserId: ownerUserId);
+    final wrytteContacts =
+        cached.where((contact) => contact.isOnWrytte).toList();
+    if (wrytteContacts.isNotEmpty) return wrytteContacts;
+
+    return const [];
+  }
+
+  Future<void> _refreshContactsInBackground(String ownerUserId) async {
+    try {
+      final contacts = await _contactService.getMatrixContactsCached(
+        ownerUserId,
+      );
+      if (contacts.isEmpty || !mounted) return;
+      _showContacts(contacts);
     } catch (e) {
       debugPrint('[FirebaseNewChatScreen] contact refresh failed: $e');
-      final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
-      if (localContacts.isEmpty && currentUserId.isNotEmpty) {
-        localContacts = await ContactLocalDb.loadSavedContacts(
-          ownerUserId: currentUserId,
-        );
-      }
-      final message = e.toString();
-      final isDirectoryLookupFailure =
-          message.contains('User search error') ||
-          message.contains('TimeoutException') ||
-          message.contains('Wrytte contact search timed out') ||
-          message.contains('ContactDirectoryUnavailable');
-      if (mounted) {
-        if (localContacts.isNotEmpty) {
-          _showContacts(localContacts);
-        } else {
-          setState(() {
-            _error = isDirectoryLookupFailure ? '' : message;
-            _isLoading = false;
-          });
-        }
-      }
     }
   }
 

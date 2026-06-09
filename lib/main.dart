@@ -20,6 +20,7 @@ import 'package:wrytte/ui/widgets/theme_wrapper.dart';
 
 import 'package:wrytte/services/call_listener_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/notification_service.dart';
 
@@ -231,6 +232,11 @@ class _AuthWrapperState extends State<AuthWrapper> {
     required String userId,
     String nickname = '',
   }) async {
+    unawaited(
+      ChatService().connect().catchError((e) {
+        debugPrint('[AuthWrapper] chat restore skipped: $e');
+      }),
+    );
     unawaited(NotificationService.instance.start(currentUserId: userId));
 
     if (mounted) {

@@ -35,8 +35,11 @@ class ChatService {
   Stream<ChatMessage> get messageStream => _messageController.stream;
   Stream<String> get errorStream => _errorController.stream;
   Stream<bool> get connectionStream => _connectionController.stream;
-  Stream<List<ChatConversation>> get conversationsStream =>
-      _conversationsController.stream;
+  Stream<List<ChatConversation>> get conversationsStream async* {
+    yield _sortedConversations();
+    yield* _conversationsController.stream;
+  }
+
   Stream<List<ChatMessage>> messagesStreamFor(String conversationId) {
     final controller = _roomMessagesControllers.putIfAbsent(
       conversationId,
@@ -153,7 +156,8 @@ class ChatService {
         'ready isConnected=true user_id="${client.userID}" rooms=${client.rooms.length}',
       );
       await hydrateLocalConversations();
-      await _finishConnectionWarmup();
+      _refreshConversationsFromRooms();
+      unawaited(_finishConnectionWarmup());
     } catch (e) {
       if (!retriedLocalStore && _looksLikeMatrixLocalStoreIoError(e)) {
         apkLog(
@@ -352,6 +356,8 @@ class ChatService {
   Future<void> _finishConnectionWarmup() async {
     try {
       await MatrixChatService.instance.ensureSyncedAndAutoJoinInvites();
+      _refreshConversationsFromRooms();
+      _refreshAllMessageStatuses();
       final userId = _currentUserId;
       if (userId != null && userId.isNotEmpty) {
         unawaited(ContactService().syncLocalContactsToMatrix(userId));
@@ -1626,10 +1632,12 @@ class ChatService {
   }
 
   void _emitConversations() {
-    final sorted =
-        _conversationsMap.values.toList()
-          ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
-    _conversationsController.add(sorted);
+    _conversationsController.add(_sortedConversations());
+  }
+
+  List<ChatConversation> _sortedConversations() {
+    return _conversationsMap.values.toList()
+      ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
   }
 
   String _toMatrixUserId(String value) {

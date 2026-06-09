@@ -138,10 +138,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     _convSub = _chat.conversationsStream.listen((incoming) async {
       final local = await ChatLocalDb.instance.loadConversations();
       final mergedCache = _mergeConversationLists(local, incoming);
-      final enriched = await _enrichNames(_realConversationRows(mergedCache));
+      final visible = _enrichSavedContactNames(
+        _realConversationRows(mergedCache),
+      );
       if (!mounted) return;
-      setState(() => _conversations = enriched);
+      setState(() => _conversations = visible);
       _notifyUnread(_conversations);
+      unawaited(_enrichPublicProfilesAndRepaint(visible));
     });
 
     _chatConnectionSub = _chat.connectionStream.listen((connected) {
@@ -153,8 +156,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     // Connect ChatService (idempotent) after local conversations are visible.
     try {
       await _chat.connect();
-      await _chat.fetchConversations();
-      await _restoreContactsAfterMatrixReady();
+      unawaited(_chat.fetchConversations());
+      unawaited(_restoreContactsAfterMatrixReady());
     } catch (e) {
       debugPrint('[ConversationsScreen] chat connect skipped: $e');
     }
@@ -168,10 +171,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _repaintConversationsWithCurrentContactData() async {
     if (!mounted || _conversations.isEmpty) return;
-    final enriched = await _enrichNames(_realConversationRows(_conversations));
+    final visible = _enrichSavedContactNames(
+      _realConversationRows(_conversations),
+    );
     if (!mounted) return;
-    setState(() => _conversations = enriched);
+    setState(() => _conversations = visible);
     _notifyUnread(_conversations);
+    unawaited(_enrichPublicProfilesAndRepaint(visible));
   }
 
   Future<void> _loadLocalConversations() async {
@@ -202,10 +208,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     try {
       await ContactService().getWrytteContactsOptimized();
       await _loadIdentityCache();
-      final enriched = await _enrichNames(_conversations);
+      final enriched = _enrichSavedContactNames(_conversations);
       if (!mounted) return;
       setState(() => _conversations = enriched);
       _notifyUnread(_conversations);
+      unawaited(_enrichPublicProfilesAndRepaint(enriched));
     } catch (e) {
       debugPrint('[ConversationsScreen] phone identity refresh skipped: $e');
     }

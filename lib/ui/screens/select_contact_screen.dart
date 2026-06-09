@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/contact_components/contact_item.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
@@ -100,20 +102,41 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         return;
       }
 
-      final cachedContacts = await ContactLocalDb.loadContacts(
-        ownerUserId: currentUserId,
-      );
-      if (cachedContacts.isNotEmpty && mounted) {
+      final immediateContacts = await _loadImmediateContacts(currentUserId);
+      if (mounted) {
         setState(() {
-          _setContacts(cachedContacts);
+          _setContacts(immediateContacts);
           _isLoading = false;
         });
-        return;
       }
+      unawaited(_refreshContactsInBackground(currentUserId));
+    } catch (e) {
+      debugPrint('[SelectContactScreen] contact load failed: $e');
+      setState(() {
+        _error = '';
+        _isLoading = false;
+      });
+    }
+  }
 
+  Future<List<Contact>> _loadImmediateContacts(String ownerUserId) async {
+    final saved = await ContactLocalDb.loadSavedContacts(
+      ownerUserId: ownerUserId,
+    );
+    if (saved.isNotEmpty) return saved;
+
+    final cached = await ContactLocalDb.loadContacts(ownerUserId: ownerUserId);
+    if (cached.isNotEmpty) return cached;
+
+    return const [];
+  }
+
+  Future<void> _refreshContactsInBackground(String currentUserId) async {
+    try {
       final matrixContacts = await _contactService.getMatrixContacts(
         currentUserId,
       );
+      if (matrixContacts.isEmpty || !mounted) return;
 
       await ContactLocalDb.saveContacts(
         matrixContacts,
@@ -128,16 +151,6 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
       }
     } catch (e) {
       debugPrint('[SelectContactScreen] contact refresh failed: $e');
-      final message = e.toString();
-      final isDirectoryLookupFailure =
-          message.contains('User search error') ||
-          message.contains('TimeoutException') ||
-          message.contains('Wrytte contact search timed out') ||
-          message.contains('ContactDirectoryUnavailable');
-      setState(() {
-        _error = isDirectoryLookupFailure ? '' : message;
-        _isLoading = false;
-      });
     }
   }
 
