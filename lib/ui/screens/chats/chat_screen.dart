@@ -222,12 +222,25 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _phoneFromIdentifier(String? value) {
+    final raw = value?.trim() ?? '';
+    if (raw.isEmpty || _looksLikeMatrixId(raw)) return '';
+
     final extracted = _extractPhone(value);
     if (extracted.isNotEmpty) return extracted;
 
-    final localpart = _matrixLocalpart(value ?? '');
+    final localpart = _matrixLocalpart(raw);
+    if (_looksLikeMatrixId(localpart)) return '';
     final digits = localpart.replaceAll(RegExp(r'[^\d]'), '');
-    return digits.length >= 7 && digits.length <= 15 ? digits : '';
+    return RegExp(r'^\+?\d{7,15}$').hasMatch(localpart) ? digits : '';
+  }
+
+  bool _looksLikeMatrixId(String value) {
+    final trimmed = value.trim();
+    final localpart = _matrixLocalpart(trimmed);
+    return trimmed.startsWith('@') ||
+        trimmed.startsWith('!') ||
+        trimmed.contains(':matrix.') ||
+        RegExp(r'^[a-f0-9]{24,}$', caseSensitive: false).hasMatch(localpart);
   }
 
   String _formatPhone(String phone) {
