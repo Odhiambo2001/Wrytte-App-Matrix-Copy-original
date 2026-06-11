@@ -454,7 +454,7 @@ class _NewContactPageState extends State<NewContactPage> {
         }
       }
 
-      // ── 4. Background: save to Matrix server + phone contacts ────
+      // ── 4. Background: sync saved contact to backend ─────────────
       unawaited(
         _saveContactInBackground(
           selfId: selfId,
@@ -603,9 +603,7 @@ class _NewContactPageState extends State<NewContactPage> {
     );
 
     try {
-      apkLog('NewContact.save', 'background Matrix connect before save');
-      await ChatService().connect();
-      apkLog('NewContact.save', 'background Matrix connected; saving contact');
+      apkLog('NewContact.save', 'background backend contact save');
       final saved = await _contactService.saveManualContact(
         firstName: firstName,
         lastName: lastName,
@@ -724,9 +722,9 @@ class _NewContactPageState extends State<NewContactPage> {
     if (raw.contains('not authenticated')) {
       return 'Session expired — please log in again.';
     }
-    if (raw.toLowerCase().contains('matrix') ||
+    if (raw.toLowerCase().contains('backend') ||
         raw.toLowerCase().contains('timeout')) {
-      return 'Matrix contact save failed. Check connection and try again.';
+      return 'Backend contact save failed. Check connection and try again.';
     }
     return 'Something went wrong. Please try again.';
   }

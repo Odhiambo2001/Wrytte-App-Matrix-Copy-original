@@ -27,7 +27,7 @@ import 'widgets/tab_bar_section.dart';
 //  ConversationsScreen
 //
 //  Name resolution priority (highest -> lowest):
-//    1. Saved contacts in Matrix account data.
+//    1. Saved contacts from local/backend contact storage.
 //    2. Phone number.
 // =============================================================================
 
@@ -296,7 +296,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       await _rebuildContactNameCaches(_savedContacts);
       await _repaintConversationsWithCurrentContactData();
     } catch (e) {
-      debugPrint('[ConversationsScreen] Matrix contact restore skipped: $e');
+      debugPrint('[ConversationsScreen] contact restore skipped: $e');
     }
   }
 

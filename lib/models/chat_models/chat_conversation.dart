@@ -36,7 +36,7 @@ class ChatConversation {
   final DateTime? deletedAt;
   final List<String> deletedBy;
 
-  // ── SQLite cache fields — populated from Matrix contacts/profile data ──────
+  // ── SQLite cache fields — populated from contacts/profile data ─────────────
   // Stored locally so the UI never waits for a network call to show names/avatars
   final String? otherUserName;
   final String? otherUserAvatar;

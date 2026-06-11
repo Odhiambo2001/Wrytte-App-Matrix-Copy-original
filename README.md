@@ -19,7 +19,7 @@ Firebase is not the source of truth for chats.
 | Direct rooms and conversation sync | Matrix |
 | Read receipts, unread counts, typing/sync events | Matrix |
 | Matrix access token, Matrix user ID, device ID | Matrix session in secure storage |
-| Saved Wrytte contacts | Matrix account data `com.wrytte.contacts` plus local cache |
+| Saved Wrytte contacts | Wrytte backend plus local cache |
 | Phone/email registration and login | Wrytte backend |
 | Backend auth token | Wrytte backend token in secure storage |
 | Registered phone-number lookup | Wrytte backend |
@@ -197,7 +197,7 @@ Wrytte keeps local cache for speed and offline access, but Matrix/Dendrite remai
 | Recent Wrytte chat projections | Yes, `wrytte_chat.db` | Matrix/Dendrite |
 | Media cache | Yes, bounded cache | Matrix media store |
 | Full old history | Paginated on demand | Matrix/Dendrite |
-| Saved contacts | Yes, local cache | Matrix account data |
+| Saved contacts | Yes, local cache | Wrytte backend |
 | Delete for me | Yes, local flag | Device-local only |
 | Delete for everyone | Synced redaction | Matrix/Dendrite |
 
@@ -242,7 +242,7 @@ Firebase is not used for Matrix chat messages, Matrix rooms, Matrix sync, read r
 | `lib/services/matrix/matrix_auth_service.dart` | Matrix session lifecycle |
 | `lib/services/matrix/matrix_client.dart` | Matrix SDK client and local SQLite cache |
 | `lib/services/chat/chat_service.dart` | App chat service backed by Matrix |
-| `lib/services/matrix/matrix_contact_service.dart` | Matrix account-data contacts |
+| `lib/services/contacts/contact_backend_service.dart` | Backend saved-contact sync |
 | `lib/services/contacts/contact_service.dart` | App contact flows |
 
 ---

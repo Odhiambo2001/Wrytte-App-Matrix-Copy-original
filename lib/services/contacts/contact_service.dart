@@ -7,22 +7,20 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_contacts/flutter_contacts.dart' as fc;
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/contacts/contact_backend_service.dart';
 import 'package:wrytte/services/contacts/contact_directory_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
-import 'package:wrytte/services/matrix/matrix_auth_service.dart';
-import 'package:wrytte/services/matrix/matrix_contact_service.dart';
-import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'user_search_service.dart';
 
 class ContactService {
   final UserSearchService _userSearchService = UserSearchService();
 
-  // ── Cache to avoid repeated Matrix directory lookups ───────────────────
+  // ── Cache to avoid repeated Wrytte directory lookups ───────────────────
   Map<String, String>? _phoneUserMapCache;
   DateTime? _cacheTime;
 
-  // ── Static in-memory cache shared across screen opens ──────────────────
+  // ── Static in-memory saved-contact cache shared across screen opens ────
   static List<Contact>? _matrixContactsCache;
   static String? _matrixContactsCacheOwner;
 
@@ -137,38 +135,29 @@ class ContactService {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Matrix account data is the restore source that survives uninstall when
-  // the backend login payload does not include saved contacts.
+  // Backend is the remote source of truth for saved contacts. Matrix is chat
+  // transport only and must not be used as the contact database.
   // ──────────────────────────────────────────────────────────────────────
-  Future<void> saveContactToMatrix({
+  Future<void> saveContactToBackend({
     required String ownerUserId,
     required Contact contact,
   }) async {
     final owner = ownerUserId.trim();
     if (owner.isEmpty) return;
 
-    final matrixReady = await _ensureMatrixContactSession(owner);
-    if (!matrixReady) {
-      apkLog(
-        'Contact.save',
-        'Matrix account-data save skipped; session not ready owner="$owner"',
-      );
-      return;
-    }
-
-    await MatrixContactService.instance.saveContact(
-      contact.copyWith(isSaved: true),
+    await ContactBackendService.instance.saveContact(
+      ownerUserId: owner,
+      contact: contact.copyWith(isSaved: true),
     );
-    invalidateMatrixContactsCache();
     apkLog(
       'Contact.save',
-      'Matrix account-data save done owner="$owner" name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}"',
+      'backend contact save done owner="$owner" name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}"',
     );
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Fetch contacts saved by this user. Active flow is backend/local cache.
-  // Matrix account data is imported only for old users with no local cache.
+  // Fetch contacts saved by this user. Local cache paints immediately; backend
+  // can restore contacts after reinstall/login. Matrix is not used here.
   // ──────────────────────────────────────────────────────────────────────
   Future<List<Contact>> getMatrixContacts(String ownerUserId) async {
     final owner = ownerUserId.trim();
@@ -194,18 +183,10 @@ class ContactService {
     }
 
     try {
-      final matrixReady = await _ensureMatrixContactSession(owner);
-      if (!matrixReady) {
-        debugPrint(
-          '[ContactService] Matrix contacts skipped: session not ready for $owner',
-        );
-        return ContactLocalDb.loadContacts(ownerUserId: owner);
-      }
-      final matrixContacts = await MatrixContactService.instance.loadContacts();
       final contacts =
-          matrixContacts
-              .map((contact) => contact.copyWith(isSaved: true))
-              .toList()
+          (await ContactBackendService.instance.loadContacts(
+              ownerUserId: owner,
+            )).map((contact) => contact.copyWith(isSaved: true)).toList()
             ..sort((a, b) => a.formattedName.compareTo(b.formattedName));
       if (contacts.isNotEmpty) {
         await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
@@ -213,30 +194,13 @@ class ContactService {
       debugPrint('Loaded ${contacts.length} contacts');
       return contacts;
     } catch (e) {
-      debugPrint('Failed to load Matrix contacts: $e');
+      debugPrint('Failed to load backend contacts: $e');
       return ContactLocalDb.loadContacts(ownerUserId: owner);
     }
   }
 
-  Future<bool> _ensureMatrixContactSession(String ownerUserId) async {
-    final expected = _toMatrixUserId(ownerUserId);
-    final client = await MatrixAuthService.instance.restore();
-    if (client.isLogged() && client.userID == expected) {
-      return MatrixAuthService.instance.validateCurrentSession(
-        expectedUserId: expected,
-      );
-    }
-
-    if (client.isLogged()) {
-      debugPrint(
-        '[ContactService] Matrix contact session mismatch current="${client.userID}" expected="$expected"; skipping Matrix contact sync.',
-      );
-    }
-    return false;
-  }
-
   // ──────────────────────────────────────────────────────────────────────
-  // Wrytte contacts — parallel lookup with 5-minute cache
+  // Wrytte directory lookup — parallel phone matching with 5-minute cache
   // ──────────────────────────────────────────────────────────────────────
   Future<List<Contact>> getWrytteContactsOptimized() async {
     final deviceContacts = await getDeviceContacts();
@@ -432,13 +396,13 @@ class ContactService {
       );
 
       unawaited(
-        saveContactToMatrix(
+        saveContactToBackend(
           ownerUserId: selfUserId,
           contact: contact,
         ).catchError((e) {
           apkLog(
             'Contact.save',
-            'Matrix account-data save failed owner="$selfUserId" name="${contact.formattedName}" error="$e"',
+            'backend contact save failed owner="$selfUserId" name="${contact.formattedName}" error="$e"',
           );
         }),
       );
@@ -472,7 +436,7 @@ class ContactService {
     return trimmed;
   }
 
-  Future<void> syncLocalContactsToMatrix(String ownerUserId) async {
+  Future<void> syncLocalContactsToBackend(String ownerUserId) async {
     final owner = ownerUserId.trim();
     if (owner.isEmpty) return;
 
@@ -480,35 +444,21 @@ class ContactService {
     if (contacts.isEmpty) {
       apkLog(
         'Contact.sync',
-        'Matrix contact sync skipped; no local saved contacts owner="$owner"',
-      );
-      return;
-    }
-
-    final matrixReady = await _ensureMatrixContactSession(owner);
-    if (!matrixReady) {
-      apkLog(
-        'Contact.sync',
-        'Matrix contact sync skipped; session not ready owner="$owner"',
+        'backend contact sync skipped; no local saved contacts owner="$owner"',
       );
       return;
     }
 
     for (final contact in contacts) {
-      await MatrixContactService.instance.saveContact(
-        contact.copyWith(isSaved: true),
+      await ContactBackendService.instance.saveContact(
+        ownerUserId: owner,
+        contact: contact.copyWith(isSaved: true),
       );
     }
     invalidateMatrixContactsCache();
     apkLog(
       'Contact.sync',
-      'Matrix contact sync done owner="$owner" contacts=${contacts.length}',
+      'backend contact sync done owner="$owner" contacts=${contacts.length}',
     );
-  }
-
-  String _toMatrixUserId(String userId) {
-    final trimmed = userId.trim();
-    if (trimmed.startsWith('@') && trimmed.contains(':')) return trimmed;
-    return '@${_matrixLocalpart(trimmed)}:${MatrixConfig.serverName}';
   }
 }

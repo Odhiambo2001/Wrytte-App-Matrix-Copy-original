@@ -683,7 +683,7 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
                 ),
               );
 
-              // Reload so the newly saved Matrix contact appears immediately
+              // Reload so the newly saved contact appears immediately.
               if (result != null && mounted) {
                 _loadContacts();
               }

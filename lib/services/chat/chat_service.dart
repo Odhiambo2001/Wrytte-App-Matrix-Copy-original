@@ -15,7 +15,6 @@ import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
-import 'package:wrytte/services/matrix/matrix_contact_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -240,8 +239,6 @@ class ChatService {
 
     // Critical: wait for OS to release file handles before retrying
     await Future.delayed(const Duration(milliseconds: 500));
-
-    MatrixContactService.instance.clearCache();
   }
 
   Future<mx.Client> _ensureCurrentMatrixSession({
@@ -360,7 +357,7 @@ class ChatService {
       _refreshAllMessageStatuses();
       final userId = _currentUserId;
       if (userId != null && userId.isNotEmpty) {
-        unawaited(ContactService().syncLocalContactsToMatrix(userId));
+        unawaited(ContactService().syncLocalContactsToBackend(userId));
       }
       await restoreAllRoomHistoryFromServer();
       _refreshConversationsFromRooms();
