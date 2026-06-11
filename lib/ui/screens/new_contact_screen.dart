@@ -11,6 +11,7 @@ import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
+import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/Country%20id%20picker%20page.dart';
 import 'package:wrytte/utils/countries_id.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
@@ -398,14 +399,33 @@ class _NewContactPageState extends State<NewContactPage> {
       final firstName = _firstNameCtrl.text.trim();
       final lastName = _lastNameCtrl.text.trim();
       final contactName = _displayName(firstName, lastName, _fullIdentifier);
+      final profileOne =
+          receiverId.isEmpty
+              ? null
+              : await UserProfileService.instance.getProfileByUid(
+                receiverId,
+                phone: _fullIdentifier,
+              );
+      final profileOneName = _cleanProfileName(profileOne?.displayName);
+      final profileOnePhone =
+          profileOne?.phone.trim().isNotEmpty == true
+              ? profileOne!.phone.trim()
+              : _fullIdentifier;
+      final profileOneAvatar =
+          profileOne?.hasProfileImage == true ? profileOne!.profileImage : null;
+      final profileOneBio =
+          profileOne?.bio.trim().isNotEmpty == true
+              ? profileOne!.bio.trim()
+              : widget.initialBio;
 
       // ── 1. Save locally ──────────────────────────────────────────
       final localContact = Contact(
         displayName: contactName,
-        phones: [_fullIdentifier],
+        phones: [profileOnePhone],
+        avatarUrl: profileOneAvatar,
         isOnWrytte: _isRegisteredOnWrytte || receiverId.isNotEmpty,
         wrytteUserId: receiverId.isEmpty ? null : receiverId,
-        bio: widget.initialBio,
+        bio: profileOneBio,
         isSaved: true,
       );
       await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
@@ -413,10 +433,12 @@ class _NewContactPageState extends State<NewContactPage> {
         await ContactIdentityCache.instance.upsert(
           ownerUserId: selfId,
           matrixUserId: receiverId,
-          phone: _fullIdentifier,
-          profileName: widget.initialName,
+          phone: profileOnePhone,
+          profileName:
+              profileOneName.isNotEmpty ? profileOneName : widget.initialName,
           savedName: contactName,
-          bio: widget.initialBio,
+          avatarUrl: profileOneAvatar,
+          bio: profileOneBio,
         );
       }
       ContactService.invalidateMatrixContactsCache();
@@ -458,13 +480,8 @@ class _NewContactPageState extends State<NewContactPage> {
       unawaited(
         _saveContactInBackground(
           selfId: selfId,
-          firstName: firstName,
-          lastName: lastName,
-          fullIdentifier: _fullIdentifier,
           receiverId: receiverId,
-          isOnWrytte: _isRegisteredOnWrytte,
-          syncToPhone: _syncToPhone,
-          token: widget.token,
+          contact: localContact,
         ),
       );
 
@@ -589,13 +606,8 @@ class _NewContactPageState extends State<NewContactPage> {
 
   Future<void> _saveContactInBackground({
     required String selfId,
-    required String firstName,
-    required String lastName,
-    required String fullIdentifier,
     required String receiverId,
-    required bool isOnWrytte,
-    required bool syncToPhone,
-    required String token,
+    required Contact contact,
   }) async {
     apkLog(
       'NewContact.save',
@@ -604,20 +616,13 @@ class _NewContactPageState extends State<NewContactPage> {
 
     try {
       apkLog('NewContact.save', 'background backend contact save');
-      final saved = await _contactService.saveManualContact(
-        firstName: firstName,
-        lastName: lastName,
-        fullIdentifier: fullIdentifier,
-        wrytteUserId: receiverId.isEmpty ? null : receiverId,
-        isOnWrytte: isOnWrytte,
-        syncToPhone: syncToPhone,
-        token: await AuthService.instance.getMatrixAccessToken() ?? token,
-        selfUserId: selfId,
-        bio: widget.initialBio,
+      await _contactService.saveContactToBackend(
+        ownerUserId: selfId,
+        contact: contact,
       );
       apkLog(
         'NewContact.save',
-        'background contact save success name="${saved.formattedName}" wrytteUserId="${saved.wrytteUserId}" phone="${saved.primaryPhone}"',
+        'background contact save success name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}" phone="${contact.primaryPhone}"',
       );
     } catch (e) {
       apkLog('NewContact.save', 'background contact save FAILED error="$e"');
@@ -750,6 +755,19 @@ class _NewContactPageState extends State<NewContactPage> {
     ].where((part) => part.isNotEmpty).join(' ');
     if (name.isNotEmpty) return name;
     return fallback.trim().isNotEmpty ? fallback.trim() : 'Contact';
+  }
+
+  String _cleanProfileName(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return '';
+    final lowered = trimmed.toLowerCase();
+    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+      return '';
+    }
+    final digits = trimmed.replaceAll(RegExp(r'[\s\-()+]'), '');
+    if (RegExp(r'^\d{7,}$').hasMatch(digits)) return '';
+    if (trimmed.startsWith('@') && trimmed.contains(':')) return '';
+    return trimmed;
   }
 
   String _friendlyLookupError(String raw) {

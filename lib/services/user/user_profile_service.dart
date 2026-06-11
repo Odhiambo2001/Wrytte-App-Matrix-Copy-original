@@ -596,14 +596,13 @@ class UserProfileService {
   }
 
   UserProfile _fallbackPublicProfile(String uid, {String? phone}) {
-    final localpart = _matrixLocalpart(uid);
     return UserProfile(
       uid: uid,
       name: '',
       username: '',
       phone: _normalizePhone(phone ?? ''),
       bio: '',
-      profileImage: _resolveAvatarUrl('/usrimg/$localpart/avatar_img.jpg'),
+      profileImage: '',
       links: const [],
     );
   }

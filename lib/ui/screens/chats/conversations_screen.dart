@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
+import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
@@ -33,6 +35,7 @@ import 'widgets/tab_bar_section.dart';
 
 const double _kSearchBarHeight = 60.0;
 const double _kTabBarHeight = 56.0;
+const Duration _kFirstPaintProfileWait = Duration(seconds: 4);
 
 class ConversationsScreen extends StatefulWidget {
   final Function(int)? onUnreadCountUpdated;
@@ -72,6 +75,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   final Map<String, ContactIdentity> _identityCache = {};
   List<Contact> _savedContacts = const [];
   bool _initialCacheWarmup = true;
+  int _conversationPaintVersion = 0;
 
   // ===========================================================================
   //  LIFECYCLE
@@ -115,21 +119,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     final identityFuture = _loadIdentityCache();
     final contactsFuture = _loadSavedContacts();
-    final localConversationsFuture = _loadLocalConversations();
 
-    await localConversationsFuture;
+    try {
+      await Future.wait([identityFuture, contactsFuture]);
+    } catch (e) {
+      debugPrint('[ConversationsScreen] initial contact hydrate skipped: $e');
+    }
+    await _loadLocalConversations();
     if (mounted) setState(() => _initialCacheWarmup = false);
-
-    unawaited(
-      Future.wait([
-        identityFuture,
-        contactsFuture,
-      ]).then((_) => _repaintConversationsWithCurrentContactData()).catchError((
-        e,
-      ) {
-        debugPrint('[ConversationsScreen] initial contact hydrate skipped: $e');
-      }),
-    );
 
     // Pre-warm phonebook identity matches, then repaint any rows that were
     // initially loaded from raw Matrix room data.
@@ -140,13 +137,12 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     _convSub = _chat.conversationsStream.listen((incoming) async {
       final local = await ChatLocalDb.instance.loadConversations();
       final mergedCache = _mergeConversationLists(local, incoming);
-      final visible = _enrichSavedContactNames(
-        _realConversationRows(mergedCache),
-      );
+      final rows = _enrichSavedContactNames(_realConversationRows(mergedCache));
+      final version = ++_conversationPaintVersion;
+      final visible = await _prepareConversationsForFirstPaint(rows, version);
       if (!mounted) return;
       setState(() => _conversations = visible);
       _notifyUnread(_conversations);
-      unawaited(_enrichPublicProfilesAndRepaint(visible));
     });
 
     _chatConnectionSub = _chat.connectionStream.listen((connected) {
@@ -189,15 +185,16 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final withContactRows = _realConversationRows(local);
       if (withContactRows.isEmpty && _initialCacheWarmup) return;
 
-      // ── Render immediately with saved contact names only (no network) ──
-      final quickVisible = _enrichSavedContactNames(withContactRows);
-      setState(() => _conversations = quickVisible);
+      final version = ++_conversationPaintVersion;
+      final visible = await _prepareConversationsForFirstPaint(
+        withContactRows,
+        version,
+      );
+      if (!mounted || version != _conversationPaintVersion) return;
+      setState(() => _conversations = visible);
       _notifyUnread(_conversations);
 
-      _prewarmVisibleMessages(quickVisible);
-
-      // ── Then enrich with profiles in the background ──
-      unawaited(_enrichPublicProfilesAndRepaint(quickVisible));
+      _prewarmVisibleMessages(visible);
     } catch (e) {
       debugPrint('[ConversationsScreen] local conversation load error: $e');
     }
@@ -389,6 +386,128 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     } catch (e) {
       debugPrint('[ConversationsScreen] public profile enrichment skipped: $e');
     }
+  }
+
+  Future<List<ChatConversation>> _prepareConversationsForFirstPaint(
+    List<ChatConversation> convs,
+    int version,
+  ) async {
+    final withSavedContacts = _enrichSavedContactNames(convs);
+    if (!_hasUnsavedRowsMissingProfileAvatar(withSavedContacts)) {
+      return withSavedContacts;
+    }
+
+    final enrichment = _enrichNames(withSavedContacts).then((enriched) async {
+      await _precacheConversationAvatars(enriched);
+      return enriched;
+    });
+    try {
+      return await enrichment.timeout(_kFirstPaintProfileWait);
+    } on TimeoutException {
+      debugPrint(
+        '[ConversationsScreen] first paint profile wait timed out; '
+        'showing cached rows and continuing enrichment',
+      );
+      unawaited(
+        enrichment
+            .then((enriched) {
+              if (!mounted || version != _conversationPaintVersion) return;
+              setState(() => _conversations = enriched);
+              _notifyUnread(_conversations);
+            })
+            .catchError((e) {
+              debugPrint(
+                '[ConversationsScreen] delayed public profile enrichment skipped: $e',
+              );
+            }),
+      );
+      return withSavedContacts;
+    } catch (e) {
+      debugPrint(
+        '[ConversationsScreen] first paint profile enrichment skipped: $e',
+      );
+      return withSavedContacts;
+    }
+  }
+
+  bool _hasUnsavedRowsMissingProfileAvatar(List<ChatConversation> convs) {
+    for (final conv in convs) {
+      if (_contactKeyForConversation(conv) != null) continue;
+      final avatar =
+          conv.otherUserAvatar?.trim().isNotEmpty == true
+              ? conv.otherUserAvatar
+              : _identityForConversation(conv)?.avatarUrl;
+      if ((avatar ?? '').trim().isEmpty) return true;
+    }
+    return false;
+  }
+
+  Future<void> _precacheConversationAvatars(
+    List<ChatConversation> conversations,
+  ) async {
+    if (!mounted) return;
+    final token = await AuthService.instance.getValidBackendToken();
+    final seen = <String>{};
+    final futures = <Future<void>>[];
+
+    for (final conversation in conversations) {
+      final url = _resolveAvatarUrl(conversation.otherUserAvatar);
+      if (url.isEmpty || !seen.add(url)) continue;
+      futures.add(
+        _warmAvatarImage(
+          CachedNetworkImageProvider(
+            url,
+            headers: _avatarAuthHeaders(url, token),
+          ),
+        ).catchError((e) {
+          debugPrint(
+            '[ConversationsScreen] avatar precache skipped url="$url" error=$e',
+          );
+        }),
+      );
+    }
+
+    if (futures.isEmpty) return;
+    await Future.wait(futures);
+  }
+
+  Future<void> _warmAvatarImage(ImageProvider provider) {
+    final completer = Completer<void>();
+    final stream = provider.resolve(ImageConfiguration.empty);
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (_, __) {
+        stream.removeListener(listener);
+        if (!completer.isCompleted) completer.complete();
+      },
+      onError: (error, stackTrace) {
+        stream.removeListener(listener);
+        if (!completer.isCompleted) completer.completeError(error, stackTrace);
+      },
+    );
+    stream.addListener(listener);
+    return completer.future;
+  }
+
+  String _resolveAvatarUrl(String? raw) {
+    final url = raw?.trim() ?? '';
+    if (url.isEmpty) return '';
+    if (url.startsWith('/')) return '${ApiService.baseUrl}$url';
+    return url;
+  }
+
+  Map<String, String>? _avatarAuthHeaders(String url, String? token) {
+    final clean = token?.trim() ?? '';
+    if (clean.isEmpty) return null;
+    final uri = Uri.tryParse(url);
+    final host = uri?.host.toLowerCase() ?? '';
+    final isWrytteImage =
+        url.startsWith('${ApiService.baseUrl}/usrimg/') ||
+        url.startsWith('/usrimg/') ||
+        host == 'wryttedev.azurewebsites.net' ||
+        host == 'wrytte.com';
+    if (!isWrytteImage) return null;
+    return {'Authorization': 'Bearer $clean'};
   }
 
   List<ChatConversation> _enrichSavedContactNames(
