@@ -502,6 +502,7 @@ class _ChatScreenState extends State<ChatScreen> {
             profile?.hasProfileImage == true
                 ? profile!.profileImage
                 : matrixProfile?.$2 ?? widget.avatarUrl,
+        bio: profile?.bio,
       );
       identity = await ContactIdentityCache.instance.findByMatrixId(
         ownerUserId: ownerUserId,
@@ -577,6 +578,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final savedName = _cleanDisplayName(_receiverIdentity?.savedName);
     if (savedName.isNotEmpty) return savedName;
 
+    final phone = _firstPhoneFrom([
+      _receiverIdentity?.phone,
+      widget.receiverId,
+      widget.title,
+      ..._messagePeerIdentifiers(),
+    ]);
+    if (phone.isNotEmpty) return _formatPhone(phone);
+
     final profileName = _cleanDisplayName(_receiverIdentity?.profileName);
     if (profileName.isNotEmpty) return profileName;
 
@@ -587,14 +596,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final cleanInitial = _cleanDisplayName(initial);
     if (cleanInitial.isNotEmpty) return cleanInitial;
 
-    final phone = _firstPhoneFrom([
-      _receiverIdentity?.phone,
-      widget.receiverId,
-      widget.title,
-      ..._messagePeerIdentifiers(),
-    ]);
-    if (phone.isNotEmpty) return _formatPhone(phone);
-
     return 'Wrytte user';
   }
 
@@ -603,7 +604,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final avatar =
         _receiverProfile?.hasProfileImage == true
             ? _receiverProfile!.profileImage
-            : widget.avatarUrl;
+            : _receiverIdentity?.avatarUrl ?? widget.avatarUrl;
     if (name.isEmpty && (avatar ?? '').trim().isEmpty) return;
     try {
       await ChatLocalDb.instance.updateConversationUserInfo(
@@ -1668,7 +1669,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final avatarUrl =
         _receiverProfile?.hasProfileImage == true
             ? _receiverProfile!.profileImage
-            : _stableHeaderAvatarUrl;
+            : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl;
 
     return SizedBox(
       height: statusBarH + kToolbarHeight,

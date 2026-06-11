@@ -114,6 +114,10 @@ class _ProfileScreenState extends State<ProfileScreen>
             profile?.hasProfileImage == true
                 ? profile!.profileImage
                 : matrixProfile?.$2 ?? widget.fallbackAvatarUrl,
+        bio:
+            profile?.bio.trim().isNotEmpty == true
+                ? profile!.bio
+                : savedContact?.bio ?? identity?.bio,
       );
       identity = await ContactIdentityCache.instance.findByMatrixId(
         ownerUserId: ownerUserId,
@@ -216,6 +220,15 @@ class _ProfileScreenState extends State<ProfileScreen>
     return _looksLikePhone(phone) ? phone : '';
   }
 
+  String _phoneFromIdentifier(String? value) {
+    final extracted = _extractPhone(value);
+    if (extracted.isNotEmpty) return extracted;
+
+    final localpart = _matrixLocalpart(value ?? '');
+    final digits = localpart.replaceAll(RegExp(r'[^\d]'), '');
+    return digits.length >= 7 && digits.length <= 15 ? digits : '';
+  }
+
   bool _looksLikeMatrixId(String value) {
     final trimmed = value.trim();
     final localpart = _matrixLocalpart(trimmed);
@@ -263,9 +276,10 @@ class _ProfileScreenState extends State<ProfileScreen>
       _matrixDisplayName,
       widget.fallbackPhone,
       widget.fallbackName,
+      widget.uid,
     ];
     for (final value in candidates) {
-      final phone = _extractPhone(value);
+      final phone = _phoneFromIdentifier(value);
       if (phone.isNotEmpty) {
         return _formatPhone(phone);
       }
@@ -319,6 +333,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               initialIdentifier: phone.isNotEmpty ? phone : widget.uid,
               initialWrytteUserId: _toMatrixUserId(widget.uid!),
               initialName: _profileDisplayName(),
+              initialBio: _profileBio(),
             ),
       ),
     );
@@ -332,9 +347,15 @@ class _ProfileScreenState extends State<ProfileScreen>
   );
 
   bool get _hasCard {
-    final bio = _profile?.bio ?? '';
+    final bio = _profileBio();
     final links = _profile?.links ?? [];
     return bio.isNotEmpty || links.isNotEmpty;
+  }
+
+  String _profileBio() {
+    final profileBio = _profile?.bio.trim() ?? '';
+    if (profileBio.isNotEmpty) return profileBio;
+    return _identity?.bio?.trim() ?? _savedContact?.bio?.trim() ?? '';
   }
 
   @override
@@ -346,7 +367,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     final String displayName =
         _profileLoading && !hasProfile ? '' : _profileDisplayName();
     final String phone = _profileLoading && !hasProfile ? '' : _profilePhone();
-    final String bioText = _profile?.bio ?? '';
+    final String bioText = _profileBio();
     final List<String> links = _profile?.links ?? [];
 
     return Scaffold(
@@ -373,7 +394,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                               imageUrl:
                                   _profile?.hasProfileImage == true
                                       ? _profile!.profileImage
-                                      : (_matrixAvatarUrl ??
+                                      : (_identity?.avatarUrl ??
+                                          _matrixAvatarUrl ??
                                           widget.fallbackAvatarUrl),
                               localImagePath:
                                   _isOtherUser

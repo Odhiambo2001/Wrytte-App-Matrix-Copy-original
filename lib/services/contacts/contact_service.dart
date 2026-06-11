@@ -35,15 +35,22 @@ class ContactService {
   }
 
   Future<List<Contact>> getMatrixContactsCached(String ownerUserId) async {
+    //Strict userId match — never serve another user's cached contacts
     if (_matrixContactsCache != null &&
-        _matrixContactsCacheOwner == ownerUserId &&
+        _matrixContactsCacheOwner != null &&
+        _matrixContactsCacheOwner!.trim().toLowerCase() ==
+            ownerUserId.trim().toLowerCase() &&
         _matrixContactsCache!.isNotEmpty) {
       return _matrixContactsCache!;
     }
+
+    //Wrong owner or empty — invalidate before fetching
+    invalidateMatrixContactsCache();
+
     final contacts = await getMatrixContacts(ownerUserId);
     if (contacts.isNotEmpty) {
       _matrixContactsCache = contacts;
-      _matrixContactsCacheOwner = ownerUserId;
+      _matrixContactsCacheOwner = ownerUserId.trim();
     }
     return contacts;
   }
@@ -386,6 +393,7 @@ class ContactService {
     required bool syncToPhone,
     required String token,
     required String? selfUserId,
+    String? bio,
   }) async {
     final displayName = '$firstName $lastName'.trim();
     final isWrytteContact =
@@ -401,6 +409,7 @@ class ContactService {
     final contact = Contact(
       displayName: displayName,
       phones: [_normalizePhone(fullIdentifier)],
+      bio: bio,
       isOnWrytte: isWrytteContact,
       wrytteUserId: wrytteUserId,
       isSaved: true,
@@ -414,6 +423,7 @@ class ContactService {
           matrixUserId: wrytteUserId,
           phone: fullIdentifier,
           savedName: displayName,
+          bio: bio,
         );
       }
       apkLog(

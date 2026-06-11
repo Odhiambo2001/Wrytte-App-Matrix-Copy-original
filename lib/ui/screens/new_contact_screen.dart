@@ -37,6 +37,7 @@ class NewContactPage extends StatefulWidget {
   final String? initialIdentifier;
   final String? initialWrytteUserId;
   final String? initialName;
+  final String? initialBio;
 
   const NewContactPage({
     super.key,
@@ -44,6 +45,7 @@ class NewContactPage extends StatefulWidget {
     this.initialIdentifier,
     this.initialWrytteUserId,
     this.initialName,
+    this.initialBio,
   });
 
   @override
@@ -403,6 +405,7 @@ class _NewContactPageState extends State<NewContactPage> {
         phones: [_fullIdentifier],
         isOnWrytte: _isRegisteredOnWrytte || receiverId.isNotEmpty,
         wrytteUserId: receiverId.isEmpty ? null : receiverId,
+        bio: widget.initialBio,
         isSaved: true,
       );
       await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
@@ -413,6 +416,7 @@ class _NewContactPageState extends State<NewContactPage> {
           phone: _fullIdentifier,
           profileName: widget.initialName,
           savedName: contactName,
+          bio: widget.initialBio,
         );
       }
       ContactService.invalidateMatrixContactsCache();
@@ -611,6 +615,7 @@ class _NewContactPageState extends State<NewContactPage> {
         syncToPhone: syncToPhone,
         token: await AuthService.instance.getMatrixAccessToken() ?? token,
         selfUserId: selfId,
+        bio: widget.initialBio,
       );
       apkLog(
         'NewContact.save',

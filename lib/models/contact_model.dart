@@ -2,6 +2,7 @@ class Contact {
   final String? displayName;
   final List<String> phones;
   final String? avatarUrl;
+  final String? bio;
   final bool isOnWrytte;
   final String? wrytteUserId;
   final String? databaseName;
@@ -12,6 +13,7 @@ class Contact {
     required this.displayName,
     required this.phones,
     this.avatarUrl,
+    this.bio,
     this.isOnWrytte = false,
     this.wrytteUserId,
     this.databaseName,
@@ -27,6 +29,7 @@ class Contact {
     String? displayName,
     List<String>? phones,
     String? avatarUrl,
+    String? bio,
     bool? isOnWrytte,
     String? wrytteUserId,
     String? databaseName,
@@ -37,6 +40,7 @@ class Contact {
       displayName: displayName ?? this.displayName,
       phones: phones ?? this.phones,
       avatarUrl: avatarUrl ?? this.avatarUrl,
+      bio: bio ?? this.bio,
       isOnWrytte: isOnWrytte ?? this.isOnWrytte,
       wrytteUserId: wrytteUserId ?? this.wrytteUserId,
       databaseName: databaseName ?? this.databaseName,
@@ -56,6 +60,7 @@ class Contact {
       'displayName': displayName,
       'phones': phones,
       'avatarUrl': avatarUrl,
+      'bio': bio,
       'isOnWrytte': isOnWrytte,
       'wrytteUserId': wrytteUserId,
       'databaseName': databaseName,
@@ -70,6 +75,7 @@ class Contact {
       displayName: map['displayName'],
       phones: List<String>.from(map['phones'] ?? []),
       avatarUrl: map['avatarUrl'],
+      bio: map['bio'],
       isOnWrytte: map['isOnWrytte'] ?? false,
       wrytteUserId: map['wrytteUserId'],
       databaseName: map['databaseName'],

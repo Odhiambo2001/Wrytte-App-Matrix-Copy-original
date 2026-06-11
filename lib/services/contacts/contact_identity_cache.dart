@@ -9,6 +9,7 @@ class ContactIdentity {
   final String? profileName;
   final String? savedName;
   final String? avatarUrl;
+  final String? bio;
 
   const ContactIdentity({
     required this.matrixUserId,
@@ -16,6 +17,7 @@ class ContactIdentity {
     this.profileName,
     this.savedName,
     this.avatarUrl,
+    this.bio,
   });
 
   ContactIdentity copyWith({
@@ -24,6 +26,7 @@ class ContactIdentity {
     String? profileName,
     String? savedName,
     String? avatarUrl,
+    String? bio,
   }) {
     return ContactIdentity(
       matrixUserId: matrixUserId ?? this.matrixUserId,
@@ -31,6 +34,7 @@ class ContactIdentity {
       profileName: profileName ?? this.profileName,
       savedName: savedName ?? this.savedName,
       avatarUrl: avatarUrl ?? this.avatarUrl,
+      bio: bio ?? this.bio,
     );
   }
 
@@ -40,6 +44,7 @@ class ContactIdentity {
     'profileName': profileName,
     'savedName': savedName,
     'avatarUrl': avatarUrl,
+    'bio': bio,
   };
 
   factory ContactIdentity.fromJson(Map<String, dynamic> json) {
@@ -49,6 +54,7 @@ class ContactIdentity {
       profileName: json['profileName']?.toString(),
       savedName: json['savedName']?.toString(),
       avatarUrl: json['avatarUrl']?.toString(),
+      bio: json['bio']?.toString(),
     );
   }
 }
@@ -66,6 +72,7 @@ class ContactIdentityCache {
     String? profileName,
     String? savedName,
     String? avatarUrl,
+    String? bio,
   }) async {
     final owner = ownerUserId.trim();
     final mxid = _toMatrixUserId(matrixUserId);
@@ -80,6 +87,7 @@ class ContactIdentityCache {
       profileName: _clean(profileName) ?? existing?.profileName,
       savedName: _clean(savedName) ?? existing?.savedName,
       avatarUrl: _clean(avatarUrl) ?? existing?.avatarUrl,
+      bio: _cleanBio(bio) ?? existing?.bio,
     );
     await _saveAll(ownerUserId: owner, identities: identities);
   }
@@ -185,5 +193,10 @@ class ContactIdentityCache {
       return null;
     }
     return trimmed;
+  }
+
+  String? _cleanBio(String? value) {
+    final trimmed = value?.trim() ?? '';
+    return trimmed.isEmpty ? null : trimmed;
   }
 }

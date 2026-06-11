@@ -47,9 +47,11 @@ class ConversationsScreen extends StatefulWidget {
   @override
   State<ConversationsScreen> createState() => _ConversationsScreenState();
 }
+//final Map<String, (String?, String?)?> _matrixProfileCache = {};
 
 class _ConversationsScreenState extends State<ConversationsScreen> {
   final ChatService _chat = ChatService();
+  final Map<String, (String?, String?)?> _matrixProfileCache = {};
 
   List<ChatConversation> _conversations = [];
 
@@ -186,12 +188,16 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       if (!mounted) return;
       final withContactRows = _realConversationRows(local);
       if (withContactRows.isEmpty && _initialCacheWarmup) return;
-      final visible = _enrichSavedContactNames(withContactRows);
-      setState(() => _conversations = visible);
+
+      // ── Render immediately with saved contact names only (no network) ──
+      final quickVisible = _enrichSavedContactNames(withContactRows);
+      setState(() => _conversations = quickVisible);
       _notifyUnread(_conversations);
 
-      _prewarmVisibleMessages(visible);
-      unawaited(_enrichPublicProfilesAndRepaint(visible));
+      _prewarmVisibleMessages(quickVisible);
+
+      // ── Then enrich with profiles in the background ──
+      unawaited(_enrichPublicProfilesAndRepaint(quickVisible));
     } catch (e) {
       debugPrint('[ConversationsScreen] local conversation load error: $e');
     }
@@ -356,12 +362,19 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     // ── Pass 2: public backend profile fills sender avatar/name for "Everyone"
     // visibility. Saved contact names stay above public names, but the avatar
     // should still show even when the receiver has not saved the sender.
-    final enriched = <ChatConversation>[];
+    //final enriched = <ChatConversation>[];
+
+    /** 
     for (final conv in afterSavedContacts) {
       enriched.add(await _enrichConversationFromPublicProfile(conv));
     }
+    **/
 
-    return enriched;
+    return Future.wait(
+      afterSavedContacts.map(
+        (conv) => _enrichConversationFromPublicProfile(conv),
+      ),
+    );
   }
 
   Future<void> _enrichPublicProfilesAndRepaint(
@@ -476,11 +489,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         contactKey == null
             ? ''
             : _cleanHumanName(_contactNameCache[contactKey]);
+    final phone = _fallbackPhoneForConversation(conv);
     final name =
         savedName.isNotEmpty
             ? savedName
             : contactName.isNotEmpty
             ? contactName
+            : phone.isNotEmpty
+            ? _formatPhone(phone)
             : publicName.isNotEmpty
             ? publicName
             : matrixName.isNotEmpty
@@ -489,7 +505,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final avatar =
         profile?.hasProfileImage == true
             ? profile!.profileImage
-            : matrixProfile?.$2 ?? conv.otherUserAvatar;
+            : _identityForConversation(conv)?.avatarUrl ??
+                matrixProfile?.$2 ??
+                conv.otherUserAvatar;
     final enriched = conv.copyWith(
       otherUserName: name,
       otherUserAvatar: avatar,
@@ -506,6 +524,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
+    if (_matrixProfileCache.containsKey(uid)) return _matrixProfileCache[uid];
     try {
       if (!MatrixClientService.instance.isLoggedIn) return null;
       final matrixUserId =
@@ -513,10 +532,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final profile = await MatrixClientService.instance.client
           .getProfileFromUserId(
             matrixUserId,
-            timeout: const Duration(seconds: 5),
+            timeout: const Duration(seconds: 2),
           );
-      return (profile.displayName, profile.avatarUrl?.toString());
+      final result = (profile.displayName, profile.avatarUrl?.toString());
+      _matrixProfileCache[uid] = result;
+      return result;
     } catch (_) {
+      _matrixProfileCache[uid] = null;
       return null;
     }
   }

@@ -25,6 +25,7 @@ class ContactLocalDb {
                 'name': c.displayName,
                 'phones': c.phones.map(_normalizePhone).toList(),
                 'avatar': c.avatarUrl,
+                'bio': c.bio,
                 'wrytteUserId': c.wrytteUserId,
                 'isOnWrytte': c.isOnWrytte,
                 'isSaved': c.isSaved,
@@ -47,6 +48,7 @@ class ContactLocalDb {
         displayName: json['name'],
         phones: List<String>.from(json['phones']).map(_normalizePhone).toList(),
         avatarUrl: json['avatar'],
+        bio: json['bio'],
         wrytteUserId: json['wrytteUserId'],
         isOnWrytte: json['isOnWrytte'] ?? false,
         isSaved: json['isSaved'] ?? false,
@@ -66,11 +68,26 @@ class ContactLocalDb {
     required String ownerUserId,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    final currentKey = _keyForOwner(ownerUserId);
+    final normalizedOwner = ownerUserId.trim();
+    final currentKey = _keyForOwner(normalizedOwner);
     final contactsByKey = <String, Contact>{};
 
     for (final key in prefs.getKeys()) {
-      if (!key.startsWith('${_key}_') || key == currentKey) continue;
+      if (!key.startsWith('${_key}_')) continue;
+
+      // Extract the userId portion from the key
+      final keyUserId = key.substring('${_key}_'.length);
+
+      // ONLY recover if the key belongs to THIS exact userId
+      // Handles minor formatting variants of the same ID (trim, case)
+      if (keyUserId.trim().toLowerCase() !=
+          normalizedOwner.trim().toLowerCase()) {
+        continue; // Different userId — never touch their contacts
+      }
+
+      // Skip the current active key (it was already checked and was empty)
+      if (key == currentKey) continue;
+
       final data = prefs.getStringList(key) ?? const <String>[];
       for (final raw in data) {
         try {
@@ -82,15 +99,16 @@ class ContactLocalDb {
                   json['phones'] ?? const <String>[],
                 ).map(_normalizePhone).toList(),
             avatarUrl: json['avatar'],
+            bio: json['bio'],
             wrytteUserId: json['wrytteUserId'],
             isOnWrytte: json['isOnWrytte'] ?? false,
             isSaved: json['isSaved'] ?? false,
           );
           if (!contact.isSaved) continue;
-          final key = _dedupeKey(contact);
-          if (key.isNotEmpty) contactsByKey[key] = contact;
+          final dedupeKey = _dedupeKey(contact);
+          if (dedupeKey.isNotEmpty) contactsByKey[dedupeKey] = contact;
         } catch (_) {
-          // Ignore corrupted old entries; they should not block recovery.
+          // Ignore corrupted entries
         }
       }
     }

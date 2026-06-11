@@ -64,6 +64,7 @@ class AuthService {
   Future<void>? _matrixLoginInFlight;
   String? _matrixLoginInFlightUserId;
   int? _matrixLoginInFlightGeneration;
+  Future<String?>? _pendingTokenRefresh;
 
   static const _tokenKey = 'auth_token';
   static const _expiryKey = 'auth_token_expiry';
@@ -514,9 +515,12 @@ class AuthService {
       return token;
     }
 
-    final refreshed = await _refreshBackendToken();
-    if (refreshed != null && refreshed.trim().isNotEmpty) return refreshed;
-    return token;
+      // ── Single-flight guard: all concurrent callers wait on ONE refresh ──
+    _pendingTokenRefresh ??= _refreshBackendToken()
+      .whenComplete(() => _pendingTokenRefresh = null);
+    return _pendingTokenRefresh;
+
+    
   }
 
   Future<bool> _isBackendTokenExpired() async {
@@ -880,6 +884,10 @@ class AuthService {
   // ---------------------------------------------------------------------------
   Future<void> logout() async {
     _matrixBootstrapGeneration++;
+    _pendingTokenRefresh = null;
+    //ADD THIS — clear contact cache before any user switch
+    ContactService.invalidateMatrixContactsCache();
+    ContactService().invalidateCache(); // clears _phoneUserMapCache and _cacheTime
     try {
       await NotificationService.instance.stop().timeout(
         const Duration(seconds: 3),

@@ -108,6 +108,7 @@ class MatrixContactService {
     'name': contact.displayName ?? '',
     'phones': contact.phones.map(_normalizePhone).toSet().toList(),
     'avatar_url': contact.avatarUrl ?? '',
+    'bio': contact.bio ?? '',
     'matrix_user_id': contact.wrytteUserId ?? '',
     'is_on_wrytte': contact.isOnWrytte,
     'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -124,6 +125,7 @@ class MatrixContactService {
                   .toList()
               : <String>[],
       avatarUrl: raw['avatar_url']?.toString(),
+      bio: raw['bio']?.toString(),
       wrytteUserId: raw['matrix_user_id']?.toString(),
       isOnWrytte: raw['is_on_wrytte'] == true,
     );
