@@ -1203,19 +1203,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
               _messageActionTile(
-                icon:
-                    message.isStarred
-                        ? Icons.star_rounded
-                        : Icons.star_border_rounded,
-                label: message.isStarred ? 'Unstar' : 'Star',
-                onTap: () async {
+                icon: Icons.copy_outlined,
+                label: 'Copy',
+                onTap: () {
                   Navigator.pop(context);
-                  final updated = message.copyWith(
-                    isStarred: !message.isStarred,
-                  );
-                  await _chat.starMessage(message, !message.isStarred);
-                  if (!mounted) return;
-                  setState(() => _upsertMessage(updated));
+                  Clipboard.setData(ClipboardData(text: message.content));
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('Copied')));
                 },
               ),
               _messageActionTile(
