@@ -69,6 +69,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   StreamSubscription<List<ChatConversation>>? _convSub;
   StreamSubscription<bool>? _chatConnectionSub;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  StreamSubscription<String>? _contactsChangedSub;
   Timer? _conversationBatchTimer;
 
   final ScrollController _scrollCtrl = ScrollController();
@@ -103,6 +104,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     _convSub?.cancel();
     _chatConnectionSub?.cancel();
     _connectivitySub?.cancel();
+    _contactsChangedSub?.cancel();
     _conversationBatchTimer?.cancel();
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
@@ -166,6 +168,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     // Subscribe to Matrix conversation stream
     _convSub = _chat.conversationsStream.listen(_queueConversationBatch);
+    _contactsChangedSub = ContactService.contactsChanged.listen((ownerUserId) {
+      if (ownerUserId.trim().toLowerCase() !=
+          _currentUserId.trim().toLowerCase()) {
+        return;
+      }
+      unawaited(_reloadContactsAndRepaint(reason: 'local contact changed'));
+    });
 
     _chatConnectionSub = _chat.connectionStream.listen((connected) {
       if (connected) {
@@ -297,7 +306,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   //  Populates _contactNameCache keyed by phone digits for O(1) lookup.
   // ===========================================================================
 
-  Future<void> _loadSavedContacts() async {
+  Future<void> _loadSavedContacts({bool refreshBackend = true}) async {
     try {
       final contacts = await _loadImmediateContactSource();
       _savedContacts = contacts;
@@ -307,7 +316,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         '[ConversationsScreen] loaded ${_contactNameCache.length} immediate contact names',
       );
 
-      unawaited(_refreshContactSourceInBackground());
+      if (refreshBackend) {
+        unawaited(_refreshContactSourceInBackground());
+      }
     } catch (e) {
       debugPrint('[ConversationsScreen] _loadSavedContacts error: $e');
     }
@@ -1178,9 +1189,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Future<void> _retryEnrichment() async {
-    await _loadSavedContacts();
+    await _reloadContactsAndRepaint(reason: 'retry enrichment');
+  }
+
+  Future<void> _reloadContactsAndRepaint({required String reason}) async {
+    await _loadSavedContacts(refreshBackend: false);
     final enriched = await _enrichNames(_conversations);
     await _publishPreparedConversations(enriched);
+    debugPrint('[ConversationsScreen] contact repaint done reason="$reason"');
   }
 
   // ===========================================================================
@@ -1197,6 +1213,20 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   String _sanitize(String s) =>
       String.fromCharCodes(s.runes.where((r) => r <= 0xD7FF || r >= 0xE000));
+
+  String _conversationPreview(String raw) {
+    var text = _sanitize(raw).trim();
+    if (text.startsWith('> ')) {
+      final parts = text.split('\n\n');
+      if (parts.length > 1) {
+        text = parts.sublist(1).join('\n\n').trim();
+      }
+    }
+    text = text.replaceFirst(RegExp(r'^<[^>]+>\s*'), '').trim();
+    text =
+        text.replaceFirst(RegExp(r'^@[A-Za-z0-9._=-]+:[^\s]+\s*'), '').trim();
+    return text;
+  }
 
   void _enterSelection() => setState(() {
     _isSelectionMode = true;
@@ -1257,7 +1287,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     return ConversationTile(
       name: name,
-      lastMessage: _sanitize(conv.lastMessage),
+      lastMessage: _conversationPreview(conv.lastMessage),
       time: _formatTime(conv.lastMessageTime),
       avatarUrl: avatar,
       localAvatarPath: localAvatarPath,

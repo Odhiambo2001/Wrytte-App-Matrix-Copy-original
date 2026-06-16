@@ -472,6 +472,7 @@ class _NewContactPageState extends State<NewContactPage> {
       // ── 1. Save ContactUserProfile2 locally, then sync backend in background.
       final localContact = contactUserProfile2.toContact();
       await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
+      ContactService.notifyContactsChanged(selfId);
       apkLog(
         'NewContact.save',
         'local contact save done owner="$selfId" name="${localContact.formattedName}" wrytteUserId="${localContact.wrytteUserId}" phone="${localContact.primaryPhone}"',

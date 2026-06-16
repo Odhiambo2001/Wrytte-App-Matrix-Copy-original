@@ -759,7 +759,7 @@ class _ChatScreenState extends State<ChatScreen> {
       timestamp: DateTime.now(),
       status: MessageStatus.sending,
       replyToMessageId: reply?.id,
-      replyToSenderId: reply?.senderId,
+      replyToSenderId: _replySenderIdForOutgoingReply(reply),
       replyPreview:
           reply == null
               ? null
@@ -1904,7 +1904,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String? _replySenderDisplayName(ChatMessage message) {
-    final rawSender = message.replyToSenderId?.trim();
+    final rawSender =
+        message.replyToSenderId?.trim().isNotEmpty == true
+            ? message.replyToSenderId!.trim()
+            : _replySenderIdFromQuotedMessage(message);
     if (rawSender == null || rawSender.isEmpty) return null;
 
     if (_matrixLocalpart(rawSender) == _matrixLocalpart(widget.currentUserId)) {
@@ -1945,6 +1948,25 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final cleanName = _cleanDisplayName(rawSender);
     return cleanName.isNotEmpty ? cleanName : null;
+  }
+
+  String? _replySenderIdForOutgoingReply(ChatMessage? reply) {
+    if (reply == null) return null;
+    final sender = reply.senderId.trim();
+    if (sender.isNotEmpty) return sender;
+    return _isMine(reply) ? widget.currentUserId : widget.receiverId;
+  }
+
+  String? _replySenderIdFromQuotedMessage(ChatMessage message) {
+    final replyToMessageId = message.replyToMessageId?.trim();
+    if (replyToMessageId == null || replyToMessageId.isEmpty) return null;
+    for (final candidate in _messages) {
+      if (candidate.id != replyToMessageId) continue;
+      final sender = candidate.senderId.trim();
+      if (sender.isNotEmpty) return sender;
+      return _isMine(candidate) ? widget.currentUserId : widget.receiverId;
+    }
+    return null;
   }
 
   String? _replyPreviewDisplayText(String? preview) {

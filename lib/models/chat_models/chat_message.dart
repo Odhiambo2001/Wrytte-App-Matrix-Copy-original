@@ -289,9 +289,13 @@ String? _replyPreviewFromFallback(String body) {
 }
 
 String? _replySenderFromFallback(String body) {
-  final preview = _replyPreviewFromFallback(body);
-  if (preview == null) return null;
-  final match = RegExp(r'^<([^>]+)>').firstMatch(preview);
+  if (!body.startsWith('> ')) return null;
+  final firstBlock = body.split('\n\n').first;
+  final firstLine = firstBlock
+      .split('\n')
+      .map((line) => line.replaceFirst(RegExp(r'^> ?'), '').trim())
+      .firstWhere((line) => line.isNotEmpty, orElse: () => '');
+  final match = RegExp(r'^<([^>]+)>').firstMatch(firstLine);
   return match?.group(1);
 }
 

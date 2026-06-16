@@ -17,6 +17,11 @@ import 'user_search_service.dart';
 
 class ContactService {
   final UserSearchService _userSearchService = UserSearchService();
+  static final StreamController<String> _contactsChangedController =
+      StreamController<String>.broadcast();
+
+  static Stream<String> get contactsChanged =>
+      _contactsChangedController.stream;
 
   // ── Cache to avoid repeated Wrytte directory lookups ───────────────────
   Map<String, String>? _phoneUserMapCache;
@@ -58,6 +63,12 @@ class ContactService {
   static void invalidateMatrixContactsCache() {
     _matrixContactsCache = null;
     _matrixContactsCacheOwner = null;
+  }
+
+  static void notifyContactsChanged(String ownerUserId) {
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return;
+    _contactsChangedController.add(owner);
   }
 
   void invalidateCache() {
@@ -387,6 +398,7 @@ class ContactService {
 
     if (selfUserId != null && selfUserId.isNotEmpty) {
       await ContactLocalDb.addContact(contact, ownerUserId: selfUserId);
+      ContactService.notifyContactsChanged(selfUserId);
       if (wrytteUserId != null && wrytteUserId.trim().isNotEmpty) {
         await ContactIdentityCache.instance.upsert(
           ownerUserId: selfUserId,
