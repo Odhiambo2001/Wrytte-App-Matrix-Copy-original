@@ -469,14 +469,13 @@ class _NewContactPageState extends State<NewContactPage> {
         contactUserProfile1: contactUserProfile1,
       );
 
-      // ── 1. Save ContactUserProfile2 to backend, then locally ─────
+      // ── 1. Save ContactUserProfile2 locally, then sync backend in background.
       final localContact = contactUserProfile2.toContact();
-      await _saveContactToBackendOrThrow(
-        selfId: selfId,
-        receiverId: receiverId,
-        contact: localContact,
-      );
       await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
+      apkLog(
+        'NewContact.save',
+        'local contact save done owner="$selfId" name="${localContact.formattedName}" wrytteUserId="${localContact.wrytteUserId}" phone="${localContact.primaryPhone}"',
+      );
       if (receiverId.isNotEmpty) {
         await ContactIdentityCache.instance.upsert(
           ownerUserId: selfId,
@@ -492,6 +491,18 @@ class _NewContactPageState extends State<NewContactPage> {
       await ChatService().applySavedContact(localContact);
       ContactService.invalidateMatrixContactsCache();
       _contactService.invalidateCache();
+      unawaited(
+        _saveContactToBackendOrThrow(
+          selfId: selfId,
+          receiverId: receiverId,
+          contact: localContact,
+        ).catchError((e) {
+          apkLog(
+            'NewContact.save',
+            'backend contact save failed after local success; backend still needs sync error="$e"',
+          );
+        }),
+      );
 
       // ── 2. Build a fallback local conversation ID ────────────────
       final ids = [
