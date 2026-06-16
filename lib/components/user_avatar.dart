@@ -30,20 +30,74 @@ class UserAvatar extends StatefulWidget {
 }
 
 class _UserAvatarState extends State<UserAvatar> {
-  late Future<String?> _tokenFuture;
+  // ── App-wide resolved-image cache ───────────────────────────────────────
+  // Once a CachedNetworkImage for a given URL has successfully resolved at
+  // least once (this app session), we remember its ImageProvider here. Any
+  // future build for the same URL — even in a brand new UserAvatar instance
+  // after a parent rebuild — paints directly from this provider with zero
+  // placeholder frame. This is what actually stops the flicker, because
+  // CachedNetworkImage's `placeholder` builder still renders for one frame
+  // on every widget rebuild while it asynchronously checks its disk cache,
+  // even if the bytes are already on disk.
+  static final Map<String, ImageProvider> _resolvedImageCache = {};
+
+  // Tracks which raw localImagePath strings have been confirmed to exist on
+  // disk, so we don't repeatedly hit File.existsSync() and so a transient
+  // "file missing" check (e.g. mid-write) doesn't permanently blacklist a
+  // path that becomes valid moments later.
+  static final Set<String> _knownGoodLocalPaths = {};
+
+  String? _backendToken;
+  String? _lastGoodImageUrl;
+  String? _lastGoodLocalImagePath;
 
   @override
   void initState() {
     super.initState();
-    _tokenFuture = AuthService.instance.getValidBackendToken();
+    _rememberStableSources();
+    _warmAuthToken();
   }
 
   @override
   void didUpdateWidget(covariant UserAvatar oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _rememberStableSources();
     if (oldWidget.imageUrl != widget.imageUrl) {
-      _tokenFuture = AuthService.instance.getValidBackendToken();
+      _warmAuthToken();
     }
+  }
+
+  void _rememberStableSources() {
+    final imageUrl = widget.imageUrl?.trim() ?? '';
+    if (imageUrl.isNotEmpty) _lastGoodImageUrl = imageUrl;
+
+    final localPath = widget.localImagePath?.trim() ?? '';
+    if (localPath.isNotEmpty) {
+      if (_knownGoodLocalPaths.contains(localPath)) {
+        _lastGoodLocalImagePath = localPath;
+      } else if (File(localPath).existsSync()) {
+        _knownGoodLocalPaths.add(localPath);
+        _lastGoodLocalImagePath = localPath;
+      }
+    }
+  }
+
+  void _warmAuthToken() {
+    final cached = AuthService.instance.cachedBackendToken?.trim() ?? '';
+    if (cached.isNotEmpty) {
+      _backendToken = cached;
+      return;
+    }
+    AuthService.instance
+        .getValidBackendToken()
+        .then((token) {
+          final clean = token?.trim() ?? '';
+          if (!mounted || clean.isEmpty || clean == _backendToken) return;
+          setState(() => _backendToken = clean);
+        })
+        .catchError((error) {
+          debugPrint('[UserAvatar] auth token warm skipped: $error');
+        });
   }
 
   @override
@@ -51,10 +105,15 @@ class _UserAvatarState extends State<UserAvatar> {
     Widget avatarWidget;
 
     final localFile = _localImageFile();
+    final imageUrl = _effectiveImageUrl();
+    final cachedProvider = imageUrl.isNotEmpty
+        ? _resolvedImageCache[_resolveImageUrl(imageUrl)]
+        : null;
 
     if (widget.image != null) {
       avatarWidget = _buildFromImageProvider(widget.image!);
     } else if (localFile != null) {
+      _lastGoodLocalImagePath = localFile.path;
       avatarWidget = ClipOval(
         child: Image.file(
           localFile,
@@ -65,12 +124,23 @@ class _UserAvatarState extends State<UserAvatar> {
             debugPrint(
               '[UserAvatar] local image load failed path="${localFile.path}" error=$error',
             );
-            return _buildNetworkOrPlaceholder();
+            _knownGoodLocalPaths.remove(localFile.path);
+            if (cachedProvider != null) {
+              return _buildFromImageProvider(cachedProvider);
+            }
+            return imageUrl.isNotEmpty
+                ? _buildNetworkOrPlaceholder(imageUrl)
+                : _buildPlaceholder();
           },
         ),
       );
-    } else if (widget.imageUrl != null && widget.imageUrl!.isNotEmpty) {
-      avatarWidget = _buildNetworkOrPlaceholder();
+    } else if (cachedProvider != null) {
+      // We've already successfully rendered this exact URL before in this
+      // session — paint directly from the resolved provider. No
+      // CachedNetworkImage, no placeholder frame, no flicker.
+      avatarWidget = _buildFromImageProvider(cachedProvider);
+    } else if (imageUrl.isNotEmpty) {
+      avatarWidget = _buildNetworkOrPlaceholder(imageUrl);
     } else {
       avatarWidget = _buildPlaceholder();
     }
@@ -99,49 +169,77 @@ class _UserAvatarState extends State<UserAvatar> {
   }
 
   File? _localImageFile() {
-    final path = widget.localImagePath?.trim() ?? '';
+    final path =
+        (widget.localImagePath?.trim().isNotEmpty == true
+                ? widget.localImagePath
+                : _lastGoodLocalImagePath)
+            ?.trim() ??
+        '';
     if (path.isEmpty) return null;
+    if (_knownGoodLocalPaths.contains(path)) return File(path);
     final file = File(path);
-    return file.existsSync() ? file : null;
+    if (file.existsSync()) {
+      _knownGoodLocalPaths.add(path);
+      return file;
+    }
+    return null;
   }
 
-  Widget _buildNetworkOrPlaceholder() {
-    final url = _resolveImageUrl(widget.imageUrl);
+  String _effectiveImageUrl() {
+    final direct = widget.imageUrl?.trim() ?? '';
+    if (direct.isNotEmpty) return direct;
+    return _lastGoodImageUrl?.trim() ?? '';
+  }
+
+  Widget _buildNetworkOrPlaceholder(String rawUrl) {
+    final url = _resolveImageUrl(rawUrl);
     if (url.isEmpty) return _buildPlaceholder();
-    return FutureBuilder<String?>(
-      future: _tokenFuture,
-      builder: (context, snapshot) {
-        return ClipOval(
-          child: CachedNetworkImage(
-            imageUrl: url,
-            httpHeaders: _authHeaders(snapshot.data),
+    return ClipOval(
+      child: CachedNetworkImage(
+        imageUrl: url,
+        imageBuilder: (context, imageProvider) {
+          _lastGoodImageUrl = rawUrl;
+          // Remember this provider so every future build (including in
+          // other UserAvatar instances for the same URL — other screens,
+          // conversation tiles, profile page, etc.) can skip straight to
+          // painting it with zero placeholder frame.
+          _resolvedImageCache[url] = imageProvider;
+          return Image(
+            image: imageProvider,
             width: widget.size,
             height: widget.size,
             fit: BoxFit.cover,
-            placeholder: (context, url) => _buildPlaceholder(),
-            errorWidget: (context, url, error) {
-              debugPrint(
-                '[UserAvatar] image load failed url="$url" error=$error',
-              );
-              return _buildPlaceholder();
-            },
-          ),
-        );
-      },
+          );
+        },
+        httpHeaders: _authHeaders(
+          _backendToken ?? AuthService.instance.cachedBackendToken,
+          rawUrl: rawUrl,
+        ),
+        width: widget.size,
+        height: widget.size,
+        fit: BoxFit.cover,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
+        placeholderFadeInDuration: Duration.zero,
+        useOldImageOnUrlChange: true,
+        placeholder: (context, url) => _buildPlaceholder(),
+        errorWidget: (context, url, error) {
+          debugPrint('[UserAvatar] image load failed url="$url" error=$error');
+          return _buildPlaceholder();
+        },
+      ),
     );
   }
 
   String _resolveImageUrl(String? raw) {
     final url = raw?.trim() ?? '';
     if (url.isEmpty) return '';
-    if (url.startsWith('/')) return '${ApiService.baseUrl}$url';
-    return url;
+    return url.startsWith('/') ? '${ApiService.baseUrl}$url' : url;
   }
 
-  Map<String, String>? _authHeaders(String? token) {
+  Map<String, String>? _authHeaders(String? token, {required String rawUrl}) {
     final clean = token?.trim() ?? '';
     if (clean.isEmpty) return null;
-    final rawUrl = widget.imageUrl?.trim() ?? '';
     final uri = Uri.tryParse(rawUrl);
     final isWrytteImage =
         rawUrl.startsWith('/usrimg/') ||

@@ -283,7 +283,8 @@ String? _replyPreviewFromFallback(String body) {
           .where((line) => line.isNotEmpty)
           .toList();
   if (lines.isEmpty) return null;
-  final text = lines.join(' ');
+  final text = lines.join(' ').replaceFirst(RegExp(r'^<[^>]+>\s*'), '');
+  if (text.trim().isEmpty) return null;
   return text.length > 120 ? '${text.substring(0, 120)}...' : text;
 }
 

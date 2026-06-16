@@ -141,6 +141,80 @@ class ContactLocalDb {
     await saveContacts(existing, ownerUserId: ownerUserId);
   }
 
+  static Future<Contact?> removeContact(
+    Contact contact, {
+    required String ownerUserId,
+  }) async {
+    final existing = await loadContacts(ownerUserId: ownerUserId);
+    final incomingPhones = contact.phones.map(_normalizePhone).toSet();
+    final incomingWrytteId = contact.wrytteUserId?.trim();
+    Contact? removed;
+    existing.removeWhere((saved) {
+      final savedWrytteId = saved.wrytteUserId?.trim();
+      final sameWrytteId =
+          incomingWrytteId != null &&
+          incomingWrytteId.isNotEmpty &&
+          savedWrytteId == incomingWrytteId;
+      final samePhone = saved.phones
+          .map(_normalizePhone)
+          .any(incomingPhones.contains);
+      final shouldRemove = sameWrytteId || samePhone;
+      if (shouldRemove) removed ??= saved;
+      return shouldRemove;
+    });
+    if (removed != null) {
+      await saveContacts(existing, ownerUserId: ownerUserId);
+    }
+    return removed;
+  }
+
+  static Future<Contact?> refreshPublicProfileFields({
+    required String ownerUserId,
+    String? wrytteUserId,
+    String? phone,
+    String? avatarUrl,
+    String? bio,
+  }) async {
+    final existing = await loadContacts(ownerUserId: ownerUserId);
+    final targetWrytteId = wrytteUserId?.trim();
+    final targetPhone = _normalizePhone(phone ?? '');
+    final cleanAvatar = avatarUrl?.trim();
+    final cleanBio = bio?.trim();
+    Contact? updated;
+
+    for (var i = 0; i < existing.length; i++) {
+      final contact = existing[i];
+      final sameWrytteId =
+          targetWrytteId != null &&
+          targetWrytteId.isNotEmpty &&
+          contact.wrytteUserId?.trim() == targetWrytteId;
+      final samePhone =
+          targetPhone.isNotEmpty &&
+          contact.phones.map(_normalizePhone).contains(targetPhone);
+      if (!sameWrytteId && !samePhone) continue;
+
+      final next = Contact(
+        displayName: contact.displayName,
+        phones: contact.phones,
+        avatarUrl: avatarUrl == null ? contact.avatarUrl : cleanAvatar,
+        bio: bio == null ? contact.bio : cleanBio,
+        isOnWrytte: contact.isOnWrytte,
+        wrytteUserId: contact.wrytteUserId,
+        databaseName: contact.databaseName,
+        isRecent: contact.isRecent,
+        isSaved: contact.isSaved,
+      );
+      existing[i] = next;
+      updated = next;
+      break;
+    }
+
+    if (updated != null) {
+      await saveContacts(existing, ownerUserId: ownerUserId);
+    }
+    return updated;
+  }
+
   static String _normalizePhone(String phone) {
     var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
     if (cleaned.startsWith('00') && cleaned.length > 4) {

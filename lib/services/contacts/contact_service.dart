@@ -10,6 +10,8 @@ import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/contacts/contact_backend_service.dart';
 import 'package:wrytte/services/contacts/contact_directory_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
+import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'user_search_service.dart';
 
@@ -144,14 +146,18 @@ class ContactService {
   }) async {
     final owner = ownerUserId.trim();
     if (owner.isEmpty) return;
+    final freshContact = await _contactWithLatestPublicProfile(
+      ownerUserId: owner,
+      contact: contact,
+    );
 
     await ContactBackendService.instance.saveContact(
       ownerUserId: owner,
-      contact: contact.copyWith(isSaved: true),
+      contact: freshContact.copyWith(isSaved: true),
     );
     apkLog(
       'Contact.save',
-      'backend contact save done owner="$owner" name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}"',
+      'backend contact save done owner="$owner" name="${freshContact.formattedName}" wrytteUserId="${freshContact.wrytteUserId}"',
     );
   }
 
@@ -195,7 +201,7 @@ class ContactService {
       return contacts;
     } catch (e) {
       debugPrint('Failed to load backend contacts: $e');
-      return ContactLocalDb.loadContacts(ownerUserId: owner);
+      return ContactLocalDb.loadSavedContacts(ownerUserId: owner);
     }
   }
 
@@ -450,9 +456,13 @@ class ContactService {
     }
 
     for (final contact in contacts) {
+      final freshContact = await _contactWithLatestPublicProfile(
+        ownerUserId: owner,
+        contact: contact,
+      );
       await ContactBackendService.instance.saveContact(
         ownerUserId: owner,
-        contact: contact.copyWith(isSaved: true),
+        contact: freshContact.copyWith(isSaved: true),
       );
     }
     invalidateMatrixContactsCache();
@@ -460,5 +470,61 @@ class ContactService {
       'Contact.sync',
       'backend contact sync done owner="$owner" contacts=${contacts.length}',
     );
+  }
+
+  Future<Contact> _contactWithLatestPublicProfile({
+    required String ownerUserId,
+    required Contact contact,
+  }) async {
+    final wrytteUserId = contact.wrytteUserId?.trim();
+    if (wrytteUserId == null || wrytteUserId.isEmpty) return contact;
+
+    try {
+      final profile = await UserProfileService.instance.getProfileByUid(
+        wrytteUserId,
+        phone: contact.primaryPhone,
+        forceRefresh: true,
+      );
+      if (profile == null) return contact;
+
+      final latestAvatar =
+          profile.hasProfileImage ? profile.profileImage.trim() : null;
+      final latestBio = profile.bio.trim();
+      final latestPhone =
+          profile.phone.trim().isNotEmpty ? profile.phone.trim() : null;
+      if (latestAvatar != null && latestAvatar != contact.avatarUrl?.trim()) {
+        await AvatarPreloadService.replace(
+          oldUrl: contact.avatarUrl,
+          newUrl: latestAvatar,
+        );
+      }
+
+      final refreshed = await ContactLocalDb.refreshPublicProfileFields(
+        ownerUserId: ownerUserId,
+        wrytteUserId: wrytteUserId,
+        phone: latestPhone ?? contact.primaryPhone,
+        avatarUrl: latestAvatar,
+        bio: latestBio,
+      );
+      if (refreshed != null) return refreshed;
+
+      return Contact(
+        displayName: contact.displayName,
+        phones: latestPhone == null ? contact.phones : [latestPhone],
+        avatarUrl: latestAvatar ?? contact.avatarUrl,
+        bio: latestBio.isEmpty ? contact.bio : latestBio,
+        isOnWrytte: contact.isOnWrytte,
+        wrytteUserId: contact.wrytteUserId,
+        databaseName: contact.databaseName,
+        isRecent: contact.isRecent,
+        isSaved: true,
+      );
+    } catch (e) {
+      apkLog(
+        'Contact.sync',
+        'public profile refresh skipped owner="$ownerUserId" contact="${contact.formattedName}" error="$e"',
+      );
+      return contact;
+    }
   }
 }

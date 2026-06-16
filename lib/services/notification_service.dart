@@ -13,6 +13,7 @@ import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user_service.dart';
+import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 
 class NotificationService {
   NotificationService._();
@@ -41,6 +42,7 @@ class NotificationService {
   String? _currentUserId;
   String? _lastRegisteredToken;
   DateTime? _localMessageNotificationsStartedAt;
+  DateTime? _remoteMessageNotificationsStartedAt;
   bool _matrixPusherReady = false;
 
   Future<void> initialize() async {
@@ -104,6 +106,7 @@ class NotificationService {
   Future<void> start({required String currentUserId}) async {
     _currentUserId = currentUserId;
     _localMessageNotificationsStartedAt = DateTime.now();
+    _remoteMessageNotificationsStartedAt = DateTime.now();
     await initialize();
     if (kIsWeb) return;
     await _seedNotificationStateFromLocalDb();
@@ -156,6 +159,7 @@ class NotificationService {
     _currentUserId = null;
     _lastRegisteredToken = null;
     _localMessageNotificationsStartedAt = null;
+    _remoteMessageNotificationsStartedAt = null;
     _matrixPusherReady = false;
     _notifiedMessageIds.clear();
     _notifiedCallIds.clear();
@@ -185,6 +189,7 @@ class NotificationService {
     try {
       await ChatService().connect();
       _matrixPusherReady = true;
+      _remoteMessageNotificationsStartedAt = DateTime.now();
       final cleaned = token?.trim();
       if (cleaned != null && cleaned.isNotEmpty) {
         await _registerMatrixPusher(cleaned);
@@ -473,11 +478,24 @@ class NotificationService {
   }
 
   Future<bool> _shouldIgnoreLocalMessage(ChatMessage message) async {
-    if (!_isLiveIncomingMessage(message)) return true;
+    if (!MatrixChatService.instance.initialSyncComplete) {
+      return true;
+    }
+
+    if (!_isLiveIncomingMessage(message)) {
+      return true;
+    }
+
     final readAt = _readMarkersByConversation[message.conversationId];
-    if (readAt != null && !message.timestamp.isAfter(readAt)) return true;
+
+    if (readAt != null &&
+        !message.timestamp.isAfter(readAt)) {
+      return true;
+    }
+
     return false;
   }
+
 
   bool _isLiveIncomingMessage(ChatMessage message) {
     final startedAt = _localMessageNotificationsStartedAt;
@@ -552,6 +570,23 @@ class NotificationService {
           _firstNonEmpty([data['conversationId'], data['conversation_id']]) ??
           '';
       final eventTime = _remoteEventTime(data);
+      final remoteStartedAt = _remoteMessageNotificationsStartedAt;
+      if (remoteStartedAt != null) {
+        if (eventTime != null && !eventTime.isAfter(remoteStartedAt)) {
+          debugPrint(
+            '[NotificationService] remote push ignored; event before login notification baseline id="$eventId"',
+          );
+          return true;
+        }
+        if (eventTime == null &&
+            DateTime.now().difference(remoteStartedAt) <
+                const Duration(seconds: 45)) {
+          debugPrint(
+            '[NotificationService] remote push ignored; missing timestamp during login baseline id="$eventId"',
+          );
+          return true;
+        }
+      }
       final readAt = _readMarkersByConversation[conversationId];
       if (eventTime != null && readAt != null && !eventTime.isAfter(readAt)) {
         debugPrint(

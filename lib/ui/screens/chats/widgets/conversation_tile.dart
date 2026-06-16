@@ -6,6 +6,7 @@ class ConversationTile extends StatelessWidget {
   final String lastMessage;
   final String time;
   final String? avatarUrl;
+  final String? localAvatarPath;
   final int unreadCount;
   final bool isOnline;
   final VoidCallback? onTap;
@@ -24,6 +25,7 @@ class ConversationTile extends StatelessWidget {
     required this.lastMessage,
     required this.time,
     this.avatarUrl,
+    this.localAvatarPath,
     this.unreadCount = 0,
     this.isOnline = false,
     this.onTap,
@@ -63,7 +65,12 @@ class ConversationTile extends StatelessWidget {
               Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  UserAvatar(size: 60, imageUrl: avatarUrl, name: name),
+                  UserAvatar(
+                    size: 60,
+                    imageUrl: avatarUrl,
+                    localImagePath: localAvatarPath,
+                    name: name,
+                  ),
 
                   if (isOnline && !isSelectionMode)
                     Positioned(

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
+import 'package:wrytte/models/user_models/contact_user_profiles.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
@@ -11,6 +12,7 @@ import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/Country%20id%20picker%20page.dart';
 import 'package:wrytte/utils/countries_id.dart';
@@ -366,6 +368,40 @@ class _NewContactPageState extends State<NewContactPage> {
     }
   }
 
+  Future<void> _prefillNameFromProfile(
+    String matrixUserId,
+    String identifier,
+  ) async {
+    if (_firstNameCtrl.text.trim().isNotEmpty ||
+        _lastNameCtrl.text.trim().isNotEmpty) {
+      return;
+    }
+
+    try {
+      final profile = await UserProfileService.instance.getProfileByUid(
+        matrixUserId,
+        phone: identifier,
+        forceRefresh: true,
+      );
+      final name = _cleanProfileName(profile?.displayName);
+      if (name.isEmpty || !mounted) return;
+      if (_fullIdentifier != identifier) return;
+      if (_resolvedUserId?.trim() != matrixUserId.trim()) return;
+      if (_firstNameCtrl.text.trim().isNotEmpty ||
+          _lastNameCtrl.text.trim().isNotEmpty) {
+        return;
+      }
+
+      final parts = name.split(RegExp(r'\s+'));
+      setState(() {
+        _firstNameCtrl.text = parts.first;
+        _lastNameCtrl.text = parts.length > 1 ? parts.skip(1).join(' ') : '';
+      });
+    } catch (e) {
+      debugPrint('[NewContact.lookup] profile name prefill skipped: $e');
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Save — now fully wired to Matrix + device contacts
   // ─────────────────────────────────────────────────────────────
@@ -399,34 +435,46 @@ class _NewContactPageState extends State<NewContactPage> {
       final firstName = _firstNameCtrl.text.trim();
       final lastName = _lastNameCtrl.text.trim();
       final contactName = _displayName(firstName, lastName, _fullIdentifier);
-      final profileOne =
+      final backendContactProfile =
           receiverId.isEmpty
               ? null
               : await UserProfileService.instance.getProfileByUid(
                 receiverId,
                 phone: _fullIdentifier,
+                forceRefresh: true,
               );
-      final profileOneName = _cleanProfileName(profileOne?.displayName);
+      final contactUserProfile1 =
+          backendContactProfile == null
+              ? null
+              : ContactUserProfile1.fromBackendProfile(
+                receiverId,
+                backendContactProfile,
+                fallbackPhone: _fullIdentifier,
+              );
+      final profileOneName = _cleanProfileName(
+        contactUserProfile1?.displayName,
+      );
       final profileOnePhone =
-          profileOne?.phone.trim().isNotEmpty == true
-              ? profileOne!.phone.trim()
+          contactUserProfile1?.phone.trim().isNotEmpty == true
+              ? contactUserProfile1!.phone.trim()
               : _fullIdentifier;
-      final profileOneAvatar =
-          profileOne?.hasProfileImage == true ? profileOne!.profileImage : null;
-      final profileOneBio =
-          profileOne?.bio.trim().isNotEmpty == true
-              ? profileOne!.bio.trim()
-              : widget.initialBio;
-
-      // ── 1. Save locally ──────────────────────────────────────────
-      final localContact = Contact(
-        displayName: contactName,
-        phones: [profileOnePhone],
-        avatarUrl: profileOneAvatar,
+      final profileOneAvatar = contactUserProfile1?.avatarUrl;
+      final profileOneBio = contactUserProfile1?.bio ?? widget.initialBio;
+      unawaited(AvatarPreloadService.warm(profileOneAvatar));
+      final contactUserProfile2 = ContactUserProfile2.fromSavedContact(
+        savedDisplayName: contactName,
+        typedPhone: _fullIdentifier,
         isOnWrytte: _isRegisteredOnWrytte || receiverId.isNotEmpty,
         wrytteUserId: receiverId.isEmpty ? null : receiverId,
-        bio: profileOneBio,
-        isSaved: true,
+        contactUserProfile1: contactUserProfile1,
+      );
+
+      // ── 1. Save ContactUserProfile2 to backend, then locally ─────
+      final localContact = contactUserProfile2.toContact();
+      await _saveContactToBackendOrThrow(
+        selfId: selfId,
+        receiverId: receiverId,
+        contact: localContact,
       );
       await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
       if (receiverId.isNotEmpty) {
@@ -441,6 +489,7 @@ class _NewContactPageState extends State<NewContactPage> {
           bio: profileOneBio,
         );
       }
+      await ChatService().applySavedContact(localContact);
       ContactService.invalidateMatrixContactsCache();
       _contactService.invalidateCache();
 
@@ -465,7 +514,7 @@ class _NewContactPageState extends State<NewContactPage> {
           receiverId: receiverId,
           initialConversationId: localConversationId,
           contactName: contactName,
-          avatarUrl: null,
+          avatarUrl: profileOneAvatar,
         );
 
         if (roomId != null && roomId.isNotEmpty) {
@@ -475,15 +524,6 @@ class _NewContactPageState extends State<NewContactPage> {
           apkLog('NewContact.save', 'room creation failed; using local id');
         }
       }
-
-      // ── 4. Background: sync saved contact to backend ─────────────
-      unawaited(
-        _saveContactInBackground(
-          selfId: selfId,
-          receiverId: receiverId,
-          contact: localContact,
-        ),
-      );
 
       // ── 5. Navigate AFTER room is confirmed ─────────────────────
       apkLog(
@@ -504,6 +544,7 @@ class _NewContactPageState extends State<NewContactPage> {
                     receiverId.isNotEmpty ? receiverId : _fullIdentifier,
                 currentUserId: selfId,
                 title: contactName,
+                avatarUrl: profileOneAvatar,
               ),
           transitionsBuilder: (_, animation, __, child) {
             final curved = CurvedAnimation(
@@ -604,28 +645,28 @@ class _NewContactPageState extends State<NewContactPage> {
     }
   }
 
-  Future<void> _saveContactInBackground({
+  Future<void> _saveContactToBackendOrThrow({
     required String selfId,
     required String receiverId,
     required Contact contact,
   }) async {
     apkLog(
       'NewContact.save',
-      'background contact save start self="$selfId" receiver="$receiverId"',
+      'backend contact save start self="$selfId" receiver="$receiverId"',
     );
 
     try {
-      apkLog('NewContact.save', 'background backend contact save');
       await _contactService.saveContactToBackend(
         ownerUserId: selfId,
         contact: contact,
       );
       apkLog(
         'NewContact.save',
-        'background contact save success name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}" phone="${contact.primaryPhone}"',
+        'backend contact save success name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}" phone="${contact.primaryPhone}"',
       );
     } catch (e) {
-      apkLog('NewContact.save', 'background contact save FAILED error="$e"');
+      apkLog('NewContact.save', 'backend contact save FAILED error="$e"');
+      rethrow;
     }
   }
 

@@ -6,15 +6,19 @@ import 'package:matrix/matrix.dart' as mx;
 import 'package:path/path.dart' as p;
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
+import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
+import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/file_upload_limits.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
+import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -66,9 +70,13 @@ class ChatService {
   final Set<String> _readConversationIds = {};
   final Set<String> _activeReadConversationIds = {};
   final Map<String, DateTime> _lastReadAtByConversation = {};
+  final Map<String, Future<void>> _profileRefreshInFlight = {};
+  bool _suppressRestoredRoomUnread = false;
 
   bool get isConnected => _isConnected;
   String? get currentUserId => _currentUserId;
+  List<ChatConversation> get cachedConversationsSnapshot =>
+      _sortedConversations();
 
   String _expectedMatrixUserId(String userId) =>
       '@$userId:${MatrixConfig.serverName}';
@@ -109,6 +117,8 @@ class ChatService {
       if (_currentUserId == null || _currentUserId!.isEmpty) {
         throw Exception('User not authenticated');
       }
+      await ChatLocalDb.instance.bindOwner(_currentUserId);
+      _suppressRestoredRoomUnread = true;
 
       final expectedMatrixUserId = _expectedMatrixUserId(_currentUserId!);
       apkLog(
@@ -136,12 +146,50 @@ class ChatService {
         );
         throw StateError('Matrix session did not match the current user.');
       }
-
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
         final message = ChatMessage.fromMatrixEvent(event);
         if (message == null) return;
+
         _cacheMessage(message);
+
+        unawaited(
+          _refreshPeerProfileFromBackendForMessage(
+            message,
+            reason: 'timeline',
+          ),
+        );
+
         _refreshMessageStatusesForRoom(event.room);
+
+        // Ignore history replay during startup.
+        if (_suppressRestoredRoomUnread) {
+          apkLog(
+            'ChatService.notify',
+            'suppressed startup history '
+            'event_id="${message.id}" '
+            'room_id="${message.conversationId}"',
+          );
+          return;
+        }
+
+        // Ignore Matrix initial sync replay.
+        if (!MatrixChatService.instance.initialSyncComplete) {
+          apkLog(
+            'ChatService.notify',
+            'suppressed initial sync '
+            'event_id="${message.id}" '
+            'room_id="${message.conversationId}"',
+          );
+          return;
+        }
+
+        apkLog(
+          'ChatService.notify',
+          'LIVE message '
+          'event_id="${message.id}" '
+          'room_id="${message.conversationId}"',
+        );
+
         _messageController.add(message);
       });
       _syncSub ??= client.onSync.stream.listen((update) {
@@ -359,13 +407,33 @@ class ChatService {
       if (userId != null && userId.isNotEmpty) {
         unawaited(ContactService().syncLocalContactsToBackend(userId));
       }
+
       await restoreAllRoomHistoryFromServer();
+      await MatrixChatService.instance.ensureSyncedAndAutoJoinInvites(
+        forceSync: true,
+      );
+    } catch (e) {
+      // ✅ Log the error but DO NOT lift suppression here.
+      // Suppression is always lifted in the finally block below,
+      // AFTER history work is done (or has failed).
+      debugPrint('[ChatService] connection warmup error: $e');
+    } finally {
+      // ✅ Suppression lifts exactly once, regardless of success or failure,
+      // and always AFTER the try block completes.
+      _suppressRestoredRoomUnread = false;
+
+      // These always need to run after warmup, success or not.
       _refreshConversationsFromRooms();
       _refreshAllMessageStatuses();
-    } catch (e) {
-      debugPrint('[ChatService] connection warmup skipped: $e');
+
+      apkLog(
+        'ChatService.connect',
+        'startup sync complete; notifications enabled',
+      );
     }
   }
+
+
 
   Future<void> restoreAllRoomHistoryFromServer() {
     final pending = _historyRestoreFuture;
@@ -556,6 +624,9 @@ class ChatService {
           senderPhone: _currentUserPhone,
         );
         _cacheMessage(sent);
+        unawaited(
+          _refreshPeerProfileFromBackendForMessage(sent, reason: 'sendMessage'),
+        );
         _refreshMessageStatusesForRoom(room);
         return sent;
       });
@@ -605,6 +676,12 @@ class ChatService {
         senderPhone: _currentUserPhone,
       );
       _cacheMessage(local);
+      unawaited(
+        _refreshPeerProfileFromBackendForMessage(
+          local,
+          reason: 'sendVoiceMessage',
+        ),
+      );
       _messageController.add(local);
     });
   }
@@ -645,6 +722,12 @@ class ChatService {
         senderPhone: _currentUserPhone,
       );
       _cacheMessage(local);
+      unawaited(
+        _refreshPeerProfileFromBackendForMessage(
+          local,
+          reason: 'sendVideoMessage',
+        ),
+      );
       _messageController.add(local);
     });
   }
@@ -769,7 +852,7 @@ class ChatService {
     return loadCachedMessages(conversationId);
   }
 
-  Future<void> hydrateLocalConversations() async {
+  Future<void> hydrateLocalConversations({bool syncReadMarkers = true}) async {
     _lastReadAtByConversation
       ..clear()
       ..addAll(await ChatLocalDb.instance.loadConversationReadMarkers());
@@ -790,10 +873,11 @@ class ChatService {
         ),
       );
     }
+    await _applySavedContactsToHydratedConversations();
     _emitConversations();
     for (final conversation in conversations) {
       await loadCachedMessages(conversation.id);
-      if (conversation.id.startsWith('!')) {
+      if (syncReadMarkers && conversation.id.startsWith('!')) {
         await _syncLocalReadMarkerToMatrix(conversation.id);
       }
     }
@@ -965,6 +1049,7 @@ class ChatService {
     _readConversationIds.clear();
     _activeReadConversationIds.clear();
     _lastReadAtByConversation.clear();
+    _profileRefreshInFlight.clear();
     MatrixChatService.instance.resetRuntimeState();
     for (final controller in _roomMessagesControllers.values) {
       if (!controller.isClosed) controller.add(const []);
@@ -1027,9 +1112,9 @@ class ChatService {
     final cachedName =
         existing == null ? '' : _cleanHumanName(existing.otherUserName);
     final roomName = room.getLocalizedDisplayname();
+    final cleanRoomName = _cleanHumanName(roomName);
     final shouldUseRoomName =
-        !roomName.toLowerCase().startsWith('group with ') &&
-        !_isOwnMatrixId(roomName, client.userID);
+        cleanRoomName.isNotEmpty && !_isOwnMatrixId(roomName, client.userID);
     return ChatConversation(
       id: room.id,
       participants: [if (client.userID != null) client.userID!, otherId],
@@ -1044,9 +1129,9 @@ class ChatService {
               : cachedName.isNotEmpty
               ? cachedName
               : shouldUseRoomName
-              ? roomName
+              ? cleanRoomName
               : existing?.otherUserName,
-      otherUserAvatar: room.avatar?.toString() ?? existing?.otherUserAvatar,
+      otherUserAvatar: existing?.otherUserAvatar ?? room.avatar?.toString(),
     );
   }
 
@@ -1083,6 +1168,7 @@ class ChatService {
     if (currentUser == null || currentUser.isEmpty) return 0;
     if (_activeReadConversationIds.contains(room.id)) return 0;
     final readAt = _lastReadAtByConversation[room.id];
+    if (_suppressRestoredRoomUnread && readAt == null) return 0;
 
     final cached = _messagesCache[room.id];
     if (cached != null && cached.isNotEmpty) {
@@ -1135,15 +1221,21 @@ class ChatService {
   }
 
   void _refreshConversationsFromRooms() {
-    final rooms = MatrixClientService.instance.client.rooms;
+    // ✅ Snapshot to avoid ConcurrentModificationError when sync
+    // updates arrive while we're iterating.
+    final rooms = List<mx.Room>.from(
+      MatrixClientService.instance.client.rooms,
+    );
+    
     apkLog(
       'ChatService.rooms',
-      'refresh user_id="${MatrixClientService.instance.client.userID}" rooms=${rooms.length} '
-          'summary="${rooms.map((r) => '${r.id}:${r.membership.name}:direct=${r.directChatMatrixID}:last=${r.lastEvent?.eventId ?? ''}').join('|')}"',
+      'refresh user_id="..." rooms=${rooms.length} ...',
     );
-    for (final room in rooms) {
+    
+    for (final room in rooms) {    // was: for (final room in client.rooms)
       _cacheRoomIdentity(room);
     }
+    
     final merged = Map<String, ChatConversation>.from(_conversationsMap);
     var restoredFromCache = 0;
     var refreshedFromMatrix = 0;
@@ -1217,15 +1309,28 @@ class ChatService {
             incoming.otherUserId.startsWith('!')
                 ? cached.participants
                 : incoming.participants,
-        otherUserName: incoming.otherUserName ?? cached.otherUserName,
-        otherUserAvatar: incoming.otherUserAvatar ?? cached.otherUserAvatar,
+        otherUserName: _preferCachedDisplayValue(
+          cached.otherUserName,
+          incoming.otherUserName,
+        ),
+        otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
       );
     }
     return incoming.copyWith(
       unreadCount: unreadCount,
-      otherUserName: incoming.otherUserName ?? cached.otherUserName,
-      otherUserAvatar: incoming.otherUserAvatar ?? cached.otherUserAvatar,
+      otherUserName: _preferCachedDisplayValue(
+        cached.otherUserName,
+        incoming.otherUserName,
+      ),
+      otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
     );
+  }
+
+  String? _preferCachedDisplayValue(String? cached, String? incoming) {
+    final cachedName = _cleanHumanName(cached);
+    if (cachedName.isNotEmpty) return cachedName;
+    final incomingName = _cleanHumanName(incoming);
+    return incomingName.isEmpty ? cached : incomingName;
   }
 
   int _mergedUnreadCount(ChatConversation cached, ChatConversation incoming) {
@@ -1251,11 +1356,12 @@ class ChatService {
         peerId.isEmpty) {
       return;
     }
+    final cleanRoomName = _cleanHumanName(room.getLocalizedDisplayname());
     unawaited(
       ContactIdentityCache.instance.upsert(
         ownerUserId: ownerUserId,
         matrixUserId: peerId,
-        profileName: room.getLocalizedDisplayname(),
+        profileName: cleanRoomName.isEmpty ? null : cleanRoomName,
         avatarUrl: room.avatar?.toString(),
       ),
     );
@@ -1632,9 +1738,358 @@ class ChatService {
     _conversationsController.add(_sortedConversations());
   }
 
+  Future<void> _applySavedContactsToHydratedConversations() async {
+    final ownerUserId = (await AuthService.instance.getCurrentUserId())?.trim();
+    if (ownerUserId == null || ownerUserId.isEmpty) return;
+
+    final contacts = await ContactLocalDb.loadSavedContacts(
+      ownerUserId: ownerUserId,
+    );
+    if (contacts.isEmpty || _conversationsMap.isEmpty) return;
+
+    var changed = false;
+    for (final contact in contacts) {
+      changed = _applyContactToConversationCache(contact) || changed;
+    }
+
+    if (changed) {
+      unawaited(
+        ChatLocalDb.instance.replaceConversations(
+          _conversationsMap.values.toList(),
+        ),
+      );
+    }
+  }
+
+  Future<void> _refreshPeerProfileFromBackendForMessage(
+    ChatMessage message, {
+    required String reason,
+  }) {
+    final ownerUserId = _currentUserId?.trim();
+    if (ownerUserId == null || ownerUserId.isEmpty) return Future.value();
+
+    final peerId = _peerMatrixIdForMessage(message);
+    if (peerId == null || peerId.isEmpty) return Future.value();
+
+    final existing = _profileRefreshInFlight[peerId];
+    if (existing != null) return existing;
+
+    final future = _refreshPeerProfileFromBackend(
+      ownerUserId: ownerUserId,
+      peerId: peerId,
+      phoneHint: _peerPhoneHintForMessage(message),
+      reason: reason,
+    ).whenComplete(() {
+      _profileRefreshInFlight.remove(peerId);
+    });
+    _profileRefreshInFlight[peerId] = future;
+    return future;
+  }
+
+  Future<void> _refreshPeerProfileFromBackend({
+    required String ownerUserId,
+    required String peerId,
+    required String phoneHint,
+    required String reason,
+  }) async {
+    try {
+      apkLog(
+        'ChatService.profile',
+        'BE refresh start reason="$reason" peer="$peerId"',
+      );
+      final profile = await UserProfileService.instance.getProfileByUid(
+        peerId,
+        phone: phoneHint,
+        forceRefresh: true,
+      );
+      if (profile == null) {
+        apkLog(
+          'ChatService.profile',
+          'BE refresh empty reason="$reason" peer="$peerId"',
+        );
+        return;
+      }
+
+      final profilePhone = _normalizePhone(profile.phone);
+      final phone = profilePhone.isNotEmpty ? profilePhone : phoneHint;
+      final avatar =
+          profile.hasProfileImage ? profile.profileImage.trim() : null;
+      if (avatar?.isNotEmpty == true) {
+        unawaited(AvatarPreloadService.warm(avatar));
+      }
+
+      final savedContact = await _savedContactForPeer(
+        ownerUserId: ownerUserId,
+        peerId: peerId,
+        phone: phone,
+      );
+
+      Contact? refreshedSavedContact;
+      if (savedContact != null) {
+        refreshedSavedContact = await ContactLocalDb.refreshPublicProfileFields(
+          ownerUserId: ownerUserId,
+          wrytteUserId: peerId,
+          phone: phone.isNotEmpty ? phone : savedContact.primaryPhone,
+          avatarUrl: avatar,
+          bio: profile.bio,
+        );
+        await applySavedContact(refreshedSavedContact ?? savedContact);
+      } else if (phone.isNotEmpty) {
+        await applyUnsavedContact(
+          Contact(
+            displayName: phone,
+            phones: [phone],
+            avatarUrl: avatar,
+            bio: profile.bio,
+            isOnWrytte: true,
+            wrytteUserId: peerId,
+          ),
+        );
+      }
+
+      await ContactIdentityCache.instance.upsert(
+        ownerUserId: ownerUserId,
+        matrixUserId: peerId,
+        phone: phone.isNotEmpty ? phone : null,
+        profileName:
+            _cleanHumanName(profile.displayName).isNotEmpty
+                ? _cleanHumanName(profile.displayName)
+                : null,
+        savedName: savedContact?.formattedName,
+        avatarUrl: avatar,
+        bio: profile.bio,
+      );
+
+      apkLog(
+        'ChatService.profile',
+        'BE refresh done reason="$reason" peer="$peerId" saved=${savedContact != null} phone="$phone" avatar=${avatar?.isNotEmpty == true}',
+      );
+    } catch (e) {
+      apkLog(
+        'ChatService.profile',
+        'BE refresh FAILED reason="$reason" peer="$peerId" error="$e"',
+      );
+    }
+  }
+
+  String? _peerMatrixIdForMessage(ChatMessage message) {
+    final currentUser =
+        MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
+    final candidates =
+        _isOwnMessage(message, currentUser)
+            ? [message.receiverId]
+            : [message.senderId];
+
+    for (final candidate in candidates) {
+      final raw = candidate.trim();
+      if (raw.isEmpty || raw.startsWith('!') || raw.startsWith('@!')) continue;
+      final matrixId = _isValidMatrixUserId(raw) ? raw : _toMatrixUserId(raw);
+      if (!_isValidMatrixUserId(matrixId)) continue;
+      if (_isOwnMatrixId(matrixId, currentUser)) continue;
+      return matrixId;
+    }
+    return null;
+  }
+
+  String _peerPhoneHintForMessage(ChatMessage message) {
+    final currentUser =
+        MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
+    if (!_isOwnMessage(message, currentUser)) {
+      final senderPhone = _normalizePhone(message.senderPhone ?? '');
+      if (senderPhone.isNotEmpty) return senderPhone;
+    }
+    for (final candidate in [message.receiverId, message.senderId]) {
+      final phone = _normalizePhone(candidate);
+      if (phone.isNotEmpty) return phone;
+    }
+    return '';
+  }
+
+  Future<Contact?> _savedContactForPeer({
+    required String ownerUserId,
+    required String peerId,
+    required String phone,
+  }) async {
+    final contacts = await ContactLocalDb.loadSavedContacts(
+      ownerUserId: ownerUserId,
+    );
+    final targetLocalpart = _matrixLocalpart(peerId);
+    final targetPhone = _normalizePhone(phone);
+    for (final contact in contacts) {
+      final contactUserId = contact.wrytteUserId?.trim() ?? '';
+      final sameWrytteId =
+          contactUserId.isNotEmpty &&
+          _matrixLocalpart(contactUserId) == targetLocalpart;
+      final samePhone =
+          targetPhone.isNotEmpty &&
+          contact.phones.map(_normalizePhone).contains(targetPhone);
+      if (sameWrytteId || samePhone) return contact;
+    }
+    return null;
+  }
+
+  bool _applyContactToConversationCache(Contact contact) {
+    final name = _cleanHumanName(contact.displayName);
+    if (name.isEmpty) return false;
+
+    final avatar = contact.avatarUrl?.trim();
+    final identityKeys = <String>{
+      ..._conversationIdentityKeys(contact.wrytteUserId),
+      for (final phone in contact.phones) ..._conversationIdentityKeys(phone),
+    }..removeWhere((key) => key.isEmpty);
+    if (identityKeys.isEmpty) return false;
+
+    var changed = false;
+    for (final entry in _conversationsMap.entries.toList()) {
+      final conversation = entry.value;
+      final conversationKeys = _keysForConversation(conversation);
+      if (!conversationKeys.any(identityKeys.contains)) continue;
+
+      final next = conversation.copyWith(
+        otherUserName: name,
+        otherUserAvatar:
+            avatar?.isNotEmpty == true ? avatar : conversation.otherUserAvatar,
+      );
+      if (next.otherUserName == conversation.otherUserName &&
+          next.otherUserAvatar == conversation.otherUserAvatar) {
+        continue;
+      }
+      _conversationsMap[entry.key] = next;
+      changed = true;
+    }
+    return changed;
+  }
+
+  Future<void> applySavedContact(Contact contact) async {
+    final name = _cleanHumanName(contact.displayName);
+    if (name.isEmpty) return;
+
+    final changed = _applyContactToConversationCache(contact);
+    if (changed) {
+      unawaited(
+        ChatLocalDb.instance.replaceConversations(
+          _conversationsMap.values.toList(),
+        ),
+      );
+    }
+
+    final dbConversationIds = await ChatLocalDb.instance
+        .findConversationIdsByMessageIdentity(
+          userIds: [
+            if (contact.wrytteUserId?.trim().isNotEmpty == true)
+              contact.wrytteUserId!.trim(),
+          ],
+          phones: contact.phones,
+        );
+    for (final conversationId in dbConversationIds) {
+      if (_conversationsMap.containsKey(conversationId)) continue;
+      unawaited(
+        ChatLocalDb.instance.updateConversationUserInfo(
+          conversationId: conversationId,
+          name: name,
+          avatar: contact.avatarUrl,
+        ),
+      );
+    }
+
+    if (changed) _emitConversations();
+  }
+
+  Future<void> applyUnsavedContact(Contact contact) async {
+    final phone = _firstUsablePhone(contact.phones);
+    if (phone.isEmpty) return;
+
+    final avatar = contact.avatarUrl?.trim();
+    final identityKeys = <String>{
+      ..._conversationIdentityKeys(contact.wrytteUserId),
+      for (final phone in contact.phones) ..._conversationIdentityKeys(phone),
+    }..removeWhere((key) => key.isEmpty);
+    if (identityKeys.isEmpty) return;
+
+    var changed = false;
+    for (final entry in _conversationsMap.entries.toList()) {
+      final conversation = entry.value;
+      final conversationKeys = _keysForConversation(conversation);
+      if (!conversationKeys.any(identityKeys.contains)) continue;
+
+      _conversationsMap[entry.key] = conversation.copyWith(
+        otherUserName: phone,
+        otherUserAvatar:
+            avatar?.isNotEmpty == true ? avatar : conversation.otherUserAvatar,
+      );
+      changed = true;
+      unawaited(
+        ChatLocalDb.instance.updateConversationUserInfo(
+          conversationId: entry.key,
+          name: phone,
+          avatar: avatar,
+        ),
+      );
+    }
+
+    final dbConversationIds = await ChatLocalDb.instance
+        .findConversationIdsByMessageIdentity(
+          userIds: [
+            if (contact.wrytteUserId?.trim().isNotEmpty == true)
+              contact.wrytteUserId!.trim(),
+          ],
+          phones: contact.phones,
+        );
+    for (final conversationId in dbConversationIds) {
+      if (_conversationsMap.containsKey(conversationId)) continue;
+      unawaited(
+        ChatLocalDb.instance.updateConversationUserInfo(
+          conversationId: conversationId,
+          name: phone,
+          avatar: avatar,
+        ),
+      );
+    }
+
+    if (changed) _emitConversations();
+  }
+
   List<ChatConversation> _sortedConversations() {
     return _conversationsMap.values.toList()
       ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
+  }
+
+  Set<String> _keysForConversation(ChatConversation conversation) {
+    return <String>{
+      ..._conversationIdentityKeys(conversation.otherUserId),
+      ..._conversationIdentityKeys(conversation.lastMessageSenderId),
+      ...conversation.participants.expand(_conversationIdentityKeys),
+      if (conversation.otherUserName != null)
+        ..._conversationIdentityKeys(conversation.otherUserName),
+    }..removeWhere((key) => key.isEmpty);
+  }
+
+  Iterable<String> _conversationIdentityKeys(String? raw) sync* {
+    final value = raw?.trim();
+    if (value == null || value.isEmpty) return;
+    yield value.toLowerCase();
+
+    if (value.startsWith('@') && value.contains(':')) {
+      final localpart = value.substring(1, value.indexOf(':')).toLowerCase();
+      if (localpart.isNotEmpty) yield localpart;
+    }
+
+    final phone = _normalizePhone(value);
+    if (phone.isNotEmpty) {
+      yield phone.toLowerCase();
+      yield phone.replaceAll(RegExp(r'[^\d]'), '');
+    } else {
+      final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+      if (digits.length >= 7) yield digits;
+    }
+  }
+
+  String _firstUsablePhone(Iterable<String> phones) {
+    for (final raw in phones) {
+      final phone = _normalizePhone(raw);
+      if (phone.isNotEmpty) return phone;
+    }
+    return '';
   }
 
   String _toMatrixUserId(String value) {
@@ -1664,7 +2119,10 @@ class ChatService {
     final trimmed = value?.trim() ?? '';
     if (trimmed.length < 2) return '';
     final lowered = trimmed.toLowerCase();
-    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+    if (lowered == 'user' ||
+        lowered == 'uder' ||
+        lowered == 'unknown' ||
+        lowered.startsWith('group with ')) {
       return '';
     }
     final phoneDigits = trimmed.replaceAll(RegExp(r'[\s\-()+]'), '');

@@ -33,6 +33,8 @@ class UserProfileService {
   DateTime? _lastPendingAvatarAttemptAt;
   final Map<String, UserProfile> _publicProfileCache = {};
   final Map<String, Future<UserProfile?>> _publicProfileInFlight = {};
+  final Map<String, Future<String>> _remoteAvatarInFlight = {};
+  final Map<String, DateTime> _publicProfileFetchedAt = {};
   final Set<String> _publicProfileMisses = {};
   final StreamController<UserProfile?> _profileController =
       StreamController<UserProfile?>.broadcast();
@@ -210,7 +212,11 @@ class UserProfileService {
   /// For the current user, delegates to [getCurrentUserProfile].
   /// For other users, returns a minimal stub built from what we know locally
   /// (contacts, Matrix display name, etc.) — extend as your contact store grows.
-  Future<UserProfile?> getProfileByUid(String uid, {String? phone}) async {
+  Future<UserProfile?> getProfileByUid(
+    String uid, {
+    String? phone,
+    bool forceRefresh = false,
+  }) async {
     final currentUid = await AuthService.instance.getCurrentUserId();
 
     // If it's the current user, use the full local profile
@@ -220,12 +226,18 @@ class UserProfileService {
     }
 
     final cacheKey = _publicProfileCacheKey(uid, phone);
-    final cached = _publicProfileCache[cacheKey];
-    if (cached != null) return cached;
-    if (_publicProfileMisses.contains(cacheKey)) return null;
+    if (!forceRefresh) {
+      final cached = _publicProfileCache[cacheKey];
+      if (cached != null) return cached;
+      if (_publicProfileMisses.contains(cacheKey)) return null;
 
-    final pending = _publicProfileInFlight[cacheKey];
-    if (pending != null) return pending;
+      final pending = _publicProfileInFlight[cacheKey];
+      if (pending != null) return pending;
+    } else {
+      _publicProfileMisses.remove(cacheKey);
+      final pending = _publicProfileInFlight[cacheKey];
+      if (pending != null) return pending;
+    }
 
     final future = _getProfileByUidRemote(uid, phone: phone);
     _publicProfileInFlight[cacheKey] = future;
@@ -255,13 +267,44 @@ class UserProfileService {
       _publicProfileCache[cacheKey] = fallback;
       return fallback;
     }
-    final profile = _profileFromBackendFields(
-      uid,
-      remote,
-      fallbackPhone: phone,
-    );
+    final fetchedAt = DateTime.now();
+    var profile = _profileFromBackendFields(uid, remote, fallbackPhone: phone);
+    profile = _reuseStablePublicAvatar(cacheKey, profile);
+    if (profile.profileImage.trim().isNotEmpty) {
+      final localProfileImagePath = await _readLocalProfileImagePath(uid);
+      if (localProfileImagePath.isNotEmpty) {
+        profile = profile.copyWith(
+          localProfileImagePath: localProfileImagePath,
+        );
+      }
+      unawaited(
+        _cachePublicAvatarInBackground(
+          cacheKey: cacheKey,
+          profile: profile,
+          uid: uid,
+        ),
+      );
+    }
     _publicProfileCache[cacheKey] = profile;
+    _publicProfileFetchedAt[cacheKey] = fetchedAt;
     return profile;
+  }
+
+  Future<void> _cachePublicAvatarInBackground({
+    required String cacheKey,
+    required UserProfile profile,
+    required String uid,
+  }) async {
+    final localPath = await _cacheRemoteAvatarBestEffort(
+      uid,
+      profile.profileImage,
+    );
+    if (localPath.isEmpty) return;
+    final cached = _publicProfileCache[cacheKey];
+    if (cached == null || cached.profileImage != profile.profileImage) return;
+    _publicProfileCache[cacheKey] = cached.copyWith(
+      localProfileImagePath: localPath,
+    );
   }
 
   /// Wipe cache on logout.
@@ -269,12 +312,28 @@ class UserProfileService {
     _cache = null;
     _publicProfileCache.clear();
     _publicProfileInFlight.clear();
+    _remoteAvatarInFlight.clear();
+    _publicProfileFetchedAt.clear();
     _publicProfileMisses.clear();
     _profileController.add(null);
   }
 
   // Expose cached value synchronously for widgets that need it immediately
   UserProfile? get cachedProfile => _cache;
+
+  UserProfile? cachedPublicProfileByUid(String uid, {String? phone}) {
+    final localpart = _matrixLocalpart(uid).toLowerCase();
+    if (localpart.isEmpty) return null;
+
+    final cacheKey = _publicProfileCacheKey(uid, phone);
+    final exact = _publicProfileCache[cacheKey];
+    if (exact != null) return exact;
+
+    for (final entry in _publicProfileCache.entries) {
+      if (entry.key.startsWith('$localpart|')) return entry.value;
+    }
+    return null;
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // PRIVATE
@@ -385,6 +444,24 @@ class UserProfileService {
     return cleaned;
   }
 
+  String _trustedPhone(String backendPhone, {String? fallbackPhone}) {
+    final normalizedBackend = _normalizePhone(backendPhone);
+    final normalizedFallback = _normalizePhone(fallbackPhone ?? '');
+    if (normalizedBackend.isEmpty) return normalizedFallback;
+    if (normalizedFallback.isEmpty) return normalizedBackend;
+
+    final backendDigits = normalizedBackend.replaceAll(RegExp(r'[^\d]'), '');
+    final fallbackDigits = normalizedFallback.replaceAll(RegExp(r'[^\d]'), '');
+    final backendLooksLikePrefixedFallback =
+        backendDigits.startsWith('1') &&
+        backendDigits.substring(1) == fallbackDigits;
+    if (backendLooksLikePrefixedFallback) {
+      return normalizedFallback;
+    }
+
+    return normalizedBackend;
+  }
+
   String _matrixLocalpart(String value) {
     final trimmed = value.trim();
     if (trimmed.startsWith('@') && trimmed.contains(':')) {
@@ -463,10 +540,31 @@ class UserProfileService {
     final safeUid = _matrixLocalpart(
       uid,
     ).replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-    final destination = File('${avatarDir.path}/$safeUid$ext');
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final destination = File('${avatarDir.path}/$safeUid-$stamp$ext');
     if (source.path == destination.path) return destination.path;
     await source.copy(destination.path);
+    unawaited(_deleteOlderLocalAvatarFiles(avatarDir, safeUid, destination));
     return destination.path;
+  }
+
+  Future<void> _deleteOlderLocalAvatarFiles(
+    Directory avatarDir,
+    String safeUid,
+    File keep,
+  ) async {
+    try {
+      if (!avatarDir.existsSync()) return;
+      await for (final entity in avatarDir.list()) {
+        if (entity is! File) continue;
+        if (entity.path == keep.path) continue;
+        final name = entity.uri.pathSegments.last;
+        if (!name.startsWith('$safeUid-')) continue;
+        await entity.delete();
+      }
+    } catch (e) {
+      debugPrint('[UserProfileService] Old local avatar cleanup skipped: $e');
+    }
   }
 
   String _imageExtension(String path) {
@@ -478,6 +576,29 @@ class UserProfileService {
   }
 
   Future<String> _cacheRemoteAvatarBestEffort(String uid, String url) async {
+    final cleanUrl = url.trim();
+    if (cleanUrl.isEmpty) return '';
+
+    final existingLocalPath = await _readLocalProfileImagePath(uid);
+    if (existingLocalPath.isNotEmpty) return existingLocalPath;
+
+    final key = '${_matrixLocalpart(uid).toLowerCase()}|$cleanUrl';
+    final pending = _remoteAvatarInFlight[key];
+    if (pending != null) return pending;
+
+    final future = _cacheRemoteAvatarBestEffortUncached(uid, cleanUrl);
+    _remoteAvatarInFlight[key] = future;
+    return future.whenComplete(() {
+      if (identical(_remoteAvatarInFlight[key], future)) {
+        _remoteAvatarInFlight.remove(key);
+      }
+    });
+  }
+
+  Future<String> _cacheRemoteAvatarBestEffortUncached(
+    String uid,
+    String url,
+  ) async {
     try {
       final uri = Uri.tryParse(url);
       if (uri == null || !uri.hasScheme) return '';
@@ -490,7 +611,7 @@ class UserProfileService {
                 'Authorization': 'Bearer ${token.trim()}',
             },
           )
-          .timeout(const Duration(seconds: 12));
+          .timeout(const Duration(seconds: 30));
       if (response.statusCode < 200 || response.statusCode >= 300) return '';
       if (response.bodyBytes.isEmpty) return '';
       final supportDir = await getApplicationSupportDirectory();
@@ -569,17 +690,14 @@ class UserProfileService {
         _field(fields, 'avatarUrl') ??
         _field(fields, 'ProfileImage') ??
         '';
+    final backendPhone =
+        _field(fields, 'Phone') ?? _field(fields, 'phone') ?? '';
 
     return UserProfile(
       uid: uid,
       name: displayName.trim(),
       username: displayName.trim(),
-      phone: _normalizePhone(
-        _field(fields, 'Phone') ??
-            _field(fields, 'phone') ??
-            fallbackPhone ??
-            '',
-      ),
+      phone: _trustedPhone(backendPhone, fallbackPhone: fallbackPhone),
       bio: _field(fields, 'Bio') ?? _field(fields, 'bio') ?? '',
       profileImage: _resolveAvatarUrl(avatar),
       links:
@@ -593,6 +711,44 @@ class UserProfileService {
               .where((link) => link.trim().isNotEmpty)
               .toList(),
     );
+  }
+
+  UserProfile _reuseStablePublicAvatar(String cacheKey, UserProfile fresh) {
+    final cached = _publicProfileCache[cacheKey];
+    if (cached == null) return fresh;
+
+    final freshAvatar = fresh.profileImage.trim();
+    final cachedAvatar = cached.profileImage.trim();
+    if (freshAvatar.isEmpty) {
+      return fresh.copyWith(
+        profileImage: cachedAvatar.isNotEmpty ? cachedAvatar : null,
+        localProfileImagePath:
+            cached.localProfileImagePath.trim().isNotEmpty
+                ? cached.localProfileImagePath
+                : null,
+      );
+    }
+
+    if (_stripAvatarVersion(freshAvatar) == _stripAvatarVersion(cachedAvatar)) {
+      return fresh.copyWith(
+        profileImage: cachedAvatar.isNotEmpty ? cachedAvatar : freshAvatar,
+        localProfileImagePath:
+            cached.localProfileImagePath.trim().isNotEmpty
+                ? cached.localProfileImagePath
+                : null,
+      );
+    }
+
+    return fresh;
+  }
+
+  String _stripAvatarVersion(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasQuery) return url;
+    final params = Map<String, String>.from(uri.queryParameters)..remove('v');
+    return uri
+        .replace(queryParameters: params.isEmpty ? null : params)
+        .toString();
   }
 
   UserProfile _fallbackPublicProfile(String uid, {String? phone}) {

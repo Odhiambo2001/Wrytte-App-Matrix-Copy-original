@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/backend/backend_realtime_service.dart';
@@ -16,12 +18,14 @@ class HomeScreen extends StatefulWidget {
   final String currentUserId;
   final String? initialProfileName;
   final String? initialPhone;
+  final List<Contact> initialSavedContacts;
 
   const HomeScreen({
     super.key,
     required this.currentUserId,
     this.initialProfileName,
     this.initialPhone,
+    this.initialSavedContacts = const [],
   });
 
   @override
@@ -60,6 +64,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ConversationsScreen(
         onUnreadCountUpdated: _updateUnreadCount,
         currentUserId: widget.currentUserId,
+        initialSavedContacts: widget.initialSavedContacts,
       ),
       const PostScreen(),
       const CallsScreen(),
@@ -89,7 +94,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isDisplayReadyProfile(UserProfile? profile) {
     if (profile == null) return false;
     final name = profile.displayName.trim();
-    return name.isNotEmpty && !_looksLikePhone(name);
+    final avatar = profile.profileImage.trim();
+    final localAvatar = profile.localProfileImagePath.trim();
+    return (name.isNotEmpty && !_looksLikePhone(name)) ||
+        avatar.isNotEmpty ||
+        localAvatar.isNotEmpty;
   }
 
   UserProfile? _initialSessionProfile() {
@@ -171,11 +180,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _updateUnreadCount(int count) {
-    if (mounted) {
-      setState(() {
-        _totalUnreadCount = count;
+    if (!mounted) return;
+    if (_totalUnreadCount == count) return;
+
+    final phase = WidgetsBinding.instance.schedulerPhase;
+    final isBuilding =
+        phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.transientCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks;
+    if (isBuilding) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _totalUnreadCount == count) return;
+        setState(() {
+          _totalUnreadCount = count;
+        });
       });
+      return;
     }
+
+    setState(() {
+      _totalUnreadCount = count;
+    });
   }
 
   @override

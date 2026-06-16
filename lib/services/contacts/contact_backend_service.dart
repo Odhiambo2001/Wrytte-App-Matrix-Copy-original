@@ -147,9 +147,18 @@ class ContactBackendService {
     final map = entry.map((key, value) => MapEntry(key.toString(), value));
     final phones =
         <String>[
-          _field(map, const ['phone', 'Phone', 'primaryPhone', 'PrimaryPhone']),
-          ..._phoneList(map['phones'] ?? map['Phones']),
-        ].where((phone) => phone.trim().isNotEmpty).toSet().toList();
+              _field(map, const [
+                'phone',
+                'Phone',
+                'primaryPhone',
+                'PrimaryPhone',
+              ]),
+              ..._phoneList(map['phones'] ?? map['Phones']),
+            ]
+            .map(_normalizePhone)
+            .where((phone) => phone.trim().isNotEmpty)
+            .toSet()
+            .toList();
 
     final wrytteUserId = _field(map, const [
       'wrytteUserId',
@@ -197,6 +206,15 @@ class ContactBackendService {
   List<String> _phoneList(Object? raw) {
     if (raw is List) return raw.map((phone) => phone.toString()).toList();
     return const [];
+  }
+
+  String _normalizePhone(String phone) {
+    var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleaned.startsWith('00') && cleaned.length > 4) {
+      cleaned = '+${cleaned.substring(2)}';
+    }
+    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    return cleaned;
   }
 
   bool _boolField(Map<String, dynamic> map, List<String> keys) {

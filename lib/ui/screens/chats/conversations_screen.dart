@@ -13,10 +13,12 @@ import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
+import 'package:wrytte/services/contacts/user_search_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/conversation_tile.dart';
 import 'package:wrytte/ui/screens/chats/widgets/mini_chat_window.dart';
@@ -35,16 +37,17 @@ import 'widgets/tab_bar_section.dart';
 
 const double _kSearchBarHeight = 60.0;
 const double _kTabBarHeight = 56.0;
-const Duration _kFirstPaintProfileWait = Duration(seconds: 4);
 
 class ConversationsScreen extends StatefulWidget {
   final Function(int)? onUnreadCountUpdated;
   final String currentUserId;
+  final List<Contact> initialSavedContacts;
 
   const ConversationsScreen({
     super.key,
     this.onUnreadCountUpdated,
     this.currentUserId = '',
+    this.initialSavedContacts = const [],
   });
 
   @override
@@ -54,6 +57,7 @@ class ConversationsScreen extends StatefulWidget {
 
 class _ConversationsScreenState extends State<ConversationsScreen> {
   final ChatService _chat = ChatService();
+  final UserSearchService _userSearchService = UserSearchService();
   final Map<String, (String?, String?)?> _matrixProfileCache = {};
 
   List<ChatConversation> _conversations = [];
@@ -65,6 +69,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   StreamSubscription<List<ChatConversation>>? _convSub;
   StreamSubscription<bool>? _chatConnectionSub;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  Timer? _conversationBatchTimer;
 
   final ScrollController _scrollCtrl = ScrollController();
   double _searchBarProgress = 0.0;
@@ -76,6 +81,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   List<Contact> _savedContacts = const [];
   bool _initialCacheWarmup = true;
   int _conversationPaintVersion = 0;
+  int _conversationRefreshVersion = 0;
+  List<ChatConversation>? _pendingConversationBatch;
+  bool _conversationBatchInFlight = false;
 
   // ===========================================================================
   //  LIFECYCLE
@@ -84,6 +92,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   @override
   void initState() {
     super.initState();
+    _seedSavedContacts(widget.initialSavedContacts);
+    _seedCachedConversations();
     _scrollCtrl.addListener(_onScroll);
     Future.microtask(_initialize);
   }
@@ -93,6 +103,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     _convSub?.cancel();
     _chatConnectionSub?.cancel();
     _connectivitySub?.cancel();
+    _conversationBatchTimer?.cancel();
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
     super.dispose();
@@ -109,6 +120,31 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   //  INITIALIZE
   // ===========================================================================
 
+  void _seedSavedContacts(List<Contact> contacts) {
+    if (contacts.isEmpty) return;
+    _savedContacts = _sortContacts(contacts);
+    _contactNameCache.clear();
+    _contactAvatarCache.clear();
+    for (final c in _savedContacts) {
+      final name = c.displayName ?? '';
+      if (name.isEmpty || _looksLikePhone(name)) continue;
+      _cacheContactName(c.wrytteUserId, name, c.avatarUrl);
+      _cacheContactName(_matrixLocalpart(c.wrytteUserId), name, c.avatarUrl);
+      for (final phone in c.phones) {
+        _cacheContactName(phone, name, c.avatarUrl);
+      }
+    }
+  }
+
+  void _seedCachedConversations() {
+    final cached = _enrichSavedContactNames(
+      _realConversationRows(_chat.cachedConversationsSnapshot),
+    );
+    if (cached.isEmpty) return;
+    _conversations = cached;
+    _notifyUnread(_conversations);
+  }
+
   Future<void> _initialize() async {
     _currentUserId =
         widget.currentUserId.isNotEmpty
@@ -117,16 +153,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     if (_currentUserId.isEmpty) return;
 
-    final identityFuture = _loadIdentityCache();
-    final contactsFuture = _loadSavedContacts();
-
-    try {
-      await Future.wait([identityFuture, contactsFuture]);
-    } catch (e) {
-      debugPrint('[ConversationsScreen] initial contact hydrate skipped: $e');
-    }
+    await _loadIdentityCacheFast();
+    await _loadSavedContacts();
     await _loadLocalConversations();
     if (mounted) setState(() => _initialCacheWarmup = false);
+    unawaited(_refreshContactSourceInBackground());
 
     // Pre-warm phonebook identity matches, then repaint any rows that were
     // initially loaded from raw Matrix room data.
@@ -134,16 +165,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     unawaited(_loadPhonebookIdentitiesAndRefresh());
 
     // Subscribe to Matrix conversation stream
-    _convSub = _chat.conversationsStream.listen((incoming) async {
-      final local = await ChatLocalDb.instance.loadConversations();
-      final mergedCache = _mergeConversationLists(local, incoming);
-      final rows = _enrichSavedContactNames(_realConversationRows(mergedCache));
-      final version = ++_conversationPaintVersion;
-      final visible = await _prepareConversationsForFirstPaint(rows, version);
-      if (!mounted) return;
-      setState(() => _conversations = visible);
-      _notifyUnread(_conversations);
-    });
+    _convSub = _chat.conversationsStream.listen(_queueConversationBatch);
 
     _chatConnectionSub = _chat.connectionStream.listen((connected) {
       if (connected) {
@@ -167,23 +189,65 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     });
   }
 
+  void _queueConversationBatch(List<ChatConversation> incoming) {
+    _pendingConversationBatch = incoming;
+    _conversationBatchTimer?.cancel();
+    _conversationBatchTimer = Timer(const Duration(milliseconds: 160), () {
+      unawaited(_processQueuedConversationBatch());
+    });
+  }
+
+  Future<void> _processQueuedConversationBatch() async {
+    if (_conversationBatchInFlight) return;
+    _conversationBatchInFlight = true;
+
+    try {
+      while (mounted && _pendingConversationBatch != null) {
+        final incoming = _pendingConversationBatch!;
+        _pendingConversationBatch = null;
+
+        final local = await ChatLocalDb.instance.loadConversations();
+        final mergedCache = _mergeConversationLists(local, incoming);
+        final rows = _enrichSavedContactNames(
+          _realConversationRows(mergedCache),
+        );
+        final version = ++_conversationPaintVersion;
+        final visible = await _prepareConversationsForFirstPaint(rows, version);
+        if (!mounted || version != _conversationPaintVersion) continue;
+
+        setState(() => _conversations = visible);
+        _notifyUnread(_conversations);
+      }
+    } finally {
+      _conversationBatchInFlight = false;
+      if (mounted && _pendingConversationBatch != null) {
+        _conversationBatchTimer?.cancel();
+        _conversationBatchTimer = Timer(const Duration(milliseconds: 80), () {
+          unawaited(_processQueuedConversationBatch());
+        });
+      }
+    }
+  }
+
   Future<void> _repaintConversationsWithCurrentContactData() async {
     if (!mounted || _conversations.isEmpty) return;
-    final visible = _enrichSavedContactNames(
+    final rows = _enrichSavedContactNames(
       _realConversationRows(_conversations),
     );
-    if (!mounted) return;
-    setState(() => _conversations = visible);
-    _notifyUnread(_conversations);
-    unawaited(_enrichPublicProfilesAndRepaint(visible));
+    final visible = await _enrichNames(rows);
+    await _publishPreparedConversations(visible);
   }
 
   Future<void> _loadLocalConversations() async {
     try {
       final local = await ChatLocalDb.instance.loadConversations();
       if (!mounted) return;
-      final withContactRows = _realConversationRows(local);
-      if (withContactRows.isEmpty && _initialCacheWarmup) return;
+      final withContactRows = _enrichSavedContactNames(
+        _realConversationRows(local),
+      );
+      if (withContactRows.isEmpty && _initialCacheWarmup) {
+        return;
+      }
 
       final version = ++_conversationPaintVersion;
       final visible = await _prepareConversationsForFirstPaint(
@@ -200,6 +264,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     }
   }
 
+  Future<void> _loadIdentityCacheFast() async {
+    try {
+      await _loadIdentityCache();
+    } catch (e) {
+      debugPrint('[ConversationsScreen] initial identity cache skipped: $e');
+    }
+  }
+
   void _prewarmVisibleMessages(List<ChatConversation> conversations) {
     for (final conversation in conversations) {
       if (_chat.cachedMessagesFor(conversation.id).isNotEmpty) continue;
@@ -211,11 +283,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     try {
       await ContactService().getWrytteContactsOptimized();
       await _loadIdentityCache();
-      final enriched = _enrichSavedContactNames(_conversations);
-      if (!mounted) return;
-      setState(() => _conversations = enriched);
-      _notifyUnread(_conversations);
-      unawaited(_enrichPublicProfilesAndRepaint(enriched));
+      final rows = _enrichSavedContactNames(_conversations);
+      final enriched = await _enrichNames(rows);
+      await _publishPreparedConversations(enriched);
     } catch (e) {
       debugPrint('[ConversationsScreen] phone identity refresh skipped: $e');
     }
@@ -251,15 +321,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       return _sortContacts(saved);
     }
 
-    final cached = await ContactLocalDb.loadContacts(
-      ownerUserId: _currentUserId,
-    );
-    final wrytteContacts =
-        cached.where((contact) => contact.isOnWrytte).toList();
-    if (wrytteContacts.isNotEmpty) {
-      return _sortContacts(wrytteContacts);
-    }
-
     return const [];
   }
 
@@ -271,12 +332,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       if (contacts.isEmpty || !mounted) return;
       _savedContacts = _sortContacts(contacts);
       await _rebuildContactNameCaches(_savedContacts);
-      final enriched = _enrichSavedContactNames(
+      final rows = _enrichSavedContactNames(
         _realConversationRows(_conversations),
       );
-      if (!mounted) return;
-      setState(() => _conversations = enriched);
-      _notifyUnread(_conversations);
+      final enriched = await _enrichNames(rows);
+      await _publishPreparedConversations(enriched);
     } catch (e) {
       debugPrint(
         '[ConversationsScreen] background contact refresh skipped: $e',
@@ -374,70 +434,73 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     );
   }
 
-  Future<void> _enrichPublicProfilesAndRepaint(
-    List<ChatConversation> convs,
+  Future<void> _publishPreparedConversations(
+    List<ChatConversation> conversations,
   ) async {
-    if (convs.isEmpty) return;
-    try {
-      final enriched = await _enrichNames(convs);
-      if (!mounted) return;
-      setState(() => _conversations = enriched);
-      _notifyUnread(_conversations);
-    } catch (e) {
-      debugPrint('[ConversationsScreen] public profile enrichment skipped: $e');
+    if (!mounted) return;
+    final refreshVersion = ++_conversationRefreshVersion;
+    var rows = _enrichSavedContactNames(_realConversationRows(conversations));
+    if (_hasRowsMissingStableIdentity(rows)) {
+      rows = await _enrichNames(rows);
     }
+    unawaited(_precacheConversationAvatars(rows));
+    if (!mounted || refreshVersion != _conversationRefreshVersion) return;
+    setState(() => _conversations = rows);
+    _notifyUnread(_conversations);
   }
 
   Future<List<ChatConversation>> _prepareConversationsForFirstPaint(
     List<ChatConversation> convs,
     int version,
   ) async {
-    final withSavedContacts = _enrichSavedContactNames(convs);
-    if (!_hasUnsavedRowsMissingProfileAvatar(withSavedContacts)) {
-      return withSavedContacts;
+    var withSavedContacts = _enrichSavedContactNames(convs);
+    if (_hasRowsMissingStableIdentity(withSavedContacts)) {
+      withSavedContacts = await _enrichNames(withSavedContacts);
     }
+    unawaited(_precacheInitialConversationAvatars(withSavedContacts));
+    return withSavedContacts;
+  }
 
-    final enrichment = _enrichNames(withSavedContacts).then((enriched) async {
-      await _precacheConversationAvatars(enriched);
-      return enriched;
-    });
+  Future<void> _precacheInitialConversationAvatars(
+    List<ChatConversation> conversations,
+  ) async {
     try {
-      return await enrichment.timeout(_kFirstPaintProfileWait);
-    } on TimeoutException {
-      debugPrint(
-        '[ConversationsScreen] first paint profile wait timed out; '
-        'showing cached rows and continuing enrichment',
-      );
-      unawaited(
-        enrichment
-            .then((enriched) {
-              if (!mounted || version != _conversationPaintVersion) return;
-              setState(() => _conversations = enriched);
-              _notifyUnread(_conversations);
-            })
-            .catchError((e) {
-              debugPrint(
-                '[ConversationsScreen] delayed public profile enrichment skipped: $e',
-              );
-            }),
-      );
-      return withSavedContacts;
+      await _precacheConversationAvatars(conversations);
     } catch (e) {
-      debugPrint(
-        '[ConversationsScreen] first paint profile enrichment skipped: $e',
-      );
-      return withSavedContacts;
+      debugPrint('[ConversationsScreen] initial avatar batch skipped: $e');
     }
   }
 
-  bool _hasUnsavedRowsMissingProfileAvatar(List<ChatConversation> convs) {
+  bool _hasRowsMissingStableIdentity(List<ChatConversation> convs) {
     for (final conv in convs) {
-      if (_contactKeyForConversation(conv) != null) continue;
-      final avatar =
-          conv.otherUserAvatar?.trim().isNotEmpty == true
-              ? conv.otherUserAvatar
-              : _identityForConversation(conv)?.avatarUrl;
+      final contactKey = _contactKeyForConversation(conv);
+      final cachedPublicName = _cachedPublicNameForConversation(conv);
+      final identityName = _cleanHumanName(
+        _identityForConversation(conv)?.profileName,
+      );
+      final hasStableName =
+          contactKey != null ||
+          (cachedPublicName != null && cachedPublicName.isNotEmpty) ||
+          identityName.isNotEmpty ||
+          _conversationHasPhoneLabel(conv);
+      if (!hasStableName) return true;
+      final avatar = _avatarForConversation(conv);
       if ((avatar ?? '').trim().isEmpty) return true;
+    }
+    return false;
+  }
+
+  bool _conversationHasPhoneLabel(ChatConversation conv) {
+    final phone = _fallbackPhoneForConversation(conv);
+    if (phone.isNotEmpty) return true;
+
+    for (final candidate in [
+      conv.otherUserName,
+      conv.otherUserId,
+      conv.lastMessageSenderId,
+      ...conv.participants,
+    ]) {
+      if (_phoneFromIdentifier(candidate).isNotEmpty) return true;
     }
     return false;
   }
@@ -446,12 +509,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     List<ChatConversation> conversations,
   ) async {
     if (!mounted) return;
-    final token = await AuthService.instance.getValidBackendToken();
+    final token =
+        AuthService.instance.cachedBackendToken ??
+        await AuthService.instance.getValidBackendToken();
     final seen = <String>{};
     final futures = <Future<void>>[];
 
     for (final conversation in conversations) {
-      final url = _resolveAvatarUrl(conversation.otherUserAvatar);
+      final url = _resolveAvatarUrl(_avatarForConversation(conversation));
       if (url.isEmpty || !seen.add(url)) continue;
       futures.add(
         _warmAvatarImage(
@@ -523,10 +588,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final fallbackTitle = _fallbackConversationTitle(c);
       return c.copyWith(
         otherUserName: title.trim().isEmpty ? fallbackTitle : title,
-        otherUserAvatar:
-            contactKey == null
-                ? c.otherUserAvatar
-                : _contactAvatarCache[contactKey] ?? c.otherUserAvatar,
+        otherUserAvatar: _preferredAvatarForConversation(c, contactKey),
       );
     }).toList();
   }
@@ -571,62 +633,106 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   ) {
     final incomingHasMessage = incoming.lastMessage.trim().isNotEmpty;
     final cachedHasMessage = cached.lastMessage.trim().isNotEmpty;
+    final unreadCount = cached.unreadCount == 0 ? 0 : incoming.unreadCount;
     if (!incomingHasMessage && cachedHasMessage) {
       return cached.copyWith(
-        unreadCount: incoming.unreadCount,
+        unreadCount: unreadCount,
         otherUserName: incoming.otherUserName ?? cached.otherUserName,
-        otherUserAvatar: incoming.otherUserAvatar ?? cached.otherUserAvatar,
+        otherUserAvatar:
+            cached.otherUserAvatar?.trim().isNotEmpty == true
+                ? cached.otherUserAvatar
+                : incoming.otherUserAvatar,
       );
     }
     return incoming.copyWith(
+      unreadCount: unreadCount,
       otherUserName: incoming.otherUserName ?? cached.otherUserName,
-      otherUserAvatar: incoming.otherUserAvatar ?? cached.otherUserAvatar,
+      otherUserAvatar:
+          cached.otherUserAvatar?.trim().isNotEmpty == true
+              ? cached.otherUserAvatar
+              : incoming.otherUserAvatar,
     );
   }
 
   Future<ChatConversation> _enrichConversationFromPublicProfile(
     ChatConversation conv,
   ) async {
-    final profileUid = _profileUidForConversation(conv);
+    final fallbackPhone = _fallbackPhoneForConversation(conv);
+    final profileUid =
+        _profileUidForConversation(conv) ??
+        await _profileUidFromPhone(fallbackPhone);
     if (profileUid == null) return conv;
 
-    final fallbackPhone = _fallbackPhoneForConversation(conv);
     final profile = await UserProfileService.instance.getProfileByUid(
       profileUid,
       phone: fallbackPhone,
+      forceRefresh: false,
     );
     final matrixProfile = await _loadMatrixProfile(profileUid);
     if (profile == null && matrixProfile == null) return conv;
 
-    final publicName = _cleanHumanName(profile?.displayName);
-    final matrixName = _cleanHumanName(matrixProfile?.$1);
-    final savedName = _cleanHumanName(
-      _identityForConversation(conv)?.savedName,
-    );
     final contactKey = _contactKeyForConversation(conv);
     final contactName =
         contactKey == null
             ? ''
             : _cleanHumanName(_contactNameCache[contactKey]);
+    final contactAvatar =
+        contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
     final phone = _fallbackPhoneForConversation(conv);
     final name =
-        savedName.isNotEmpty
-            ? savedName
-            : contactName.isNotEmpty
+        contactName.isNotEmpty
             ? contactName
             : phone.isNotEmpty
             ? _formatPhone(phone)
-            : publicName.isNotEmpty
-            ? publicName
-            : matrixName.isNotEmpty
-            ? matrixName
-            : _fallbackConversationTitle(conv);
+            : '';
+    final existingAvatar = conv.otherUserAvatar?.trim();
+    final identityAvatar = _identityForConversation(conv)?.avatarUrl?.trim();
+    final profileAvatar =
+        profile?.hasProfileImage == true ? profile!.profileImage.trim() : '';
+    final matrixAvatar = matrixProfile?.$2?.trim();
     final avatar =
-        profile?.hasProfileImage == true
-            ? profile!.profileImage
-            : _identityForConversation(conv)?.avatarUrl ??
-                matrixProfile?.$2 ??
-                conv.otherUserAvatar;
+        contactAvatar?.isNotEmpty == true
+            ? contactAvatar
+            : profileAvatar.isNotEmpty
+            ? profileAvatar
+            : matrixAvatar?.isNotEmpty == true
+            ? matrixAvatar
+            : existingAvatar?.isNotEmpty == true
+            ? existingAvatar
+            : identityAvatar?.isNotEmpty == true
+            ? identityAvatar
+            : null;
+    if ((avatar ?? '').trim().isNotEmpty &&
+        avatar?.trim() != conv.otherUserAvatar?.trim()) {
+      await AvatarPreloadService.replace(
+        oldUrl: conv.otherUserAvatar,
+        newUrl: avatar,
+      );
+    }
+    final refreshedSavedContact =
+        profile == null
+            ? null
+            : await ContactLocalDb.refreshPublicProfileFields(
+              ownerUserId: _currentUserId,
+              wrytteUserId: profileUid,
+              phone: profile.phone.isNotEmpty ? profile.phone : phone,
+              avatarUrl: avatar,
+              bio: profile.bio,
+            );
+    if (refreshedSavedContact != null) {
+      _cacheContactName(
+        refreshedSavedContact.wrytteUserId,
+        refreshedSavedContact.formattedName,
+        refreshedSavedContact.avatarUrl,
+      );
+      for (final savedPhone in refreshedSavedContact.phones) {
+        _cacheContactName(
+          savedPhone,
+          refreshedSavedContact.formattedName,
+          refreshedSavedContact.avatarUrl,
+        );
+      }
+    }
     final enriched = conv.copyWith(
       otherUserName: name,
       otherUserAvatar: avatar,
@@ -638,8 +744,66 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         name: name.trim(),
         avatar: avatar,
       );
+      final identity = ContactIdentity(
+        matrixUserId: profileUid,
+        phone: profile?.phone ?? phone,
+        profileName:
+            _cleanHumanName(profile?.displayName).isNotEmpty
+                ? _cleanHumanName(profile?.displayName)
+                : _cleanHumanName(matrixProfile?.$1).isNotEmpty
+                ? _cleanHumanName(matrixProfile?.$1)
+                : null,
+        avatarUrl: avatar,
+        bio: profile?.bio,
+      );
+      _cacheIdentity(identity);
+      await ContactIdentityCache.instance.upsert(
+        ownerUserId: _currentUserId,
+        matrixUserId: profileUid,
+        phone: profile?.phone ?? phone,
+        profileName:
+            _cleanHumanName(profile?.displayName).isNotEmpty
+                ? _cleanHumanName(profile?.displayName)
+                : _cleanHumanName(matrixProfile?.$1).isNotEmpty
+                ? _cleanHumanName(matrixProfile?.$1)
+                : null,
+        avatarUrl: avatar,
+        bio: profile?.bio,
+      );
     }
     return enriched;
+  }
+
+  Future<String?> _profileUidFromPhone(String phone) async {
+    final cleanPhone = _normalizePhone(phone);
+    if (cleanPhone.isEmpty) return null;
+    final digits = cleanPhone.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.length < 7) return null;
+
+    try {
+      final result = await _userSearchService.searchUsersByPhones(
+        phoneNumbersC: '$digits|$cleanPhone',
+        token: '',
+      );
+      final resolved =
+          result[cleanPhone] ??
+          result[digits] ??
+          result[cleanPhone.replaceFirst('+', '')];
+      if (resolved == null ||
+          resolved.isEmpty ||
+          resolved == UserSearchService.registeredWithoutMatrixId) {
+        return null;
+      }
+      final localpart = _matrixLocalpart(resolved) ?? resolved;
+      return resolved.startsWith('@')
+          ? resolved
+          : '@$localpart:${MatrixConfig.serverName}';
+    } catch (e) {
+      debugPrint(
+        '[ConversationsScreen] profile phone lookup skipped phone="$cleanPhone": $e',
+      );
+      return null;
+    }
   }
 
   Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
@@ -708,15 +872,30 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       if (name.isNotEmpty) return name;
     }
 
-    return 'Wrytte user';
+    return _fallbackConversationIdentifier(conv);
+  }
+
+  String _fallbackConversationIdentifier(ChatConversation conv) {
+    for (final candidate in [
+      conv.otherUserName,
+      conv.otherUserId,
+      conv.lastMessageSenderId,
+      ...conv.participants,
+    ]) {
+      final value = candidate?.trim() ?? '';
+      if (value.isEmpty || _isCurrentUserIdentifier(value)) continue;
+      if (value.startsWith('!') || value.startsWith('@!')) continue;
+      final localpart = _matrixLocalpart(value) ?? value;
+      if (localpart.trim().isNotEmpty) return localpart.trim();
+    }
+    return conv.id;
   }
 
   String _conversationTitle(ChatConversation conv) {
     final identity = _identityForConversation(conv);
-    final savedName = _cleanHumanName(identity?.savedName);
-    if (savedName.isNotEmpty) return savedName;
-
     final contactKey = _contactKeyForConversation(conv);
+
+    // Saved contact labels are local user intent and always win.
     if (contactKey != null) {
       final contactName = _cleanHumanName(_contactNameCache[contactKey]);
       if (contactName.isNotEmpty) return contactName;
@@ -740,9 +919,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       if (phone.isNotEmpty) return _formatPhone(phone);
     }
 
-    final lastSenderPhone = _phoneFromIdentifier(conv.lastMessageSenderId);
-    if (lastSenderPhone.isNotEmpty) return _formatPhone(lastSenderPhone);
-
     return '';
   }
 
@@ -754,6 +930,103 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       }
     }
     return null;
+  }
+
+  String? _avatarForConversation(ChatConversation conv) {
+    final contactKey = _contactKeyForConversation(conv);
+    final contactAvatar =
+        contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
+    if (contactAvatar != null && contactAvatar.isNotEmpty) {
+      return contactAvatar;
+    }
+
+    final cachedPublicAvatar = _cachedPublicAvatarForConversation(conv);
+    if (cachedPublicAvatar != null && cachedPublicAvatar.isNotEmpty) {
+      return cachedPublicAvatar;
+    }
+
+    final direct = conv.otherUserAvatar?.trim();
+    if (direct != null && direct.isNotEmpty) return direct;
+
+    final identityAvatar = _identityForConversation(conv)?.avatarUrl?.trim();
+    if (identityAvatar != null && identityAvatar.isNotEmpty) {
+      return identityAvatar;
+    }
+
+    return null;
+  }
+
+  String? _preferredAvatarForConversation(
+    ChatConversation conv,
+    String? contactKey,
+  ) {
+    final contactAvatar =
+        contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
+    if (contactAvatar != null && contactAvatar.isNotEmpty) {
+      return contactAvatar;
+    }
+
+    final cachedPublicAvatar = _cachedPublicAvatarForConversation(conv);
+    if (cachedPublicAvatar != null && cachedPublicAvatar.isNotEmpty) {
+      return cachedPublicAvatar;
+    }
+
+    final direct = conv.otherUserAvatar?.trim();
+    if (direct != null && direct.isNotEmpty) return direct;
+
+    final identityAvatar = _identityForConversation(conv)?.avatarUrl?.trim();
+    if (identityAvatar != null && identityAvatar.isNotEmpty) {
+      return identityAvatar;
+    }
+
+    return null;
+  }
+
+  String? _cachedPublicAvatarForConversation(ChatConversation conv) {
+    final fallbackPhone = _fallbackPhoneForConversation(conv);
+    final uid = _profileUidForConversation(conv);
+    if (uid == null) return null;
+    final cached = UserProfileService.instance.cachedPublicProfileByUid(
+      uid,
+      phone: fallbackPhone,
+    );
+    return cached?.hasProfileImage == true ? cached!.profileImage : null;
+  }
+
+  String? _localAvatarPathForConversation(ChatConversation conv) {
+    final fallbackPhone = _fallbackPhoneForConversation(conv);
+    final uid = _profileUidForConversation(conv);
+    if (uid == null) return null;
+    final cached = UserProfileService.instance.cachedPublicProfileByUid(
+      uid,
+      phone: fallbackPhone,
+    );
+    final localPath = cached?.localProfileImagePath.trim() ?? '';
+    return localPath.isEmpty ? null : localPath;
+  }
+
+  String? _cachedPublicNameForConversation(ChatConversation conv) {
+    final fallbackPhone = _fallbackPhoneForConversation(conv);
+    final uid = _profileUidForConversation(conv);
+    if (uid == null) return null;
+    final cached = UserProfileService.instance.cachedPublicProfileByUid(
+      uid,
+      phone: fallbackPhone,
+    );
+    final name = _cleanHumanName(cached?.displayName);
+    return name.isEmpty ? null : name;
+  }
+
+  void _cacheIdentity(ContactIdentity identity) {
+    for (final key in [
+      ..._identityKeys(identity.matrixUserId),
+      ..._identityKeys(identity.phone),
+    ]) {
+      final localpart = _matrixLocalpart(key)?.toLowerCase();
+      if (localpart != null && localpart.isNotEmpty) {
+        _identityCache[localpart] = identity;
+      }
+    }
   }
 
   List<ChatConversation> _dedupeLocalPlaceholders(
@@ -852,7 +1125,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final trimmed = value?.trim() ?? '';
     if (trimmed.isEmpty) return '';
     final lowered = trimmed.toLowerCase();
-    if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
+    if (lowered == 'user' ||
+        lowered == 'uder' ||
+        lowered == 'unknown' ||
+        lowered.startsWith('group with ')) {
       return '';
     }
     if (_looksLikePhone(trimmed) || _looksLikeMatrixId(trimmed)) return '';
@@ -892,10 +1168,19 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     return phone;
   }
 
+  String _normalizePhone(String phone) {
+    var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleaned.startsWith('00') && cleaned.length > 4) {
+      cleaned = '+${cleaned.substring(2)}';
+    }
+    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    return cleaned;
+  }
+
   Future<void> _retryEnrichment() async {
     await _loadSavedContacts();
     final enriched = await _enrichNames(_conversations);
-    if (mounted) setState(() => _conversations = enriched);
+    await _publishPreparedConversations(enriched);
   }
 
   // ===========================================================================
@@ -904,7 +1189,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   void _notifyUnread(List<ChatConversation> convs) {
     final total = convs.fold(0, (sum, c) => sum + c.unreadCount);
-    widget.onUnreadCountUpdated?.call(total);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onUnreadCountUpdated?.call(total);
+    });
   }
 
   String _sanitize(String s) =>
@@ -962,11 +1250,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   // ===========================================================================
 
   Widget _buildTile(ChatConversation conv) {
-    final rawName = _cleanHumanName(conv.otherUserName);
-    final name = _sanitize(
-      rawName.isNotEmpty ? rawName : _fallbackConversationTitle(conv),
-    );
-    final avatar = conv.otherUserAvatar;
+    final name = _sanitize(_conversationTitle(conv));
+    final avatar = _avatarForConversation(conv);
+    final localAvatarPath = _localAvatarPathForConversation(conv);
     final selected = _selectedIds.contains(conv.id);
 
     return ConversationTile(
@@ -974,6 +1260,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       lastMessage: _sanitize(conv.lastMessage),
       time: _formatTime(conv.lastMessageTime),
       avatarUrl: avatar,
+      localAvatarPath: localAvatarPath,
       unreadCount: conv.unreadCount,
       isSelectionMode: _isSelectionMode,
       isSelected: selected,
@@ -1072,6 +1359,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             controller: _scrollCtrl,
             padding: EdgeInsets.only(top: topPadding, bottom: 120),
             physics: const BouncingScrollPhysics(),
+            children: const [
+              _ConversationLoadingRow(),
+              _ConversationLoadingRow(),
+            ],
           ),
         );
       }
@@ -1133,7 +1424,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           physics: const BouncingScrollPhysics(),
           padding: EdgeInsets.only(top: topPadding, bottom: 120),
           itemCount: _conversations.length,
-          itemBuilder: (_, i) => _buildTile(_conversations[i]),
+          itemBuilder:
+              (_, i) => KeyedSubtree(
+                key: ValueKey(_conversations[i].id),
+                child: _buildTile(_conversations[i]),
+              ),
         ),
       ),
     );
@@ -1174,9 +1469,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                     if (mounted) {
                       await _loadSavedContacts();
                       final enriched = await _enrichNames(_conversations);
-                      if (mounted) {
-                        setState(() => _conversations = enriched);
-                      }
+                      await _publishPreparedConversations(enriched);
                     }
                   },
                   backgroundColor: const Color(0xFF4DA3FF),
@@ -1302,5 +1595,59 @@ class _ConversationsScrollBehavior extends ScrollBehavior {
     ScrollableDetails details,
   ) {
     return child;
+  }
+}
+
+class _ConversationLoadingRow extends StatelessWidget {
+  const _ConversationLoadingRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 60,
+            height: 60,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFF23262C),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  height: 18,
+                  width: 120,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF23262C),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  height: 14,
+                  width: 180,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1B1D22),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Divider(
+                  color: Color(0xFF2A2D34),
+                  thickness: 0.5,
+                  height: 0,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart' as mx;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
@@ -65,6 +68,7 @@ class AuthService {
   String? _matrixLoginInFlightUserId;
   int? _matrixLoginInFlightGeneration;
   Future<String?>? _pendingTokenRefresh;
+  String? _cachedBackendToken;
 
   static const _tokenKey = 'auth_token';
   static const _expiryKey = 'auth_token_expiry';
@@ -307,6 +311,7 @@ class AuthService {
             : _looksLikeJwt(currentToken)
             ? currentToken!.trim()
             : userId;
+    if (_looksLikeJwt(tokenToSave)) _cachedBackendToken = tokenToSave;
 
     // Save secret first so loginToMatrix() can read it immediately.
     final writes = <Future<void>>[
@@ -326,6 +331,7 @@ class AuthService {
       writes.add(_storage.write(key: _secretKey, value: secret.trim()));
     }
     await Future.wait(writes);
+    await ChatLocalDb.instance.bindOwner(userId);
     await _archiveProfile(
       phone: normalizedPhone,
       userId: userId,
@@ -499,7 +505,14 @@ class AuthService {
 
   Future<String?> getSavedPhone() async => _storage.read(key: _phoneKey);
   Future<String?> getCurrentUserId() async => _storage.read(key: _userIdKey);
-  Future<String?> getToken() async => _storage.read(key: _tokenKey);
+  String? get cachedBackendToken => _cachedBackendToken;
+
+  Future<String?> getToken() async {
+    final token = await _storage.read(key: _tokenKey);
+    if (_looksLikeJwt(token)) _cachedBackendToken = token!.trim();
+    return token;
+  }
+
   Future<DateTime?> getBackendTokenExpiry() async {
     final expiryString = await _storage.read(key: _expiryKey);
     final storedExpiry =
@@ -515,12 +528,11 @@ class AuthService {
       return token;
     }
 
-      // ── Single-flight guard: all concurrent callers wait on ONE refresh ──
-    _pendingTokenRefresh ??= _refreshBackendToken()
-      .whenComplete(() => _pendingTokenRefresh = null);
+    // ── Single-flight guard: all concurrent callers wait on ONE refresh ──
+    _pendingTokenRefresh ??= _refreshBackendToken().whenComplete(
+      () => _pendingTokenRefresh = null,
+    );
     return _pendingTokenRefresh;
-
-    
   }
 
   Future<bool> _isBackendTokenExpired() async {
@@ -668,6 +680,7 @@ class AuthService {
 
       final refreshedToken = (response['token'] as String? ?? '').trim();
       if (!_looksLikeJwt(refreshedToken)) return null;
+      _cachedBackendToken = refreshedToken;
 
       final refreshedUserId =
           (response['userid'] as String? ?? userId ?? '').trim();
@@ -883,28 +896,37 @@ class AuthService {
   // Logout
   // ---------------------------------------------------------------------------
   Future<void> logout() async {
+    apkLog('Auth.logout', 'START full local logout purge');
     _matrixBootstrapGeneration++;
     _pendingTokenRefresh = null;
     //ADD THIS — clear contact cache before any user switch
     ContactService.invalidateMatrixContactsCache();
-    ContactService().invalidateCache(); // clears _phoneUserMapCache and _cacheTime
+    ContactService()
+        .invalidateCache(); // clears _phoneUserMapCache and _cacheTime
+    apkLog('Auth.logout', 'contact service memory caches cleared');
     try {
       await NotificationService.instance.stop().timeout(
         const Duration(seconds: 3),
       );
+      apkLog('Auth.logout', 'notification service stopped');
     } catch (e) {
+      apkLog('Auth.logout', 'notification service stop FAILED: $e');
       debugPrint('[AuthService] notification stop failed: $e');
     }
     try {
       await ChatService().reset().timeout(const Duration(seconds: 3));
+      apkLog('Auth.logout', 'chat service reset complete');
     } catch (e) {
+      apkLog('Auth.logout', 'chat service reset FAILED: $e');
       debugPrint('[AuthService] Chat reset timeout/error during logout: $e');
     }
     try {
       await MatrixAuthService.instance.clearStoredSession().timeout(
         const Duration(seconds: 3),
       );
+      apkLog('Auth.logout', 'Matrix stored session cleared');
     } catch (e) {
+      apkLog('Auth.logout', 'Matrix stored session clear FAILED: $e');
       debugPrint(
         '[AuthService] Matrix local session clear timeout/error; continuing: $e',
       );
@@ -913,27 +935,116 @@ class AuthService {
       await MatrixClientService.instance.deleteLocalStore().timeout(
         const Duration(seconds: 3),
       );
+      apkLog('Auth.logout', 'Matrix local store deleted');
     } catch (e) {
+      apkLog('Auth.logout', 'Matrix local store delete FAILED: $e');
       debugPrint('[AuthService] Matrix local store wipe failed: $e');
     }
-    // Keep the per-user chat SQLite cache on normal logout. The database name
-    // is keyed by user id, so the same account can show its saved chat history
-    // immediately after logging back in while other accounts remain isolated.
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_profileArchiveKey);
+      await _purgeLocalLogoutData().timeout(const Duration(seconds: 8));
+      apkLog('Auth.logout', 'full local app data purge complete');
     } catch (e) {
-      debugPrint('[AuthService] profile archive clear failed: $e');
+      apkLog('Auth.logout', 'full local app data purge FAILED: $e');
+      debugPrint('[AuthService] full local logout purge failed: $e');
     }
     try {
       await _firebaseAuth.signOut();
+      apkLog('Auth.logout', 'Firebase session signed out');
     } catch (e) {
+      apkLog('Auth.logout', 'Firebase sign-out FAILED: $e');
       debugPrint('[AuthService] Firebase sign-out error: $e');
     }
     try {
       await _storage.deleteAll();
+      apkLog('Auth.logout', 'secure storage deleted');
     } catch (e) {
+      apkLog('Auth.logout', 'secure storage delete FAILED: $e');
       debugPrint('[AuthService] secure storage clear failed: $e');
+    }
+    apkLog('Auth.logout', 'DONE logout local wipe finished');
+  }
+
+  Future<void> _purgeLocalLogoutData() async {
+    _cachedBackendToken = null;
+    apkLog('Auth.logout', 'backend token memory cache cleared');
+
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    apkLog('Auth.logout', 'Flutter in-memory image cache cleared');
+
+    try {
+      await ChatLocalDb.instance.deleteAllLocalDatabases();
+      apkLog('Auth.logout', 'chat SQLite databases deleted');
+    } catch (e) {
+      apkLog('Auth.logout', 'chat SQLite database delete FAILED: $e');
+      debugPrint('[AuthService] chat SQLite purge failed: $e');
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final prefCount = prefs.getKeys().length;
+      await prefs.clear();
+      apkLog('Auth.logout', 'SharedPreferences cleared keys=$prefCount');
+    } catch (e) {
+      apkLog('Auth.logout', 'SharedPreferences clear FAILED: $e');
+      debugPrint('[AuthService] shared preferences purge failed: $e');
+    }
+
+    try {
+      final supportDir = await getApplicationSupportDirectory();
+      final deleted = await _deleteChildIfExists(supportDir, 'profile_avatars');
+      apkLog(
+        'Auth.logout',
+        'local profile_avatars folder ${deleted ? 'deleted' : 'not present'}',
+      );
+    } catch (e) {
+      apkLog('Auth.logout', 'local avatar folder delete FAILED: $e');
+      debugPrint('[AuthService] local avatar purge failed: $e');
+    }
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      var deletedEntries = 0;
+      if (await tempDir.exists()) {
+        await for (final entity in tempDir.list()) {
+          if (await _deleteEntity(entity)) deletedEntries += 1;
+        }
+      }
+      apkLog(
+        'Auth.logout',
+        'temporary/cache directory cleared entries=$deletedEntries',
+      );
+    } catch (e) {
+      apkLog('Auth.logout', 'temporary/cache clear FAILED: $e');
+      debugPrint('[AuthService] temporary/cache purge failed: $e');
+    }
+  }
+
+  Future<bool> _deleteChildIfExists(Directory parent, String childName) async {
+    final child = Directory(
+      '${parent.path}${Platform.pathSeparator}$childName',
+    );
+    if (await child.exists()) {
+      await child.delete(recursive: true);
+      return true;
+    }
+
+    final file = File('${parent.path}${Platform.pathSeparator}$childName');
+    if (await file.exists()) {
+      await file.delete();
+      return true;
+    }
+    return false;
+  }
+
+  Future<bool> _deleteEntity(FileSystemEntity entity) async {
+    try {
+      await entity.delete(recursive: true);
+      return true;
+    } catch (e) {
+      apkLog('Auth.logout', 'cache entry delete skipped ${entity.path}: $e');
+      debugPrint('[AuthService] cache entry delete skipped ${entity.path}: $e');
+      return false;
     }
   }
 

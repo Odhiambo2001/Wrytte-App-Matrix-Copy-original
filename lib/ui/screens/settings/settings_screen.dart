@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/user_avatar.dart';
@@ -21,21 +22,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   UserProfile? _profile;
   bool _profileLoading = true;
+  StreamSubscription<UserProfile?>? _profileSub;
 
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
-    _loadProfile();
-  }
-
-  Future<void> _loadProfile() async {
-    final profile = await UserProfileService.instance.getCurrentUserProfile();
-    if (!mounted) return;
-    setState(() {
-      _profile = profile;
-      _profileLoading = false;
-    });
+    final cached = UserProfileService.instance.cachedProfile;
+    _profile = cached;
+    _profileLoading = cached == null;
+    _profileSub = UserProfileService.instance
+        .getCurrentUserProfileStream()
+        .listen((profile) {
+          if (!mounted) return;
+          setState(() {
+            _profile = profile;
+            _profileLoading = false;
+          });
+        });
   }
 
   void _onScroll() {
@@ -50,6 +54,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _profileSub?.cancel();
     super.dispose();
   }
 
@@ -254,9 +259,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     end: Alignment.bottomCenter,
                     stops: const [0.0, 0.6, 1.0],
                     colors: [
-                      const Color(0xFF08090B).withOpacity(0.95),
-                      const Color(0xFF08090B).withOpacity(0.75),
-                      const Color(0xFF08090B).withOpacity(0.0),
+                      const Color(0xFF08090B).withValues(alpha: 0.95),
+                      const Color(0xFF08090B).withValues(alpha: 0.75),
+                      const Color(0xFF08090B).withValues(alpha: 0.0),
                     ],
                   ),
                 ),
@@ -344,7 +349,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       width: _pillHeight,
                       height: _pillHeight,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF23262C).withOpacity(0.30),
+                        color: const Color(0xFF23262C).withValues(alpha: 0.30),
                         borderRadius: BorderRadius.circular(22),
                         border: Border.all(
                           color: const Color(0xFF23262C),

@@ -203,7 +203,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         }
         _isSaving = false;
       });
-      _showSnack(
+      Navigator.pop(
+        context,
         avatarUploadPending
             ? 'Profile saved. Photo will upload when internet is back.'
             : 'Profile updated successfully.',

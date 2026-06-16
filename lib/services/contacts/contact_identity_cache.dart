@@ -100,6 +100,28 @@ class ContactIdentityCache {
     return identities[_identityKey(_toMatrixUserId(matrixUserId))];
   }
 
+  Future<void> clearSavedName({
+    required String ownerUserId,
+    required String matrixUserId,
+  }) async {
+    final owner = ownerUserId.trim();
+    final mxid = _toMatrixUserId(matrixUserId);
+    if (owner.isEmpty || mxid.isEmpty) return;
+
+    final identities = await loadAll(ownerUserId: owner);
+    final key = _identityKey(mxid);
+    final existing = identities[key];
+    if (existing == null || existing.savedName == null) return;
+    identities[key] = ContactIdentity(
+      matrixUserId: existing.matrixUserId,
+      phone: existing.phone,
+      profileName: existing.profileName,
+      avatarUrl: existing.avatarUrl,
+      bio: existing.bio,
+    );
+    await _saveAll(ownerUserId: owner, identities: identities);
+  }
+
   Future<Map<String, ContactIdentity>> loadAll({
     required String ownerUserId,
   }) async {

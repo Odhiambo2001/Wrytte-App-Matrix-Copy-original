@@ -15,10 +15,12 @@ import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
+import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/notification_service.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/calls/call_screen.dart';
 import 'package:wrytte/ui/screens/chats/video_message_recorder_screen.dart';
@@ -96,6 +98,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   UserProfile? _receiverProfile;
   ContactIdentity? _receiverIdentity;
+  bool _receiverIsSavedContact = false;
   ChatMessage? _replyingTo;
   double? _stableStatusBarH;
   late final String? _stableHeaderAvatarUrl;
@@ -134,7 +137,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _focusNode.addListener(_onInputFocusChanged);
     _loadInitial();
-    _loadReceiverProfile();
     _scrollCtrl.addListener(_onScroll);
   }
 
@@ -391,10 +393,12 @@ class _ChatScreenState extends State<ChatScreen> {
       final restored = await _chat.fetchMessageHistory(
         conversationID: realConvId,
       );
-      if (restored.isNotEmpty && mounted) {
-        setState(() => _replaceMessagesFromSharedCache(restored));
+      if (restored.isNotEmpty) {
+        _replaceMessagesFromSharedCache(restored);
       }
     }
+
+    await _loadReceiverProfile(publish: false);
 
     await _chat.markConversationAsRead(realConvId);
     await NotificationService.instance.clearConversationNotifications(
@@ -413,19 +417,26 @@ class _ChatScreenState extends State<ChatScreen> {
       _loadingInitial = false;
     });
 
-    await _hydrateAndSubscribe(realConvId);
+    await _hydrateAndSubscribe(realConvId, publishHydrated: false);
   }
 
-  Future<void> _hydrateAndSubscribe(String convId) async {
+  Future<void> _hydrateAndSubscribe(
+    String convId, {
+    bool publishHydrated = true,
+  }) async {
     final msgs = await _chat.hydrateConversation(convId);
     apkLog(
       'ChatScreen._hydrateAndSubscribe',
       'hydrated ${msgs.length} msgs for "$convId"',
     );
     if (mounted && (msgs.isNotEmpty || _messages.isEmpty)) {
-      setState(() => _replaceMessagesFromSharedCache(msgs));
-      if (_receiverProfile == null && _receiverIdentity == null) {
-        unawaited(_loadReceiverProfile());
+      if (!publishHydrated || _loadingInitial) {
+        _replaceMessagesFromSharedCache(msgs);
+      } else {
+        setState(() => _replaceMessagesFromSharedCache(msgs));
+        if (_receiverProfile == null && _receiverIdentity == null) {
+          unawaited(_loadReceiverProfile(forceRefresh: false));
+        }
       }
     }
 
@@ -434,6 +445,12 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       apkLog('ChatScreen.roomStream', 'room="$convId" msgs=${messages.length}');
       if (messages.isEmpty && _messages.isNotEmpty) return;
+      if (_loadingInitial) {
+        _initialStreamBuffer
+          ..clear()
+          ..addAll(messages);
+        return;
+      }
       setState(() => _replaceMessagesFromSharedCache(messages));
       final currentConv = _resolvedConversationId ?? widget.conversationId;
       if (convId == currentConv && messages.any((m) => !_isMine(m))) {
@@ -479,7 +496,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Future<void> _loadReceiverProfile() async {
+  Future<void> _loadReceiverProfile({
+    bool publish = true,
+    bool forceRefresh = true,
+  }) async {
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     final profileUid = _profilePeerId();
     if (profileUid == null) return;
@@ -487,7 +507,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final profile = await UserProfileService.instance.getProfileByUid(
       profileUid,
       phone: fallbackPhone,
+      forceRefresh: forceRefresh,
     );
+
     final matrixProfile = await _loadMatrixProfile(profileUid);
     final saved =
         ownerUserId == null || ownerUserId.isEmpty
@@ -501,7 +523,42 @@ class _ChatScreenState extends State<ChatScreen> {
               matrixUserId: profileUid,
             );
 
+    if (ownerUserId != null && ownerUserId.isNotEmpty && saved == null) {
+      await ContactIdentityCache.instance.clearSavedName(
+        ownerUserId: ownerUserId,
+        matrixUserId: profileUid,
+      );
+      identity = await ContactIdentityCache.instance.findByMatrixId(
+        ownerUserId: ownerUserId,
+        matrixUserId: profileUid,
+      );
+    }
+
     if (ownerUserId != null && ownerUserId.isNotEmpty) {
+      if (saved != null && profile != null) {
+        final nextAvatar =
+            profile.hasProfileImage
+                ? profile.profileImage
+                : matrixProfile?.$2 ?? widget.avatarUrl;
+        if (nextAvatar?.trim().isNotEmpty == true &&
+            nextAvatar?.trim() != widget.avatarUrl?.trim()) {
+          await AvatarPreloadService.replace(
+            oldUrl: widget.avatarUrl,
+            newUrl: nextAvatar,
+          );
+        }
+        final refreshedContact =
+            await ContactLocalDb.refreshPublicProfileFields(
+              ownerUserId: ownerUserId,
+              wrytteUserId: profileUid,
+              phone: profile.phone.isNotEmpty ? profile.phone : fallbackPhone,
+              avatarUrl: nextAvatar,
+              bio: profile.bio,
+            );
+        if (refreshedContact != null) {
+          await ChatService().applySavedContact(refreshedContact);
+        }
+      }
       await ContactIdentityCache.instance.upsert(
         ownerUserId: ownerUserId,
         matrixUserId: profileUid,
@@ -523,11 +580,24 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
 
+    final nextAvatar =
+        profile?.hasProfileImage == true
+            ? profile!.profileImage
+            : identity?.avatarUrl ?? widget.avatarUrl;
+    unawaited(AvatarPreloadService.warm(nextAvatar));
+
     if (!mounted) return;
-    setState(() {
+    if (publish) {
+      setState(() {
+        _receiverProfile = profile;
+        _receiverIdentity = identity;
+        _receiverIsSavedContact = saved != null;
+      });
+    } else {
       _receiverProfile = profile;
       _receiverIdentity = identity;
-    });
+      _receiverIsSavedContact = saved != null;
+    }
     await _persistResolvedReceiverInfo();
   }
 
@@ -573,43 +643,20 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  String _initialHeaderName() {
-    final cleanTitle = _cleanDisplayName(widget.title);
-    if (cleanTitle.isNotEmpty) return cleanTitle;
-
-    for (final candidate in [widget.title, widget.receiverId]) {
-      final phone = _phoneFromIdentifier(candidate);
-      if (phone.isNotEmpty) return _formatPhone(phone);
-    }
-
-    final trimmedTitle = widget.title.trim();
-    if (trimmedTitle.isNotEmpty) return trimmedTitle;
-    return widget.receiverId.trim();
-  }
-
   String get _resolvedHeaderName {
-    final savedName = _cleanDisplayName(_receiverIdentity?.savedName);
-    if (savedName.isNotEmpty) return savedName;
+    if (_receiverIsSavedContact) {
+      final savedName = _cleanDisplayName(_receiverIdentity?.savedName);
+      if (savedName.isNotEmpty) return savedName;
+    }
 
     final phone = _firstPhoneFrom([
       _receiverIdentity?.phone,
+      _receiverProfile?.phone,
       widget.receiverId,
       widget.title,
       ..._messagePeerIdentifiers(),
     ]);
-    if (phone.isNotEmpty) return _formatPhone(phone);
-
-    final profileName = _cleanDisplayName(_receiverIdentity?.profileName);
-    if (profileName.isNotEmpty) return profileName;
-
-    final remoteName = _cleanDisplayName(_receiverProfile?.displayName);
-    if (remoteName.isNotEmpty) return remoteName;
-
-    final initial = _initialHeaderName();
-    final cleanInitial = _cleanDisplayName(initial);
-    if (cleanInitial.isNotEmpty) return cleanInitial;
-
-    return 'Wrytte user';
+    return phone.isNotEmpty ? _formatPhone(phone) : '';
   }
 
   Future<void> _persistResolvedReceiverInfo() async {
@@ -1631,8 +1678,10 @@ class _ChatScreenState extends State<ChatScreen> {
                               isForwarded: msg.isForwarded,
                               isStarred: msg.isStarred,
                               isDeleted: msg.isDeleted,
-                              replyPreview: msg.replyPreview,
-                              replySender: msg.replyToSenderId,
+                              replyPreview: _replyPreviewDisplayText(
+                                msg.replyPreview,
+                              ),
+                              replySender: _replySenderDisplayName(msg),
                               animateOnMount: true,
                             ),
                           ),
@@ -1676,13 +1725,19 @@ class _ChatScreenState extends State<ChatScreen> {
               ..._messagePeerIdentifiers(),
             ]);
     final profileFallbackName =
-        _receiverIdentity?.profileName?.trim().isNotEmpty == true
+        _receiverProfile?.displayName.trim().isNotEmpty == true
+            ? _receiverProfile!.displayName.trim()
+            : _receiverIdentity?.profileName?.trim().isNotEmpty == true
             ? _receiverIdentity!.profileName!.trim()
-            : widget.title;
+            : null;
     final avatarUrl =
         _receiverProfile?.hasProfileImage == true
             ? _receiverProfile!.profileImage
             : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl;
+    final localAvatarPath =
+        _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
+            ? _receiverProfile!.localProfileImagePath.trim()
+            : null;
 
     return SizedBox(
       height: statusBarH + kToolbarHeight,
@@ -1751,6 +1806,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                     child: UserAvatar(
                                       size: _kHeaderPillH,
                                       imageUrl: avatarUrl,
+                                      localImagePath: localAvatarPath,
                                       name: displayName,
                                     ),
                                   ),
@@ -1850,6 +1906,59 @@ class _ChatScreenState extends State<ChatScreen> {
       return sender.substring(1, sender.indexOf(':')) == current;
     }
     return false;
+  }
+
+  String? _replySenderDisplayName(ChatMessage message) {
+    final rawSender = message.replyToSenderId?.trim();
+    if (rawSender == null || rawSender.isEmpty) return null;
+
+    if (_matrixLocalpart(rawSender) == _matrixLocalpart(widget.currentUserId)) {
+      return 'You';
+    }
+
+    final receiverLocalpart = _matrixLocalpart(widget.receiverId);
+    final senderLocalpart = _matrixLocalpart(rawSender);
+    final isKnownPeer =
+        senderLocalpart.isNotEmpty &&
+        (senderLocalpart == receiverLocalpart ||
+            senderLocalpart ==
+                _matrixLocalpart(_receiverIdentity?.matrixUserId ?? ''));
+
+    if (isKnownPeer) {
+      final savedName = _cleanDisplayName(_receiverIdentity?.savedName);
+      if (_receiverIsSavedContact && savedName.isNotEmpty) return savedName;
+
+      final phone = _firstPhoneFrom([
+        _receiverIdentity?.phone,
+        _receiverProfile?.phone,
+        widget.receiverId,
+        widget.title,
+        rawSender,
+        ..._messagePeerIdentifiers(),
+      ]);
+      if (phone.isNotEmpty) return phone;
+
+      final titleName = _cleanDisplayName(widget.title);
+      if (titleName.isNotEmpty) return titleName;
+
+      return null;
+    }
+
+    final phone = _firstPhoneFrom([rawSender]);
+    if (phone.isNotEmpty) return phone;
+    if (_looksLikeMatrixId(rawSender)) return null;
+
+    final cleanName = _cleanDisplayName(rawSender);
+    return cleanName.isNotEmpty ? cleanName : null;
+  }
+
+  String? _replyPreviewDisplayText(String? preview) {
+    var text = preview?.trim() ?? '';
+    if (text.isEmpty) return null;
+    text = text.replaceFirst(RegExp(r'^<[^>]+>\s*'), '').trim();
+    text =
+        text.replaceFirst(RegExp(r'^@[A-Za-z0-9._=-]+:[^\s]+\s*'), '').trim();
+    return text.isEmpty ? null : text;
   }
 
   bool _isValidMatrixUserId(String value) {

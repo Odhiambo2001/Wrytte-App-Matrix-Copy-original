@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui';
@@ -5,10 +6,13 @@ import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
+import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
 import 'package:wrytte/ui/widgets/profile_tab_bar_section.dart';
@@ -45,6 +49,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   String? _matrixDisplayName;
   String? _matrixAvatarUrl;
   bool _profileLoading = true;
+  StreamSubscription<UserProfile?>? _profileSub;
 
   late final TabController _tabController;
 
@@ -55,16 +60,32 @@ class _ProfileScreenState extends State<ProfileScreen>
   List<String> get _tabs =>
       _isOtherUser ? ['Media', 'Files', 'Feed', 'Links'] : ['Posts', 'Saved'];
 
+  bool get _hasImmediateProfileSeed {
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: _tabs.length, vsync: this);
-    _seedCurrentProfileFromCache();
+    _seedProfileForFirstPaint();
+    if (!_isOtherUser) {
+      _profileSub = UserProfileService.instance
+          .getCurrentUserProfileStream()
+          .listen((profile) {
+            if (!mounted || profile == null) return;
+            setState(() {
+              _profile = profile;
+              _profileLoading = false;
+            });
+          });
+    }
     _loadProfile();
   }
 
   @override
   void dispose() {
+    _profileSub?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -80,23 +101,66 @@ class _ProfileScreenState extends State<ProfileScreen>
             )
             : null;
     final savedContact = uid != null ? await _findSavedContact(uid) : null;
+    if (mounted && (identity != null || savedContact != null)) {
+      setState(() {
+        _identity = identity;
+        _savedContact = savedContact;
+        _profile ??= _profileFromLocalProfileData(uid: uid, identity: identity);
+        _profileLoading = false;
+      });
+    }
     final fallbackPhone =
-        widget.fallbackPhone ??
-        savedContact?.primaryPhone ??
-        identity?.phone ??
-        _extractPhone(widget.fallbackName);
+        identity?.phone ?? _phoneFromIdentifier(widget.fallbackPhone);
     final profile =
         uid != null
             ? await UserProfileService.instance.getProfileByUid(
               uid,
               phone: fallbackPhone,
+              forceRefresh: true,
             )
             : await UserProfileService.instance.getCurrentUserProfile(
               forceRefresh: true,
             );
+
+    if (!mounted) return;
+    setState(() {
+      _profile = profile;
+      _savedContact = savedContact;
+      _identity = identity;
+      _profileLoading = false;
+    });
+
     final matrixProfile = uid != null ? await _loadMatrixProfile(uid) : null;
 
     if (uid != null && ownerUserId != null && ownerUserId.isNotEmpty) {
+      if (savedContact == null) {
+        await ContactIdentityCache.instance.clearSavedName(
+          ownerUserId: ownerUserId,
+          matrixUserId: uid,
+        );
+      } else if (profile != null) {
+        final nextAvatar =
+            profile.hasProfileImage ? profile.profileImage : matrixProfile?.$2;
+        if (nextAvatar?.trim().isNotEmpty == true) {
+          unawaited(
+            AvatarPreloadService.replace(
+              oldUrl: identity?.avatarUrl,
+              newUrl: nextAvatar,
+            ),
+          );
+        }
+        final refreshedContact =
+            await ContactLocalDb.refreshPublicProfileFields(
+              ownerUserId: ownerUserId,
+              wrytteUserId: uid,
+              phone: profile.phone.isNotEmpty ? profile.phone : fallbackPhone,
+              avatarUrl: nextAvatar,
+              bio: profile.bio,
+            );
+        if (refreshedContact != null) {
+          await ChatService().applySavedContact(refreshedContact);
+        }
+      }
       await ContactIdentityCache.instance.upsert(
         ownerUserId: ownerUserId,
         matrixUserId: uid,
@@ -106,18 +170,16 @@ class _ProfileScreenState extends State<ProfileScreen>
                 ? profile?.displayName
                 : _cleanName(matrixProfile?.$1).isNotEmpty
                 ? matrixProfile?.$1
-                : _cleanName(widget.fallbackName).isNotEmpty
-                ? widget.fallbackName
                 : identity?.profileName,
-        savedName: savedContact?.formattedName ?? identity?.savedName,
+        savedName: savedContact?.formattedName,
         avatarUrl:
             profile?.hasProfileImage == true
                 ? profile!.profileImage
-                : matrixProfile?.$2 ?? widget.fallbackAvatarUrl,
+                : matrixProfile?.$2,
         bio:
             profile?.bio.trim().isNotEmpty == true
                 ? profile!.bio
-                : savedContact?.bio ?? identity?.bio,
+                : identity?.bio,
       );
       identity = await ContactIdentityCache.instance.findByMatrixId(
         ownerUserId: ownerUserId,
@@ -136,8 +198,25 @@ class _ProfileScreenState extends State<ProfileScreen>
     });
   }
 
-  void _seedCurrentProfileFromCache() {
-    if (_isOtherUser) return;
+  void _seedProfileForFirstPaint() {
+    if (_isOtherUser) {
+      final phone =
+          _phoneFromIdentifier(widget.fallbackPhone).isNotEmpty
+              ? _formatPhone(_phoneFromIdentifier(widget.fallbackPhone))
+              : '';
+      final uid = _validProfileUid(widget.uid) ?? '';
+      final cached = UserProfileService.instance.cachedPublicProfileByUid(
+        uid,
+        phone: phone,
+      );
+      if (cached != null && _hasRenderableProfile(cached)) {
+        _profile = cached;
+        _profileLoading = false;
+        return;
+      }
+      return;
+    }
+
     final cached = UserProfileService.instance.cachedProfile;
     if (cached == null || !_hasRenderableProfile(cached)) return;
     _profile = cached;
@@ -150,6 +229,28 @@ class _ProfileScreenState extends State<ProfileScreen>
         profile.hasProfileImage ||
         profile.localProfileImagePath.trim().isNotEmpty ||
         profile.bio.trim().isNotEmpty;
+  }
+
+  UserProfile? _profileFromLocalProfileData({
+    required String? uid,
+    ContactIdentity? identity,
+  }) {
+    final name = _cleanName(identity?.profileName);
+    final phone = _phoneFromIdentifier(identity?.phone);
+    final avatar = identity?.avatarUrl?.trim() ?? '';
+    final bio = identity?.bio?.trim() ?? '';
+    if (name.isEmpty && phone.isEmpty && avatar.isEmpty && bio.isEmpty) {
+      return null;
+    }
+    return UserProfile(
+      uid: uid ?? _validProfileUid(widget.uid) ?? '',
+      name: name,
+      username: name,
+      phone: phone.isNotEmpty ? _formatPhone(phone) : '',
+      bio: bio,
+      profileImage: avatar,
+      links: const [],
+    );
   }
 
   Future<Contact?> _findSavedContact(String uid) async {
@@ -257,31 +358,17 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profileDisplayName() {
-    return _cleanName(_savedContact?.formattedName).isNotEmpty
-        ? _cleanName(_savedContact?.formattedName)
-        : _cleanName(_identity?.savedName).isNotEmpty
-        ? _cleanName(_identity?.savedName)
-        : _cleanName(_profile?.displayName).isNotEmpty
+    return _cleanName(_profile?.displayName).isNotEmpty
         ? _cleanName(_profile?.displayName)
-        : _cleanName(_matrixDisplayName).isNotEmpty
-        ? _cleanName(_matrixDisplayName)
         : _cleanName(_identity?.profileName).isNotEmpty
         ? _cleanName(_identity?.profileName)
-        : _cleanName(widget.fallbackName).isNotEmpty
-        ? _cleanName(widget.fallbackName)
+        : _cleanName(_matrixDisplayName).isNotEmpty
+        ? _cleanName(_matrixDisplayName)
         : '';
   }
 
   String _profilePhone() {
-    final candidates = [
-      _profile?.phone,
-      _savedContact?.primaryPhone,
-      _identity?.phone,
-      _matrixDisplayName,
-      widget.fallbackPhone,
-      widget.fallbackName,
-      widget.uid,
-    ];
+    final candidates = [_profile?.phone, _identity?.phone];
     for (final value in candidates) {
       final phone = _phoneFromIdentifier(value);
       if (phone.isNotEmpty) {
@@ -344,6 +431,79 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (mounted) _loadProfile();
   }
 
+  Future<void> _deleteSavedContact() async {
+    final contact = _savedContact;
+    final ownerUserId = await AuthService.instance.getCurrentUserId();
+    final uid = _validProfileUid(widget.uid);
+    if (contact == null ||
+        ownerUserId == null ||
+        ownerUserId.isEmpty ||
+        uid == null) {
+      return;
+    }
+
+    await ContactLocalDb.removeContact(contact, ownerUserId: ownerUserId);
+    await ContactIdentityCache.instance.clearSavedName(
+      ownerUserId: ownerUserId,
+      matrixUserId: uid,
+    );
+    await ChatService().applyUnsavedContact(contact);
+    ContactService.invalidateMatrixContactsCache();
+    ContactService().invalidateCache();
+
+    final identity = await ContactIdentityCache.instance.findByMatrixId(
+      ownerUserId: ownerUserId,
+      matrixUserId: uid,
+    );
+    if (!mounted) return;
+    setState(() {
+      _savedContact = null;
+      _identity = identity;
+    });
+  }
+
+  Future<void> _showMoreActions() async {
+    final isSaved = _savedContact != null;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1F25),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder:
+          (context) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isSaved)
+                  ListTile(
+                    leading: const Icon(
+                      Icons.person_remove_outlined,
+                      color: Color(0xFFFF6B6B),
+                    ),
+                    title: const Text(
+                      'Delete contact',
+                      style: TextStyle(color: Color(0xFFFF6B6B)),
+                    ),
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _deleteSavedContact();
+                    },
+                  ),
+                ListTile(
+                  leading: const Icon(Icons.close, color: Colors.white70),
+                  title: const Text(
+                    'Cancel',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+    );
+  }
+
   static const TextStyle _bioStyle = TextStyle(
     color: Colors.white,
     fontSize: 14,
@@ -359,7 +519,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   String _profileBio() {
     final profileBio = _profile?.bio.trim() ?? '';
     if (profileBio.isNotEmpty) return profileBio;
-    return _identity?.bio?.trim() ?? _savedContact?.bio?.trim() ?? '';
+    return _identity?.bio?.trim() ?? '';
   }
 
   @override
@@ -367,7 +527,11 @@ class _ProfileScreenState extends State<ProfileScreen>
     final double statusBarHeight = MediaQuery.of(context).padding.top;
     final double topBarHeight = statusBarHeight + kToolbarHeight;
 
-    final hasProfile = _profile != null;
+    final hasProfile =
+        _profile != null ||
+        _identity != null ||
+        _cleanName(_matrixDisplayName).isNotEmpty ||
+        _hasImmediateProfileSeed;
     final String displayName =
         _profileLoading && !hasProfile ? '' : _profileDisplayName();
     final String phone = _profileLoading && !hasProfile ? '' : _profilePhone();
@@ -399,12 +563,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                                   _profile?.hasProfileImage == true
                                       ? _profile!.profileImage
                                       : (_identity?.avatarUrl ??
-                                          _matrixAvatarUrl ??
-                                          widget.fallbackAvatarUrl),
-                              localImagePath:
-                                  _isOtherUser
-                                      ? null
-                                      : _profile?.localProfileImagePath,
+                                          _matrixAvatarUrl),
+                              localImagePath: _profile?.localProfileImagePath,
                               name: displayName,
                             ),
 
@@ -433,6 +593,24 @@ class _ProfileScreenState extends State<ProfileScreen>
                             ),
                           ),
 
+                        if (!_profileLoading && bioText.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 32),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF23262C),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: _buildBio(bioText),
+                            ),
+                          ),
+                        ],
+
                         const SizedBox(height: 16),
 
                         // ── Quick actions (other user only) ─────────────────
@@ -441,8 +619,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                           const SizedBox(height: 20),
                         ],
 
-                        // ── Bio + links card (only when content exists) ─────
-                        if (!_profileLoading && _hasCard) ...[
+                        // ── Links card (only when content exists) ───────────
+                        if (!_profileLoading && links.isNotEmpty) ...[
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16),
                             child: Container(
@@ -453,14 +631,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (bioText.isNotEmpty) _buildBio(bioText),
-                                  if (links.isNotEmpty) ...[
-                                    if (bioText.isNotEmpty)
-                                      const SizedBox(height: 10),
-                                    _buildLinks(links),
-                                  ],
-                                ],
+                                children: [_buildLinks(links)],
                               ),
                             ),
                           ),
@@ -571,11 +742,14 @@ class _ProfileScreenState extends State<ProfileScreen>
 
                       // ── Edit / action button ─────────────────────────
                       _isOtherUser
-                          ? _glassButton(icon: Icons.more_vert, onTap: () {})
+                          ? _glassButton(
+                            icon: Icons.more_vert,
+                            onTap: _showMoreActions,
+                          )
                           : _glassTextButton(
                             text: "Edit",
-                            onTap: () {
-                              Navigator.push(
+                            onTap: () async {
+                              final message = await Navigator.push<String>(
                                 context,
                                 MaterialPageRoute(
                                   builder:
@@ -584,6 +758,24 @@ class _ProfileScreenState extends State<ProfileScreen>
                                       ),
                                 ),
                               );
+                              if (!context.mounted) return;
+                              unawaited(_loadProfile());
+                              if (message?.trim().isNotEmpty == true) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(message!),
+                                    backgroundColor: const Color(0xFF4DA3FF),
+                                    behavior: SnackBarBehavior.floating,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    margin: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 12,
+                                    ),
+                                  ),
+                                );
+                              }
                             },
                           ),
                     ],

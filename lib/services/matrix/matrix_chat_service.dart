@@ -15,6 +15,7 @@ class MatrixChatService {
   static final MatrixChatService instance = MatrixChatService._();
 
   bool _initialSyncComplete = false;
+  bool get initialSyncComplete => _initialSyncComplete;
   Future<void>? _syncAndJoinFuture;
   final Map<String, Future<Room>> _directRoomFutures = {};
 

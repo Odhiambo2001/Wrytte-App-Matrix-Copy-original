@@ -300,7 +300,11 @@ class _BottomNavBarState extends State<BottomNavBar> {
   bool _isDisplayReadyProfile(UserProfile? profile) {
     if (profile == null) return false;
     final name = profile.displayName.trim();
-    return name.isNotEmpty && !_looksLikePhone(name);
+    final avatar = profile.profileImage.trim();
+    final localAvatar = profile.localProfileImagePath.trim();
+    return (name.isNotEmpty && !_looksLikePhone(name)) ||
+        avatar.isNotEmpty ||
+        localAvatar.isNotEmpty;
   }
 }
 

@@ -40,6 +40,26 @@ class UserProfileApiService {
 
     final localpart = _matrixLocalpart(userId ?? matrixUserId ?? '');
     final cleanPhone = _normalizePhone(phone ?? '');
+
+    if (localpart.isNotEmpty) {
+      try {
+        final response = await ApiService.get(
+          '/api/UserProfile/get/${Uri.encodeComponent(localpart)}',
+          token: token,
+        );
+        final fields = _stringMap(response);
+        if (fields.isNotEmpty) {
+          fields.putIfAbsent('userid', () => localpart);
+          return fields;
+        }
+      } catch (e) {
+        debugPrint(
+          '[UserProfileApiService] public profile path query skipped '
+          'userid="$localpart": $e',
+        );
+      }
+    }
+
     final candidates = <Map<String, String>>[
       if (localpart.isNotEmpty) {'userid': localpart},
       if (localpart.isNotEmpty) {'userId': localpart},

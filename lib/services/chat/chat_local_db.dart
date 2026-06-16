@@ -21,6 +21,20 @@ class ChatLocalDb {
 
   Database? _db;
   String? _ownerId;
+  String? _boundOwnerId;
+
+  Future<void> bindOwner(String? ownerUserId) async {
+    final normalized = ownerUserId?.trim();
+    final nextOwner =
+        normalized == null || normalized.isEmpty ? null : normalized;
+    if (_boundOwnerId == nextOwner) return;
+    _boundOwnerId = nextOwner;
+    if (_db != null && _ownerId != await _currentOwnerId()) {
+      await _db!.close();
+      _db = null;
+      _ownerId = null;
+    }
+  }
 
   Future<Database> get db async {
     final ownerId = await _currentOwnerId();
@@ -165,6 +179,8 @@ class ChatLocalDb {
   }
 
   Future<String> _currentOwnerId() async {
+    final bound = _boundOwnerId?.trim();
+    if (bound != null && bound.isNotEmpty) return bound;
     final userId = await _storage.read(key: _userIdKey);
     final normalized = userId?.trim();
     if (normalized == null || normalized.isEmpty) return 'signed_out';
@@ -447,11 +463,19 @@ class ChatLocalDb {
     final database = await db;
     final existingRows = await database.query(
       'conversations',
-      columns: ['id', 'lastReadTime'],
+      columns: ['id', 'lastReadTime', 'otherUserName', 'otherUserAvatar'],
     );
     final existingLastReadTimes = <String, int?>{
       for (final row in existingRows)
         row['id'] as String: row['lastReadTime'] as int?,
+    };
+    final existingNames = <String, String?>{
+      for (final row in existingRows)
+        row['id'] as String: row['otherUserName'] as String?,
+    };
+    final existingAvatars = <String, String?>{
+      for (final row in existingRows)
+        row['id'] as String: row['otherUserAvatar'] as String?,
     };
     await database.transaction((txn) async {
       await txn.delete('conversations');
@@ -466,6 +490,8 @@ class ChatLocalDb {
                     nextLastReadTime >= c.lastMessageTime.millisecondsSinceEpoch
                 ? 0
                 : c.unreadCount;
+        final cleanName = c.otherUserName?.trim() ?? '';
+        final cleanAvatar = c.otherUserAvatar?.trim() ?? '';
         await txn.insert('conversations', {
           'id': c.id,
           'participants': c.participants.join(','),
@@ -478,8 +504,12 @@ class ChatLocalDb {
           'isArchived': c.isArchived ? 1 : 0,
           'isMuted': c.isMuted ? 1 : 0,
           'isPinned': c.isPinned ? 1 : 0,
-          'otherUserName': c.otherUserName,
-          'otherUserAvatar': c.otherUserAvatar,
+          'otherUserName':
+              cleanName.isNotEmpty ? c.otherUserName : existingNames[c.id],
+          'otherUserAvatar':
+              cleanAvatar.isNotEmpty
+                  ? c.otherUserAvatar
+                  : existingAvatars[c.id],
           'lastReadTime': nextLastReadTime,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
@@ -493,9 +523,14 @@ class ChatLocalDb {
     String? avatar,
   }) async {
     final database = await db;
+    final values = <String, Object?>{'otherUserName': name};
+    final cleanAvatar = avatar?.trim() ?? '';
+    if (cleanAvatar.isNotEmpty) {
+      values['otherUserAvatar'] = cleanAvatar;
+    }
     await database.update(
       'conversations',
-      {'otherUserName': name, 'otherUserAvatar': avatar},
+      values,
       where: 'id = ?',
       whereArgs: [conversationId],
     );
