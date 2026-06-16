@@ -28,6 +28,7 @@ class MessageBubble extends StatelessWidget {
   final bool isForwarded;
   final bool isStarred;
   final bool isDeleted;
+  final bool isEdited;
   final String? replyPreview;
   final String? replySender;
   final bool animateOnMount;
@@ -51,6 +52,7 @@ class MessageBubble extends StatelessWidget {
     this.isForwarded = false,
     this.isStarred = false,
     this.isDeleted = false,
+    this.isEdited = false,
     this.replyPreview,
     this.replySender,
     this.animateOnMount = true,
@@ -95,6 +97,7 @@ class MessageBubble extends StatelessWidget {
                 isForwarded: isForwarded,
                 isStarred: isStarred,
                 isDeleted: isDeleted,
+                isEdited: isEdited,
                 replyPreview: replyPreview,
                 replySender: replySender,
                 isMine: isMine,
@@ -159,6 +162,15 @@ class MessageBubble extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
+        if (isEdited && !isDeleted)
+          Text(
+            'Edited ',
+            style: TextStyle(
+              color: Colors.white.withOpacity(isMine ? 0.65 : 0.45),
+              fontSize: 11,
+              height: 1,
+            ),
+          ),
         Text(
           time,
           style: TextStyle(
@@ -516,6 +528,7 @@ class _BubbleContent extends StatelessWidget {
   final bool isForwarded;
   final bool isStarred;
   final bool isDeleted;
+  final bool isEdited;
   final String? replyPreview;
   final String? replySender;
   final bool isMine;
@@ -527,6 +540,7 @@ class _BubbleContent extends StatelessWidget {
     this.isForwarded = false,
     this.isStarred = false,
     this.isDeleted = false,
+    this.isEdited = false,
     this.replyPreview,
     this.replySender,
   });

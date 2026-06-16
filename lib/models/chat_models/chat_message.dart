@@ -63,6 +63,7 @@ class ChatMessage {
   final bool isStarred;
   final bool isDeletedForMe;
   final bool isDeletedForEveryone;
+  final bool isEdited;
 
   const ChatMessage({
     required this.id,
@@ -85,6 +86,7 @@ class ChatMessage {
     this.isStarred = false,
     this.isDeletedForMe = false,
     this.isDeletedForEveryone = false,
+    this.isEdited = false,
   });
 
   // FROM JSON (Backend / local DB)
@@ -118,6 +120,7 @@ class ChatMessage {
       isStarred: _boolFromJson(json["isStarred"]),
       isDeletedForMe: _boolFromJson(json["isDeletedForMe"]),
       isDeletedForEveryone: _boolFromJson(json["isDeletedForEveryone"]),
+      isEdited: _boolFromJson(json["isEdited"]),
     );
   }
 
@@ -139,7 +142,7 @@ class ChatMessage {
       content:
           event.redacted
               ? 'This message was deleted'
-              : _stripReplyFallback(event.body),
+              : _stripReplyFallback(_matrixEventBody(event)),
       timestamp: event.originServerTs,
       status: _statusFromMatrix(event.status),
       attachmentUrl: _attachmentUrlFromMatrix(event),
@@ -152,15 +155,24 @@ class ChatMessage {
       senderName: content['wrytte.sender_name']?.toString(),
       isForwarded: content['wrytte.forwarded'] == true,
       isDeletedForEveryone: event.redacted,
+      isEdited: _isMatrixEdit(event),
     );
   }
 
   static ChatMessage? fromMatrixEvent(mx.Event event) {
     if (event.type != mx.EventTypes.Message) return null;
-    if (!event.redacted && event.body.isEmpty && !event.hasAttachment) {
+    if (!event.redacted && _matrixEventBody(event).isEmpty && !event.hasAttachment) {
       return null;
     }
     return ChatMessage.fromMatrix(event);
+  }
+
+  static String? matrixEditTargetId(mx.Event event) {
+    final relatesTo = event.content['m.relates_to'];
+    if (relatesTo is! Map || relatesTo['rel_type'] != 'm.replace') {
+      return null;
+    }
+    return relatesTo['event_id']?.toString();
   }
 
   // TO JSON (HTTP / Local DB)
@@ -186,6 +198,7 @@ class ChatMessage {
       "isStarred": isStarred,
       "isDeletedForMe": isDeletedForMe,
       "isDeletedForEveryone": isDeletedForEveryone,
+      "isEdited": isEdited,
     };
   }
 
@@ -211,6 +224,7 @@ class ChatMessage {
     bool? isStarred,
     bool? isDeletedForMe,
     bool? isDeletedForEveryone,
+    bool? isEdited,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -232,6 +246,7 @@ class ChatMessage {
       isStarred: isStarred ?? this.isStarred,
       isDeletedForMe: isDeletedForMe ?? this.isDeletedForMe,
       isDeletedForEveryone: isDeletedForEveryone ?? this.isDeletedForEveryone,
+      isEdited: isEdited ?? this.isEdited,
     );
   }
 
@@ -297,6 +312,11 @@ String? _replySenderFromFallback(String body) {
       .firstWhere((line) => line.isNotEmpty, orElse: () => '');
   final match = RegExp(r'^<([^>]+)>').firstMatch(firstLine);
   return match?.group(1);
+}
+
+bool _isMatrixEdit(mx.Event event) {
+  final relatesTo = event.content['m.relates_to'];
+  return relatesTo is Map && relatesTo['rel_type'] == 'm.replace';
 }
 
 String? _attachmentTypeFromMatrix(String msgType) {

@@ -956,6 +956,45 @@ class ChatService {
     _messageController.add(updated);
   }
 
+  Future<ChatMessage> editMessage({
+    required ChatMessage message,
+    required String newContent,
+  }) async {
+    final text = newContent.trim();
+    if (text.isEmpty) throw ArgumentError('Edited message cannot be empty');
+    if (message.hasAttachment || message.isVoiceNote) {
+      throw StateError('Only text messages can be edited');
+    }
+
+    return _withMatrixTokenRetry('editMessage', () async {
+      await _waitForConnection();
+      final client = MatrixClientService.instance.client;
+      final currentUser = client.userID ?? _currentUserId ?? '';
+      if (!_isOwnMessage(message, currentUser)) {
+        throw StateError('You can only edit your own messages');
+      }
+      final room = _roomById(message.conversationId);
+      if (room == null) {
+        throw StateError('Unknown Matrix room: ${message.conversationId}');
+      }
+      await room.sendEvent(
+        _buildMessageContent(message.copyWith(content: text)),
+        editEventId: message.id,
+      );
+      final updated = message.copyWith(
+        content: text,
+        timestamp: DateTime.now(),
+        status: MessageStatus.sent,
+        isEdited: true,
+      );
+      _replaceCachedMessage(updated);
+      await ChatLocalDb.instance.saveMessage(updated);
+      _messageController.add(updated);
+      _emitConversations();
+      return updated;
+    });
+  }
+
   Future<void> deleteMessageForMe(ChatMessage message) async {
     final roomId = message.conversationId.trim();
     final eventId = message.id.trim();

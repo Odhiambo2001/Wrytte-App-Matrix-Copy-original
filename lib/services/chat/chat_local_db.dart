@@ -65,7 +65,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -87,7 +87,8 @@ class ChatLocalDb {
             isForwarded      INTEGER NOT NULL DEFAULT 0,
             isStarred        INTEGER NOT NULL DEFAULT 0,
             isDeletedForMe   INTEGER NOT NULL DEFAULT 0,
-            isDeletedForEveryone INTEGER NOT NULL DEFAULT 0
+            isDeletedForEveryone INTEGER NOT NULL DEFAULT 0,
+            isEdited         INTEGER NOT NULL DEFAULT 0
           )
         ''');
 
@@ -174,6 +175,14 @@ class ChatLocalDb {
             'INTEGER',
           );
         }
+        if (oldVersion < 6) {
+          await _addColumnIfMissing(
+            db,
+            'messages',
+            'isEdited',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+        }
       },
     );
   }
@@ -234,6 +243,7 @@ class ChatLocalDb {
         'isStarred': m.isStarred ? 1 : 0,
         'isDeletedForMe': m.isDeletedForMe ? 1 : 0,
         'isDeletedForEveryone': m.isDeletedForEveryone ? 1 : 0,
+        'isEdited': m.isEdited ? 1 : 0,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
 
@@ -356,6 +366,7 @@ class ChatLocalDb {
       isStarred: (row['isStarred'] as int? ?? 0) == 1,
       isDeletedForMe: (row['isDeletedForMe'] as int? ?? 0) == 1,
       isDeletedForEveryone: (row['isDeletedForEveryone'] as int? ?? 0) == 1,
+      isEdited: (row['isEdited'] as int? ?? 0) == 1,
     );
   }
 
