@@ -27,6 +27,8 @@ class ChatService {
   static final ChatService _instance = ChatService._internal();
   factory ChatService() => _instance;
 
+  static const String _hiddenEventsAccountDataType = 'com.wrytte.hidden_events';
+
   final _messageController = StreamController<ChatMessage>.broadcast();
   final _errorController = StreamController<String>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
@@ -67,6 +69,7 @@ class ChatService {
 
   final Map<String, ChatConversation> _conversationsMap = {};
   final Map<String, List<ChatMessage>> _messagesCache = {};
+  final Map<String, Set<String>> _hiddenEventIdsByRoom = {};
   final Set<String> _readConversationIds = {};
   final Set<String> _activeReadConversationIds = {};
   final Map<String, DateTime> _lastReadAtByConversation = {};
@@ -490,19 +493,30 @@ class ChatService {
         for (final message in await ChatLocalDb.instance.loadMessages(room.id))
           message.id: message,
       };
+      final hiddenIds = _hiddenEventIdsForRoom(room.id, room: room);
       final messages =
           timeline.events
               .map(ChatMessage.fromMatrixEvent)
               .whereType<ChatMessage>()
               .map((message) {
                 final local = localById[message.id];
-                if (local == null) return message;
+                final isHidden = hiddenIds.contains(message.id);
+                if (isHidden) {
+                  unawaited(
+                    ChatLocalDb.instance.deleteMessageForMe(message.id),
+                  );
+                }
+                if (local == null) {
+                  return isHidden
+                      ? message.copyWith(isDeletedForMe: true)
+                      : message;
+                }
                 return message.copyWith(
                   isStarred: local.isStarred,
-                  isDeletedForMe: local.isDeletedForMe,
+                  isDeletedForMe: local.isDeletedForMe || isHidden,
                 );
               })
-              .where((message) => !message.isDeletedForMe)
+              .where((message) => !_isHiddenForMe(message))
               .toList()
             ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
@@ -588,6 +602,37 @@ class ChatService {
     if (message == null) return false;
     return message.content.trim().isNotEmpty ||
         (message.attachmentUrl?.trim().isNotEmpty ?? false);
+  }
+
+  bool _isHiddenForMe(ChatMessage message) {
+    if (message.isDeletedForMe) return true;
+    final roomId = message.conversationId.trim();
+    final eventId = message.id.trim();
+    if (roomId.isEmpty || eventId.isEmpty) return false;
+    return _hiddenEventIdsForRoom(roomId).contains(eventId);
+  }
+
+  Set<String> _hiddenEventIdsForRoom(String roomId, {mx.Room? room}) {
+    final normalizedRoomId = roomId.trim();
+    if (normalizedRoomId.isEmpty) return <String>{};
+    final matrixRoom = room ?? _roomById(normalizedRoomId);
+    if (matrixRoom != null) _syncHiddenEventsFromRoom(matrixRoom);
+    return Set<String>.from(_hiddenEventIdsByRoom[normalizedRoomId] ?? {});
+  }
+
+  void _syncHiddenEventsFromRoom(mx.Room room) {
+    final content = room.roomAccountData[_hiddenEventsAccountDataType]?.content;
+    if (content == null) return;
+    final rawIds = content['hidden_event_ids'];
+    if (rawIds is! Iterable) return;
+    final ids =
+        rawIds
+            .whereType<Object>()
+            .map((value) => value.toString().trim())
+            .where((value) => value.isNotEmpty)
+            .toSet();
+    final existing = _hiddenEventIdsByRoom[room.id] ?? <String>{};
+    _hiddenEventIdsByRoom[room.id] = {...existing, ...ids};
   }
 
   Future<ChatMessage> sendMessage(ChatMessage message) async {
@@ -817,7 +862,7 @@ class ChatService {
     final messages =
         List<ChatMessage>.from(
           _messagesCache[conversationId] ?? [],
-        ).where((message) => !message.isDeletedForMe).toList();
+        ).where((message) => !_isHiddenForMe(message)).toList();
     messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return messages;
   }
@@ -828,8 +873,16 @@ class ChatService {
 
   Future<List<ChatMessage>> loadCachedMessages(String conversationId) async {
     final cached = await ChatLocalDb.instance.loadMessages(conversationId);
+    final hiddenIds = _hiddenEventIdsForRoom(conversationId);
     final visible =
-        cached.where((message) => !message.isDeletedForMe).toList()
+        cached
+            .map((message) {
+              if (!hiddenIds.contains(message.id)) return message;
+              unawaited(ChatLocalDb.instance.deleteMessageForMe(message.id));
+              return message.copyWith(isDeletedForMe: true);
+            })
+            .where((message) => !_isHiddenForMe(message))
+            .toList()
           ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     for (final message in visible) {
       _upsertCachedMessage(message.copyWith(conversationId: conversationId));
@@ -904,10 +957,64 @@ class ChatService {
   }
 
   Future<void> deleteMessageForMe(ChatMessage message) async {
+    final roomId = message.conversationId.trim();
+    final eventId = message.id.trim();
+    if (roomId.isNotEmpty && eventId.isNotEmpty) {
+      final hiddenIds = _hiddenEventIdsForRoom(roomId)..add(eventId);
+      _hiddenEventIdsByRoom[roomId] = hiddenIds;
+    }
     final updated = message.copyWith(isDeletedForMe: true);
     _replaceCachedMessage(updated);
     await ChatLocalDb.instance.deleteMessageForMe(message.id);
+    _emitRoomMessages(message.conversationId);
     _emitConversations();
+    unawaited(_hideMessageForMeOnMatrix(message));
+  }
+
+  Future<void> _hideMessageForMeOnMatrix(ChatMessage message) async {
+    final roomId = message.conversationId.trim();
+    final eventId = message.id.trim();
+    if (roomId.isEmpty || eventId.isEmpty || !roomId.startsWith('!')) {
+      return;
+    }
+
+    final hiddenIds = _hiddenEventIdsForRoom(roomId)..add(eventId);
+    _hiddenEventIdsByRoom[roomId] = hiddenIds;
+
+    try {
+      await _withMatrixTokenRetry('hideMessageForMe', () async {
+        await _waitForConnection();
+        final client = MatrixClientService.instance.client;
+        final userId = client.userID;
+        if (userId == null || userId.isEmpty) {
+          throw StateError('Matrix user is not logged in');
+        }
+        final latestHiddenIds = _hiddenEventIdsForRoom(
+          roomId,
+          room: _roomById(roomId),
+        )..add(eventId);
+        _hiddenEventIdsByRoom[roomId] = latestHiddenIds;
+        final sortedHiddenIds = latestHiddenIds.toList()..sort();
+        await client.setAccountDataPerRoom(
+          userId,
+          roomId,
+          _hiddenEventsAccountDataType,
+          {
+            'hidden_event_ids': sortedHiddenIds,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          },
+        );
+        apkLog(
+          'ChatService.deleteForMe',
+          'hidden event persisted room_id="$roomId" event_id="$eventId"',
+        );
+      });
+    } catch (e) {
+      apkLog(
+        'ChatService.deleteForMe',
+        'hidden event server sync failed room_id="$roomId" event_id="$eventId" error="$e"',
+      );
+    }
   }
 
   Future<void> deleteMessageForEveryone(ChatMessage message) async {
@@ -1178,7 +1285,7 @@ class ChatService {
       return cached
           .where(
             (message) =>
-                !message.isDeletedForMe &&
+                !_isHiddenForMe(message) &&
                 _isDisplayableMessage(message) &&
                 !_isOwnMessage(message, currentUser) &&
                 _isAfterReadMarker(message, room.id),
@@ -1190,8 +1297,10 @@ class ChatService {
 
     final last = room.lastEvent;
     final lastMessage = last == null ? null : ChatMessage.fromMatrixEvent(last);
-    if (!_isDisplayableMessage(lastMessage)) return 0;
-    if (_isOwnMessage(lastMessage!, currentUser)) return 0;
+    if (!_isDisplayableMessage(lastMessage) || _isHiddenForMe(lastMessage!)) {
+      return 0;
+    }
+    if (_isOwnMessage(lastMessage, currentUser)) return 0;
     if (readAt != null && !lastMessage.timestamp.isAfter(readAt)) return 0;
     return 1;
   }
@@ -1235,6 +1344,7 @@ class ChatService {
 
     for (final room in rooms) {
       // was: for (final room in client.rooms)
+      _syncHiddenEventsFromRoom(room);
       _cacheRoomIdentity(room);
     }
 
@@ -1247,10 +1357,12 @@ class ChatService {
           room.lastEvent == null
               ? null
               : ChatMessage.fromMatrixEvent(room.lastEvent!);
-      final hasDisplayableMatrixLast = _isDisplayableMessage(lastMessage);
+      final hasDisplayableMatrixLast =
+          _isDisplayableMessage(lastMessage) && !_isHiddenForMe(lastMessage!);
       final hasCachedPreview = existing?.lastMessage.trim().isNotEmpty == true;
       final hasCachedMessages = (_messagesCache[room.id] ??
               const <ChatMessage>[])
+          .where((message) => !_isHiddenForMe(message))
           .any(_isDisplayableMessage);
 
       if (!hasDisplayableMatrixLast &&
@@ -1435,6 +1547,7 @@ class ChatService {
 
   void _cacheMessage(ChatMessage message, {bool countUnread = true}) {
     if (!_isDisplayableMessage(message)) return;
+    if (_isHiddenForMe(message)) return;
     final convId = message.conversationId;
     final currentUser =
         MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
@@ -1556,7 +1669,7 @@ class ChatService {
   DateTime _latestKnownMessageTime(String conversationId) {
     final cached = _messagesCache[conversationId];
     if (cached != null && cached.isNotEmpty) {
-      final visible = cached.where((message) => !message.isDeletedForMe);
+      final visible = cached.where((message) => !_isHiddenForMe(message));
       var latest = DateTime.fromMillisecondsSinceEpoch(0);
       for (final message in visible) {
         if (message.timestamp.isAfter(latest)) latest = message.timestamp;
@@ -1571,7 +1684,7 @@ class ChatService {
     final cached = _messagesCache[conversationId];
     if (cached == null || cached.isEmpty) return null;
     for (final message in cached.reversed) {
-      if (!message.isDeletedForMe && _isDisplayableMessage(message)) {
+      if (!_isHiddenForMe(message) && _isDisplayableMessage(message)) {
         return message.id;
       }
     }
