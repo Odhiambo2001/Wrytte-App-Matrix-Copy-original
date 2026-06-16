@@ -161,7 +161,9 @@ class ChatMessage {
 
   static ChatMessage? fromMatrixEvent(mx.Event event) {
     if (event.type != mx.EventTypes.Message) return null;
-    if (!event.redacted && _matrixEventBody(event).isEmpty && !event.hasAttachment) {
+    if (!event.redacted &&
+        _matrixEventBody(event).isEmpty &&
+        !event.hasAttachment) {
       return null;
     }
     return ChatMessage.fromMatrix(event);
@@ -286,6 +288,15 @@ String _stripReplyFallback(String body) {
     return split.sublist(1).join('\n\n');
   }
   return body;
+}
+
+String _matrixEventBody(mx.Event event) {
+  final newContent = event.content['m.new_content'];
+  if (_isMatrixEdit(event) && newContent is Map) {
+    final editedBody = newContent['body']?.toString() ?? '';
+    if (editedBody.isNotEmpty) return editedBody;
+  }
+  return event.body;
 }
 
 String? _replyPreviewFromFallback(String body) {

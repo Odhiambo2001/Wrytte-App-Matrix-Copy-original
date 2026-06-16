@@ -400,6 +400,7 @@ class _ChatScreenState extends State<ChatScreen> {
   ContactIdentity? _receiverIdentity;
   bool _receiverIsSavedContact = false;
   ChatMessage? _replyingTo;
+  ChatMessage? _editingMessage;
   double? _stableStatusBarH;
   late final String? _stableHeaderAvatarUrl;
 
@@ -1035,6 +1036,11 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     if (text.isEmpty || _isSending) return;
+    final editing = _editingMessage;
+    if (editing != null) {
+      await _sendEditedMessage(editing, text);
+      return;
+    }
     if (_isSelfConversation) {
       _logSelfConversationBlocked('send');
       _showSelfConversationError();
@@ -1046,6 +1052,7 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _isSending = true;
       _replyingTo = null;
+      _editingMessage = null;
     });
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
@@ -1114,6 +1121,48 @@ class _ChatScreenState extends State<ChatScreen> {
             _messages[idx] = local;
           }
         });
+      }
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  Future<void> _sendEditedMessage(ChatMessage message, String text) async {
+    if (text.trim() == message.content.trim()) {
+      _controller.clear();
+      setState(() => _editingMessage = null);
+      return;
+    }
+    if (_isSending) return;
+
+    _controller.clear();
+    setState(() {
+      _isSending = true;
+      _editingMessage = null;
+    });
+
+    final optimistic = message.copyWith(
+      content: text.trim(),
+      status: MessageStatus.sending,
+      isEdited: true,
+    );
+    setState(() => _replaceOptimisticMessage(message.id, optimistic));
+
+    try {
+      final updated = await _chat.editMessage(
+        message: message,
+        newContent: text,
+      );
+      if (mounted) {
+        setState(() => _replaceOptimisticMessage(message.id, updated));
+      }
+    } catch (e) {
+      apkLog('ChatScreen._sendEditedMessage', 'EDIT FAILED: $e');
+      if (mounted) {
+        setState(() => _replaceOptimisticMessage(message.id, message));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Edit failed: $e')));
       }
     } finally {
       if (mounted) setState(() => _isSending = false);
@@ -1513,6 +1562,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   ).showSnackBar(const SnackBar(content: Text('Copied')));
                 },
               ),
+              if (_canEditMessage(message))
+                _messageActionTile(
+                  icon: Icons.edit_outlined,
+                  label: 'Edit',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _promptEditMessage(message);
+                  },
+                ),
               _messageActionTile(
                 icon: Icons.delete_outline,
                 label: 'Delete for me',
@@ -1576,6 +1634,29 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       },
     );
+  }
+
+  bool _canEditMessage(ChatMessage message) {
+    if (!_isMine(message)) return false;
+    if (message.isDeleted) return false;
+    if (message.hasAttachment || message.isVoiceNote) return false;
+    if (message.status == MessageStatus.sending ||
+        message.status == MessageStatus.failed) {
+      return false;
+    }
+    if (message.id.startsWith('opt_')) return false;
+    return message.content.trim().isNotEmpty;
+  }
+
+  void _promptEditMessage(ChatMessage message) {
+    setState(() {
+      _replyingTo = null;
+      _editingMessage = message;
+    });
+    _controller
+      ..text = message.content
+      ..selection = TextSelection.collapsed(offset: message.content.length);
+    _focusNode.requestFocus();
   }
 
   Widget _messageActionTile({
@@ -1823,6 +1904,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         children: [
                           Expanded(child: _buildMessageList()),
                           if (_replyingTo != null) _buildReplyComposerBanner(),
+                          if (_editingMessage != null)
+                            _buildEditComposerBanner(),
                           MessageInputField(
                             controller: _controller,
                             focusNode: _focusNode,
@@ -2112,6 +2195,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               isForwarded: msg.isForwarded,
                               isStarred: msg.isStarred,
                               isDeleted: msg.isDeleted,
+                              isEdited: msg.isEdited,
                               replyPreview: _replyPreviewDisplayText(
                                 msg.replyPreview,
                               ),
@@ -2526,6 +2610,67 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.close, color: Colors.white70, size: 20),
             onPressed: () => setState(() => _replyingTo = null),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEditComposerBanner() {
+    final message = _editingMessage!;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF181B22),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 3,
+            height: 42,
+            decoration: BoxDecoration(
+              color: const Color(0xFF4DA3FF),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Edit Message',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Color(0xFF4DA3FF),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  message.content,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.68),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+            onPressed: () {
+              setState(() => _editingMessage = null);
+              _controller.clear();
+            },
           ),
         ],
       ),

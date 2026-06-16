@@ -150,6 +150,12 @@ class ChatService {
         throw StateError('Matrix session did not match the current user.');
       }
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
+        if (ChatMessage.matrixEditTargetId(event)?.isNotEmpty == true) {
+          _applyMatrixEditEvent(event);
+          _refreshMessageStatusesForRoom(event.room);
+          return;
+        }
+
         final message = ChatMessage.fromMatrixEvent(event);
         if (message == null) return;
 
@@ -494,31 +500,11 @@ class ChatService {
           message.id: message,
       };
       final hiddenIds = _hiddenEventIdsForRoom(room.id, room: room);
-      final messages =
-          timeline.events
-              .map(ChatMessage.fromMatrixEvent)
-              .whereType<ChatMessage>()
-              .map((message) {
-                final local = localById[message.id];
-                final isHidden = hiddenIds.contains(message.id);
-                if (isHidden) {
-                  unawaited(
-                    ChatLocalDb.instance.deleteMessageForMe(message.id),
-                  );
-                }
-                if (local == null) {
-                  return isHidden
-                      ? message.copyWith(isDeletedForMe: true)
-                      : message;
-                }
-                return message.copyWith(
-                  isStarred: local.isStarred,
-                  isDeletedForMe: local.isDeletedForMe || isHidden,
-                );
-              })
-              .where((message) => !_isHiddenForMe(message))
-              .toList()
-            ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      final messages = _messagesFromMatrixEvents(
+        timeline.events,
+        localById: localById,
+        hiddenIds: hiddenIds,
+      );
 
       final latestRestoredAt =
           messages.isNotEmpty ? messages.last.timestamp : null;
@@ -564,6 +550,61 @@ class ChatService {
   Future<void> _waitForConnection() async {
     if (_isConnected) return;
     await connect();
+  }
+
+  List<ChatMessage> _messagesFromMatrixEvents(
+    Iterable<mx.Event> events, {
+    required Map<String, ChatMessage> localById,
+    required Set<String> hiddenIds,
+  }) {
+    final sortedEvents =
+        events.toList()
+          ..sort((a, b) => a.originServerTs.compareTo(b.originServerTs));
+    final byId = <String, ChatMessage>{};
+
+    for (final event in sortedEvents) {
+      if (ChatMessage.matrixEditTargetId(event) != null) continue;
+      final message = ChatMessage.fromMatrixEvent(event);
+      if (message == null) continue;
+      final local = localById[message.id];
+      final isHidden = hiddenIds.contains(message.id);
+      if (isHidden) {
+        unawaited(ChatLocalDb.instance.deleteMessageForMe(message.id));
+      }
+      byId[message.id] =
+          local == null
+              ? (isHidden ? message.copyWith(isDeletedForMe: true) : message)
+              : message.copyWith(
+                isStarred: local.isStarred,
+                isDeletedForMe: local.isDeletedForMe || isHidden,
+                isEdited: local.isEdited,
+              );
+    }
+
+    for (final event in sortedEvents) {
+      _applyMatrixEditEventToMap(event, byId);
+    }
+
+    final messages =
+        byId.values.where((message) => !_isHiddenForMe(message)).toList()
+          ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return messages;
+  }
+
+  void _applyMatrixEditEventToMap(
+    mx.Event event,
+    Map<String, ChatMessage> messagesById,
+  ) {
+    final targetId = ChatMessage.matrixEditTargetId(event);
+    if (targetId == null || targetId.isEmpty) return;
+    final original = messagesById[targetId];
+    if (original == null || original.senderId != event.senderId) return;
+    final edit = ChatMessage.fromMatrixEvent(event);
+    if (edit == null || edit.content.trim().isEmpty) return;
+    messagesById[targetId] = original.copyWith(
+      content: edit.content,
+      isEdited: true,
+    );
   }
 
   Future<T> _withMatrixTokenRetry<T>(
@@ -983,7 +1024,6 @@ class ChatService {
       );
       final updated = message.copyWith(
         content: text,
-        timestamp: DateTime.now(),
         status: MessageStatus.sent,
         isEdited: true,
       );
@@ -1657,6 +1697,33 @@ class ChatService {
             );
     unawaited(_persistCachedMessage(message, _conversationsMap[convId]!));
     _emitRoomMessages(convId);
+    _emitConversations();
+  }
+
+  void _applyMatrixEditEvent(mx.Event event) {
+    final targetId = ChatMessage.matrixEditTargetId(event);
+    if (targetId == null || targetId.isEmpty) return;
+    final edit = ChatMessage.fromMatrixEvent(event);
+    if (edit == null || edit.content.trim().isEmpty) return;
+    final roomId = event.room.id;
+    final messages = _messagesCache[roomId];
+    if (messages == null) return;
+    final index = messages.indexWhere((message) => message.id == targetId);
+    if (index == -1) return;
+    final original = messages[index];
+    if (original.senderId != event.senderId) return;
+
+    final updated = original.copyWith(content: edit.content, isEdited: true);
+    messages[index] = updated;
+    unawaited(ChatLocalDb.instance.saveMessage(updated));
+
+    final latestVisibleId = _latestKnownMessageId(roomId);
+    final existing = _conversationsMap[roomId];
+    if (existing != null && latestVisibleId == targetId) {
+      _conversationsMap[roomId] = existing.copyWith(lastMessage: edit.content);
+    }
+
+    _emitRoomMessages(roomId);
     _emitConversations();
   }
 
