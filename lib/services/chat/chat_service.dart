@@ -153,10 +153,7 @@ class ChatService {
         _cacheMessage(message);
 
         unawaited(
-          _refreshPeerProfileFromBackendForMessage(
-            message,
-            reason: 'timeline',
-          ),
+          _refreshPeerProfileFromBackendForMessage(message, reason: 'timeline'),
         );
 
         _refreshMessageStatusesForRoom(event.room);
@@ -166,8 +163,8 @@ class ChatService {
           apkLog(
             'ChatService.notify',
             'suppressed startup history '
-            'event_id="${message.id}" '
-            'room_id="${message.conversationId}"',
+                'event_id="${message.id}" '
+                'room_id="${message.conversationId}"',
           );
           return;
         }
@@ -177,8 +174,8 @@ class ChatService {
           apkLog(
             'ChatService.notify',
             'suppressed initial sync '
-            'event_id="${message.id}" '
-            'room_id="${message.conversationId}"',
+                'event_id="${message.id}" '
+                'room_id="${message.conversationId}"',
           );
           return;
         }
@@ -186,8 +183,8 @@ class ChatService {
         apkLog(
           'ChatService.notify',
           'LIVE message '
-          'event_id="${message.id}" '
-          'room_id="${message.conversationId}"',
+              'event_id="${message.id}" '
+              'room_id="${message.conversationId}"',
         );
 
         _messageController.add(message);
@@ -432,8 +429,6 @@ class ChatService {
       );
     }
   }
-
-
 
   Future<void> restoreAllRoomHistoryFromServer() {
     final pending = _historyRestoreFuture;
@@ -945,8 +940,16 @@ class ChatService {
   Future<ChatMessage> forwardMessage({
     required ChatMessage original,
     required String receiverId,
+    String? conversationId,
   }) async {
-    final room = await _directRoom(receiverId);
+    final existingRoomId = conversationId?.trim() ?? '';
+    final room =
+        existingRoomId.isNotEmpty
+            ? _roomById(existingRoomId)
+            : await _directRoom(receiverId);
+    if (room == null) {
+      throw StateError('Existing forward room is not loaded: $existingRoomId');
+    }
     final message = ChatMessage(
       id: 'fwd_${DateTime.now().millisecondsSinceEpoch}',
       conversationId: room.id,
@@ -1223,19 +1226,18 @@ class ChatService {
   void _refreshConversationsFromRooms() {
     // ✅ Snapshot to avoid ConcurrentModificationError when sync
     // updates arrive while we're iterating.
-    final rooms = List<mx.Room>.from(
-      MatrixClientService.instance.client.rooms,
-    );
-    
+    final rooms = List<mx.Room>.from(MatrixClientService.instance.client.rooms);
+
     apkLog(
       'ChatService.rooms',
       'refresh user_id="..." rooms=${rooms.length} ...',
     );
-    
-    for (final room in rooms) {    // was: for (final room in client.rooms)
+
+    for (final room in rooms) {
+      // was: for (final room in client.rooms)
       _cacheRoomIdentity(room);
     }
-    
+
     final merged = Map<String, ChatConversation>.from(_conversationsMap);
     var restoredFromCache = 0;
     var refreshedFromMatrix = 0;
