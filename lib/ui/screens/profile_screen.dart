@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui';
 import 'package:wrytte/components/user_avatar.dart';
+import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
@@ -15,7 +17,13 @@ import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
+import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
+import 'package:wrytte/ui/widgets/full_screen_video_viewer.dart';
 import 'package:wrytte/ui/widgets/profile_tab_bar_section.dart';
+import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
+import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
+import 'package:wrytte/ui/widgets/wrytte_persistent_image.dart';
+import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
 import 'edit_profile_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -25,6 +33,7 @@ class ProfileScreen extends StatefulWidget {
   final String? fallbackName;
   final String? fallbackPhone;
   final String? fallbackAvatarUrl;
+  final String? conversationId;
 
   const ProfileScreen({
     super.key,
@@ -32,6 +41,7 @@ class ProfileScreen extends StatefulWidget {
     this.fallbackName,
     this.fallbackPhone,
     this.fallbackAvatarUrl,
+    this.conversationId,
   });
 
   @override
@@ -49,6 +59,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   String? _matrixDisplayName;
   String? _matrixAvatarUrl;
   bool _profileLoading = true;
+  List<ChatMessage> _conversationMessages = const [];
   StreamSubscription<UserProfile?>? _profileSub;
 
   late final TabController _tabController;
@@ -81,6 +92,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           });
     }
     _loadProfile();
+    _loadConversationMessages();
   }
 
   @override
@@ -195,6 +207,22 @@ class _ProfileScreenState extends State<ProfileScreen>
       _matrixDisplayName = matrixProfile?.$1;
       _matrixAvatarUrl = matrixProfile?.$2;
       _profileLoading = false;
+    });
+  }
+
+  Future<void> _loadConversationMessages() async {
+    final conversationId = widget.conversationId?.trim() ?? '';
+    if (conversationId.isEmpty) return;
+    final cached = ChatService().cachedMessagesFor(conversationId);
+    if (mounted && cached.isNotEmpty) {
+      setState(() => _conversationMessages = cached);
+    }
+    final local = await ChatLocalDb.instance.loadMessages(conversationId);
+    if (!mounted) return;
+    setState(() {
+      _conversationMessages =
+          local.where((message) => !message.isDeleted).toList()
+            ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     });
   }
 
@@ -358,6 +386,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profileDisplayName() {
+    final savedName = _cleanName(_savedContact?.formattedName);
+    if (savedName.isNotEmpty) return savedName;
+
+    final savedIdentityName = _cleanName(_identity?.savedName);
+    if (savedIdentityName.isNotEmpty) return savedIdentityName;
+
     return _cleanName(_profile?.displayName).isNotEmpty
         ? _cleanName(_profile?.displayName)
         : _cleanName(_identity?.profileName).isNotEmpty
@@ -368,7 +402,11 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profilePhone() {
-    final candidates = [_profile?.phone, _identity?.phone];
+    final candidates = [
+      _savedContact?.primaryPhone,
+      _profile?.phone,
+      _identity?.phone,
+    ];
     for (final value in candidates) {
       final phone = _phoneFromIdentifier(value);
       if (phone.isNotEmpty) {
@@ -379,7 +417,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _formatPhone(String phone) {
-    final digits = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    final digits = _stripInvalidNorthAmericaPrefix(
+      phone.replaceAll(RegExp(r'[^\d+]'), ''),
+    );
     final digitsOnly = digits.replaceAll(RegExp(r'[^\d]'), '');
     if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
     if (digits.startsWith('+256') && digits.length == 13) {
@@ -389,7 +429,14 @@ class _ProfileScreenState extends State<ProfileScreen>
       return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
     }
     if (digits.isNotEmpty && !digits.startsWith('+')) return '+$digits';
-    return phone;
+    return digits;
+  }
+
+  String _stripInvalidNorthAmericaPrefix(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (!phone.startsWith('+1')) return phone;
+    if (digits.length <= 11) return phone;
+    return '+${digits.substring(1)}';
   }
 
   Future<void> _launchLink(String url) async {
@@ -665,16 +712,10 @@ class _ProfileScreenState extends State<ProfileScreen>
               children:
                   _isOtherUser
                       ? [
-                        _buildEmptyTab(
-                          Icons.photo_library_outlined,
-                          'No media',
-                        ),
-                        _buildEmptyTab(
-                          Icons.insert_drive_file_outlined,
-                          'No files',
-                        ),
+                        _buildMediaTab(),
+                        _buildFilesTab(),
                         _buildEmptyTab(Icons.dynamic_feed_outlined, 'No feed'),
-                        _buildEmptyTab(Icons.link_outlined, 'No links'),
+                        _buildLinksTab(),
                       ]
                       : [_buildPostsTab(), _buildSavedTab()],
             ),
@@ -944,6 +985,205 @@ class _ProfileScreenState extends State<ProfileScreen>
         ),
       ],
     );
+  }
+
+  Widget _buildMediaTab() {
+    final items =
+        _conversationMessages
+            .where(
+              (message) =>
+                  message.attachmentType == 'image' ||
+                  message.attachmentType == 'video',
+            )
+            .toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    if (items.isEmpty) {
+      return _buildEmptyTab(Icons.photo_library_outlined, 'No media');
+    }
+    return CustomScrollView(
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.all(14),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) => _buildMediaTile(items[index]),
+              childCount: items.length,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFilesTab() {
+    final items =
+        _conversationMessages
+            .where((message) => message.attachmentType == 'file')
+            .toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    if (items.isEmpty) {
+      return _buildEmptyTab(Icons.insert_drive_file_outlined, 'No files');
+    }
+    return CustomScrollView(
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        SliverList.builder(
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final item = items[index];
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
+              child: WrytteFileCard(
+                source: item.attachmentUrl ?? '',
+                fileName: item.content.trim().isEmpty ? 'File' : item.content,
+                profileStyle: true,
+                trailing: Text(
+                  _formatProfileMessageDate(item.timestamp),
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.45),
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLinksTab() {
+    final links =
+        _conversationMessages
+            .map(
+              (message) => (
+                link: _firstLinkIn(message.content),
+                timestamp: message.timestamp,
+              ),
+            )
+            .where((item) => item.link != null)
+            .toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    if (links.isEmpty) return _buildEmptyTab(Icons.link_outlined, 'No links');
+    return CustomScrollView(
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        SliverList.builder(
+          itemCount: links.length,
+          itemBuilder: (context, index) {
+            final item = links[index];
+            final section = _linkSectionLabel(item.timestamp);
+            final showSection =
+                index == 0 ||
+                _linkSectionLabel(links[index - 1].timestamp) != section;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (showSection)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 18, 18, 5),
+                    child: Text(
+                      section,
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 4, 18, 4),
+                  child: WrytteLinkPreview(
+                    url: item.link!,
+                    showOriginalUrl: true,
+                    compact: true,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  String _linkSectionLabel(DateTime timestamp) {
+    final now = DateTime.now();
+    final age = now.difference(timestamp);
+    if (age.inDays < 7) return 'RECENT';
+    if (age.inDays < 60) return 'LAST MONTH';
+    const months = [
+      'JANUARY',
+      'FEBRUARY',
+      'MARCH',
+      'APRIL',
+      'MAY',
+      'JUNE',
+      'JULY',
+      'AUGUST',
+      'SEPTEMBER',
+      'OCTOBER',
+      'NOVEMBER',
+      'DECEMBER',
+    ];
+    return months[timestamp.month - 1];
+  }
+
+  Widget _buildMediaTile(ChatMessage message) {
+    final url = message.attachmentUrl?.trim() ?? '';
+    if (message.attachmentType == 'video') {
+      return GestureDetector(
+        onTap: () => FullScreenVideoViewer.open(context, url),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Stack(
+            fit: StackFit.expand,
+            alignment: Alignment.center,
+            children: [
+              WrytteVideoThumbnail(source: url),
+              IgnorePointer(
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.18),
+                  child: const Center(
+                    child: Icon(
+                      Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 34,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final child = WryttePersistentImage(source: url, fit: BoxFit.cover);
+    return GestureDetector(
+      onTap: () => FullScreenImageViewer.open(context, url),
+      child: ClipRRect(borderRadius: BorderRadius.circular(10), child: child),
+    );
+  }
+
+  String _formatProfileMessageDate(DateTime value) {
+    final now = DateTime.now();
+    if (now.year == value.year &&
+        now.month == value.month &&
+        now.day == value.day) {
+      return 'Today';
+    }
+    return '${value.day}/${value.month}/${value.year}';
+  }
+
+  String? _firstLinkIn(String value) {
+    final match = RegExp(r'https?://[^\s]+').firstMatch(value);
+    return match?.group(0);
   }
 
   // ── Avatar shimmer ─────────────────────────────────────────────────────────

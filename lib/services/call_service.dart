@@ -6,6 +6,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
 // At the top of call_service.dart, add this import:
 import 'package:webrtc_interface/webrtc_interface.dart' as webrtc_iface;
 import 'package:matrix/matrix.dart' as mx;
+import 'package:permission_handler/permission_handler.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_call_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
@@ -74,14 +75,17 @@ class CallService {
 
   Future<void> startListeningForIncomingCalls() async {
     final voip = await MatrixCallService.instance.ensureStarted(_delegate);
-    _incomingCallSub ??= MatrixCallService.instance.incomingCalls.listen((call) {
+    _incomingCallSub ??= MatrixCallService.instance.incomingCalls.listen((
+      call,
+    ) {
       final session = call.session;
       _attachSession(session);
       _incomingCallController.add(
         CallData(
           callId: session.callId,
           callerId: session.remoteUserId ?? '',
-          callerName: session.remoteUser?.displayName ??
+          callerName:
+              session.remoteUser?.displayName ??
               session.remoteUserId ??
               'Incoming call',
           callerAvatar: session.remoteUser?.avatarUrl?.toString() ?? '',
@@ -106,6 +110,7 @@ class CallService {
     required String callerName,
     String callerAvatar = '',
   }) async {
+    await _requestMediaPermissions(type);
     await ChatService().connect();
     final roomId = await ChatService().getMatrixConversationId(receiverId);
     if (roomId == null || roomId.isEmpty) {
@@ -119,16 +124,44 @@ class CallService {
       userId: _toMatrixUserId(receiverId),
     );
     _attachSession(session);
+    if (type == CallType.video) await ensureVideoEnabled();
     _callStatusController.add(CallStatus.ringing);
     return session.callId;
   }
 
   Future<void> acceptCall(CallData call) async {
+    await _requestMediaPermissions(call.type);
     final session = call.matrixSession ?? _activeSession;
     if (session == null) throw Exception('No active Matrix call session');
     _attachSession(session);
     await MatrixCallService.instance.answer(session);
+    if (call.type == CallType.video) await ensureVideoEnabled();
     _callStatusController.add(CallStatus.accepted);
+  }
+
+  Future<void> _requestMediaPermissions(CallType type) async {
+    final permissions = <Permission>[Permission.microphone];
+    if (type == CallType.video) permissions.add(Permission.camera);
+    final statuses = await permissions.request();
+    final denied = statuses.entries.where((entry) => !entry.value.isGranted);
+    if (denied.isNotEmpty) {
+      throw StateError(
+        type == CallType.video
+            ? 'Camera and microphone permissions are required for video calls'
+            : 'Microphone permission is required for calls',
+      );
+    }
+  }
+
+  Future<void> ensureVideoEnabled() async {
+    final session = _activeSession;
+    if (session == null) throw StateError('No active video call session');
+    await session.setLocalVideoMuted(false);
+    for (final wrapped in session.getLocalStreams) {
+      _publishStream(wrapped);
+    }
+    _localStream?.getVideoTracks().forEach((track) => track.enabled = true);
+    await setSpeakerOn(true);
   }
 
   Future<void> rejectCall(String callId) async {
@@ -190,6 +223,9 @@ class CallService {
     if (stream == null) return;
     if (wrapped.isLocal()) {
       _localStream = stream as webrtc.MediaStream;
+      if (_activeSession?.type == mx.CallType.kVideo) {
+        _localStream!.getVideoTracks().forEach((track) => track.enabled = true);
+      }
       _localStreamController.add(_localStream!);
     } else {
       _remoteStream = stream as webrtc.MediaStream;
@@ -209,9 +245,10 @@ class CallService {
     final trimmed = value.trim();
     if (trimmed.startsWith('@') && trimmed.contains(':')) return trimmed;
     final own = MatrixClientService.instance.userId;
-    final domain = own != null && own.contains(':')
-        ? own.split(':').last
-        : MatrixConfig.serverName;
+    final domain =
+        own != null && own.contains(':')
+            ? own.split(':').last
+            : MatrixConfig.serverName;
     final localpart = trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
     return '@$localpart:$domain';
   }
@@ -236,7 +273,8 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
   }
 
   @override
-  webrtc_iface.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices as webrtc_iface.MediaDevices;
+  webrtc_iface.MediaDevices get mediaDevices =>
+      webrtc.navigator.mediaDevices as webrtc_iface.MediaDevices;
 
   //@override
   //webrtc.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices;

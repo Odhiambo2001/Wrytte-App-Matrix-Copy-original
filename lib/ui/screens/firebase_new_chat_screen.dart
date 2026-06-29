@@ -11,6 +11,7 @@ import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
+import 'package:wrytte/ui/screens/new_group_screen.dart';
 
 class FirebaseNewChatScreen extends StatefulWidget {
   const FirebaseNewChatScreen({super.key});
@@ -577,6 +578,11 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
                       ),
                 ),
               ).then((_) => _loadMyContacts());
+            } else if (title == 'New group') {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const NewGroupScreen()),
+              );
             }
           },
         ),

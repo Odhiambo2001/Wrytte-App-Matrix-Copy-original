@@ -1,9 +1,14 @@
 // lib/ui/screens/chats/chat_screen.dart
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:matrix/matrix.dart' as mx;
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
@@ -14,9 +19,11 @@ import 'package:wrytte/services/call_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/attachment_local_store.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
+import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/notification_service.dart';
@@ -26,6 +33,7 @@ import 'package:wrytte/ui/screens/calls/call_screen.dart';
 import 'package:wrytte/ui/screens/chats/video_message_recorder_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_input.dart';
+import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
@@ -386,6 +394,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<ChatMessage> _messages = [];
   final List<ChatMessage> _initialStreamBuffer = [];
   final Map<String, String> _optimisticIdByContent = {};
+  final Map<String, String> _groupMemberNames = {};
+  final Map<String, String> _groupMemberAvatars = {};
+  List<mx.User> _groupMembers = const [];
 
   String? _resolvedConversationId;
 
@@ -547,14 +558,23 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _formatPhone(String phone) {
-    final digits = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    final digits = _stripInvalidNorthAmericaPrefix(
+      phone.replaceAll(RegExp(r'[^\d+]'), ''),
+    );
     final digitsOnly = digits.replaceAll(RegExp(r'[^\d]'), '');
     if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
     if (digits.startsWith('+1') && digits.length == 12) {
       return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
     }
     if (digits.isNotEmpty && !digits.startsWith('+')) return '+$digits';
-    return phone;
+    return digits;
+  }
+
+  String _stripInvalidNorthAmericaPrefix(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (!phone.startsWith('+1')) return phone;
+    if (digits.length <= 11) return phone;
+    return '+${digits.substring(1)}';
   }
 
   String _firstPhoneFrom(Iterable<String?> candidates) {
@@ -683,6 +703,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final realConvId = await _resolveConversationId();
     _chat.activateConversationRead(realConvId);
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
+    if (realConvId.startsWith('!')) {
+      unawaited(_loadGroupMemberProfiles(realConvId));
+    }
 
     if (realConvId != widget.conversationId) {
       await _migrateLocalConversationToRoom(realConvId, const []);
@@ -945,6 +968,19 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String get _resolvedHeaderName {
+    if (_isGroupChat) {
+      final room = MatrixChatService.instance.getRoomById(
+        _activeConversationId,
+      );
+      for (final candidate in [room?.name, widget.title]) {
+        final groupName = _cleanDisplayName(candidate);
+        if (groupName.isNotEmpty && !groupName.startsWith('gr.@')) {
+          return groupName;
+        }
+      }
+      return 'Group';
+    }
+
     if (_receiverIsSavedContact) {
       final savedName = _cleanDisplayName(_receiverIdentity?.savedName);
       if (savedName.isNotEmpty) return savedName;
@@ -1067,10 +1103,7 @@ class _ChatScreenState extends State<ChatScreen> {
       status: MessageStatus.sending,
       replyToMessageId: reply?.id,
       replyToSenderId: _replySenderIdForOutgoingReply(reply),
-      replyPreview:
-          reply == null
-              ? null
-              : (reply.isVoiceNote ? 'Voice note' : reply.content),
+      replyPreview: reply == null ? null : _replyPreviewForMessage(reply),
     );
 
     setState(() => _messages.add(optimistic));
@@ -1220,6 +1253,8 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     setState(() => _messages.add(placeholder));
+    _optimisticIdByContent['${normalisedReceiverId}_${placeholder.content}_$filePath'] =
+        placeholder.id;
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
 
     try {
@@ -1292,6 +1327,8 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     setState(() => _messages.add(placeholder));
+    _optimisticIdByContent['${normalisedReceiverId}_${placeholder.content}_$filePath'] =
+        placeholder.id;
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
 
     try {
@@ -1310,6 +1347,179 @@ class _ChatScreenState extends State<ChatScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to send video message: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _pickCameraAttachment() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 92,
+    );
+    if (!mounted || picked == null) return;
+    await _sendPickedAttachment(picked.path, 'image');
+  }
+
+  Future<void> _pickGalleryAttachment() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF111318),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder:
+          (context) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                _messageActionTile(
+                  icon: Icons.image_outlined,
+                  label: 'Photo',
+                  onTap: () => Navigator.pop(context, 'image'),
+                ),
+                _messageActionTile(
+                  icon: Icons.videocam_outlined,
+                  label: 'Video',
+                  onTap: () => Navigator.pop(context, 'video'),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+    );
+    if (!mounted || choice == null) return;
+
+    final picker = ImagePicker();
+    final picked =
+        choice == 'video'
+            ? await picker.pickVideo(source: ImageSource.gallery)
+            : await picker.pickImage(
+              source: ImageSource.gallery,
+              imageQuality: 92,
+            );
+    if (!mounted || picked == null) return;
+    await _sendPickedAttachment(picked.path, choice);
+  }
+
+  Future<void> _pickFileAttachment() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+        withData: false,
+      );
+      if (!mounted || result == null || result.files.isEmpty) return;
+
+      final path = result.files.single.path?.trim() ?? '';
+      if (path.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not access the selected file'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+      await _sendPickedAttachment(path, 'file');
+    } catch (error) {
+      apkLog('ChatScreen._pickFileAttachment', 'ERROR: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not select file: $error'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Future<void> _sendPickedAttachment(String filePath, String type) async {
+    if (_isSelfConversation) {
+      _logSelfConversationBlocked('send attachment');
+      _showSelfConversationError();
+      return;
+    }
+    if (!await File(filePath).exists()) return;
+
+    final normalisedReceiverId = _normaliseId(widget.receiverId);
+    final realConvId = await _resolveMatrixConversationIdForSend();
+    if (realConvId == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not send attachment: room unavailable'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    try {
+      await _chat.validateAttachmentUpload(
+        filePath: filePath,
+        attachmentType: type,
+      );
+      await _chat.removeFailedAttachmentAttempts(
+        conversationId: realConvId,
+        filePath: filePath,
+      );
+    } catch (e) {
+      await _chat.removeFailedAttachmentAttempts(
+        conversationId: realConvId,
+        filePath: filePath,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Cannot send attachment: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    final placeholderId = 'attach_${DateTime.now().millisecondsSinceEpoch}';
+    final placeholder = ChatMessage(
+      id: placeholderId,
+      conversationId: realConvId,
+      senderId: widget.currentUserId,
+      receiverId: normalisedReceiverId,
+      content: _attachmentLabelForType(type),
+      timestamp: DateTime.now(),
+      status: MessageStatus.sending,
+      attachmentUrl: filePath,
+      attachmentType: type,
+    );
+
+    setState(() => _messages.add(placeholder));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+
+    try {
+      final sent = await _chat.sendAttachmentMessage(
+        receiverID: normalisedReceiverId,
+        filePath: filePath,
+        attachmentType: type,
+        conversationId: realConvId,
+      );
+      await _saveCanonicalSentMessage(sent);
+      if (mounted) {
+        setState(() => _replaceOptimisticMessage(placeholderId, sent));
+      }
+    } catch (e) {
+      apkLog('ChatScreen._sendAttachment', 'ERROR: $e');
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((message) => message.id == placeholderId);
+          _optimisticIdByContent.removeWhere((_, id) => id == placeholderId);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send attachment: $e'),
             backgroundColor: Colors.redAccent,
           ),
         );
@@ -1435,6 +1645,9 @@ class _ChatScreenState extends State<ChatScreen> {
       if (optimistic.status != MessageStatus.sending) continue;
       if (!_isMine(optimistic)) continue;
       final sameContent = optimistic.content == msg.content;
+      final sameAttachment =
+          optimistic.attachmentType?.isNotEmpty == true &&
+          optimistic.attachmentType == msg.attachmentType;
       final sameConversation =
           optimistic.conversationId == msg.conversationId ||
           optimistic.conversationId == widget.conversationId ||
@@ -1449,8 +1662,12 @@ class _ChatScreenState extends State<ChatScreen> {
       final closeInTime =
           msg.timestamp.difference(optimistic.timestamp).inSeconds.abs() < 60;
       final ownMatrixEcho =
-          _isMine(msg) && sameContent && sameConversation && closeInTime;
-      if ((sameContent && sameReceiver && closeInTime) || ownMatrixEcho) {
+          _isMine(msg) &&
+          (sameContent || sameAttachment) &&
+          sameConversation &&
+          closeInTime;
+      if (((sameContent || sameAttachment) && sameReceiver && closeInTime) ||
+          ownMatrixEcho) {
         apkLog(
           'ChatScreen.reconcile',
           'replace optimistic id=${optimistic.id} with Matrix id=${msg.id}',
@@ -1505,7 +1722,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (candidate.id == sent.id) return false;
     if (!_isMine(candidate) || !_isMine(sent)) return false;
     if (!_isLocalOutgoingEchoId(candidate.id)) return false;
-    if (candidate.content != sent.content) return false;
+    final sameContent = candidate.content == sent.content;
+    final sameAttachment =
+        candidate.attachmentType?.isNotEmpty == true &&
+        candidate.attachmentType == sent.attachmentType;
+    if (!sameContent && !sameAttachment) return false;
     final sameConversation =
         candidate.conversationId == sent.conversationId ||
         candidate.conversationId == widget.conversationId ||
@@ -1517,11 +1738,18 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool _isLocalOutgoingEchoId(String id) {
-    return id.startsWith('opt_') || id.startsWith('Wrytte-');
+    return id.startsWith('opt_') ||
+        id.startsWith('attach_') ||
+        id.startsWith('voice_') ||
+        id.startsWith('video_') ||
+        id.startsWith('Wrytte-');
   }
 
   Future<void> _showMessageActions(ChatMessage message) async {
     final isMine = _isMine(message);
+    final attachmentType = message.attachmentType?.trim();
+    final hasAttachment = attachmentType != null && attachmentType.isNotEmpty;
+    final link = _firstLinkIn(message.content);
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF111318),
@@ -1551,17 +1779,47 @@ class _ChatScreenState extends State<ChatScreen> {
                   _promptForward(message);
                 },
               ),
-              _messageActionTile(
-                icon: Icons.copy_outlined,
-                label: 'Copy',
-                onTap: () {
-                  Navigator.pop(context);
-                  Clipboard.setData(ClipboardData(text: message.content));
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(const SnackBar(content: Text('Copied')));
-                },
-              ),
+              if (!hasAttachment && link != null) ...[
+                _messageActionTile(
+                  icon: Icons.copy_outlined,
+                  label: 'Copy link',
+                  onTap: () {
+                    Navigator.pop(context);
+                    Clipboard.setData(ClipboardData(text: link));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Link copied')),
+                    );
+                  },
+                ),
+                _messageActionTile(
+                  icon: Icons.open_in_new,
+                  label: 'Open link',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _openLink(link);
+                  },
+                ),
+              ] else if (!hasAttachment)
+                _messageActionTile(
+                  icon: Icons.copy_outlined,
+                  label: 'Copy',
+                  onTap: () {
+                    Navigator.pop(context);
+                    Clipboard.setData(ClipboardData(text: message.content));
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text('Copied')));
+                  },
+                ),
+              if (hasAttachment)
+                _messageActionTile(
+                  icon: Icons.save_alt_outlined,
+                  label: _saveAttachmentLabel(attachmentType),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _saveAttachmentToDevice(message);
+                  },
+                ),
               if (_canEditMessage(message))
                 _messageActionTile(
                   icon: Icons.edit_outlined,
@@ -1639,13 +1897,75 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _canEditMessage(ChatMessage message) {
     if (!_isMine(message)) return false;
     if (message.isDeleted) return false;
-    if (message.hasAttachment || message.isVoiceNote) return false;
+    if (message.attachmentType?.trim().isNotEmpty == true ||
+        message.hasAttachment ||
+        message.isVoiceNote) {
+      return false;
+    }
     if (message.status == MessageStatus.sending ||
         message.status == MessageStatus.failed) {
       return false;
     }
     if (message.id.startsWith('opt_')) return false;
     return message.content.trim().isNotEmpty;
+  }
+
+  String _saveAttachmentLabel(String? type) {
+    switch (type) {
+      case 'image':
+        return 'Save image';
+      case 'video':
+        return 'Save video';
+      case 'voice':
+        return 'Save voice';
+      case 'file':
+        return 'Save file';
+      default:
+        return 'Save attachment';
+    }
+  }
+
+  Future<void> _saveAttachmentToDevice(ChatMessage message) async {
+    final path = message.attachmentUrl?.trim() ?? '';
+    if (path.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Attachment file was not found')),
+      );
+      return;
+    }
+    try {
+      await AttachmentLocalStore.instance.ensureComplete(
+        source: path,
+        fileName:
+            message.content.trim().isEmpty ? 'attachment' : message.content,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not save attachment: $error'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${_saveAttachmentLabel(message.attachmentType)} ready'),
+      ),
+    );
+  }
+
+  Future<void> _openLink(String link) async {
+    final normalised =
+        link.startsWith('http://') || link.startsWith('https://')
+            ? link
+            : 'https://$link';
+    final uri = Uri.tryParse(normalised);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   void _promptEditMessage(ChatMessage message) {
@@ -1690,12 +2010,7 @@ class _ChatScreenState extends State<ChatScreen> {
         builder:
             (_) => _ForwardPickerPage(
               targets: targets,
-              previewText:
-                  message.isVoiceNote
-                      ? 'Voice note'
-                      : message.content.trim().isEmpty
-                      ? 'Message'
-                      : message.content,
+              previewText: _replyPreviewForMessage(message) ?? 'Message',
               previewAvatarUrl: widget.avatarUrl,
             ),
       ),
@@ -1737,6 +2052,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final ownerUserId =
         (await AuthService.instance.getCurrentUserId())?.trim() ??
         widget.currentUserId.trim();
+    final identities =
+        ownerUserId.isEmpty
+            ? <String, ContactIdentity>{}
+            : await ContactIdentityCache.instance.loadAll(
+              ownerUserId: ownerUserId,
+            );
     final byKey = <String, _ForwardTarget>{};
     var order = 0;
 
@@ -1766,8 +2087,19 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       if (!existing.isSavedContact && target.isSavedContact) {
         byKey[key] = target.copyWith(
-          conversationId: existing.conversationId,
-          receiverId: existing.receiverId,
+          conversationId: existing.conversationId ?? target.conversationId,
+          receiverId:
+              existing.conversationId != null
+                  ? existing.receiverId
+                  : target.receiverId,
+          subtitle:
+              existing.subtitle?.trim().isNotEmpty == true
+                  ? existing.subtitle
+                  : target.subtitle,
+          avatarUrl:
+              target.avatarUrl?.trim().isNotEmpty == true
+                  ? target.avatarUrl
+                  : existing.avatarUrl,
           sortOrder: existing.sortOrder,
         );
       }
@@ -1805,7 +2137,9 @@ class _ChatScreenState extends State<ChatScreen> {
     for (final conversation in _chat.cachedConversationsSnapshot) {
       final receiverId = conversation.otherUserId.trim();
       if (receiverId.isEmpty || receiverId.startsWith('!')) continue;
+      final identity = identities[_matrixLocalpart(receiverId).toLowerCase()];
       var phone = _firstPhoneFrom([
+        identity?.phone ?? '',
         conversation.otherUserName,
         conversation.otherUserId,
         conversation.lastMessageSenderId,
@@ -1814,7 +2148,11 @@ class _ChatScreenState extends State<ChatScreen> {
       if (phone.isEmpty) {
         phone = _phoneFromMatrixLocalpart(receiverId);
       }
-      final name = _cleanDisplayName(conversation.otherUserName);
+      final name = _cleanDisplayName(
+        identity?.savedName ??
+            identity?.profileName ??
+            conversation.otherUserName,
+      );
       addTarget(
         _ForwardTarget(
           conversationId: conversation.id,
@@ -1826,7 +2164,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ? phone
                   : _matrixLocalpart(receiverId),
           subtitle: _replyPreviewDisplayText(conversation.lastMessage) ?? '',
-          avatarUrl: conversation.otherUserAvatar,
+          avatarUrl: identity?.avatarUrl ?? conversation.otherUserAvatar,
           phone: phone,
           isSavedContact: false,
         ),
@@ -1914,6 +2252,9 @@ class _ChatScreenState extends State<ChatScreen> {
                             inputPillHeight: _kInputPillH,
                             onVoiceMessage: _sendVoiceNote,
                             onVideoMessage: _recordAndSendVideoMessage,
+                            onCameraAttachment: _pickCameraAttachment,
+                            onGalleryAttachment: _pickGalleryAttachment,
+                            onFileAttachment: _pickFileAttachment,
                           ),
                         ],
                       ),
@@ -2172,6 +2513,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       final showTail =
                           previousChronological == null ||
                           _isMine(previousChronological) != isMine;
+                      final effectiveAttachmentType = _effectiveAttachmentType(
+                        msg,
+                      );
                       return Column(
                         children: [
                           if (showDate)
@@ -2182,25 +2526,11 @@ class _ChatScreenState extends State<ChatScreen> {
                             key: ValueKey(msg.id),
                             behavior: HitTestBehavior.opaque,
                             onLongPress: () => _showMessageActions(msg),
-                            child: MessageBubble(
-                              content: msg.content,
-                              time: _formatTime(msg.timestamp),
+                            child: _buildGroupAwareMessageBubble(
+                              msg: msg,
                               isMine: isMine,
                               showTail: showTail,
-                              status: isMine ? msg.status : null,
-                              isVoiceNote: msg.isVoiceNote,
-                              isVideoNote: msg.attachmentType == 'video',
-                              voiceDuration: msg.voiceDuration,
-                              audioUrl: msg.attachmentUrl,
-                              isForwarded: msg.isForwarded,
-                              isStarred: msg.isStarred,
-                              isDeleted: msg.isDeleted,
-                              isEdited: msg.isEdited,
-                              replyPreview: _replyPreviewDisplayText(
-                                msg.replyPreview,
-                              ),
-                              replySender: _replySenderDisplayName(msg),
-                              animateOnMount: true,
+                              effectiveAttachmentType: effectiveAttachmentType,
                             ),
                           ),
                         ],
@@ -2230,9 +2560,78 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Widget _buildGroupAwareMessageBubble({
+    required ChatMessage msg,
+    required bool isMine,
+    required bool showTail,
+    required String? effectiveAttachmentType,
+  }) {
+    final bubble = MessageBubble(
+      content: msg.content,
+      time: _formatTime(msg.timestamp),
+      isMine: isMine,
+      showTail: showTail,
+      status: isMine ? msg.status : null,
+      isVoiceNote: msg.isVoiceNote,
+      isVideoNote: effectiveAttachmentType == 'video',
+      voiceDuration: msg.voiceDuration,
+      audioUrl: msg.attachmentUrl,
+      attachmentType: effectiveAttachmentType,
+      attachmentUrl: msg.attachmentUrl,
+      isForwarded: msg.isForwarded,
+      isStarred: msg.isStarred,
+      isDeleted: msg.isDeleted,
+      isEdited: msg.isEdited,
+      replyPreview: _replyPreviewDisplayText(msg.replyPreview),
+      replySender: _replySenderDisplayName(msg),
+      animateOnMount: true,
+    );
+
+    if (!_isGroupChat || isMine) return bubble;
+
+    final senderName = _groupSenderName(msg.senderId);
+    return Padding(
+      padding: const EdgeInsets.only(left: 10, right: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          UserAvatar(
+            size: 36,
+            imageUrl: _groupMemberAvatars[msg.senderId],
+            name: senderName,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(left: 10, bottom: 1),
+                  child: Text(
+                    senderName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFFFFC861),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                bubble,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ─── APP BAR ───────────────────────────────────────────────────────────────
 
   Widget _buildAppBar(double statusBarH) {
+    final isGroupChat = _isGroupChat;
     final displayName = _resolvedHeaderName;
     final fallbackPhone =
         (_receiverIdentity?.phone?.trim().isNotEmpty == true)
@@ -2285,6 +2684,22 @@ class _ChatScreenState extends State<ChatScreen> {
                     Expanded(
                       child: GestureDetector(
                         onTap: () async {
+                          if (isGroupChat) {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder:
+                                    (_) => GroupProfileScreen(
+                                      roomId:
+                                          _resolvedConversationId ??
+                                          widget.conversationId,
+                                      groupName: displayName,
+                                      avatarUrl: avatarUrl,
+                                    ),
+                              ),
+                            );
+                            return;
+                          }
                           final profileUid = _profilePeerId();
                           if (profileUid == null) return;
                           await Navigator.push(
@@ -2299,6 +2714,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                             ? fallbackPhone
                                             : null,
                                     fallbackAvatarUrl: avatarUrl,
+                                    conversationId:
+                                        _resolvedConversationId ??
+                                        widget.conversationId,
                                   ),
                             ),
                           );
@@ -2359,7 +2777,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                         child: Align(
                                           alignment: Alignment.centerLeft,
                                           child: Text(
-                                            'Online',
+                                            isGroupChat
+                                                ? _groupSubtitle()
+                                                : 'Online',
                                             style: TextStyle(
                                               color: Colors.white.withOpacity(
                                                 0.5,
@@ -2383,27 +2803,40 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    _glassPill(
-                      width: _kHeaderPillH,
-                      height: _kHeaderPillH,
-                      child: const Icon(
-                        Icons.videocam_outlined,
-                        color: Colors.white,
-                        size: 20,
+                    if (isGroupChat)
+                      _glassPill(
+                        width: _kHeaderPillH,
+                        height: _kHeaderPillH,
+                        child: const Icon(
+                          Icons.more_vert,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        onTap: () {},
+                      )
+                    else ...[
+                      _glassPill(
+                        width: _kHeaderPillH,
+                        height: _kHeaderPillH,
+                        child: const Icon(
+                          Icons.videocam_outlined,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        onTap: () => _startCall(CallType.video),
                       ),
-                      onTap: () => _startCall(CallType.video),
-                    ),
-                    const SizedBox(width: 8),
-                    _glassPill(
-                      width: _kHeaderPillH,
-                      height: _kHeaderPillH,
-                      child: const Icon(
-                        Icons.call_outlined,
-                        color: Colors.white,
-                        size: 20,
+                      const SizedBox(width: 8),
+                      _glassPill(
+                        width: _kHeaderPillH,
+                        height: _kHeaderPillH,
+                        child: const Icon(
+                          Icons.call_outlined,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        onTap: () => _startCall(CallType.voice),
                       ),
-                      onTap: () => _startCall(CallType.voice),
-                    ),
+                    ],
                   ],
                 ),
               ),
@@ -2415,6 +2848,147 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   // ─── HELPERS ───────────────────────────────────────────────────────────────
+
+  int _groupMemberCount() {
+    final room = MatrixChatService.instance.getRoomById(_activeConversationId);
+    final roomCount =
+        _groupMembers.isNotEmpty
+            ? _groupMembers.length
+            : room?.getParticipants(_groupMemberships).length ?? 0;
+    if (roomCount > 0) return roomCount;
+
+    final ids = <String>{};
+    for (final message in _messages) {
+      final sender = message.senderId.trim();
+      if (sender.isNotEmpty) ids.add(sender);
+      final receiver = message.receiverId.trim();
+      if (receiver.isNotEmpty && !receiver.startsWith('!')) ids.add(receiver);
+    }
+    final current = widget.currentUserId.trim();
+    if (current.isNotEmpty) ids.add(current);
+    return ids.length.clamp(1, 999999).toInt();
+  }
+
+  String _groupSubtitle() {
+    final count = _groupMemberCount();
+    return count == 1 ? '1 member' : '$count members';
+  }
+
+  bool get _isGroupChat =>
+      widget.receiverId.trim().startsWith('!') ||
+      _cachedConversationIsGroup(widget.conversationId) ||
+      (_resolvedConversationId != null &&
+          _cachedConversationIsGroup(_resolvedConversationId!));
+
+  bool _cachedConversationIsGroup(String conversationId) {
+    final conversation = _chat.cachedConversationsSnapshot
+        .where((item) => item.id == conversationId)
+        .cast<ChatConversation?>()
+        .firstWhere((item) => item != null, orElse: () => null);
+    if (conversation == null) return false;
+    return conversation.lastMessageType == 'group' ||
+        (conversation.id.startsWith('!') &&
+            conversation.otherUserId == conversation.id &&
+            conversation.participants.length > 2);
+  }
+
+  String get _activeConversationId =>
+      (_resolvedConversationId?.trim().isNotEmpty == true)
+          ? _resolvedConversationId!.trim()
+          : widget.conversationId.trim();
+
+  static const List<mx.Membership> _groupMemberships = [
+    mx.Membership.join,
+    mx.Membership.invite,
+  ];
+
+  Future<void> _loadGroupMemberProfiles(String roomId) async {
+    final room = MatrixChatService.instance.getRoomById(roomId);
+    final members = room?.getParticipants(_groupMemberships) ?? const [];
+    _setGroupMembers(members);
+    for (final member in members) {
+      final fallback = _cleanDisplayName(member.calcDisplayname());
+      if (fallback.isNotEmpty && !_groupMemberNames.containsKey(member.id)) {
+        _groupMemberNames[member.id] = fallback;
+      }
+      unawaited(_loadGroupMemberProfileName(member.id));
+    }
+    if (room != null) {
+      unawaited(_requestFullGroupMemberList(room));
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _requestFullGroupMemberList(mx.Room room) async {
+    try {
+      final members = await room.requestParticipants(
+        _groupMemberships,
+        true,
+        true,
+      );
+      if (!mounted) return;
+      _setGroupMembers(members);
+      for (final member in members) {
+        final fallback = _cleanDisplayName(member.calcDisplayname());
+        if (fallback.isNotEmpty && !_groupMemberNames.containsKey(member.id)) {
+          _groupMemberNames[member.id] = fallback;
+        }
+        unawaited(_loadGroupMemberProfileName(member.id));
+      }
+      setState(() {});
+    } catch (_) {
+      // Keep the local Matrix member snapshot if the full request is unavailable.
+    }
+  }
+
+  void _setGroupMembers(List<mx.User> members) {
+    final seen = <String>{};
+    final unique = <mx.User>[];
+    for (final member in members) {
+      if (seen.add(member.id)) unique.add(member);
+    }
+    _groupMembers = unique;
+  }
+
+  String _groupSenderName(String matrixId) {
+    final resolved = _cleanDisplayName(_groupMemberNames[matrixId]);
+    if (resolved.isNotEmpty) return resolved;
+    for (final member in _groupMembers) {
+      if (member.id != matrixId) continue;
+      final fallback = _cleanDisplayName(member.calcDisplayname());
+      if (fallback.isNotEmpty) return fallback;
+    }
+    final localpart = _matrixLocalpart(matrixId);
+    return localpart.isNotEmpty ? localpart : 'Member';
+  }
+
+  Future<void> _loadGroupMemberProfileName(String matrixId) async {
+    try {
+      final localpart = _matrixLocalpart(matrixId);
+      if (localpart.isEmpty) return;
+      final current = await AuthService.instance.getCurrentUserId();
+      final isMe = _matrixLocalpart(current ?? '') == localpart;
+      final profile =
+          isMe
+              ? await UserProfileService.instance.getCurrentUserProfile(
+                forceRefresh: false,
+              )
+              : await UserProfileService.instance.getProfileByUid(
+                localpart,
+                forceRefresh: false,
+              );
+      final name = _cleanDisplayName(profile?.displayName);
+      final avatar = profile?.profileImage.trim() ?? '';
+      if (!mounted) return;
+      if (name.isEmpty && avatar.isEmpty) return;
+      setState(() {
+        if (name.isNotEmpty) _groupMemberNames[matrixId] = name;
+        if (avatar.isNotEmpty) _groupMemberAvatars[matrixId] = avatar;
+      });
+    } catch (_) {
+      // Matrix display names are kept as fallback.
+    }
+  }
 
   bool _isMine(ChatMessage message) {
     final current = widget.currentUserId.trim();
@@ -2499,6 +3073,41 @@ class _ChatScreenState extends State<ChatScreen> {
     text =
         text.replaceFirst(RegExp(r'^@[A-Za-z0-9._=-]+:[^\s]+\s*'), '').trim();
     return text.isEmpty ? null : text;
+  }
+
+  String? _replyPreviewForMessage(ChatMessage message) {
+    if (message.isDeleted) return 'This message was deleted';
+    final attachmentType = message.attachmentType?.trim();
+    if (attachmentType != null && attachmentType.isNotEmpty) {
+      return _attachmentLabelForType(attachmentType);
+    }
+    final text = message.content.trim();
+    if (text.isEmpty) return null;
+    return text;
+  }
+
+  String _attachmentLabelForType(String type) {
+    switch (type) {
+      case 'image':
+        return 'Photo';
+      case 'video':
+        return 'Video';
+      case 'voice':
+        return 'Voice';
+      case 'file':
+        return 'File';
+      default:
+        return 'Attachment';
+    }
+  }
+
+  String? _firstLinkIn(String value) {
+    final match = RegExp(
+      r'((?:https?:\/\/|www\.)[^\s]+|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:\/[^\s]*)?)',
+    ).firstMatch(value);
+    final raw = match?.group(0);
+    if (raw == null || raw.isEmpty) return null;
+    return raw.replaceFirst(RegExp(r'[),.;:!?]+$'), '');
   }
 
   bool _isValidMatrixUserId(String value) {
@@ -2596,7 +3205,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  message.isVoiceNote ? 'Voice note' : message.content,
+                  _replyPreviewForMessage(message) ?? 'Message',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -2675,6 +3284,33 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+
+  String? _effectiveAttachmentType(ChatMessage message) {
+    final explicit = message.attachmentType?.trim().toLowerCase();
+    if (explicit?.isNotEmpty == true) return explicit;
+
+    final value =
+        [
+          message.attachmentUrl,
+          message.content,
+        ].whereType<String>().join(' ').toLowerCase();
+    if (value.isEmpty) return null;
+
+    if (RegExp(
+      r'\.(png|jpe?g|gif|webp|bmp|heic|heif)(?:$|[?#\s])',
+    ).hasMatch(value)) {
+      return 'image';
+    }
+    if (RegExp(r'\.(mp4|mov|m4v|webm|mkv|3gp)(?:$|[?#\s])').hasMatch(value)) {
+      return 'video';
+    }
+    if (RegExp(
+      r'\.(pdf|docx?|pptx?|xlsx?|txt|csv|zip|rar|7z|apk)(?:$|[?#\s])',
+    ).hasMatch(value)) {
+      return 'file';
+    }
+    return null;
   }
 
   Widget _buildDateDivider(String label) {

@@ -293,7 +293,10 @@ class ChatLocalDb {
         id != ?
         AND content = ?
         AND timestamp BETWEEN ? AND ?
-        AND (id LIKE ? OR id LIKE ? OR status = ?)
+        AND (
+          id LIKE ? OR id LIKE ? OR id LIKE ? OR id LIKE ? OR id LIKE ?
+          OR status = ? OR status = ?
+        )
       ''',
       whereArgs: [
         canonical.id,
@@ -302,7 +305,11 @@ class ChatLocalDb {
         timestamp + 60000,
         'opt_%',
         'Wrytte-%',
+        'attach_%',
+        'voice_%',
+        'video_%',
         MessageStatus.sending.name,
+        MessageStatus.failed.name,
       ],
     );
 
@@ -645,11 +652,6 @@ class ChatLocalDb {
     final hydrated = <ChatConversation>[];
     var changed = false;
     for (final conversation in conversations) {
-      if (conversation.lastMessage.trim().isNotEmpty) {
-        hydrated.add(conversation);
-        continue;
-      }
-
       final latest = await database.query(
         'messages',
         where: 'conversationId = ? AND isDeletedForMe = ?',
@@ -658,11 +660,36 @@ class ChatLocalDb {
         limit: 1,
       );
       if (latest.isEmpty) {
-        hydrated.add(conversation);
+        if (conversation.lastMessage.trim().isEmpty &&
+            conversation.lastMessageSenderId.trim().isEmpty) {
+          hydrated.add(conversation);
+          continue;
+        }
+        final repaired = conversation.copyWith(
+          lastMessage: '',
+          lastMessageSenderId: '',
+        );
+        hydrated.add(repaired);
+        changed = true;
+        await database.update(
+          'conversations',
+          {'lastMessage': '', 'lastMessageSenderId': ''},
+          where: 'id = ?',
+          whereArgs: [conversation.id],
+        );
         continue;
       }
 
       final message = _rowToMessage(latest.first);
+      if (conversation.lastMessage == message.content &&
+          conversation.lastMessageSenderId == message.senderId &&
+          conversation.lastMessageTime == message.timestamp &&
+          conversation.lastMessageType ==
+              (message.attachmentType ?? conversation.lastMessageType)) {
+        hydrated.add(conversation);
+        continue;
+      }
+
       final repaired = conversation.copyWith(
         lastMessage: message.content,
         lastMessageSenderId: message.senderId,
@@ -716,8 +743,11 @@ class ChatLocalDb {
       final existingRows = await database.query(
         'conversations',
         columns: [
+          'participants',
+          'otherUserId',
           'lastReadTime',
           'unreadCount',
+          'lastMessageType',
           'otherUserName',
           'otherUserAvatar',
         ],
@@ -728,6 +758,14 @@ class ChatLocalDb {
       final existing =
           existingRows.isNotEmpty ? existingRows.first : <String, Object?>{};
       final lastReadTime = existing['lastReadTime'] as int?;
+      final existingLastMessageType =
+          existing['lastMessageType'] as String? ?? '';
+      final existingParticipants =
+          ((existing['participants'] as String?) ?? '')
+              .split(',')
+              .where((id) => id.trim().isNotEmpty)
+              .toList();
+      final existingOtherUserId = existing['otherUserId'] as String? ?? '';
       final wasMarkedRead = (existing['unreadCount'] as int? ?? 0) == 0;
       final isAlreadyRead =
           lastReadTime != null
@@ -738,6 +776,26 @@ class ChatLocalDb {
         ownerId,
       ).copyWith(
         unreadCount: isAlreadyRead ? 0 : null,
+        participants:
+            existingParticipants.isNotEmpty ? existingParticipants : null,
+        otherUserId:
+            _isStoredGroupConversation(
+                  message.conversationId,
+                  existingOtherUserId,
+                  existingParticipants,
+                  existingLastMessageType,
+                )
+                ? message.conversationId
+                : null,
+        lastMessageType:
+            _isStoredGroupConversation(
+                  message.conversationId,
+                  existingOtherUserId,
+                  existingParticipants,
+                  existingLastMessageType,
+                )
+                ? 'group'
+                : message.attachmentType,
         otherUserName: existing['otherUserName'] as String?,
         otherUserAvatar: existing['otherUserAvatar'] as String?,
       );
@@ -758,6 +816,10 @@ class ChatLocalDb {
     ChatConversation conversation,
     String ownerId,
   ) async {
+    if (_isStableGroupConversation(conversation)) {
+      return conversation;
+    }
+
     final currentPeer = _conversationPeerKey(conversation.otherUserId);
     if (currentPeer.isNotEmpty &&
         currentPeer != _conversationPeerKey(ownerId) &&
@@ -804,6 +866,25 @@ class ChatLocalDb {
     }
 
     return conversation;
+  }
+
+  bool _isStableGroupConversation(ChatConversation conversation) {
+    return _isStoredGroupConversation(
+      conversation.id,
+      conversation.otherUserId,
+      conversation.participants,
+      conversation.lastMessageType,
+    );
+  }
+
+  bool _isStoredGroupConversation(
+    String id,
+    String otherUserId,
+    List<String> participants,
+    String lastMessageType,
+  ) {
+    if (lastMessageType == 'group') return true;
+    return id.startsWith('!') && otherUserId == id && participants.length > 2;
   }
 
   Future<String?> findDirectConversationId({

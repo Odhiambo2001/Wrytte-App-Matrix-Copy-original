@@ -8,6 +8,7 @@ import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/attachment_local_store.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
@@ -150,6 +151,11 @@ class ChatService {
         throw StateError('Matrix session did not match the current user.');
       }
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
+        if (_applyLiveRedactionEvent(event)) {
+          _refreshMessageStatusesForRoom(event.room);
+          return;
+        }
+
         if (ChatMessage.matrixEditTargetId(event)?.isNotEmpty == true) {
           _applyMatrixEditEvent(event);
           _refreshMessageStatusesForRoom(event.room);
@@ -567,7 +573,8 @@ class ChatService {
       final message = ChatMessage.fromMatrixEvent(event);
       if (message == null) continue;
       final local = localById[message.id];
-      final isHidden = hiddenIds.contains(message.id);
+      final isHidden =
+          hiddenIds.contains(message.id) || local?.isDeletedForMe == true;
       if (isHidden) {
         unawaited(ChatLocalDb.instance.deleteMessageForMe(message.id));
       }
@@ -682,10 +689,12 @@ class ChatService {
         await _waitForConnection();
         final client = MatrixClientService.instance.client;
         final room = _roomForMessage(message);
-        await MatrixChatService.instance.ensurePeerInvited(
-          roomId: room.id,
-          matrixUserId: _toMatrixUserId(message.receiverId),
-        );
+        if (!message.receiverId.trim().startsWith('!')) {
+          await MatrixChatService.instance.ensurePeerInvited(
+            roomId: room.id,
+            matrixUserId: _toMatrixUserId(message.receiverId),
+          );
+        }
         apkLog(
           'Matrix.send',
           'PUT /_matrix/client/r0/rooms/${room.id}/send/m.room.message user_id="${client.userID}" room_id="${room.id}"',
@@ -811,6 +820,157 @@ class ChatService {
       );
       _messageController.add(local);
     });
+  }
+
+  Future<ChatMessage> sendAttachmentMessage({
+    required String receiverID,
+    required String filePath,
+    required String attachmentType,
+    String? conversationId,
+    String? caption,
+  }) async {
+    return _withMatrixTokenRetry('sendAttachmentMessage', () async {
+      await _waitForConnection();
+      final existingRoomId = conversationId?.trim() ?? '';
+      final room =
+          existingRoomId.isNotEmpty
+              ? _roomById(existingRoomId) ??
+                  (receiverID.trim().startsWith('!')
+                      ? null
+                      : await _directRoom(receiverID))
+              : receiverID.trim().startsWith('!')
+              ? _roomById(receiverID.trim())
+              : await _directRoom(receiverID);
+      if (room == null) {
+        throw StateError(
+          'Unknown Matrix room: ${conversationId ?? receiverID}',
+        );
+      }
+      if (!receiverID.trim().startsWith('!')) {
+        await MatrixChatService.instance.ensurePeerInvited(
+          roomId: room.id,
+          matrixUserId: _toMatrixUserId(receiverID),
+        );
+      }
+      await FileUploadLimits.validatePath(
+        filePath,
+        maxBytes: FileUploadLimits.chatFileMaxBytes,
+        label:
+            attachmentType == 'image'
+                ? 'Photo'
+                : attachmentType == 'video'
+                ? 'Video'
+                : 'File',
+      );
+      final bytes = await File(filePath).readAsBytes();
+      final matrixFile =
+          attachmentType == 'file'
+              ? _WrytteDocumentFile(bytes: bytes, name: p.basename(filePath))
+              : mx.MatrixFile.fromMimeType(
+                bytes: bytes,
+                name: p.basename(filePath),
+              );
+      final eventId = await room.sendFileEvent(
+        matrixFile,
+        extraContent:
+            attachmentType == 'file'
+                ? const {'wrytte.sent_as_file': true}
+                : null,
+      );
+      final local = ChatMessage(
+        id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        conversationId: room.id,
+        senderId:
+            MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
+        receiverId: _toMatrixUserId(receiverID),
+        content:
+            caption?.trim().isNotEmpty == true
+                ? caption!.trim()
+                : attachmentType == 'file'
+                ? p.basename(filePath)
+                : _attachmentLabel(attachmentType),
+        timestamp: DateTime.now(),
+        status: MessageStatus.sent,
+        attachmentUrl: filePath,
+        attachmentType: attachmentType,
+        senderPhone: _currentUserPhone,
+      );
+      _cacheMessage(local);
+      unawaited(
+        _refreshPeerProfileFromBackendForMessage(
+          local,
+          reason: 'sendAttachmentMessage',
+        ),
+      );
+      return local;
+    });
+  }
+
+  Future<void> validateAttachmentUpload({
+    required String filePath,
+    required String attachmentType,
+  }) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw FileSystemException('File not found', filePath);
+    }
+    final configuredLimit = FileUploadLimits.chatFileMaxBytes;
+    int effectiveLimit = configuredLimit;
+    try {
+      final serverLimit =
+          (await MatrixClientService.instance.client.getConfig()).mUploadSize;
+      if (serverLimit != null && serverLimit > 0) {
+        effectiveLimit =
+            serverLimit < configuredLimit ? serverLimit : configuredLimit;
+      }
+    } catch (_) {
+      // The SDK repeats this check during upload if config is unavailable here.
+    }
+    final label =
+        attachmentType == 'image'
+            ? 'Photo'
+            : attachmentType == 'video'
+            ? 'Video'
+            : 'File';
+    await FileUploadLimits.validatePath(
+      filePath,
+      maxBytes: effectiveLimit,
+      label: label,
+    );
+  }
+
+  Future<void> removeFailedAttachmentAttempts({
+    required String conversationId,
+    required String filePath,
+  }) async {
+    final fileName = p.basename(filePath);
+    final failed = getConversationMessages(conversationId)
+        .where(
+          (message) =>
+              message.status == MessageStatus.failed &&
+              message.attachmentType?.trim().isNotEmpty == true &&
+              (message.attachmentUrl == filePath ||
+                  message.content == fileName),
+        )
+        .toList(growable: false);
+    for (final message in failed) {
+      await cancelLocalMessage(message);
+    }
+  }
+
+  String _attachmentLabel(String type) {
+    switch (type) {
+      case 'image':
+        return 'Photo';
+      case 'video':
+        return 'Video';
+      case 'voice':
+        return 'Voice message';
+      case 'file':
+        return 'File';
+      default:
+        return 'Attachment';
+    }
   }
 
   Future<List<ChatMessage>> fetchMessageHistory({
@@ -1045,6 +1205,7 @@ class ChatService {
     final updated = message.copyWith(isDeletedForMe: true);
     _replaceCachedMessage(updated);
     await ChatLocalDb.instance.deleteMessageForMe(message.id);
+    await _repairConversationPreviewFromVisibleMessages(message.conversationId);
     _emitRoomMessages(message.conversationId);
     _emitConversations();
     unawaited(_hideMessageForMeOnMatrix(message));
@@ -1136,6 +1297,15 @@ class ChatService {
     if (room == null) {
       throw StateError('Existing forward room is not loaded: $existingRoomId');
     }
+    final inferredAttachmentType = _forwardedAttachmentType(original);
+    if (inferredAttachmentType != null) {
+      return _forwardAttachmentMessage(
+        original: original,
+        attachmentType: inferredAttachmentType,
+        receiverId: receiverId,
+        targetRoom: room,
+      );
+    }
     final message = ChatMessage(
       id: 'fwd_${DateTime.now().millisecondsSinceEpoch}',
       conversationId: room.id,
@@ -1151,6 +1321,151 @@ class ChatService {
       isForwarded: true,
     );
     return sendMessage(message);
+  }
+
+  Future<ChatMessage> _forwardAttachmentMessage({
+    required ChatMessage original,
+    required String attachmentType,
+    required String receiverId,
+    required mx.Room targetRoom,
+  }) async {
+    return _withMatrixTokenRetry('forwardAttachmentMessage', () async {
+      await _waitForConnection();
+      await MatrixChatService.instance.ensurePeerInvited(
+        roomId: targetRoom.id,
+        matrixUserId: _toMatrixUserId(receiverId),
+      );
+
+      final sourceRoom = _roomById(original.conversationId);
+      final sourceEvent = await sourceRoom?.getEventById(original.id);
+      String? forwardedAttachmentUrl = original.attachmentUrl;
+      String forwardedContent = original.content;
+      String? eventId;
+
+      if (sourceEvent != null && sourceEvent.hasAttachment) {
+        final sourceMessage = ChatMessage.fromMatrixEvent(sourceEvent);
+        forwardedAttachmentUrl =
+            sourceMessage?.attachmentUrl ?? forwardedAttachmentUrl;
+        if (forwardedContent.trim().isEmpty && sourceMessage != null) {
+          forwardedContent = sourceMessage.content;
+        }
+        final content =
+            Map<String, dynamic>.from(sourceEvent.content)
+              ..remove('m.relates_to')
+              ..remove('m.new_content')
+              ..['wrytte.forwarded'] = true;
+        eventId = await targetRoom.sendEvent(content);
+      } else {
+        final path = original.attachmentUrl?.trim() ?? '';
+        if (path.isEmpty) {
+          throw StateError('The original attachment is not available');
+        }
+        final bytes =
+            _isHttpUrl(path)
+                ? await _downloadForwardAttachmentBytes(path)
+                : await File(path).readAsBytes();
+        final name = _forwardAttachmentFileName(original, path);
+        forwardedContent =
+            forwardedContent.trim().isEmpty ? name : forwardedContent;
+        final matrixFile = mx.MatrixFile.fromMimeType(bytes: bytes, name: name);
+        eventId = await targetRoom.sendFileEvent(
+          matrixFile,
+          extraContent:
+              attachmentType == 'file'
+                  ? const {
+                    'wrytte.forwarded': true,
+                    'wrytte.sent_as_file': true,
+                  }
+                  : const {'wrytte.forwarded': true},
+        );
+      }
+
+      final sent = ChatMessage(
+        id: eventId ?? 'fwd_${DateTime.now().millisecondsSinceEpoch}',
+        conversationId: targetRoom.id,
+        senderId:
+            MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
+        receiverId: _toMatrixUserId(receiverId),
+        content: forwardedContent,
+        timestamp: DateTime.now(),
+        status: MessageStatus.sent,
+        attachmentUrl: forwardedAttachmentUrl,
+        attachmentType: attachmentType,
+        voiceDuration: original.voiceDuration,
+        senderPhone: _currentUserPhone,
+        isForwarded: true,
+      );
+      _cacheMessage(sent);
+      unawaited(
+        _refreshPeerProfileFromBackendForMessage(
+          sent,
+          reason: 'forwardAttachmentMessage',
+        ),
+      );
+      _refreshMessageStatusesForRoom(targetRoom);
+      return sent;
+    });
+  }
+
+  String? _forwardedAttachmentType(ChatMessage message) {
+    final explicit = message.attachmentType?.trim().toLowerCase();
+    if (explicit?.isNotEmpty == true) return explicit;
+
+    final value =
+        [
+          message.attachmentUrl,
+          message.content,
+        ].whereType<String>().join(' ').toLowerCase();
+    if (value.isEmpty) return null;
+
+    if (RegExp(
+      r'\.(png|jpe?g|gif|webp|bmp|heic|heif)(?:$|[?#\s])',
+    ).hasMatch(value)) {
+      return 'image';
+    }
+    if (RegExp(r'\.(mp4|mov|m4v|webm|mkv|3gp)(?:$|[?#\s])').hasMatch(value)) {
+      return 'video';
+    }
+    if (RegExp(
+      r'\.(pdf|docx?|pptx?|xlsx?|txt|csv|zip|rar|7z|apk)(?:$|[?#\s])',
+    ).hasMatch(value)) {
+      return 'file';
+    }
+    return null;
+  }
+
+  bool _isHttpUrl(String value) =>
+      value.startsWith('http://') || value.startsWith('https://');
+
+  Future<Uint8List> _downloadForwardAttachmentBytes(String url) async {
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(Uri.parse(url));
+      final response = await request.close();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw StateError(
+          'Could not download original attachment: HTTP ${response.statusCode}',
+        );
+      }
+      final chunks = <int>[];
+      await for (final chunk in response) {
+        chunks.addAll(chunk);
+      }
+      return Uint8List.fromList(chunks);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  String _forwardAttachmentFileName(ChatMessage message, String source) {
+    final contentName = message.content.trim();
+    if (contentName.isNotEmpty && !contentName.contains('\n')) {
+      return contentName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    }
+    final uri = Uri.tryParse(source);
+    final uriName = uri == null ? '' : p.basename(uri.path);
+    if (uriName.isNotEmpty) return uriName;
+    return p.basename(source);
   }
 
   Future<String?> getMatrixConversationId(String otherUserId) async {
@@ -1275,6 +1590,52 @@ class ChatService {
       .instance
       .getOrCreateDirectRoom(_toMatrixUserId(otherUserId));
 
+  Future<bool> isGroupAliasAvailable(String aliasLocalpart) {
+    return MatrixChatService.instance.isRoomAliasAvailable(aliasLocalpart);
+  }
+
+  Future<ChatConversation> createGroupConversation({
+    required String name,
+    required bool isPublic,
+    String? aliasLocalpart,
+    List<String> memberIds = const [],
+  }) async {
+    await connect();
+    final invites =
+        memberIds
+            .map((id) => _toMatrixUserId(id))
+            .where((id) => id != MatrixClientService.instance.client.userID)
+            .toSet()
+            .toList();
+    final room = await MatrixChatService.instance.createGroupRoom(
+      name: name,
+      isPublic: isPublic,
+      aliasLocalpart: aliasLocalpart,
+      invite: invites,
+    );
+    final now = DateTime.now();
+    final conversation = ChatConversation(
+      id: room.id,
+      participants: [
+        if (MatrixClientService.instance.client.userID != null)
+          MatrixClientService.instance.client.userID!,
+        ...invites,
+      ],
+      otherUserId: room.id,
+      lastMessage: '',
+      lastMessageSenderId: MatrixClientService.instance.client.userID ?? '',
+      lastMessageTime: now,
+      unreadCount: 0,
+      lastMessageType: 'group',
+      otherUserName: name.trim(),
+      otherUserAvatar: room.avatar?.toString(),
+    );
+    _conversationsMap[room.id] = conversation;
+    await ChatLocalDb.instance.saveConversations([conversation]);
+    _emitConversations();
+    return conversation;
+  }
+
   mx.Room? _roomById(String roomId) {
     for (final room in MatrixClientService.instance.client.rooms) {
       if (room.id == roomId) return room;
@@ -1285,6 +1646,32 @@ class ChatService {
   ChatConversation _toConversation(mx.Room room) {
     final client = MatrixClientService.instance.client;
     final existing = _conversationsMap[room.id];
+    final isGroupRoom = _isGroupRoom(room, existing);
+    final cleanRoomName = _cleanHumanName(room.getLocalizedDisplayname());
+    if (isGroupRoom) {
+      final last = room.lastEvent;
+      final groupName = _groupDisplayName(room, existing);
+      return ChatConversation(
+        id: room.id,
+        participants: [
+          if (client.userID != null) client.userID!,
+          ...room
+              .getParticipants()
+              .map((user) => user.id)
+              .where((id) => id != client.userID),
+        ],
+        otherUserId: room.id,
+        lastMessage: last?.body ?? existing?.lastMessage ?? '',
+        lastMessageSenderId:
+            last?.senderId ?? existing?.lastMessageSenderId ?? '',
+        lastMessageTime:
+            last?.originServerTs ?? existing?.lastMessageTime ?? DateTime.now(),
+        unreadCount: _displayableUnreadCountForRoom(room, client.userID),
+        lastMessageType: existing?.lastMessageType ?? 'group',
+        otherUserName: groupName,
+        otherUserAvatar: existing?.otherUserAvatar ?? room.avatar?.toString(),
+      );
+    }
     final otherId =
         _roomPeerMatrixId(room, client.userID) ??
         _usableConversationPeer(existing, client.userID) ??
@@ -1301,7 +1688,6 @@ class ChatService {
     final cachedName =
         existing == null ? '' : _cleanHumanName(existing.otherUserName);
     final roomName = room.getLocalizedDisplayname();
-    final cleanRoomName = _cleanHumanName(roomName);
     final shouldUseRoomName =
         cleanRoomName.isNotEmpty && !_isOwnMatrixId(roomName, client.userID);
     return ChatConversation(
@@ -1322,6 +1708,33 @@ class ChatService {
               : existing?.otherUserName,
       otherUserAvatar: existing?.otherUserAvatar ?? room.avatar?.toString(),
     );
+  }
+
+  bool _isGroupRoom(mx.Room room, ChatConversation? existing) {
+    final directPeer = room.directChatMatrixID?.trim() ?? '';
+    if (directPeer.isNotEmpty) return false;
+    final members = room.getParticipants();
+    if (existing?.lastMessageType == 'group') return true;
+    if (existing?.id.startsWith('!') == true &&
+        existing?.otherUserId == existing?.id &&
+        (existing?.participants.length ?? 0) > 2) {
+      return true;
+    }
+    return members.length > 2;
+  }
+
+  String _groupDisplayName(mx.Room room, ChatConversation? existing) {
+    for (final candidate in [
+      room.name,
+      existing?.otherUserName,
+      room.getLocalizedDisplayname(),
+    ]) {
+      final name = _cleanHumanName(candidate);
+      if (name.isEmpty) continue;
+      if (name.startsWith('gr.@')) continue;
+      return name;
+    }
+    return 'Group';
   }
 
   String? _usableConversationPeer(ChatConversation? conversation, String? me) {
@@ -1431,7 +1844,7 @@ class ChatService {
     var restoredFromCache = 0;
     var refreshedFromMatrix = 0;
     for (final room in rooms) {
-      final existing = merged[room.id];
+      final existing = _conversationWithVisiblePreview(merged[room.id]);
       final lastMessage =
           room.lastEvent == null
               ? null
@@ -1484,6 +1897,36 @@ class ChatService {
     _emitConversations();
   }
 
+  ChatConversation? _conversationWithVisiblePreview(
+    ChatConversation? conversation,
+  ) {
+    if (conversation == null) return null;
+    final visible = getConversationMessages(conversation.id);
+    if (visible.isEmpty) {
+      if (conversation.lastMessage.trim().isEmpty &&
+          conversation.lastMessageSenderId.trim().isEmpty) {
+        return conversation;
+      }
+      return conversation.copyWith(lastMessage: '', lastMessageSenderId: '');
+    }
+
+    final last = visible.last;
+    if (conversation.lastMessage == last.content &&
+        conversation.lastMessageSenderId == last.senderId &&
+        conversation.lastMessageTime == last.timestamp) {
+      return conversation;
+    }
+    return conversation.copyWith(
+      lastMessage: last.content,
+      lastMessageSenderId: last.senderId,
+      lastMessageTime: last.timestamp,
+      lastMessageType:
+          conversation.lastMessageType == 'group'
+              ? 'group'
+              : last.attachmentType ?? conversation.lastMessageType,
+    );
+  }
+
   ChatConversation _preferImmediateConversation(
     ChatConversation cached,
     ChatConversation incoming,
@@ -1491,7 +1934,29 @@ class ChatService {
     final incomingHasMessage = incoming.lastMessage.trim().isNotEmpty;
     final cachedHasMessage = cached.lastMessage.trim().isNotEmpty;
     final unreadCount = _mergedUnreadCount(cached, incoming);
+    final incomingIsDirect =
+        incoming.lastMessageType != 'group' &&
+        incoming.otherUserId.trim().isNotEmpty &&
+        !incoming.otherUserId.startsWith('!');
+    final cachedIsGroup =
+        !incomingIsDirect &&
+        (cached.lastMessageType == 'group' ||
+            (cached.id.startsWith('!') &&
+                cached.otherUserId == cached.id &&
+                cached.participants.length > 2));
     if (!incomingHasMessage && cachedHasMessage) {
+      if (cachedIsGroup) {
+        return cached.copyWith(
+          unreadCount: unreadCount,
+          otherUserId: cached.id,
+          lastMessageType: 'group',
+          otherUserName: _preferCachedDisplayValue(
+            incoming.otherUserName,
+            cached.otherUserName,
+          ),
+          otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
+        );
+      }
       return cached.copyWith(
         unreadCount: unreadCount,
         otherUserId:
@@ -1511,6 +1976,8 @@ class ChatService {
     }
     return incoming.copyWith(
       unreadCount: unreadCount,
+      otherUserId: cachedIsGroup ? incoming.id : incoming.otherUserId,
+      lastMessageType: cachedIsGroup ? 'group' : incoming.lastMessageType,
       otherUserName: _preferCachedDisplayValue(
         cached.otherUserName,
         incoming.otherUserName,
@@ -1627,6 +2094,7 @@ class ChatService {
   void _cacheMessage(ChatMessage message, {bool countUnread = true}) {
     if (!_isDisplayableMessage(message)) return;
     if (_isHiddenForMe(message)) return;
+    _prefetchPersistentAttachment(message);
     final convId = message.conversationId;
     final currentUser =
         MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
@@ -1661,6 +2129,63 @@ class ChatService {
       _readConversationIds.remove(convId);
     }
     final existing = _conversationsMap[convId];
+    final room = _roomById(convId);
+    final directPeer = room?.directChatMatrixID?.trim() ?? '';
+    final isMatrixDirectRoom = directPeer.isNotEmpty;
+    final isGroupConversation =
+        !isMatrixDirectRoom &&
+        (message.receiverId.trim().startsWith('!') ||
+            (room != null && _isGroupRoom(room, existing)) ||
+            (room == null &&
+                (existing?.lastMessageType == 'group' ||
+                    (existing?.id.startsWith('!') == true &&
+                        existing?.otherUserId == existing?.id &&
+                        (existing?.participants.length ?? 0) > 2))));
+    if (isGroupConversation) {
+      final groupName =
+          room == null
+              ? _cleanHumanName(existing?.otherUserName)
+              : _groupDisplayName(room, existing);
+      final participants =
+          <String>{
+            if (MatrixClientService.instance.client.userID != null)
+              MatrixClientService.instance.client.userID!,
+            if (existing != null) ...existing.participants,
+            if (room != null) ...room.getParticipants().map((user) => user.id),
+            message.senderId,
+          }.where((id) => id.trim().isNotEmpty).toList();
+      final isNewer =
+          existing == null ||
+          message.timestamp.isAfter(existing.lastMessageTime);
+      _conversationsMap[convId] = ChatConversation(
+        id: convId,
+        participants: participants,
+        otherUserId: convId,
+        lastMessage: isNewer ? message.content : existing.lastMessage,
+        lastMessageSenderId:
+            isNewer ? message.senderId : existing.lastMessageSenderId,
+        lastMessageTime: isNewer ? message.timestamp : existing.lastMessageTime,
+        unreadCount:
+            shouldCountUnread
+                ? (existing?.unreadCount ?? 0) + 1
+                : existing?.unreadCount ?? 0,
+        lastMessageType: 'group',
+        isArchived: existing?.isArchived ?? false,
+        isMuted: existing?.isMuted ?? false,
+        isPinned: existing?.isPinned ?? false,
+        mutedUntil: existing?.mutedUntil,
+        lastSeen: existing?.lastSeen ?? const {},
+        createdAt: existing?.createdAt,
+        deletedAt: existing?.deletedAt,
+        deletedBy: existing?.deletedBy ?? const [],
+        otherUserName: groupName.isNotEmpty ? groupName : 'Group',
+        otherUserAvatar: existing?.otherUserAvatar ?? room?.avatar?.toString(),
+      );
+      unawaited(_persistCachedMessage(message, _conversationsMap[convId]!));
+      _emitRoomMessages(convId);
+      _emitConversations();
+      return;
+    }
     _conversationsMap[convId] =
         existing == null
             ? ChatConversation.fromMessage(message, currentUser).copyWith(
@@ -1698,6 +2223,33 @@ class ChatService {
     unawaited(_persistCachedMessage(message, _conversationsMap[convId]!));
     _emitRoomMessages(convId);
     _emitConversations();
+  }
+
+  void _prefetchPersistentAttachment(ChatMessage message) {
+    final type = message.attachmentType?.trim();
+    final source = message.attachmentUrl?.trim() ?? '';
+    const persistentTypes = {'image', 'video', 'file', 'voice'};
+    if (source.isEmpty || !persistentTypes.contains(type)) return;
+    unawaited(_prefetchAttachment(message, source, type == 'file'));
+  }
+
+  Future<void> _prefetchAttachment(
+    ChatMessage message,
+    String source,
+    bool allowPartial,
+  ) async {
+    try {
+      await AttachmentLocalStore.instance.ensureInitial(
+        source: source,
+        fileName: message.content,
+        allowPartial: allowPartial,
+      );
+    } catch (error) {
+      apkLog(
+        'ChatService.attachmentCache',
+        'prefetch failed event_id="${message.id}" error="$error"',
+      );
+    }
   }
 
   void _applyMatrixEditEvent(mx.Event event) {
@@ -1825,6 +2377,47 @@ class ChatService {
     if (index == -1) return;
     messages[index] = message;
     _emitRoomMessages(message.conversationId);
+  }
+
+  bool _applyLiveRedactionEvent(mx.Event event) {
+    if (event.type != mx.EventTypes.Redaction) return false;
+
+    final targetEventId =
+        event.redacts ?? event.content['redacts']?.toString().trim() ?? '';
+    if (targetEventId.isEmpty) return true;
+
+    final roomId = event.room.id;
+    final messages = _messagesCache[roomId];
+    final index = messages?.indexWhere((m) => m.id == targetEventId) ?? -1;
+
+    if (messages != null && index != -1) {
+      final current = messages[index];
+      final updated = current.copyWith(
+        content: 'This message was deleted',
+        isDeletedForEveryone: true,
+      );
+      messages[index] = updated;
+      _messageController.add(updated);
+      _emitRoomMessages(roomId);
+      unawaited(ChatLocalDb.instance.markMessageDeletedForEveryone(updated.id));
+      _emitConversations();
+      apkLog(
+        'ChatService.redaction',
+        'live redaction applied room_id="$roomId" event_id="$targetEventId"',
+      );
+      return true;
+    }
+
+    unawaited(
+      ChatLocalDb.instance.markMessageDeletedForEveryone(targetEventId),
+    );
+    _emitRoomMessages(roomId);
+    _emitConversations();
+    apkLog(
+      'ChatService.redaction',
+      'live redaction stored room_id="$roomId" event_id="$targetEventId"',
+    );
+    return true;
   }
 
   void _refreshAllMessageStatuses() {
@@ -1957,6 +2550,34 @@ class ChatService {
 
   void _emitConversations() {
     _conversationsController.add(_sortedConversations());
+  }
+
+  Future<void> _repairConversationPreviewFromVisibleMessages(
+    String conversationId,
+  ) async {
+    final existing = _conversationsMap[conversationId];
+    if (existing == null) return;
+
+    final visible = getConversationMessages(conversationId);
+    if (visible.isEmpty) {
+      final repaired = existing.copyWith(
+        lastMessage: '',
+        lastMessageSenderId: '',
+      );
+      _conversationsMap[conversationId] = repaired;
+      await ChatLocalDb.instance.saveConversations([repaired]);
+      return;
+    }
+
+    final last = visible.last;
+    final repaired = existing.copyWith(
+      lastMessage: last.content,
+      lastMessageSenderId: last.senderId,
+      lastMessageTime: last.timestamp,
+      lastMessageType: last.attachmentType ?? existing.lastMessageType,
+    );
+    _conversationsMap[conversationId] = repaired;
+    await ChatLocalDb.instance.saveConversations([repaired]);
   }
 
   Future<void> _applySavedContactsToHydratedConversations() async {
@@ -2357,4 +2978,11 @@ class ChatService {
     }
     return trimmed;
   }
+}
+
+class _WrytteDocumentFile extends mx.MatrixFile {
+  _WrytteDocumentFile({required super.bytes, required super.name});
+
+  @override
+  String get msgType => mx.MessageTypes.File;
 }

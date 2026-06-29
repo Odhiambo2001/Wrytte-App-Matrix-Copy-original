@@ -192,7 +192,15 @@ class ContactIdentityCache {
     final digitsOnly = cleaned.replaceAll(RegExp(r'[^\d]'), '');
     if (digitsOnly.length < 7 || digitsOnly.length > 15) return null;
     if (!cleaned.startsWith('+')) cleaned = '+$cleaned';
+    cleaned = _stripInvalidNorthAmericaPrefix(cleaned);
     return cleaned;
+  }
+
+  String _stripInvalidNorthAmericaPrefix(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (!phone.startsWith('+1')) return phone;
+    if (digits.length <= 11) return phone;
+    return '+${digits.substring(1)}';
   }
 
   String? _clean(String? value) {

@@ -22,6 +22,13 @@ dependencies:
   flutter_svg: ^2.2.0
   flutter_slidable: ^4.0.3
   image_picker: ^1.2.0
+  file_picker: ^10.3.10
+  open_filex: ^4.7.0
+  archive: ^4.0.7
+  pdfx: ^2.9.2
+  video_player: ^2.10.0
+  video_thumbnail: ^0.5.6
+  flutter_cache_manager: ^3.4.1
   url_launcher: ^6.3.2
   clipboard: ^2.0.2
   flutter_contacts: ^1.1.9+2

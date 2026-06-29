@@ -113,8 +113,16 @@ class ContactService {
     if (cleaned.startsWith('00') && cleaned.length > 4) {
       cleaned = '+${cleaned.substring(2)}';
     }
-    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) return '+$cleaned';
+    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    cleaned = _stripInvalidNorthAmericaPrefix(cleaned);
     return cleaned;
+  }
+
+  String _stripInvalidNorthAmericaPrefix(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (!phone.startsWith('+1')) return phone;
+    if (digits.length <= 11) return phone;
+    return '+${digits.substring(1)}';
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -472,10 +480,19 @@ class ContactService {
         ownerUserId: owner,
         contact: contact,
       );
-      await ContactBackendService.instance.saveContact(
-        ownerUserId: owner,
-        contact: freshContact.copyWith(isSaved: true),
-      );
+      try {
+        await ContactBackendService.instance.saveContact(
+          ownerUserId: owner,
+          contact: freshContact.copyWith(isSaved: true),
+        );
+      } catch (error, stackTrace) {
+        apkLog(
+          'Contact.sync',
+          'backend contact sync failed owner="$owner" '
+              'contact="${freshContact.formattedName}" error="$error"',
+        );
+        debugPrintStack(stackTrace: stackTrace);
+      }
     }
     invalidateMatrixContactsCache();
     apkLog(

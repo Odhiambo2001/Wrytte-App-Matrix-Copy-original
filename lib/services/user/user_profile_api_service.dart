@@ -194,7 +194,15 @@ class UserProfileApiService {
       cleaned = '+${cleaned.substring(2)}';
     }
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    cleaned = _stripInvalidNorthAmericaPrefix(cleaned);
     return cleaned;
+  }
+
+  String _stripInvalidNorthAmericaPrefix(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (!phone.startsWith('+1')) return phone;
+    if (digits.length <= 11) return phone;
+    return '+${digits.substring(1)}';
   }
 
   bool _matchesRequestedProfile(

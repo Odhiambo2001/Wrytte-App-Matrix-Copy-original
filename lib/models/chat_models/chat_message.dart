@@ -127,7 +127,10 @@ class ChatMessage {
   factory ChatMessage.fromMatrix(mx.Event event) {
     final content = event.content;
     final msgType = content['msgtype']?.toString() ?? event.messageType;
-    final attachmentType = _attachmentTypeFromMatrix(msgType);
+    final attachmentType =
+        content['wrytte.sent_as_file'] == true
+            ? 'file'
+            : _attachmentTypeFromMatrix(msgType);
     final info = content['info'];
     int? duration;
     if (info is Map && info['duration'] != null) {

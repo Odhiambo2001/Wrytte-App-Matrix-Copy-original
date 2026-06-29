@@ -156,6 +156,107 @@ class MatrixChatService {
     }
   }
 
+  Future<bool> isRoomAliasAvailable(String aliasLocalpart) async {
+    final client = await connect();
+    if (!client.isLogged()) return false;
+
+    final localpart = aliasLocalpart.trim();
+    if (localpart.isEmpty) return false;
+    final fullAlias = '#$localpart:${MatrixConfig.serverName}';
+    try {
+      await client.getRoomIdByAlias(fullAlias);
+      return false;
+    } catch (e) {
+      final text = e.toString().toUpperCase();
+      if (text.contains('404') ||
+          text.contains('M_NOT_FOUND') ||
+          text.contains('NOT_FOUND')) {
+        return true;
+      }
+      apkLog(
+        'Matrix.alias',
+        'alias check failed alias="$fullAlias" error="$e"',
+      );
+      return false;
+    }
+  }
+
+  Future<Room> createGroupRoom({
+    required String name,
+    required bool isPublic,
+    String? aliasLocalpart,
+    List<String> invite = const [],
+  }) async {
+    final client = await connect();
+    if (!client.isLogged()) {
+      throw StateError('Matrix session is not available.');
+    }
+
+    final cleanName = name.trim();
+    if (cleanName.isEmpty) {
+      throw ArgumentError('Group name is required.');
+    }
+    final cleanAlias = aliasLocalpart?.trim();
+    final cleanInvites =
+        invite
+            .map((id) => id.trim())
+            .where((id) => id.startsWith('@') && id.contains(':'))
+            .toSet()
+            .toList();
+
+    await ensureSyncedAndAutoJoinInvites();
+
+    final roomId = await client.createRoom(
+      name: cleanName,
+      invite: cleanInvites,
+      isDirect: false,
+      roomAliasName: isPublic ? cleanAlias : null,
+      visibility: isPublic ? Visibility.public : Visibility.private,
+      preset:
+          isPublic ? CreateRoomPreset.publicChat : CreateRoomPreset.privateChat,
+      initialState: [
+        StateEvent(
+          content: {'join_rule': isPublic ? 'public' : 'invite'},
+          type: EventTypes.RoomJoinRules,
+        ),
+        StateEvent(
+          content: {
+            'history_visibility':
+                isPublic
+                    ? HistoryVisibility.shared.text
+                    : HistoryVisibility.invited.text,
+          },
+          type: EventTypes.HistoryVisibility,
+        ),
+      ],
+    );
+
+    try {
+      await client
+          .waitForRoomInSync(roomId, join: true)
+          .timeout(const Duration(seconds: 12));
+    } catch (_) {
+      // The background sync may still have the room; inspect loaded rooms below.
+    }
+    final room = getRoomById(roomId);
+    if (room == null) {
+      throw StateError(
+        'Matrix group room $roomId was not available after sync.',
+      );
+    }
+    if (isPublic && cleanAlias != null && cleanAlias.isNotEmpty) {
+      try {
+        await room.setCanonicalAlias('#$cleanAlias:${MatrixConfig.serverName}');
+      } catch (e) {
+        apkLog(
+          'Matrix.alias',
+          'set canonical alias skipped room_id="$roomId" alias="$cleanAlias" error="$e"',
+        );
+      }
+    }
+    return room;
+  }
+
   Future<Room> _getOrCreateDirectRoom(String matrixUserId) async {
     final client = await connect();
     apkLog(
@@ -406,7 +507,9 @@ class MatrixChatService {
         break;
       }
     }
-    if (peer != null && peer.membership == Membership.join) {
+    if (peer != null &&
+        (peer.membership == Membership.join ||
+            peer.membership == Membership.invite)) {
       apkLog(
         'Matrix.invite',
         'peer present room_id="${room.id}" target="$matrixUserId" membership="${peer.membership.name}"',

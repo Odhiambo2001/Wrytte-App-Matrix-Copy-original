@@ -8,8 +8,8 @@ import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/services/call_service.dart';
 
 class CallScreen extends StatefulWidget {
-  final String  remoteUserId;
-  final String  remoteUserName;
+  final String remoteUserId;
+  final String remoteUserName;
   final String? remoteUserAvatar;
   final CallType type;
   final bool isCaller;
@@ -31,21 +31,19 @@ class _CallScreenState extends State<CallScreen> {
   final CallService _callService = CallService.instance;
 
   // ── WebRTC renderers ───────────────────────────────────────────────────────
-  final RTCVideoRenderer _localRenderer  = RTCVideoRenderer();
+  final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
   bool _renderersReady = false;
 
-
-
   // ── Call state ─────────────────────────────────────────────────────────────
-  bool _isMuted       = false;
-  bool _isSpeakerOn   = false;
-  bool _isCameraOn    = true;
-  bool _isConnected   = false;
+  bool _isMuted = false;
+  bool _isSpeakerOn = false;
+  bool _isCameraOn = true;
+  bool _isConnected = false;
   bool _isFrontCamera = true;
 
   // ── Timer ──────────────────────────────────────────────────────────────────
-  int    _elapsedSeconds = 0;
+  int _elapsedSeconds = 0;
   Timer? _timer;
 
   // ── Subscriptions ──────────────────────────────────────────────────────────
@@ -60,10 +58,26 @@ class _CallScreenState extends State<CallScreen> {
     _listenToCallStatus();
     _listenToRemoteStream();
     _listenToLocalStream();
+    if (widget.type == CallType.video) {
+      unawaited(_startVideoMedia());
+    }
 
     // Caller plays ringing tone while waiting for answer
     if (widget.isCaller) {
       _startRinging();
+    }
+  }
+
+  Future<void> _startVideoMedia() async {
+    try {
+      await _callService.ensureVideoEnabled();
+      if (!mounted) return;
+      setState(() {
+        _isCameraOn = true;
+        _isSpeakerOn = true;
+      });
+    } catch (error) {
+      debugPrint('[CallScreen] Could not enable video: $error');
     }
   }
 
@@ -100,7 +114,10 @@ class _CallScreenState extends State<CallScreen> {
         if (mounted) setState(() => _renderersReady = true);
       }
       if (mounted) {
-        setState(() => _localRenderer.srcObject = stream);
+        setState(() {
+          _localRenderer.srcObject = stream;
+          _isCameraOn = stream.getVideoTracks().isNotEmpty;
+        });
       }
     });
   }
@@ -220,9 +237,8 @@ class _CallScreenState extends State<CallScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
-      body: widget.type == CallType.video
-          ? _buildVideoCall()
-          : _buildVoiceCall(),
+      body:
+          widget.type == CallType.video ? _buildVideoCall() : _buildVoiceCall(),
     );
   }
 
@@ -252,15 +268,21 @@ class _CallScreenState extends State<CallScreen> {
                   children: [
                     _glassPill(
                       size: 44,
-                      child: const Icon(Icons.fullscreen,
-                          color: Colors.white, size: 20),
+                      child: const Icon(
+                        Icons.fullscreen,
+                        color: Colors.white,
+                        size: 20,
+                      ),
                       onTap: () {},
                     ),
                     const Spacer(),
                     _glassPill(
                       size: 44,
-                      child: const Icon(Icons.person_add_outlined,
-                          color: Colors.white, size: 20),
+                      child: const Icon(
+                        Icons.person_add_outlined,
+                        color: Colors.white,
+                        size: 20,
+                      ),
                       onTap: () {},
                     ),
                   ],
@@ -279,13 +301,18 @@ class _CallScreenState extends State<CallScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.lock_outline,
-                      size: 13, color: Colors.white.withOpacity(0.5)),
+                  Icon(
+                    Icons.lock_outline,
+                    size: 13,
+                    color: Colors.white.withOpacity(0.5),
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     'End-to-end encrypted',
                     style: TextStyle(
-                        color: Colors.white.withOpacity(0.5), fontSize: 13),
+                      color: Colors.white.withOpacity(0.5),
+                      fontSize: 13,
+                    ),
                   ),
                 ],
               ),
@@ -300,8 +327,8 @@ class _CallScreenState extends State<CallScreen> {
                 _isConnected
                     ? _timerLabel
                     : widget.isCaller
-                        ? 'Calling…'
-                        : 'Connecting…',
+                    ? 'Calling…'
+                    : 'Connecting…',
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 16,
@@ -322,28 +349,28 @@ class _CallScreenState extends State<CallScreen> {
 
   Widget _buildVideoCall() {
     final hasRemote = _remoteRenderer.srcObject != null;
-    final hasLocal  = _localRenderer.srcObject  != null;
+    final hasLocal = _localRenderer.srcObject != null;
 
     return Stack(
       children: [
         // ── Remote video full screen ─────────────────────────────────────
         Positioned.fill(
-          child: hasRemote
-              ? RTCVideoView(
-                  _remoteRenderer,
-                  objectFit:
-                      RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                )
-              : Container(
-                  color: const Color(0xFF1A1D24),
-                  child: Center(
-                    child: UserAvatar(
-                      size: 120,
-                      imageUrl: widget.remoteUserAvatar,
-                      name: widget.remoteUserName,
+          child:
+              hasRemote
+                  ? RTCVideoView(
+                    _remoteRenderer,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  )
+                  : Container(
+                    color: const Color(0xFF1A1D24),
+                    child: Center(
+                      child: UserAvatar(
+                        size: 120,
+                        imageUrl: widget.remoteUserAvatar,
+                        name: widget.remoteUserName,
+                      ),
                     ),
                   ),
-                ),
         ),
 
         // ── Gradients ────────────────────────────────────────────────────
@@ -396,21 +423,22 @@ class _CallScreenState extends State<CallScreen> {
             child: SizedBox(
               width: 100,
               height: 140,
-              child: hasLocal && _isCameraOn
-                  ? RTCVideoView(
-                      _localRenderer,
-                      mirror: _isFrontCamera,
-                      objectFit:
-                          RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                    )
-                  : Container(
-                      color: const Color(0xFF23262C),
-                      child: const Icon(
-                        Icons.videocam_off,
-                        color: Colors.white54,
-                        size: 32,
+              child:
+                  hasLocal && _isCameraOn
+                      ? RTCVideoView(
+                        _localRenderer,
+                        mirror: _isFrontCamera,
+                        objectFit:
+                            RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      )
+                      : Container(
+                        color: const Color(0xFF23262C),
+                        child: const Icon(
+                          Icons.videocam_off,
+                          color: Colors.white54,
+                          size: 32,
+                        ),
                       ),
-                    ),
             ),
           ),
         ),
@@ -423,14 +451,16 @@ class _CallScreenState extends State<CallScreen> {
           child: SafeArea(
             bottom: false,
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
                   _glassPill(
                     size: 44,
-                    child: const Icon(Icons.fullscreen_exit,
-                        color: Colors.white, size: 20),
+                    child: const Icon(
+                      Icons.fullscreen_exit,
+                      color: Colors.white,
+                      size: 20,
+                    ),
                     onTap: () {},
                   ),
                   const SizedBox(width: 12),
@@ -447,15 +477,18 @@ class _CallScreenState extends State<CallScreen> {
                       ),
                       Row(
                         children: [
-                          Icon(Icons.lock_outline,
-                              size: 12,
-                              color: Colors.white.withOpacity(0.6)),
+                          Icon(
+                            Icons.lock_outline,
+                            size: 12,
+                            color: Colors.white.withOpacity(0.6),
+                          ),
                           const SizedBox(width: 3),
                           Text(
                             'End-to-end encrypted',
                             style: TextStyle(
-                                color: Colors.white.withOpacity(0.6),
-                                fontSize: 12),
+                              color: Colors.white.withOpacity(0.6),
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),
@@ -465,7 +498,9 @@ class _CallScreenState extends State<CallScreen> {
                   if (_isConnected)
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.green,
                         borderRadius: BorderRadius.circular(12),
@@ -512,34 +547,30 @@ class _CallScreenState extends State<CallScreen> {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
             decoration: BoxDecoration(
               color: const Color(0xFF23262C).withOpacity(0.55),
               borderRadius: BorderRadius.circular(32),
-              border:
-                  Border.all(color: Colors.white.withOpacity(0.08)),
+              border: Border.all(color: Colors.white.withOpacity(0.08)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _controlButton(
-                  icon: Icons.more_horiz,
-                  onTap: () {},
-                ),
+                _controlButton(icon: Icons.more_horiz, onTap: () {}),
                 isVideo
                     ? _controlButton(
-                        icon: Icons.flip_camera_ios_outlined,
-                        onTap: _flipCamera,
-                      )
+                      icon: Icons.flip_camera_ios_outlined,
+                      onTap: _flipCamera,
+                    )
                     : _controlButton(
-                        icon: Icons.videocam_outlined,
-                        onTap: () {},
-                      ),
+                      icon: Icons.videocam_outlined,
+                      onTap: () {},
+                    ),
                 _controlButton(
-                  icon: _isSpeakerOn
-                      ? Icons.volume_up
-                      : Icons.volume_down_outlined,
+                  icon:
+                      _isSpeakerOn
+                          ? Icons.volume_up
+                          : Icons.volume_down_outlined,
                   onTap: _toggleSpeaker,
                   active: _isSpeakerOn,
                 ),
@@ -564,12 +595,13 @@ class _CallScreenState extends State<CallScreen> {
   Widget _controlButton({
     required IconData icon,
     required VoidCallback onTap,
-    bool active    = false,
+    bool active = false,
     bool isEndCall = false,
   }) {
-    final Color bg = isEndCall
-        ? const Color(0xFFFF3B30)
-        : active
+    final Color bg =
+        isEndCall
+            ? const Color(0xFFFF3B30)
+            : active
             ? Colors.white.withOpacity(0.25)
             : const Color(0xFF2C2F36);
 
@@ -581,9 +613,10 @@ class _CallScreenState extends State<CallScreen> {
         decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
         child: Icon(
           icon,
-          color: isEndCall
-              ? Colors.white
-              : active
+          color:
+              isEndCall
+                  ? Colors.white
+                  : active
                   ? Colors.white
                   : Colors.white.withOpacity(0.85),
           size: 26,

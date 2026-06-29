@@ -11,6 +11,7 @@ import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
+import 'package:wrytte/ui/screens/new_group_screen.dart';
 
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 
@@ -687,6 +688,11 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
               if (result != null && mounted) {
                 _loadContacts();
               }
+            } else if (title == 'New group') {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const NewGroupScreen()),
+              );
             }
           },
         ),

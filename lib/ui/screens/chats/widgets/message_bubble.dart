@@ -1,7 +1,21 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_sound/flutter_sound.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
+import 'package:wrytte/services/attachment_local_store.dart';
+import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
+import 'package:wrytte/ui/widgets/full_screen_video_viewer.dart';
+import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
+import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
+import 'package:wrytte/ui/widgets/wrytte_persistent_image.dart';
+import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MessageBubble
@@ -25,6 +39,8 @@ class MessageBubble extends StatelessWidget {
   final bool isVideoNote;
   final int? voiceDuration; // total seconds
   final String? audioUrl; // CDN URL from Matrix media upload
+  final String? attachmentType;
+  final String? attachmentUrl;
   final bool isForwarded;
   final bool isStarred;
   final bool isDeleted;
@@ -49,6 +65,8 @@ class MessageBubble extends StatelessWidget {
     this.isVideoNote = false,
     this.voiceDuration,
     this.audioUrl,
+    this.attachmentType,
+    this.attachmentUrl,
     this.isForwarded = false,
     this.isStarred = false,
     this.isDeleted = false,
@@ -86,10 +104,25 @@ class MessageBubble extends StatelessWidget {
                 isMine: isMine,
                 timeWidget: timeWidget,
               )
+              : attachmentType == 'image'
+              ? _ImageMessageBubble(
+                imageUrl: attachmentUrl ?? '',
+                timeWidget: timeWidget,
+                isForwarded: isForwarded,
+              )
+              : attachmentType == 'file'
+              ? WrytteFileCard(
+                fileName: content.trim().isEmpty ? 'File' : content,
+                source: attachmentUrl ?? '',
+                trailing: timeWidget,
+                isForwarded: isForwarded,
+              )
               : isVideoNote
               ? _VideoMessageBubble(
+                videoUrl: attachmentUrl ?? '',
                 totalSeconds: voiceDuration ?? 0,
                 timeWidget: timeWidget,
+                isForwarded: isForwarded,
               )
               : _BubbleContent(
                 content: content,
@@ -223,12 +256,16 @@ class MessageBubble extends StatelessWidget {
 }
 
 class _VideoMessageBubble extends StatelessWidget {
+  final String videoUrl;
   final int totalSeconds;
   final Widget timeWidget;
+  final bool isForwarded;
 
   const _VideoMessageBubble({
+    required this.videoUrl,
     required this.totalSeconds,
     required this.timeWidget,
+    this.isForwarded = false,
   });
 
   String _fmt(int s) {
@@ -240,54 +277,307 @@ class _VideoMessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 210,
+      width: 230,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.play_arrow_rounded,
-                  color: Colors.white,
-                  size: 27,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Video message',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.92),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
+          if (isForwarded) const _ForwardedLabel(),
+          GestureDetector(
+            onTap: () => FullScreenVideoViewer.open(context, videoUrl),
+            child: AspectRatio(
+              aspectRatio: 4 / 3,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  WrytteVideoThumbnail(source: videoUrl),
+                  Container(
+                    width: 58,
+                    height: 58,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.42),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 42,
+                    ),
                   ),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (totalSeconds > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Text(
+                      _fmt(totalSeconds),
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.65),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                timeWidget,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ImageMessageBubble extends StatefulWidget {
+  final String imageUrl;
+  final Widget timeWidget;
+  final bool isForwarded;
+
+  const _ImageMessageBubble({
+    required this.imageUrl,
+    required this.timeWidget,
+    required this.isForwarded,
+  });
+
+  @override
+  State<_ImageMessageBubble> createState() => _ImageMessageBubbleState();
+}
+
+class _ImageMessageBubbleState extends State<_ImageMessageBubble> {
+  @override
+  Widget build(BuildContext context) {
+    final image = _attachmentImage(widget.imageUrl);
+    return SizedBox(
+      width: 230,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (widget.isForwarded) const _ForwardedLabel(),
+          GestureDetector(
+            onTap: () => FullScreenImageViewer.open(context, widget.imageUrl),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: AspectRatio(
+                aspectRatio: 4 / 3,
+                child: Container(
+                  color: Colors.black.withOpacity(0.18),
+                  child: image,
                 ),
               ),
-              const SizedBox(width: 8),
-              Text(
-                _fmt(totalSeconds),
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.65),
-                  fontSize: 12,
-                ),
-              ),
-            ],
+            ),
           ),
           Align(
             alignment: Alignment.bottomRight,
             child: Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: timeWidget,
+              child: widget.timeWidget,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _attachmentImage(String url) {
+    return WryttePersistentImage(
+      source: url,
+      fit: BoxFit.cover,
+      placeholder: const _AttachmentPlaceholder(
+        icon: Icons.image_outlined,
+        label: 'Photo',
+      ),
+      errorWidget: const _AttachmentPlaceholder(
+        icon: Icons.broken_image_outlined,
+        label: 'Photo',
+      ),
+    );
+  }
+}
+
+class _FileMessageBubble extends StatefulWidget {
+  final String fileName;
+  final String fileUrl;
+  final Widget timeWidget;
+  final bool isForwarded;
+
+  const _FileMessageBubble({
+    required this.fileName,
+    required this.fileUrl,
+    required this.timeWidget,
+    required this.isForwarded,
+  });
+
+  @override
+  State<_FileMessageBubble> createState() => _FileMessageBubbleState();
+}
+
+class _FileMessageBubbleState extends State<_FileMessageBubble> {
+  bool _opening = false;
+
+  Future<void> _downloadAndOpen() async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    try {
+      final source = widget.fileUrl.trim();
+      if (source.isEmpty) throw StateError('File URL is unavailable');
+
+      File sourceFile;
+      if (source.startsWith('http')) {
+        final cache = DefaultCacheManager();
+        final cached = await cache.getFileFromCache(source);
+        sourceFile = cached?.file ?? await cache.getSingleFile(source);
+      } else {
+        sourceFile = File(source);
+      }
+      if (!await sourceFile.exists()) {
+        throw const FileSystemException('Downloaded file is unavailable');
+      }
+
+      final documents = await getApplicationDocumentsDirectory();
+      final downloads = Directory('${documents.path}/Wrytte Downloads');
+      await downloads.create(recursive: true);
+      final safeName = _safeFileName(widget.fileName, sourceFile.path);
+      final localFile = File('${downloads.path}/$safeName');
+      if (!await localFile.exists() || await localFile.length() == 0) {
+        await sourceFile.copy(localFile.path);
+      }
+
+      final result = await OpenFilex.open(localFile.path);
+      if (result.type != ResultType.done) {
+        throw StateError(result.message);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not open file: $error'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  String _safeFileName(String displayName, String sourcePath) {
+    var name = displayName.trim();
+    if (name.isEmpty || name.toLowerCase() == 'file') {
+      name = p.basename(sourcePath);
+    }
+    name = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    return name.isEmpty ? 'Wrytte file' : name;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _downloadAndOpen,
+      child: SizedBox(
+        width: 230,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.isForwarded) const _ForwardedLabel(),
+            Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child:
+                      _opening
+                          ? const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                          : const Icon(
+                            Icons.insert_drive_file_outlined,
+                            color: Colors.white,
+                          ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    widget.fileName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.92),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Align(
+              alignment: Alignment.bottomRight,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: widget.timeWidget,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AttachmentPlaceholder extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _AttachmentPlaceholder({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: Colors.white70, size: 34),
+          const SizedBox(height: 6),
+          Text(label, style: const TextStyle(color: Colors.white70)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ForwardedLabel extends StatelessWidget {
+  const _ForwardedLabel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.shortcut_rounded,
+            color: Colors.white.withOpacity(0.62),
+            size: 15,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            'Forwarded',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.62),
+              fontSize: 13,
+              fontStyle: FontStyle.italic,
             ),
           ),
         ],
@@ -360,16 +650,21 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
       } else {
         // Reset if we finished previously
         _elapsed = 0;
+        final copy = await AttachmentLocalStore.instance.ensureComplete(
+          source: widget.audioUrl,
+          fileName: 'voice_message.aac',
+        );
         await _player.startPlayer(
-          fromURI: widget.audioUrl,
+          fromURI: copy.file.path,
           codec: Codec.aacADTS,
           whenFinished: () {
             _timer?.cancel();
-            if (mounted)
+            if (mounted) {
               setState(() {
                 _isPlaying = false;
                 _elapsed = 0;
               });
+            }
           },
         );
       }
@@ -547,6 +842,7 @@ class _BubbleContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final link = isDeleted ? null : firstLinkInText(content);
     return Stack(
       children: [
         Padding(
@@ -623,42 +919,18 @@ class _BubbleContent extends StatelessWidget {
                     ],
                   ),
                 ),
-              Text.rich(
-                TextSpan(
-                  children: [
-                    if (isStarred)
-                      WidgetSpan(
-                        alignment: PlaceholderAlignment.middle,
-                        child: Padding(
-                          padding: const EdgeInsets.only(right: 4),
-                          child: Icon(
-                            Icons.star_rounded,
-                            size: 15,
-                            color: Colors.white.withOpacity(0.72),
-                          ),
-                        ),
-                      ),
-                    TextSpan(
-                      text: isDeleted ? 'This message was deleted' : content,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(isDeleted ? 0.65 : 1),
-                        fontSize: 15,
-                        height: 1.35,
-                        fontStyle:
-                            isDeleted ? FontStyle.italic : FontStyle.normal,
-                      ),
-                    ),
-                    WidgetSpan(
-                      child: Opacity(
-                        opacity: 0,
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 6),
-                          child: timeWidget,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              if (link != null) ...[
+                WrytteLinkPreview(url: link),
+                const SizedBox(height: 6),
+              ],
+              _LinkedMessageText(
+                text:
+                    isDeleted
+                        ? 'This message was deleted'
+                        : linkDisplayText(content),
+                isDeleted: isDeleted,
+                isStarred: isStarred,
+                trailingWidget: timeWidget,
               ),
             ],
           ),
@@ -666,6 +938,145 @@ class _BubbleContent extends StatelessWidget {
         Positioned(bottom: 0, right: 0, child: timeWidget),
       ],
     );
+  }
+}
+
+class _LinkedMessageText extends StatefulWidget {
+  final String text;
+  final bool isDeleted;
+  final bool isStarred;
+  final Widget trailingWidget;
+
+  const _LinkedMessageText({
+    required this.text,
+    required this.isDeleted,
+    required this.isStarred,
+    required this.trailingWidget,
+  });
+
+  @override
+  State<_LinkedMessageText> createState() => _LinkedMessageTextState();
+}
+
+class _LinkedMessageTextState extends State<_LinkedMessageText> {
+  final List<TapGestureRecognizer> _recognizers = [];
+
+  static final RegExp _urlPattern = RegExp(
+    r'((?:https?:\/\/|www\.)[^\s]+|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:\/[^\s]*)?)',
+  );
+
+  @override
+  void dispose() {
+    for (final recognizer in _recognizers) {
+      recognizer.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    for (final recognizer in _recognizers) {
+      recognizer.dispose();
+    }
+    _recognizers.clear();
+
+    final baseStyle = TextStyle(
+      color: Colors.white.withOpacity(widget.isDeleted ? 0.65 : 1),
+      fontSize: 15,
+      height: 1.35,
+      fontStyle: widget.isDeleted ? FontStyle.italic : FontStyle.normal,
+    );
+
+    final spans = <InlineSpan>[
+      if (widget.isStarred)
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Icon(
+              Icons.star_rounded,
+              size: 15,
+              color: Colors.white.withOpacity(0.72),
+            ),
+          ),
+        ),
+    ];
+
+    if (widget.isDeleted) {
+      spans.add(TextSpan(text: widget.text, style: baseStyle));
+    } else {
+      var cursor = 0;
+      for (final match in _urlPattern.allMatches(widget.text)) {
+        if (match.start > cursor) {
+          spans.add(TextSpan(text: widget.text.substring(cursor, match.start)));
+        }
+        final raw = match.group(0) ?? '';
+        final clean = _trimUrlPunctuation(raw);
+        if (_looksLikeAttachmentFileName(clean)) {
+          spans.add(TextSpan(text: raw));
+          cursor = match.end;
+          continue;
+        }
+        final trailing = raw.substring(clean.length);
+        final recognizer =
+            TapGestureRecognizer()..onTap = () => _openLink(clean);
+        _recognizers.add(recognizer);
+        spans.add(
+          TextSpan(
+            text: clean,
+            style: baseStyle.copyWith(
+              color: const Color(0xFFB9DDFF),
+              decoration: TextDecoration.underline,
+              decorationColor: const Color(0xFFB9DDFF),
+            ),
+            recognizer: recognizer,
+          ),
+        );
+        if (trailing.isNotEmpty) spans.add(TextSpan(text: trailing));
+        cursor = match.end;
+      }
+      if (cursor < widget.text.length) {
+        spans.add(TextSpan(text: widget.text.substring(cursor)));
+      }
+    }
+
+    spans.add(
+      WidgetSpan(
+        child: Opacity(
+          opacity: 0,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 6),
+            child: widget.trailingWidget,
+          ),
+        ),
+      ),
+    );
+
+    return Text.rich(TextSpan(style: baseStyle, children: spans));
+  }
+
+  String _trimUrlPunctuation(String value) {
+    return value.replaceFirst(RegExp(r'[),.;:!?]+$'), '');
+  }
+
+  bool _looksLikeAttachmentFileName(String value) {
+    final trimmed = value.trim().toLowerCase();
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return false;
+    }
+    return RegExp(
+      r'\.(png|jpe?g|gif|webp|bmp|heic|heif|mp4|mov|m4v|webm|mkv|3gp|pdf|docx?|pptx?|xlsx?|txt|csv|zip|rar|7z|apk)$',
+    ).hasMatch(trimmed);
+  }
+
+  Future<void> _openLink(String value) async {
+    final url =
+        value.startsWith('http://') || value.startsWith('https://')
+            ? value
+            : 'https://$value';
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 }
 

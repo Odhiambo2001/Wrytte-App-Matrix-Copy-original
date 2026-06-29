@@ -38,7 +38,7 @@ The practical rule is:
 
 ### Backend API
 
-Backend HTTP requests use:
+Backend HTTP requests use this default:
 
 ```text
 https://wryttedev.azurewebsites.net
@@ -48,6 +48,13 @@ Defined in:
 
 ```text
 lib/services/auth/api_service.dart
+```
+
+To point a build at another backend deployment without changing source code:
+
+```bash
+flutter run \
+  --dart-define=WRYTTE_BACKEND_API_URL=https://your-backend-host
 ```
 
 Backend requests can attach:

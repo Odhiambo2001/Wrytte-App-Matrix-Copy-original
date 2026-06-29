@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:wrytte/ui/screens/chats/widgets/selection_top_bar.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
+import 'package:wrytte/ui/screens/new_group_screen.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
 
 class TopBar extends StatelessWidget implements PreferredSizeWidget {
@@ -87,9 +88,7 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
       if (value == 'contact') {
         Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => const NewContactPage(token: ''),
-          ),
+          MaterialPageRoute(builder: (_) => const NewContactPage(token: '')),
         );
       } else if (value == 'profile') {
         Navigator.push(
@@ -97,8 +96,10 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
           MaterialPageRoute(builder: (_) => const ProfileScreen()),
         );
       } else if (value == 'group') {
-        // Add navigation for New group when screen is created
-        debugPrint('Navigate to New group');
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const NewGroupScreen()),
+        );
       } else if (value == 'channel') {
         // Add navigation for New channel when screen is created
         debugPrint('Navigate to New channel');

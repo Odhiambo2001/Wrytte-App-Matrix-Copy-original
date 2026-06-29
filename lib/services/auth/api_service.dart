@@ -4,7 +4,10 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 
 class ApiService {
-  static const String baseUrl = "https://wryttedev.azurewebsites.net";
+  static const String baseUrl = String.fromEnvironment(
+    'WRYTTE_BACKEND_API_URL',
+    defaultValue: 'https://wryttedev.azurewebsites.net',
+  );
 
   // POST (x-www-form-urlencoded)
 

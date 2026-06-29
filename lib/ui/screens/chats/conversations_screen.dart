@@ -14,6 +14,7 @@ import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
+import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/notification_service.dart';
@@ -24,6 +25,7 @@ import 'package:wrytte/ui/screens/chats/widgets/conversation_tile.dart';
 import 'package:wrytte/ui/screens/chats/widgets/mini_chat_window.dart';
 import 'package:wrytte/ui/screens/chats/widgets/top_bar.dart';
 import 'package:wrytte/ui/screens/firebase_new_chat_screen.dart';
+import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'widgets/search_bar.dart' as local_widgets;
 import 'widgets/tab_bar_section.dart';
 
@@ -484,6 +486,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   bool _hasRowsMissingStableIdentity(List<ChatConversation> convs) {
     for (final conv in convs) {
+      if (_isGroupConversation(conv)) continue;
       final contactKey = _contactKeyForConversation(conv);
       final cachedPublicName = _cachedPublicNameForConversation(conv);
       final identityName = _cleanHumanName(
@@ -668,6 +671,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   Future<ChatConversation> _enrichConversationFromPublicProfile(
     ChatConversation conv,
   ) async {
+    if (_isGroupConversation(conv)) return conv;
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final profileUid =
         _profileUidForConversation(conv) ??
@@ -870,6 +874,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   String _fallbackConversationTitle(ChatConversation conv) {
+    if (_isGroupConversation(conv)) {
+      final roomName = _cleanHumanName(
+        MatrixChatService.instance.getRoomById(conv.id)?.name,
+      );
+      if (roomName.isNotEmpty) return roomName;
+      final groupName = _cleanHumanName(conv.otherUserName);
+      if (groupName.isNotEmpty) return groupName;
+      return 'Group';
+    }
     final phone = _fallbackPhoneForConversation(conv);
     if (phone.isNotEmpty) return _formatPhone(phone);
 
@@ -903,6 +916,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   String _conversationTitle(ChatConversation conv) {
+    if (_isGroupConversation(conv)) {
+      final roomName = _cleanHumanName(
+        MatrixChatService.instance.getRoomById(conv.id)?.name,
+      );
+      if (roomName.isNotEmpty) return roomName;
+      final groupName = _cleanHumanName(conv.otherUserName);
+      if (groupName.isNotEmpty) return groupName;
+      return 'Group';
+    }
     final identity = _identityForConversation(conv);
     final contactKey = _contactKeyForConversation(conv);
 
@@ -931,6 +953,20 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     }
 
     return '';
+  }
+
+  bool _isGroupConversation(ChatConversation conv) {
+    final room = MatrixChatService.instance.getRoomById(conv.id);
+    final directPeer = room?.directChatMatrixID?.trim() ?? '';
+    if (directPeer.isNotEmpty) return false;
+    if (room != null) {
+      final members = room.getParticipants();
+      if (members.length > 2) return true;
+    }
+    return conv.lastMessageType == 'group' ||
+        (conv.id.startsWith('!') &&
+            conv.otherUserId == conv.id &&
+            conv.participants.length > 2);
   }
 
   ContactIdentity? _identityForConversation(ChatConversation conv) {
@@ -1169,14 +1205,16 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   String _formatPhone(String phone) {
-    final digits = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    final digits = _stripInvalidNorthAmericaPrefix(
+      phone.replaceAll(RegExp(r'[^\d+]'), ''),
+    );
     final digitsOnly = digits.replaceAll(RegExp(r'[^\d]'), '');
     if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
     if (digits.startsWith('+1') && digits.length == 12) {
       return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
     }
     if (digits.isNotEmpty && !digits.startsWith('+')) return '+$digits';
-    return phone;
+    return digits;
   }
 
   String _normalizePhone(String phone) {
@@ -1185,7 +1223,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       cleaned = '+${cleaned.substring(2)}';
     }
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    cleaned = _stripInvalidNorthAmericaPrefix(cleaned);
     return cleaned;
+  }
+
+  String _stripInvalidNorthAmericaPrefix(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (!phone.startsWith('+1')) return phone;
+    if (digits.length <= 11) return phone;
+    return '+${digits.substring(1)}';
   }
 
   Future<void> _retryEnrichment() async {
@@ -1225,7 +1271,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     text = text.replaceFirst(RegExp(r'^<[^>]+>\s*'), '').trim();
     text =
         text.replaceFirst(RegExp(r'^@[A-Za-z0-9._=-]+:[^\s]+\s*'), '').trim();
-    return text;
+    return linkDisplayText(text);
   }
 
   void _enterSelection() => setState(() {
@@ -1341,6 +1387,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         }
 
         if (!mounted) return;
+        final isGroup = _isGroupConversation(conv);
+        final chatReceiverId = isGroup ? conv.id : conv.otherUserId;
+
         await Navigator.push(
           context,
           PageRouteBuilder(
@@ -1349,7 +1398,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             pageBuilder:
                 (_, __, ___) => ChatScreen(
                   conversationId: conv.id,
-                  receiverId: conv.otherUserId,
+                  receiverId: chatReceiverId,
                   currentUserId: _currentUserId,
                   title: name,
                   avatarUrl: avatar,
@@ -1380,13 +1429,20 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   //  BUILD
   // ===========================================================================
 
-  Widget _buildChatsTab(double topPadding) {
-    if (_conversations.isEmpty) {
+  Widget _buildConversationTab(
+    double topPadding, {
+    required List<ChatConversation> conversations,
+    required String emptyTitle,
+    required String emptySubtitle,
+    required IconData emptyIcon,
+    ScrollController? controller,
+  }) {
+    if (conversations.isEmpty) {
       if (_initialCacheWarmup) {
         return ScrollConfiguration(
           behavior: const _ConversationsScrollBehavior(),
           child: ListView(
-            controller: _scrollCtrl,
+            controller: controller,
             padding: EdgeInsets.only(top: topPadding, bottom: 120),
             physics: const BouncingScrollPhysics(),
             children: const [
@@ -1400,7 +1456,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       return ScrollConfiguration(
         behavior: const _ConversationsScrollBehavior(),
         child: ListView(
-          controller: _scrollCtrl,
+          controller: controller,
           padding: EdgeInsets.only(top: topPadding, bottom: 120),
           physics: const BouncingScrollPhysics(),
           children: [
@@ -1409,13 +1465,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               child: Column(
                 children: [
                   Icon(
-                    Icons.chat_bubble_outline_rounded,
+                    emptyIcon,
                     size: 64,
                     color: Colors.white.withValues(alpha: 0.12),
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'No conversations yet',
+                    emptyTitle,
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.35),
                       fontSize: 16,
@@ -1424,7 +1480,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Tap the pencil icon to start a new chat',
+                    emptySubtitle,
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.2),
                       fontSize: 13,
@@ -1450,17 +1506,41 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       child: ScrollConfiguration(
         behavior: const _ConversationsScrollBehavior(),
         child: ListView.builder(
-          controller: _scrollCtrl,
+          controller: controller,
           physics: const BouncingScrollPhysics(),
           padding: EdgeInsets.only(top: topPadding, bottom: 120),
-          itemCount: _conversations.length,
+          itemCount: conversations.length,
           itemBuilder:
               (_, i) => KeyedSubtree(
-                key: ValueKey(_conversations[i].id),
-                child: _buildTile(_conversations[i]),
+                key: ValueKey(conversations[i].id),
+                child: _buildTile(conversations[i]),
               ),
         ),
       ),
+    );
+  }
+
+  Widget _buildChatsTab(double topPadding) {
+    final chats =
+        _conversations.where((c) => !_isGroupConversation(c)).toList();
+    return _buildConversationTab(
+      topPadding,
+      conversations: chats,
+      emptyTitle: 'No conversations yet',
+      emptySubtitle: 'Tap the pencil icon to start a new chat',
+      emptyIcon: Icons.chat_bubble_outline_rounded,
+      controller: _scrollCtrl,
+    );
+  }
+
+  Widget _buildGroupsTab(double topPadding) {
+    final groups = _conversations.where(_isGroupConversation).toList();
+    return _buildConversationTab(
+      topPadding,
+      conversations: groups,
+      emptyTitle: 'No groups yet',
+      emptySubtitle: 'Tap the menu and create a new group',
+      emptyIcon: Icons.groups_2_outlined,
     );
   }
 
@@ -1525,15 +1605,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       ),
                     ),
                   ),
-                  Center(
-                    child: Padding(
-                      padding: EdgeInsets.only(top: headerH),
-                      child: const Text(
-                        'Groups coming soon',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ),
-                  ),
+                  _buildGroupsTab(headerH),
                 ],
               ),
             ),
