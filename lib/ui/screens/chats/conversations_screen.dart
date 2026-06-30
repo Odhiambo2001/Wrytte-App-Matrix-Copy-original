@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:matrix/matrix.dart' show Membership;
 
+import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/api_service.dart';
@@ -63,6 +65,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   final Map<String, (String?, String?)?> _matrixProfileCache = {};
 
   List<ChatConversation> _conversations = [];
+  List<MatrixPublicGroup> _suggestedGroups = const [];
 
   String _currentUserId = '';
   bool _isSelectionMode = false;
@@ -87,6 +90,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   int _conversationRefreshVersion = 0;
   List<ChatConversation>? _pendingConversationBatch;
   bool _conversationBatchInFlight = false;
+  bool _loadingSuggestedGroups = false;
 
   // ===========================================================================
   //  LIFECYCLE
@@ -189,6 +193,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       await _chat.connect();
       unawaited(_chat.fetchConversations());
       unawaited(_restoreContactsAfterMatrixReady());
+      unawaited(_loadSuggestedGroups());
     } catch (e) {
       debugPrint('[ConversationsScreen] chat connect skipped: $e');
     }
@@ -196,8 +201,25 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     // Retry enrichment when connectivity is restored
     _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
       final hasNet = results.any((r) => r != ConnectivityResult.none);
-      if (hasNet) _retryEnrichment();
+      if (hasNet) {
+        _retryEnrichment();
+        unawaited(_loadSuggestedGroups());
+      }
     });
+  }
+
+  Future<void> _loadSuggestedGroups() async {
+    if (_loadingSuggestedGroups) return;
+    _loadingSuggestedGroups = true;
+    try {
+      final groups = await MatrixChatService.instance.fetchPublicGroups(
+        limit: 50,
+      );
+      if (!mounted) return;
+      setState(() => _suggestedGroups = groups);
+    } finally {
+      _loadingSuggestedGroups = false;
+    }
   }
 
   void _queueConversationBatch(List<ChatConversation> incoming) {
@@ -956,12 +978,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   bool _isGroupConversation(ChatConversation conv) {
-    final room = MatrixChatService.instance.getRoomById(conv.id);
-    final directPeer = room?.directChatMatrixID?.trim() ?? '';
-    if (directPeer.isNotEmpty) return false;
-    if (room != null) {
-      final members = room.getParticipants();
-      if (members.length > 2) return true;
+    if (MatrixClientService.instance.isInitialized) {
+      final room = MatrixChatService.instance.getRoomById(conv.id);
+      final directPeer = room?.directChatMatrixID?.trim() ?? '';
+      if (directPeer.isNotEmpty) return false;
+      if (room != null) {
+        final members = room.getParticipants();
+        if (members.length > 2) return true;
+      }
     }
     return conv.lastMessageType == 'group' ||
         (conv.id.startsWith('!') &&
@@ -1534,14 +1558,269 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Widget _buildGroupsTab(double topPadding) {
-    final groups = _conversations.where(_isGroupConversation).toList();
-    return _buildConversationTab(
-      topPadding,
-      conversations: groups,
-      emptyTitle: 'No groups yet',
-      emptySubtitle: 'Tap the menu and create a new group',
-      emptyIcon: Icons.groups_2_outlined,
+    final allGroups = _conversations.where(_isGroupConversation).toList();
+    final ownGroups = allGroups.where(_isOwnGroupConversation).toList();
+    final joinedGroups =
+        allGroups.where((group) => !_isOwnGroupConversation(group)).toList();
+    final joinedIds = allGroups.map((group) => group.id).toSet();
+    final suggested =
+        _suggestedGroups
+            .where((group) => !joinedIds.contains(group.roomId))
+            .toList();
+
+    if (allGroups.isEmpty && suggested.isEmpty && _initialCacheWarmup) {
+      return _buildConversationTab(
+        topPadding,
+        conversations: const [],
+        emptyTitle: 'No groups yet',
+        emptySubtitle: 'Tap the menu and create a new group',
+        emptyIcon: Icons.groups_2_outlined,
+      );
+    }
+
+    if (allGroups.isEmpty && suggested.isEmpty && !_loadingSuggestedGroups) {
+      return _buildGroupsEmptyState(topPadding);
+    }
+
+    return RefreshIndicator(
+      color: const Color(0xFF4DA3FF),
+      backgroundColor: Colors.transparent,
+      onRefresh: () async {
+        await _loadSavedContacts();
+        await _loadLocalConversations();
+        await _chat.fetchConversations();
+        await _loadSuggestedGroups();
+      },
+      child: ScrollConfiguration(
+        behavior: const _ConversationsScrollBehavior(),
+        child: ListView(
+          physics: const BouncingScrollPhysics(),
+          padding: EdgeInsets.only(top: topPadding, bottom: 120),
+          children: [
+            if (ownGroups.isNotEmpty) ...[
+              _groupSectionHeader('Your Groups ${ownGroups.length}'),
+              for (final group in ownGroups)
+                KeyedSubtree(
+                  key: ValueKey('own-${group.id}'),
+                  child: _buildTile(group),
+                ),
+            ],
+            if (joinedGroups.isNotEmpty) ...[
+              _groupSectionHeader('Joined Groups ${joinedGroups.length}'),
+              for (final group in joinedGroups)
+                KeyedSubtree(
+                  key: ValueKey('joined-${group.id}'),
+                  child: _buildTile(group),
+                ),
+            ],
+            if (suggested.isNotEmpty) ...[
+              _groupSectionHeader('Suggested'),
+              for (final group in suggested)
+                KeyedSubtree(
+                  key: ValueKey('suggested-${group.roomId}'),
+                  child: _suggestedGroupTile(group),
+                ),
+            ],
+            if (_loadingSuggestedGroups)
+              const Padding(
+                padding: EdgeInsets.only(top: 16),
+                child: Center(
+                  child: SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFF4DA3FF),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
+  }
+
+  Widget _buildGroupsEmptyState(double topPadding) {
+    return ScrollConfiguration(
+      behavior: const _ConversationsScrollBehavior(),
+      child: ListView(
+        padding: EdgeInsets.only(top: topPadding, bottom: 120),
+        physics: const BouncingScrollPhysics(),
+        children: [
+          const SizedBox(height: 60),
+          Center(
+            child: Column(
+              children: [
+                Icon(
+                  Icons.groups_2_outlined,
+                  size: 64,
+                  color: Colors.white.withValues(alpha: 0.12),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No groups yet',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Tap the menu and create a new group',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _groupSectionHeader(String label) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(28, 12, 24, 6),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: Colors.white.withValues(alpha: 0.58),
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _suggestedGroupTile(MatrixPublicGroup group) {
+    return InkWell(
+      onTap: () => _openSuggestedGroup(group),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            UserAvatar(size: 60, imageUrl: group.avatarUrl, name: group.name),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    group.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _memberCountLabel(group.memberCount),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                  ),
+                  const SizedBox(height: 14),
+                  Divider(
+                    color: Colors.grey.withOpacity(0.3),
+                    thickness: 0.5,
+                    height: 0,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              height: 36,
+              child: FilledButton(
+                onPressed: () => _joinSuggestedGroup(group),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF4DA3FF),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                ),
+                child: const Text('Join'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openSuggestedGroup(MatrixPublicGroup group) async {
+    await Navigator.push(
+      context,
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 300),
+        reverseTransitionDuration: const Duration(milliseconds: 220),
+        pageBuilder:
+            (_, __, ___) => ChatScreen(
+              conversationId: group.roomId,
+              receiverId: group.roomId,
+              currentUserId: _currentUserId,
+              title: group.name,
+              avatarUrl: group.avatarUrl,
+              readOnlyUntilJoin: true,
+              initialMemberCount: group.memberCount,
+              groupAlias: group.canonicalAlias,
+            ),
+        transitionsBuilder: (_, animation, __, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(1, 0),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          );
+        },
+      ),
+    );
+    if (!mounted) return;
+    await _loadLocalConversations();
+    unawaited(_loadSuggestedGroups());
+  }
+
+  Future<void> _joinSuggestedGroup(MatrixPublicGroup group) async {
+    try {
+      await MatrixChatService.instance.joinGroup(
+        group.canonicalAlias?.trim().isNotEmpty == true
+            ? group.canonicalAlias!
+            : group.roomId,
+      );
+      await _chat.fetchConversations();
+      await _loadLocalConversations();
+      await _loadSuggestedGroups();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not join group: $e')));
+    }
+  }
+
+  bool _isOwnGroupConversation(ChatConversation conv) {
+    final room = MatrixChatService.instance.getRoomById(conv.id);
+    if (room == null || room.membership != Membership.join) return false;
+    return MatrixChatService.instance.isGroupOwner(room);
+  }
+
+  String _memberCountLabel(int count) {
+    return count == 1 ? '1 member' : '$count members';
   }
 
   @override

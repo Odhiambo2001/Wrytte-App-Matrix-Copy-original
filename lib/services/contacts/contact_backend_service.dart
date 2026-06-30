@@ -16,30 +16,11 @@ class ContactBackendService {
       throw Exception('Missing backend auth token.');
     }
 
-    final body = _contactBody(ownerUserId: ownerUserId, contact: contact);
-    await _sendFirstSuccessful(
-      action: 'save contact',
-      requests: [
-        () =>
-            ApiService.postJson('/api/Contacts/save', body: body, token: token),
-        () =>
-            ApiService.postJson('/api/Contact/save', body: body, token: token),
-        () => ApiService.postJson(
-          '/api/UserContacts/save',
-          body: body,
-          token: token,
-        ),
-        () => ApiService.postJson(
-          '/api/Users/Contacts/save',
-          body: body,
-          token: token,
-        ),
-        () => ApiService.postMultipart(
-          '/api/Contacts/save',
-          body.map((key, value) => MapEntry(key, value?.toString() ?? '')),
-          token: token,
-        ),
-      ],
+    final query = _contactQuery(contact);
+    await ApiService.post(
+      '/api/UserContacts/add',
+      queryParameters: query,
+      token: token,
     );
   }
 
@@ -47,80 +28,67 @@ class ContactBackendService {
     final token = await AuthService.instance.getValidBackendToken();
     if (token == null || token.trim().isEmpty) return const [];
 
-    final query = {
-      'ownerUserId': ownerUserId,
-      'userid': ownerUserId,
-      'userId': ownerUserId,
-    };
-    final candidates = [
-      () => ApiService.get(
-        '/api/Contacts/get',
+    try {
+      final response = await ApiService.get(
+        '/api/UserContacts/getall',
         token: token,
-        queryParameters: query,
-      ),
-      () =>
-          ApiService.get('/api/Contacts', token: token, queryParameters: query),
-      () => ApiService.get(
-        '/api/UserContacts/get',
-        token: token,
-        queryParameters: query,
-      ),
-      () => ApiService.get(
-        '/api/Users/Contacts',
-        token: token,
-        queryParameters: query,
-      ),
-    ];
-
-    for (final request in candidates) {
-      try {
-        final response = await request();
-        final contacts = _contactsFromResponse(response);
-        if (contacts.isNotEmpty) return contacts;
-      } catch (e) {
-        debugPrint('[ContactBackendService] load contact endpoint skipped: $e');
-      }
+      );
+      return _contactsFromResponse(response);
+    } catch (e) {
+      debugPrint('[ContactBackendService] load contacts failed: $e');
+      return const [];
     }
-    return const [];
   }
 
-  Map<String, dynamic> _contactBody({
+  Future<void> removeContact({
     required String ownerUserId,
     required Contact contact,
-  }) {
-    return {
-      'ownerUserId': ownerUserId,
-      'userid': ownerUserId,
-      'userId': ownerUserId,
-      'name': contact.displayName ?? '',
-      'displayName': contact.displayName ?? '',
-      'phone': contact.primaryPhone,
-      'phones': contact.phones,
-      'avatarUrl': contact.avatarUrl ?? '',
-      'avatar': contact.avatarUrl ?? '',
-      'bio': contact.bio ?? '',
-      'wrytteUserId': contact.wrytteUserId ?? '',
-      'matrixUserId': contact.wrytteUserId ?? '',
-      'isOnWrytte': contact.isOnWrytte,
-      'isSaved': true,
-    };
+  }) async {
+    final token = await AuthService.instance.getValidBackendToken();
+    if (token == null || token.trim().isEmpty) {
+      throw Exception('Missing backend auth token.');
+    }
+
+    final userId = _contactUserId(contact);
+    if (userId.isEmpty) throw Exception('Missing contact userId.');
+    await ApiService.post(
+      '/api/UserContacts/remove',
+      queryParameters: {'userId': userId},
+      token: token,
+    );
   }
 
-  Future<void> _sendFirstSuccessful({
-    required String action,
-    required List<Future<dynamic> Function()> requests,
+  Future<void> updateContactName({
+    required String ownerUserId,
+    required Contact contact,
+    required String name,
   }) async {
-    Object? lastError;
-    for (final request in requests) {
-      try {
-        await request();
-        return;
-      } catch (e) {
-        lastError = e;
-        debugPrint('[ContactBackendService] $action endpoint skipped: $e');
-      }
+    final token = await AuthService.instance.getValidBackendToken();
+    if (token == null || token.trim().isEmpty) {
+      throw Exception('Missing backend auth token.');
     }
-    throw Exception('Could not $action on backend: $lastError');
+
+    final userId = _contactUserId(contact);
+    if (userId.isEmpty) throw Exception('Missing contact userId.');
+    await ApiService.post(
+      '/api/UserContacts/update',
+      queryParameters: {'userId': userId, 'name': name.trim()},
+      token: token,
+    );
+  }
+
+  Map<String, dynamic> _contactQuery(Contact contact) {
+    final userId = _contactUserId(contact);
+    if (userId.isEmpty) throw Exception('Missing contact userId.');
+    return {'userId': userId, 'name': contact.displayName?.trim() ?? ''};
+  }
+
+  String _contactUserId(Contact contact) {
+    final id = contact.wrytteUserId?.trim() ?? '';
+    if (id.startsWith('@') && id.contains(':')) {
+      return id.substring(1, id.indexOf(':'));
+    }
+    return id;
   }
 
   List<Contact> _contactsFromResponse(dynamic response) {
@@ -166,6 +134,7 @@ class ContactBackendService {
       'matrixUserId',
       'MatrixUserId',
       'userid',
+      'Userid',
       'userId',
       'UserId',
     ]);
@@ -214,15 +183,7 @@ class ContactBackendService {
       cleaned = '+${cleaned.substring(2)}';
     }
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
-    cleaned = _stripInvalidBackendNorthAmericaPrefix(cleaned);
     return cleaned;
-  }
-
-  String _stripInvalidBackendNorthAmericaPrefix(String phone) {
-    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
-    if (!phone.startsWith('+1')) return phone;
-    if (digits.length <= 11) return phone;
-    return '+${digits.substring(1)}';
   }
 
   bool _boolField(Map<String, dynamic> map, List<String> keys) {

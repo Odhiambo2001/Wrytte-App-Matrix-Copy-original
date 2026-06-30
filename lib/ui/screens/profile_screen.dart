@@ -490,6 +490,14 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
 
     await ContactLocalDb.removeContact(contact, ownerUserId: ownerUserId);
+    unawaited(
+      ContactService()
+          .removeContactFromBackend(ownerUserId: ownerUserId, contact: contact)
+          .catchError(
+            (e) =>
+                debugPrint('[ProfileScreen] backend contact remove failed: $e'),
+          ),
+    );
     await ContactIdentityCache.instance.clearSavedName(
       ownerUserId: ownerUserId,
       matrixUserId: uid,

@@ -180,6 +180,40 @@ class ContactService {
     );
   }
 
+  Future<void> removeContactFromBackend({
+    required String ownerUserId,
+    required Contact contact,
+  }) async {
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return;
+    await ContactBackendService.instance.removeContact(
+      ownerUserId: owner,
+      contact: contact,
+    );
+    apkLog(
+      'Contact.remove',
+      'backend contact remove done owner="$owner" name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}"',
+    );
+  }
+
+  Future<void> updateContactNameOnBackend({
+    required String ownerUserId,
+    required Contact contact,
+    required String name,
+  }) async {
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return;
+    await ContactBackendService.instance.updateContactName(
+      ownerUserId: owner,
+      contact: contact,
+      name: name,
+    );
+    apkLog(
+      'Contact.update',
+      'backend contact update done owner="$owner" name="$name" wrytteUserId="${contact.wrytteUserId}"',
+    );
+  }
+
   // ──────────────────────────────────────────────────────────────────────
   // Fetch contacts saved by this user. Local cache paints immediately; backend
   // can restore contacts after reinstall/login. Matrix is not used here.

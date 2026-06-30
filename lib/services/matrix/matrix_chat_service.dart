@@ -10,6 +10,26 @@ import 'matrix_client.dart';
 import 'matrix_config.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
+class MatrixPublicGroup {
+  final String roomId;
+  final String name;
+  final String? avatarUrl;
+  final String? canonicalAlias;
+  final String? topic;
+  final int memberCount;
+  final bool worldReadable;
+
+  const MatrixPublicGroup({
+    required this.roomId,
+    required this.name,
+    this.avatarUrl,
+    this.canonicalAlias,
+    this.topic,
+    required this.memberCount,
+    required this.worldReadable,
+  });
+}
+
 class MatrixChatService {
   MatrixChatService._();
   static final MatrixChatService instance = MatrixChatService._();
@@ -255,6 +275,80 @@ class MatrixChatService {
       }
     }
     return room;
+  }
+
+  Future<List<MatrixPublicGroup>> fetchPublicGroups({int limit = 50}) async {
+    final client = await connect();
+    if (!client.isLogged()) return const [];
+
+    try {
+      final response = await client.queryPublicRooms(limit: limit);
+      return response.chunk
+          .map(
+            (room) => MatrixPublicGroup(
+              roomId: room.roomId,
+              name:
+                  room.name?.trim().isNotEmpty == true
+                      ? room.name!.trim()
+                      : _displayAlias(room.canonicalAlias) ?? 'Group',
+              avatarUrl: room.avatarUrl?.toString(),
+              canonicalAlias: room.canonicalAlias,
+              topic: room.topic,
+              memberCount: room.numJoinedMembers,
+              worldReadable: room.worldReadable,
+            ),
+          )
+          .toList();
+    } catch (e) {
+      apkLog('Matrix.groups', 'public rooms fetch failed error="$e"');
+      return const [];
+    }
+  }
+
+  Future<Room?> joinGroup(String roomIdOrAlias) async {
+    final client = await connect();
+    if (!client.isLogged()) return null;
+    final target = roomIdOrAlias.trim();
+    if (target.isEmpty) return null;
+
+    final existing = getRoomById(target);
+    if (existing != null && existing.membership == Membership.join) {
+      return existing;
+    }
+
+    try {
+      final roomId =
+          target.startsWith('!')
+              ? await client.joinRoomById(target)
+              : await client.joinRoom(target);
+      await client
+          .waitForRoomInSync(roomId, join: true)
+          .timeout(const Duration(seconds: 12));
+      return getRoomById(roomId);
+    } catch (e) {
+      apkLog('Matrix.groups', 'join failed target="$target" error="$e"');
+      rethrow;
+    }
+  }
+
+  Future<void> leaveGroup(String roomId) async {
+    final room = getRoomById(roomId);
+    if (room == null) return;
+    await room.leave();
+  }
+
+  bool isGroupOwner(Room room) {
+    final userId = MatrixClientService.instance.client.userID;
+    if (userId == null || userId.isEmpty) return false;
+    return room.creatorUserIds.contains(userId) ||
+        room.ownPowerLevel.level >= 100;
+  }
+
+  String? _displayAlias(String? alias) {
+    final raw = alias?.trim() ?? '';
+    if (raw.isEmpty) return null;
+    final withoutHash = raw.startsWith('#') ? raw.substring(1) : raw;
+    return withoutHash.split(':').first;
   }
 
   Future<Room> _getOrCreateDirectRoom(String matrixUserId) async {

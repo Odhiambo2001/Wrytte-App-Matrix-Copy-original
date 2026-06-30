@@ -25,12 +25,18 @@ class GroupProfileScreen extends StatefulWidget {
   final String roomId;
   final String groupName;
   final String? avatarUrl;
+  final String? alias;
+  final int? initialMemberCount;
+  final bool initiallyJoined;
 
   const GroupProfileScreen({
     super.key,
     required this.roomId,
     required this.groupName,
     this.avatarUrl,
+    this.alias,
+    this.initialMemberCount,
+    this.initiallyJoined = true,
   });
 
   @override
@@ -42,17 +48,21 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   final Map<String, String> _memberAvatars = {};
   List<mx.User> _members = const [];
   String? _localAvatarOverride;
+  late bool _joined;
+  bool _joiningOrLeaving = false;
 
   @override
   void initState() {
     super.initState();
+    final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    _joined = widget.initiallyJoined || room?.membership == mx.Membership.join;
     _loadMemberProfiles();
   }
 
   @override
   Widget build(BuildContext context) {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
-    final alias = _displayAlias(room?.canonicalAlias ?? '');
+    final alias = _displayAlias(room?.canonicalAlias ?? widget.alias ?? '');
     final title = _displayTitle(room?.name ?? '', widget.groupName, alias);
     final memberCount = _memberCount;
     final top = MediaQuery.of(context).padding.top;
@@ -118,7 +128,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Row(
                 children: [
-                  _action(Icons.record_voice_over_outlined, 'Voice chat'),
+                  _joinLeaveAction(),
                   const SizedBox(width: 12),
                   _action(Icons.volume_off_outlined, 'Mute'),
                   const SizedBox(width: 12),
@@ -257,6 +267,46 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _joinLeaveAction() {
+    final label = _joined ? 'Leave' : 'Join';
+    final icon = _joined ? Icons.logout_rounded : Icons.login_rounded;
+    return Expanded(
+      child: GestureDetector(
+        onTap: _joiningOrLeaving ? null : _toggleMembership,
+        child: Container(
+          height: 74,
+          decoration: BoxDecoration(
+            color: const Color(0xFF15181D),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF242830)),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_joiningOrLeaving)
+                const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              else
+                Icon(icon, color: Colors.white, size: 24),
+              const SizedBox(height: 7),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -456,7 +506,46 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     _loadMemberProfiles();
   }
 
-  int get _memberCount => _members.isNotEmpty ? _members.length : 1;
+  Future<void> _toggleMembership() async {
+    if (_joiningOrLeaving) return;
+    setState(() => _joiningOrLeaving = true);
+    try {
+      if (_joined) {
+        await MatrixChatService.instance.leaveGroup(widget.roomId);
+        if (!mounted) return;
+        setState(() {
+          _joined = false;
+          _members = const [];
+          _joiningOrLeaving = false;
+        });
+      } else {
+        await MatrixChatService.instance.joinGroup(
+          widget.alias?.trim().isNotEmpty == true
+              ? widget.alias!
+              : widget.roomId,
+        );
+        if (!mounted) return;
+        setState(() {
+          _joined = true;
+          _joiningOrLeaving = false;
+        });
+        _loadMemberProfiles();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _joiningOrLeaving = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Group update failed: $e')));
+    }
+  }
+
+  int get _memberCount {
+    if (_members.isNotEmpty) return _members.length;
+    final initial = widget.initialMemberCount;
+    if (initial != null && initial > 0) return initial;
+    return 1;
+  }
 
   String _memberCountLabel(int count) {
     return count == 1 ? '1 member' : '$count members';
@@ -464,7 +553,11 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   void _loadMemberProfiles() {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
-    final members = room?.getParticipants(_groupMemberships) ?? const [];
+    if (room == null || room.membership != mx.Membership.join) {
+      _setMembers(const []);
+      return;
+    }
+    final members = room.getParticipants(_groupMemberships);
     _setMembers(members);
     for (final member in members) {
       unawaited(
@@ -475,9 +568,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         ),
       );
     }
-    if (room != null) {
-      unawaited(_requestFullMemberList(room));
-    }
+    unawaited(_requestFullMemberList(room));
   }
 
   Future<void> _requestFullMemberList(mx.Room room) async {

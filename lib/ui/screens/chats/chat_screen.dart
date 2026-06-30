@@ -44,6 +44,9 @@ class ChatScreen extends StatefulWidget {
   final String title;
   final String? avatarUrl;
   final List<ChatMessage> initialMessages;
+  final bool readOnlyUntilJoin;
+  final int? initialMemberCount;
+  final String? groupAlias;
 
   const ChatScreen({
     super.key,
@@ -53,6 +56,9 @@ class ChatScreen extends StatefulWidget {
     required this.title,
     this.avatarUrl,
     this.initialMessages = const [],
+    this.readOnlyUntilJoin = false,
+    this.initialMemberCount,
+    this.groupAlias,
   });
 
   @override
@@ -406,6 +412,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _isSending = false;
   bool _matrixAvailable = false;
+  bool _joinedSuggestedGroup = false;
+  bool _joiningSuggestedGroup = false;
 
   UserProfile? _receiverProfile;
   ContactIdentity? _receiverIdentity;
@@ -441,6 +449,12 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isSelfConversation) {
       _logSelfConversationBlocked('open');
     }
+    final initialGroupRoom = MatrixChatService.instance.getRoomById(
+      widget.conversationId,
+    );
+    _joinedSuggestedGroup =
+        !widget.readOnlyUntilJoin ||
+        initialGroupRoom?.membership == mx.Membership.join;
 
     _logger.addListener(_onNewLog);
     if (widget.initialMessages.isNotEmpty) {
@@ -703,7 +717,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final realConvId = await _resolveConversationId();
     _chat.activateConversationRead(realConvId);
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
-    if (realConvId.startsWith('!')) {
+    if (realConvId.startsWith('!') && !_isReadOnlySuggestedGroup) {
       unawaited(_loadGroupMemberProfiles(realConvId));
     }
 
@@ -713,7 +727,7 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() => _normaliseMessagesToConversation(realConvId));
     }
 
-    if (realConvId.startsWith('!')) {
+    if (realConvId.startsWith('!') && !_isReadOnlySuggestedGroup) {
       final restored = await _chat.fetchMessageHistory(
         conversationID: realConvId,
       );
@@ -2244,18 +2258,21 @@ class _ChatScreenState extends State<ChatScreen> {
                           if (_replyingTo != null) _buildReplyComposerBanner(),
                           if (_editingMessage != null)
                             _buildEditComposerBanner(),
-                          MessageInputField(
-                            controller: _controller,
-                            focusNode: _focusNode,
-                            isSending: _isSending,
-                            onSend: _send,
-                            inputPillHeight: _kInputPillH,
-                            onVoiceMessage: _sendVoiceNote,
-                            onVideoMessage: _recordAndSendVideoMessage,
-                            onCameraAttachment: _pickCameraAttachment,
-                            onGalleryAttachment: _pickGalleryAttachment,
-                            onFileAttachment: _pickFileAttachment,
-                          ),
+                          if (_isReadOnlySuggestedGroup)
+                            _buildJoinGroupBottomBar()
+                          else
+                            MessageInputField(
+                              controller: _controller,
+                              focusNode: _focusNode,
+                              isSending: _isSending,
+                              onSend: _send,
+                              inputPillHeight: _kInputPillH,
+                              onVoiceMessage: _sendVoiceNote,
+                              onVideoMessage: _recordAndSendVideoMessage,
+                              onCameraAttachment: _pickCameraAttachment,
+                              onGalleryAttachment: _pickGalleryAttachment,
+                              onFileAttachment: _pickFileAttachment,
+                            ),
                         ],
                       ),
                     ),
@@ -2560,6 +2577,79 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Widget _buildJoinGroupBottomBar() {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 10, 24, 14),
+        child: SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: FilledButton(
+            onPressed: _joiningSuggestedGroup ? null : _joinSuggestedGroup,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF4DA3FF),
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: const Color(0xFF4DA3FF).withOpacity(0.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+              ),
+            ),
+            child:
+                _joiningSuggestedGroup
+                    ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                    : const Text(
+                      'Join',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _joinSuggestedGroup() async {
+    if (_joiningSuggestedGroup) return;
+    setState(() => _joiningSuggestedGroup = true);
+    try {
+      final room = await MatrixChatService.instance.joinGroup(
+        widget.groupAlias?.trim().isNotEmpty == true
+            ? widget.groupAlias!
+            : _activeConversationId,
+      );
+      if (room != null) {
+        _resolvedConversationId = room.id;
+        await _chat.fetchConversations();
+        final restored = await _chat.fetchMessageHistory(
+          conversationID: room.id,
+        );
+        if (restored.isNotEmpty) _replaceMessagesFromSharedCache(restored);
+        unawaited(_loadGroupMemberProfiles(room.id));
+      }
+      if (!mounted) return;
+      setState(() {
+        _joinedSuggestedGroup = true;
+        _joiningSuggestedGroup = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _joiningSuggestedGroup = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not join group: $e')));
+    }
+  }
+
   Widget _buildGroupAwareMessageBubble({
     required ChatMessage msg,
     required bool isMine,
@@ -2648,7 +2738,9 @@ class _ChatScreenState extends State<ChatScreen> {
             ? _receiverIdentity!.profileName!.trim()
             : null;
     final avatarUrl =
-        _receiverProfile?.hasProfileImage == true
+        isGroupChat
+            ? _stableHeaderAvatarUrl
+            : _receiverProfile?.hasProfileImage == true
             ? _receiverProfile!.profileImage
             : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl;
     final localAvatarPath =
@@ -2695,6 +2787,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                           widget.conversationId,
                                       groupName: displayName,
                                       avatarUrl: avatarUrl,
+                                      alias: widget.groupAlias,
+                                      initialMemberCount:
+                                          widget.initialMemberCount,
+                                      initiallyJoined:
+                                          !_isReadOnlySuggestedGroup,
                                     ),
                               ),
                             );
@@ -2850,6 +2947,11 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── HELPERS ───────────────────────────────────────────────────────────────
 
   int _groupMemberCount() {
+    if (_isReadOnlySuggestedGroup &&
+        widget.initialMemberCount != null &&
+        widget.initialMemberCount! > 0) {
+      return widget.initialMemberCount!;
+    }
     final room = MatrixChatService.instance.getRoomById(_activeConversationId);
     final roomCount =
         _groupMembers.isNotEmpty
@@ -2875,10 +2977,17 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool get _isGroupChat =>
+      widget.readOnlyUntilJoin ||
       widget.receiverId.trim().startsWith('!') ||
       _cachedConversationIsGroup(widget.conversationId) ||
       (_resolvedConversationId != null &&
           _cachedConversationIsGroup(_resolvedConversationId!));
+
+  bool get _isReadOnlySuggestedGroup {
+    if (!widget.readOnlyUntilJoin || _joinedSuggestedGroup) return false;
+    final room = MatrixChatService.instance.getRoomById(_activeConversationId);
+    return room == null || room.membership != mx.Membership.join;
+  }
 
   bool _cachedConversationIsGroup(String conversationId) {
     final conversation = _chat.cachedConversationsSnapshot
