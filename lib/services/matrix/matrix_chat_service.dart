@@ -39,6 +39,13 @@ class MatrixChatService {
   Future<void>? _syncAndJoinFuture;
   final Map<String, Future<Room>> _directRoomFutures = {};
 
+  // Room IDs the app knows to be groups (created or restored via ChatService).
+  // This is an authoritative signal that distinguishes a 2-member group from a
+  // 1:1 DM — member count alone cannot. ChatService pushes its persisted set
+  // down via registerCreatedGroupRooms() on startup, and createGroupRoom()
+  // registers newly created rooms immediately.
+  final Set<String> _createdGroupRoomIds = {};
+
   Stream<Event> get timelineEvents =>
       MatrixClientService.instance.client.onTimelineEvent.stream;
 
@@ -47,7 +54,10 @@ class MatrixChatService {
 
   Future<Client> connect() => MatrixAuthService.instance.restore();
 
-  List<Room> get rooms => MatrixClientService.instance.client.rooms;
+  List<Room> get rooms {
+    if (!MatrixClientService.instance.isInitialized) return const [];
+    return MatrixClientService.instance.client.rooms;
+  }
 
   void resetRuntimeState() {
     _initialSyncComplete = false;
@@ -55,7 +65,27 @@ class MatrixChatService {
     _directRoomFutures.clear();
   }
 
+  // ── Created-group registry ─────────────────────────────────────────────────
+
+  /// Register a single room ID as a known group. Safe to call repeatedly.
+  void registerCreatedGroupRoom(String roomId) {
+    final id = roomId.trim();
+    if (id.isNotEmpty) _createdGroupRoomIds.add(id);
+  }
+
+  /// Register many room IDs as known groups (e.g. ChatService's persisted set).
+  void registerCreatedGroupRooms(Iterable<String> roomIds) {
+    for (final id in roomIds) {
+      registerCreatedGroupRoom(id);
+    }
+  }
+
+  /// True if the room was created/known as a group by the app.
+  bool isCreatedGroupRoom(String roomId) =>
+      _createdGroupRoomIds.contains(roomId.trim());
+
   Room? getRoomById(String roomId) {
+    if (!MatrixClientService.instance.isInitialized) return null;
     for (final room in MatrixClientService.instance.client.rooms) {
       if (room.id == roomId) return room;
     }
@@ -243,13 +273,17 @@ class MatrixChatService {
           content: {
             'history_visibility':
                 isPublic
-                    ? HistoryVisibility.shared.text
+                    ? HistoryVisibility.joined.text
                     : HistoryVisibility.invited.text,
           },
           type: EventTypes.HistoryVisibility,
         ),
       ],
     );
+
+    // Register immediately so this room is authoritatively known as a group,
+    // even if it only has 2 members (creator + one invitee).
+    registerCreatedGroupRoom(roomId);
 
     try {
       await client
@@ -277,12 +311,15 @@ class MatrixChatService {
     return room;
   }
 
-  Future<List<MatrixPublicGroup>> fetchPublicGroups({int limit = 50}) async {
+  Future<List<MatrixPublicGroup>> fetchPublicGroups({int? limit}) async {
     final client = await connect();
     if (!client.isLogged()) return const [];
 
     try {
-      final response = await client.queryPublicRooms(limit: limit);
+      final response =
+          limit == null
+              ? await client.queryPublicRooms()
+              : await client.queryPublicRooms(limit: limit);
       return response.chunk
           .map(
             (room) => MatrixPublicGroup(
@@ -342,6 +379,51 @@ class MatrixChatService {
     if (userId == null || userId.isEmpty) return false;
     return room.creatorUserIds.contains(userId) ||
         room.ownPowerLevel.level >= 100;
+  }
+
+  bool isMatrixGroupRoom(Room room) {
+    // a public room is always a group
+    if (room.joinRules == JoinRules.public) return true;
+    // a room with a canonical alias is always a group
+    if (room.canonicalAlias.trim().isNotEmpty) return true;
+    // a room the app created/knows as a group is always a group
+    // (this is the only reliable signal for a 2-member group)
+    if (isCreatedGroupRoom(room.id)) return true;
+    // a 3+ member room is a group, period
+    if (groupMemberCount(room) > 2) return true;
+    if (room.isDirectChat) return false;
+    if (_looksLikeUnmarkedDirectRoom(room)) return false;
+    return false;
+  }
+
+  bool looksLikeUnmarkedDirectRoom(Room room) =>
+      _looksLikeUnmarkedDirectRoom(room);
+
+  bool _looksLikeUnmarkedDirectRoom(Room room) {
+    if (room.joinRules == JoinRules.public) return false;
+    final alias = room.canonicalAlias.trim();
+    if (alias.isNotEmpty) return false;
+    // A known group is never an unmarked direct room, even with 2 members.
+    if (isCreatedGroupRoom(room.id)) return false;
+    final participantCount =
+        room
+            .getParticipants([Membership.join, Membership.invite])
+            .map((user) => user.id.trim())
+            .where((id) => id.isNotEmpty)
+            .toSet()
+            .length;
+    return participantCount > 0 && participantCount <= 2;
+  }
+
+  int groupMemberCount(Room room) {
+    final ids =
+        room
+            .getParticipants([Membership.join, Membership.invite])
+            .map((user) => user.id.trim())
+            .where((id) => id.isNotEmpty)
+            .toSet();
+    if (ids.isNotEmpty) return ids.length;
+    return room.getParticipants().map((user) => user.id).toSet().length;
   }
 
   String? _displayAlias(String? alias) {
@@ -547,6 +629,10 @@ class MatrixChatService {
   Room? _directRoomFor(String matrixUserId, {bool includeInvite = false}) {
     for (final room in MatrixClientService.instance.client.rooms) {
       if (room.directChatMatrixID != matrixUserId) continue;
+      // A known group (including a 2-member group) is never a direct room.
+      if (isCreatedGroupRoom(room.id)) continue;
+      // 3+ members can't be a real 1:1 — skip it.
+      if (groupMemberCount(room) > 2) continue;
       if (room.membership == Membership.join) return room;
       if (includeInvite && room.membership == Membership.invite) return room;
     }

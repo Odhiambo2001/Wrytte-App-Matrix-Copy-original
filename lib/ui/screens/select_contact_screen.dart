@@ -206,6 +206,14 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         currentUserId: currentUserId,
         contact: contact,
       );
+      unawaited(
+        _resolveMatrixRoomId(
+          currentUserId: currentUserId,
+          receiverId: receiverId,
+          localConversationId: chatOpenData.conversationId,
+          contact: contact,
+        ),
+      );
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -218,6 +226,7 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
                 receiverId: receiverId,
                 currentUserId: currentUserId,
                 title: contact.formattedName,
+                avatarUrl: contact.avatarUrl,
                 initialMessages: chatOpenData.messages,
               ),
           transitionsBuilder: (_, animation, __, child) {
@@ -310,26 +319,6 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         selectedMessages = messages;
         selectedLatest = latest;
       }
-    }
-
-    if (selectedConversationId.startsWith('!') && selectedMessages.isNotEmpty) {
-      return _ContactChatOpenData(
-        conversationId: selectedConversationId,
-        messages: selectedMessages,
-      );
-    }
-
-    final roomId = await _resolveMatrixRoomId(
-      currentUserId: currentUserId,
-      receiverId: receiverId,
-      localConversationId: selectedConversationId,
-      contact: contact,
-    );
-    if (roomId != null && roomId.isNotEmpty) {
-      selectedConversationId = roomId;
-      final chat = ChatService();
-      await chat.fetchMessageHistory(conversationID: roomId);
-      selectedMessages = await chat.loadCachedMessages(roomId);
     }
 
     return _ContactChatOpenData(

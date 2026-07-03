@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 
 class ContactBackendService {
   ContactBackendService._();
@@ -70,9 +71,14 @@ class ContactBackendService {
 
     final userId = _contactUserId(contact);
     if (userId.isEmpty) throw Exception('Missing contact userId.');
+    final nameParts = _nameParts(name);
     await ApiService.post(
       '/api/UserContacts/update',
-      queryParameters: {'userId': userId, 'name': name.trim()},
+      queryParameters: {
+        'userId': userId,
+        'firstName': nameParts.$1,
+        'lastName': nameParts.$2,
+      },
       token: token,
     );
   }
@@ -80,15 +86,42 @@ class ContactBackendService {
   Map<String, dynamic> _contactQuery(Contact contact) {
     final userId = _contactUserId(contact);
     if (userId.isEmpty) throw Exception('Missing contact userId.');
-    return {'userId': userId, 'name': contact.displayName?.trim() ?? ''};
+    final nameParts = _nameParts(contact.displayName ?? '');
+    return {
+      'userId': userId,
+      'firstName': nameParts.$1,
+      'lastName': nameParts.$2,
+    };
   }
 
+  /// The backend always identifies contacts by the bare localpart (no `@`,
+  /// no `:server`). Strip any Matrix wrapper before sending it upstream.
   String _contactUserId(Contact contact) {
     final id = contact.wrytteUserId?.trim() ?? '';
     if (id.startsWith('@') && id.contains(':')) {
       return id.substring(1, id.indexOf(':'));
     }
     return id;
+  }
+
+  /// Canonical full Matrix id for a bare or already-wrapped localpart.
+  /// The backend returns bare ids ("b715d625…") while the rest of the app
+  /// stores and routes on the full form ("@b715d625…:matrix.wrytte.com").
+  /// Normalizing here, at the boundary where backend contacts enter the app,
+  /// guarantees a single canonical id everywhere and prevents the same user
+  /// from appearing twice after a merge.
+  String? _canonicalWrytteUserId(String rawId) {
+    var id = rawId.trim();
+    if (id.isEmpty) return null;
+    // Already a full Matrix id — keep as-is.
+    if (id.startsWith('@') && id.contains(':')) return id;
+    // Strip a stray leading '@' with no server part.
+    if (id.startsWith('@')) id = id.substring(1);
+    // Strip a stray ':server' with no leading '@'.
+    final colon = id.indexOf(':');
+    if (colon != -1) id = id.substring(0, colon);
+    if (id.isEmpty) return null;
+    return '@$id:${MatrixConfig.serverName}';
   }
 
   List<Contact> _contactsFromResponse(dynamic response) {
@@ -128,7 +161,7 @@ class ContactBackendService {
             .toSet()
             .toList();
 
-    final wrytteUserId = _field(map, const [
+    final rawWrytteUserId = _field(map, const [
       'wrytteUserId',
       'WrytteUserId',
       'matrixUserId',
@@ -138,17 +171,33 @@ class ContactBackendService {
       'userId',
       'UserId',
     ]);
-    if (phones.isEmpty && wrytteUserId.isEmpty) return null;
+    // Canonicalize to the full Matrix form so this contact dedupes cleanly
+    // against locally-saved contacts (which store the full "@id:server" form).
+    final wrytteUserId = _canonicalWrytteUserId(rawWrytteUserId);
+    if (phones.isEmpty && (wrytteUserId == null || wrytteUserId.isEmpty)) {
+      return null;
+    }
+
+    final firstName = _field(map, const ['firstName', 'FirstName']);
+    final lastName = _field(map, const ['lastName', 'LastName']);
+    final displayNameFromParts =
+        [
+          firstName,
+          lastName,
+        ].where((part) => part.trim().isNotEmpty).join(' ').trim();
 
     return Contact(
-      displayName: _field(map, const [
-        'displayName',
-        'DisplayName',
-        'name',
-        'Name',
-        'savedName',
-        'SavedName',
-      ]),
+      displayName:
+          displayNameFromParts.isNotEmpty
+              ? displayNameFromParts
+              : _field(map, const [
+                'displayName',
+                'DisplayName',
+                'name',
+                'Name',
+                'savedName',
+                'SavedName',
+              ]),
       phones: phones,
       avatarUrl: _field(map, const [
         'avatarUrl',
@@ -159,9 +208,17 @@ class ContactBackendService {
       ]),
       bio: _field(map, const ['bio', 'Bio']),
       isOnWrytte: _boolField(map, const ['isOnWrytte', 'IsOnWrytte']),
-      wrytteUserId: wrytteUserId.isEmpty ? null : wrytteUserId,
+      wrytteUserId: wrytteUserId,
       isSaved: true,
     );
+  }
+
+  (String, String) _nameParts(String name) {
+    final trimmed = name.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (trimmed.isEmpty) return ('', '');
+    final parts = trimmed.split(' ');
+    if (parts.length == 1) return (parts.first, '');
+    return (parts.first, parts.skip(1).join(' '));
   }
 
   String _field(Map<String, dynamic> map, List<String> keys) {

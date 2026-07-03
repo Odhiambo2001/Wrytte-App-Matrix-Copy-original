@@ -852,7 +852,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final saved =
         ownerUserId == null || ownerUserId.isEmpty
             ? null
-            : await _findSavedContact(ownerUserId, profileUid);
+            : await _findSavedContact(
+              ownerUserId,
+              profileUid,
+              phone: fallbackPhone,
+            );
     var identity =
         ownerUserId == null || ownerUserId.isEmpty
             ? null
@@ -861,7 +865,12 @@ class _ChatScreenState extends State<ChatScreen> {
               matrixUserId: profileUid,
             );
 
-    if (ownerUserId != null && ownerUserId.isNotEmpty && saved == null) {
+    final hasCachedSavedName =
+        _cleanDisplayName(identity?.savedName).isNotEmpty;
+    if (ownerUserId != null &&
+        ownerUserId.isNotEmpty &&
+        saved == null &&
+        !hasCachedSavedName) {
       await ContactIdentityCache.instance.clearSavedName(
         ownerUserId: ownerUserId,
         matrixUserId: profileUid,
@@ -880,9 +889,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 : matrixProfile?.$2 ?? widget.avatarUrl;
         if (nextAvatar?.trim().isNotEmpty == true &&
             nextAvatar?.trim() != widget.avatarUrl?.trim()) {
-          await AvatarPreloadService.replace(
-            oldUrl: widget.avatarUrl,
-            newUrl: nextAvatar,
+          unawaited(
+            AvatarPreloadService.replace(
+              oldUrl: widget.avatarUrl,
+              newUrl: nextAvatar,
+            ),
           );
         }
         final refreshedContact =
@@ -946,22 +957,44 @@ class _ChatScreenState extends State<ChatScreen> {
       ..._messagePeerIdentifiers(),
     ]) {
       final value = candidate?.trim() ?? '';
-      if (_isValidMatrixUserId(value) && !_isOwnMatrixId(value)) {
+      if (value.isEmpty) continue;
+      if (value.startsWith('!') || value.startsWith('@!')) continue;
+      if (_matrixLocalpart(value) == _matrixLocalpart(widget.currentUserId)) {
+        continue;
+      }
+      if (_isValidMatrixUserId(value) || _looksLikeMatrixId(value)) {
         return value;
       }
     }
     return null;
   }
 
-  Future<Contact?> _findSavedContact(String ownerUserId, String uid) async {
+  Future<Contact?> _findSavedContact(
+    String ownerUserId,
+    String uid, {
+    String? phone,
+  }) async {
     final targetLocalpart = _matrixLocalpart(uid);
+    String normalizedPhone(String? value) {
+      final parsed = _phoneFromIdentifier(value);
+      if (parsed.isEmpty) return '';
+      return _formatPhone(parsed).replaceAll(RegExp(r'[^\d]'), '');
+    }
+
+    final targetPhone = normalizedPhone(phone);
     final contacts = await ContactService().getMatrixContactsCached(
       ownerUserId,
     );
     for (final contact in contacts) {
       final contactId = contact.wrytteUserId;
-      if (contactId == null || contactId.isEmpty) continue;
-      if (_matrixLocalpart(contactId) == targetLocalpart) return contact;
+      final sameWrytteId =
+          contactId != null &&
+          contactId.isNotEmpty &&
+          _matrixLocalpart(contactId) == targetLocalpart;
+      final samePhone =
+          targetPhone.isNotEmpty &&
+          contact.phones.map(normalizedPhone).contains(targetPhone);
+      if (sameWrytteId || samePhone) return contact;
     }
     return null;
   }
@@ -995,10 +1028,11 @@ class _ChatScreenState extends State<ChatScreen> {
       return 'Group';
     }
 
-    if (_receiverIsSavedContact) {
-      final savedName = _cleanDisplayName(_receiverIdentity?.savedName);
-      if (savedName.isNotEmpty) return savedName;
-    }
+    final savedName = _cleanDisplayName(_receiverIdentity?.savedName);
+    if (savedName.isNotEmpty) return savedName;
+
+    final initialSavedName = _cleanDisplayName(widget.title);
+    if (initialSavedName.isNotEmpty) return initialSavedName;
 
     final phone = _firstPhoneFrom([
       _receiverIdentity?.phone,
@@ -2177,7 +2211,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   : phone.isNotEmpty
                   ? phone
                   : _matrixLocalpart(receiverId),
-          subtitle: _replyPreviewDisplayText(conversation.lastMessage) ?? '',
+          subtitle: '',
           avatarUrl: identity?.avatarUrl ?? conversation.otherUserAvatar,
           phone: phone,
           isSavedContact: false,
@@ -2620,6 +2654,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _joinSuggestedGroup() async {
     if (_joiningSuggestedGroup) return;
+    final joinedFrom = DateTime.now();
     setState(() => _joiningSuggestedGroup = true);
     try {
       final room = await MatrixChatService.instance.joinGroup(
@@ -2629,11 +2664,9 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (room != null) {
         _resolvedConversationId = room.id;
+        await _chat.markGroupJoinedFrom(room.id, joinedFrom);
         await _chat.fetchConversations();
-        final restored = await _chat.fetchMessageHistory(
-          conversationID: room.id,
-        );
-        if (restored.isNotEmpty) _replaceMessagesFromSharedCache(restored);
+        _replaceMessagesFromSharedCache(const []);
         unawaited(_loadGroupMemberProfiles(room.id));
       }
       if (!mounted) return;
@@ -2675,6 +2708,10 @@ class _ChatScreenState extends State<ChatScreen> {
       replyPreview: _replyPreviewDisplayText(msg.replyPreview),
       replySender: _replySenderDisplayName(msg),
       animateOnMount: true,
+      maxWidth:
+          _isGroupChat && !isMine
+              ? MediaQuery.sizeOf(context).width - 92
+              : null,
     );
 
     if (!_isGroupChat || isMine) return bubble;
@@ -2732,10 +2769,12 @@ class _ChatScreenState extends State<ChatScreen> {
               ..._messagePeerIdentifiers(),
             ]);
     final profileFallbackName =
-        _receiverProfile?.displayName.trim().isNotEmpty == true
-            ? _receiverProfile!.displayName.trim()
+        displayName.trim().isNotEmpty
+            ? displayName.trim()
             : _receiverIdentity?.profileName?.trim().isNotEmpty == true
             ? _receiverIdentity!.profileName!.trim()
+            : _receiverProfile?.displayName.trim().isNotEmpty == true
+            ? _receiverProfile!.displayName.trim()
             : null;
     final avatarUrl =
         isGroupChat
@@ -2775,6 +2814,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
                         onTap: () async {
                           if (isGroupChat) {
                             await Navigator.push(
@@ -2798,7 +2838,9 @@ class _ChatScreenState extends State<ChatScreen> {
                             return;
                           }
                           final profileUid = _profilePeerId();
-                          if (profileUid == null) return;
+                          if (profileUid == null && fallbackPhone.isEmpty) {
+                            return;
+                          }
                           await Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -2956,7 +2998,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final roomCount =
         _groupMembers.isNotEmpty
             ? _groupMembers.length
-            : room?.getParticipants(_groupMemberships).length ?? 0;
+            : room == null
+            ? 0
+            : MatrixChatService.instance.groupMemberCount(room);
     if (roomCount > 0) return roomCount;
 
     final ids = <String>{};
@@ -2990,6 +3034,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool _cachedConversationIsGroup(String conversationId) {
+    final room = MatrixChatService.instance.getRoomById(conversationId);
+    if (room != null) {
+      return MatrixChatService.instance.isMatrixGroupRoom(room);
+    }
     final conversation = _chat.cachedConversationsSnapshot
         .where((item) => item.id == conversationId)
         .cast<ChatConversation?>()
@@ -2997,8 +3045,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (conversation == null) return false;
     return conversation.lastMessageType == 'group' ||
         (conversation.id.startsWith('!') &&
-            conversation.otherUserId == conversation.id &&
-            conversation.participants.length > 2);
+            conversation.otherUserId == conversation.id);
   }
 
   String get _activeConversationId =>
@@ -3067,8 +3114,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final fallback = _cleanDisplayName(member.calcDisplayname());
       if (fallback.isNotEmpty) return fallback;
     }
-    final localpart = _matrixLocalpart(matrixId);
-    return localpart.isNotEmpty ? localpart : 'Member';
+    return 'Member';
   }
 
   Future<void> _loadGroupMemberProfileName(String matrixId) async {

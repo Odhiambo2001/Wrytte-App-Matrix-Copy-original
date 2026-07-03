@@ -121,12 +121,6 @@ class MatrixAuthService {
       'Matrix.auth',
       'password login response user_id="${client.userID}" device_id="${client.deviceID}"',
     );
-    await MatrixClientService.instance.initWithCredentials(
-      homeserver: _stripTrailingSlash(baseUri),
-      userId: response.userId,
-      accessToken: response.accessToken,
-      deviceId: response.deviceId,
-    );
     await _persistLoginResponse(
       homeserver: _stripTrailingSlash(baseUri),
       response: response,

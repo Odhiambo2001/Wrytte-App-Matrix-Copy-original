@@ -519,11 +519,15 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
           _joiningOrLeaving = false;
         });
       } else {
-        await MatrixChatService.instance.joinGroup(
+        final joinedFrom = DateTime.now();
+        final room = await MatrixChatService.instance.joinGroup(
           widget.alias?.trim().isNotEmpty == true
               ? widget.alias!
               : widget.roomId,
         );
+        if (room != null) {
+          await ChatService().markGroupJoinedFrom(room.id, joinedFrom);
+        }
         if (!mounted) return;
         setState(() {
           _joined = true;
@@ -542,6 +546,11 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   int get _memberCount {
     if (_members.isNotEmpty) return _members.length;
+    final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    if (room != null) {
+      final count = MatrixChatService.instance.groupMemberCount(room);
+      if (count > 0) return count;
+    }
     final initial = widget.initialMemberCount;
     if (initial != null && initial > 0) return initial;
     return 1;

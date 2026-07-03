@@ -30,6 +30,9 @@ class ContactService {
   // ── Static in-memory saved-contact cache shared across screen opens ────
   static List<Contact>? _matrixContactsCache;
   static String? _matrixContactsCacheOwner;
+  static Future<List<Contact>>? _matrixContactsFetchInFlight;
+  static String? _matrixContactsFetchOwner;
+  static final Set<String> _profileRefreshOwners = <String>{};
 
   static void preloadContacts(String ownerUserId, ContactService service) {
     service.getMatrixContacts(ownerUserId).then((contacts) {
@@ -40,22 +43,37 @@ class ContactService {
   }
 
   Future<List<Contact>> getMatrixContactsCached(String ownerUserId) async {
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return [];
+
     //Strict userId match — never serve another user's cached contacts
     if (_matrixContactsCache != null &&
         _matrixContactsCacheOwner != null &&
         _matrixContactsCacheOwner!.trim().toLowerCase() ==
-            ownerUserId.trim().toLowerCase() &&
+            owner.toLowerCase() &&
         _matrixContactsCache!.isNotEmpty) {
       return _matrixContactsCache!;
     }
 
-    //Wrong owner or empty — invalidate before fetching
-    invalidateMatrixContactsCache();
+    if (_matrixContactsFetchInFlight != null &&
+        _matrixContactsFetchOwner != null &&
+        _matrixContactsFetchOwner!.trim().toLowerCase() ==
+            owner.toLowerCase()) {
+      return _matrixContactsFetchInFlight!;
+    }
 
-    final contacts = await getMatrixContacts(ownerUserId);
+    // Wrong owner — invalidate before fetching, but do not clear a valid in-flight
+    // request for this owner.
+    if (_matrixContactsCacheOwner != null &&
+        _matrixContactsCacheOwner!.trim().toLowerCase() !=
+            owner.toLowerCase()) {
+      invalidateMatrixContactsCache();
+    }
+
+    final contacts = await getMatrixContacts(owner);
     if (contacts.isNotEmpty) {
       _matrixContactsCache = contacts;
-      _matrixContactsCacheOwner = ownerUserId.trim();
+      _matrixContactsCacheOwner = owner;
     }
     return contacts;
   }
@@ -63,6 +81,8 @@ class ContactService {
   static void invalidateMatrixContactsCache() {
     _matrixContactsCache = null;
     _matrixContactsCacheOwner = null;
+    _matrixContactsFetchInFlight = null;
+    _matrixContactsFetchOwner = null;
   }
 
   static void notifyContactsChanged(String ownerUserId) {
@@ -221,41 +241,180 @@ class ContactService {
   Future<List<Contact>> getMatrixContacts(String ownerUserId) async {
     final owner = ownerUserId.trim();
     if (owner.isEmpty) return [];
+    if (_matrixContactsFetchInFlight != null &&
+        _matrixContactsFetchOwner != null &&
+        _matrixContactsFetchOwner!.trim().toLowerCase() ==
+            owner.toLowerCase()) {
+      return _matrixContactsFetchInFlight!;
+    }
+
+    final fetch = _getMatrixContactsFresh(owner);
+    _matrixContactsFetchInFlight = fetch;
+    _matrixContactsFetchOwner = owner;
+    try {
+      return await fetch;
+    } finally {
+      if (identical(_matrixContactsFetchInFlight, fetch)) {
+        _matrixContactsFetchInFlight = null;
+        _matrixContactsFetchOwner = null;
+      }
+    }
+  }
+
+  Future<List<Contact>> _getMatrixContactsFresh(String owner) async {
     final localContacts = await ContactLocalDb.loadSavedContacts(
       ownerUserId: owner,
     );
-    if (localContacts.isNotEmpty) {
-      return localContacts
-        ..sort((a, b) => a.formattedName.compareTo(b.formattedName));
-    }
+    var contacts = _sortSavedContacts(localContacts);
 
-    final recoveredContacts = await ContactLocalDb.loadRecoverableContacts(
-      ownerUserId: owner,
-    );
-    if (recoveredContacts.isNotEmpty) {
-      await ContactLocalDb.saveContacts(recoveredContacts, ownerUserId: owner);
-      apkLog(
-        'Contact.recover',
-        'recovered ${recoveredContacts.length} contacts into owner="$owner"',
+    if (contacts.isEmpty) {
+      final recoveredContacts = await ContactLocalDb.loadRecoverableContacts(
+        ownerUserId: owner,
       );
-      return recoveredContacts;
+      if (recoveredContacts.isNotEmpty) {
+        contacts = _mergeSavedContacts(contacts, recoveredContacts);
+        await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
+        apkLog(
+          'Contact.recover',
+          'recovered ${recoveredContacts.length} contacts into owner="$owner"',
+        );
+      }
     }
 
     try {
-      final contacts =
-          (await ContactBackendService.instance.loadContacts(
-              ownerUserId: owner,
-            )).map((contact) => contact.copyWith(isSaved: true)).toList()
-            ..sort((a, b) => a.formattedName.compareTo(b.formattedName));
-      if (contacts.isNotEmpty) {
+      final backendContacts = await ContactBackendService.instance.loadContacts(
+        ownerUserId: owner,
+      );
+      if (backendContacts.isNotEmpty) {
+        contacts = _mergeSavedContacts(contacts, backendContacts);
         await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
+        ContactService.notifyContactsChanged(owner);
+        unawaited(_refreshBackendContactProfiles(owner, backendContacts));
       }
+      _matrixContactsCache = contacts;
+      _matrixContactsCacheOwner = owner;
       debugPrint('Loaded ${contacts.length} contacts');
       return contacts;
     } catch (e) {
       debugPrint('Failed to load backend contacts: $e');
-      return ContactLocalDb.loadSavedContacts(ownerUserId: owner);
+      _matrixContactsCache = contacts;
+      _matrixContactsCacheOwner = owner;
+      return contacts;
     }
+  }
+
+  Future<void> _refreshBackendContactProfiles(
+    String owner,
+    List<Contact> backendContacts,
+  ) async {
+    if (backendContacts.isEmpty || _profileRefreshOwners.contains(owner)) {
+      return;
+    }
+    _profileRefreshOwners.add(owner);
+    try {
+      final refreshedContacts = await Future.wait(
+        backendContacts.map(
+          (contact) => _contactWithLatestPublicProfile(
+            ownerUserId: owner,
+            contact: contact.copyWith(isSaved: true),
+          ),
+        ),
+      );
+      if (refreshedContacts.isEmpty) return;
+
+      final currentContacts = await ContactLocalDb.loadSavedContacts(
+        ownerUserId: owner,
+      );
+      final mergedContacts = _mergeSavedContacts(
+        currentContacts,
+        refreshedContacts,
+      );
+      await ContactLocalDb.saveContacts(mergedContacts, ownerUserId: owner);
+      _matrixContactsCache = mergedContacts;
+      _matrixContactsCacheOwner = owner;
+      ContactService.notifyContactsChanged(owner);
+    } catch (e) {
+      apkLog(
+        'Contact.sync',
+        'backend profile refresh failed owner="$owner" error="$e"',
+      );
+    } finally {
+      _profileRefreshOwners.remove(owner);
+    }
+  }
+
+  List<Contact> _mergeSavedContacts(
+    List<Contact> current,
+    List<Contact> incoming,
+  ) {
+    final byKey = <String, Contact>{};
+    for (final contact in current) {
+      byKey[_dedupeKey(contact)] = contact.copyWith(isSaved: true);
+    }
+    for (final contact in incoming) {
+      final savedContact = contact.copyWith(isSaved: true);
+      final key = _dedupeKey(savedContact);
+      final existing = byKey[key];
+      if (existing == null) {
+        byKey[key] = savedContact;
+        continue;
+      }
+      byKey[key] = _mergeSavedContact(existing, savedContact);
+    }
+    return _sortSavedContacts(byKey.values.toList());
+  }
+
+  Contact _mergeSavedContact(Contact existing, Contact incoming) {
+    final incomingName = incoming.displayName?.trim();
+    final existingName = existing.displayName?.trim();
+    final incomingAvatar = incoming.avatarUrl?.trim();
+    final existingAvatar = existing.avatarUrl?.trim();
+    final incomingBio = incoming.bio?.trim();
+    final existingBio = existing.bio?.trim();
+    final incomingUserId = incoming.wrytteUserId?.trim();
+    final existingUserId = existing.wrytteUserId?.trim();
+
+    return Contact(
+      displayName:
+          incomingName != null && incomingName.isNotEmpty
+              ? incomingName
+              : existingName,
+      phones: incoming.phones.isNotEmpty ? incoming.phones : existing.phones,
+      avatarUrl:
+          incomingAvatar != null && incomingAvatar.isNotEmpty
+              ? incomingAvatar
+              : existingAvatar,
+      bio:
+          incomingBio != null && incomingBio.isNotEmpty
+              ? incomingBio
+              : existingBio,
+      isOnWrytte: incoming.isOnWrytte || existing.isOnWrytte,
+      wrytteUserId:
+          incomingUserId != null && incomingUserId.isNotEmpty
+              ? incomingUserId
+              : existingUserId,
+      databaseName: incoming.databaseName ?? existing.databaseName,
+      isRecent: existing.isRecent || incoming.isRecent,
+      isSaved: true,
+    );
+  }
+
+  List<Contact> _sortSavedContacts(List<Contact> contacts) {
+    final sorted = List<Contact>.from(contacts);
+    sorted.sort((a, b) => a.formattedName.compareTo(b.formattedName));
+    return sorted;
+  }
+
+  String _dedupeKey(Contact contact) {
+    final wrytteId = _matrixLocalpart(contact.wrytteUserId);
+    if (wrytteId != null && wrytteId.isNotEmpty) {
+      return 'w:${wrytteId.toLowerCase()}';
+    }
+    final phone = contact.phones
+        .map(_normalizePhone)
+        .firstWhere((phone) => phone.isNotEmpty, orElse: () => '');
+    if (phone.isNotEmpty) return 'p:$phone';
+    return 'n:${contact.formattedName.trim().toLowerCase()}';
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -556,9 +715,11 @@ class ContactService {
       final latestPhone =
           profile.phone.trim().isNotEmpty ? profile.phone.trim() : null;
       if (latestAvatar != null && latestAvatar != contact.avatarUrl?.trim()) {
-        await AvatarPreloadService.replace(
-          oldUrl: contact.avatarUrl,
-          newUrl: latestAvatar,
+        unawaited(
+          AvatarPreloadService.replace(
+            oldUrl: contact.avatarUrl,
+            newUrl: latestAvatar,
+          ),
         );
       }
 

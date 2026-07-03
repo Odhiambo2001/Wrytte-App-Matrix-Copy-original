@@ -167,6 +167,24 @@ class AuthService {
       return;
     }
     final password = secret.trim();
+    final expectedMatrixUserId = '@$userId:${MatrixConfig.serverName}';
+    final current =
+        MatrixClientService.instance.isInitialized
+            ? MatrixClientService.instance.client
+            : null;
+    if (!forceFreshSession &&
+        current?.isLogged() == true &&
+        current?.userID == expectedMatrixUserId) {
+      await MatrixAuthService.instance.persistCurrentSession();
+      apkLog(
+        'Matrix.auth',
+        'login skipped; active session already matches user_id="$userId"',
+      );
+      if (nickname.trim().isNotEmpty) {
+        unawaited(_updateMatrixDisplayName(current!, nickname.trim()));
+      }
+      return;
+    }
 
     if (preferRegisterFirst) {
       try {
@@ -213,7 +231,6 @@ class AuthService {
             MatrixClientService.instance.isInitialized
                 ? MatrixClientService.instance.client
                 : null;
-        final expectedMatrixUserId = '@$userId:${MatrixConfig.serverName}';
         if (current?.isLogged() == true &&
             current?.userID == expectedMatrixUserId) {
           await MatrixAuthService.instance.persistCurrentSession();

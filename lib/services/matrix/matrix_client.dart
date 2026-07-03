@@ -141,7 +141,15 @@ class MatrixClientService {
     required String accessToken,
     String? deviceId,
   }) async {
-    final matrix = await ensureInitialized(storeNamespace: userId);
+    var matrix = await ensureInitialized(storeNamespace: userId);
+    if (matrix.isLogged()) {
+      if (matrix.userID == userId && matrix.accessToken == accessToken) {
+        return;
+      }
+      await clearLocalSession();
+      await disposeCurrentClient();
+      matrix = await ensureInitialized(storeNamespace: userId);
+    }
     await matrix.init(
       newHomeserver: homeserver,
       newUserID: userId,

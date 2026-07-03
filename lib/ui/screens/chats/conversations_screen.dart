@@ -184,7 +184,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     _chatConnectionSub = _chat.connectionStream.listen((connected) {
       if (connected) {
+        unawaited(_chat.fetchConversations());
         unawaited(_restoreContactsAfterMatrixReady());
+        unawaited(_loadSuggestedGroups());
       }
     });
 
@@ -212,9 +214,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     if (_loadingSuggestedGroups) return;
     _loadingSuggestedGroups = true;
     try {
-      final groups = await MatrixChatService.instance.fetchPublicGroups(
-        limit: 50,
-      );
+      final groups = await MatrixChatService.instance.fetchPublicGroups();
       if (!mounted) return;
       setState(() => _suggestedGroups = groups);
     } finally {
@@ -709,7 +709,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     if (profile == null && matrixProfile == null) return conv;
 
     final contactKey = _contactKeyForConversation(conv);
-    final contactName =
+    var contactName =
         contactKey == null
             ? ''
             : _cleanHumanName(_contactNameCache[contactKey]);
@@ -741,9 +741,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             : null;
     if ((avatar ?? '').trim().isNotEmpty &&
         avatar?.trim() != conv.otherUserAvatar?.trim()) {
-      await AvatarPreloadService.replace(
-        oldUrl: conv.otherUserAvatar,
-        newUrl: avatar,
+      unawaited(
+        AvatarPreloadService.replace(
+          oldUrl: conv.otherUserAvatar,
+          newUrl: avatar,
+        ),
       );
     }
     final refreshedSavedContact =
@@ -769,16 +771,23 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           refreshedSavedContact.avatarUrl,
         );
       }
+      contactName = _cleanHumanName(refreshedSavedContact.formattedName);
     }
+    final resolvedName =
+        contactName.isNotEmpty
+            ? contactName
+            : phone.isNotEmpty
+            ? _formatPhone(phone)
+            : name;
     final enriched = conv.copyWith(
-      otherUserName: name,
+      otherUserName: resolvedName,
       otherUserAvatar: avatar,
     );
 
-    if (name.trim().isNotEmpty || (avatar ?? '').trim().isNotEmpty) {
+    if (resolvedName.trim().isNotEmpty || (avatar ?? '').trim().isNotEmpty) {
       await ChatLocalDb.instance.updateConversationUserInfo(
         conversationId: conv.id,
-        name: name.trim(),
+        name: resolvedName.trim(),
         avatar: avatar,
       );
       final identity = ContactIdentity(
@@ -951,6 +960,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final contactKey = _contactKeyForConversation(conv);
 
     // Saved contact labels are local user intent and always win.
+    final savedIdentityName = _cleanHumanName(identity?.savedName);
+    if (savedIdentityName.isNotEmpty) return savedIdentityName;
+
     if (contactKey != null) {
       final contactName = _cleanHumanName(_contactNameCache[contactKey]);
       if (contactName.isNotEmpty) return contactName;
@@ -978,19 +990,37 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   bool _isGroupConversation(ChatConversation conv) {
+    final explicitlyStoredGroup =
+        conv.lastMessageType == 'group' &&
+        conv.id.startsWith('!') &&
+        conv.otherUserId == conv.id;
+    if (explicitlyStoredGroup) return true;
+
     if (MatrixClientService.instance.isInitialized) {
       final room = MatrixChatService.instance.getRoomById(conv.id);
-      final directPeer = room?.directChatMatrixID?.trim() ?? '';
-      if (directPeer.isNotEmpty) return false;
       if (room != null) {
-        final members = room.getParticipants();
-        if (members.length > 2) return true;
+        if (MatrixChatService.instance.isMatrixGroupRoom(room)) return true;
+        if (room.isDirectChat ||
+            MatrixChatService.instance.looksLikeUnmarkedDirectRoom(room)) {
+          return false;
+        }
+        return conv.lastMessageType == 'group' &&
+            conv.otherUserId == conv.id &&
+            _cleanHumanName(conv.otherUserName).isNotEmpty &&
+            _cleanHumanName(conv.otherUserName) != 'Group';
       }
     }
-    return conv.lastMessageType == 'group' ||
-        (conv.id.startsWith('!') &&
-            conv.otherUserId == conv.id &&
-            conv.participants.length > 2);
+    return false;
+  }
+
+  bool _isDisplayableGroupConversation(ChatConversation conv) {
+    if (!_isGroupConversation(conv)) return false;
+    final title = _cleanHumanName(_conversationTitle(conv));
+    final normalized = title.toLowerCase();
+    if (title.isEmpty || normalized == 'empty chat' || normalized == 'group') {
+      return false;
+    }
+    return true;
   }
 
   ContactIdentity? _identityForConversation(ChatConversation conv) {
@@ -1558,14 +1588,25 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Widget _buildGroupsTab(double topPadding) {
-    final allGroups = _conversations.where(_isGroupConversation).toList();
+    final allGroups =
+        _conversations.where(_isDisplayableGroupConversation).toList();
     final ownGroups = allGroups.where(_isOwnGroupConversation).toList();
     final joinedGroups =
         allGroups.where((group) => !_isOwnGroupConversation(group)).toList();
-    final joinedIds = allGroups.map((group) => group.id).toSet();
+    final createdIds = _chat.createdGroupRoomIds;
+    final joinedIds = {
+      ...allGroups.map((group) => group.id),
+      ..._joinedMatrixGroupRoomIds(),
+      ...createdIds,
+    };
+    final joinedAliases = _joinedMatrixGroupAliases();
     final suggested =
         _suggestedGroups
-            .where((group) => !joinedIds.contains(group.roomId))
+            .where(
+              (group) =>
+                  !joinedIds.contains(group.roomId) &&
+                  !_suggestedAliasMatchesJoined(group, joinedAliases),
+            )
             .toList();
 
     if (allGroups.isEmpty && suggested.isEmpty && _initialCacheWarmup) {
@@ -1639,6 +1680,33 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         ),
       ),
     );
+  }
+
+  Set<String> _joinedMatrixGroupRoomIds() {
+    if (!MatrixClientService.instance.isInitialized) return const {};
+    return MatrixChatService.instance.rooms
+        .where(MatrixChatService.instance.isMatrixGroupRoom)
+        .map((room) => room.id)
+        .where((id) => id.isNotEmpty)
+        .toSet();
+  }
+
+  Set<String> _joinedMatrixGroupAliases() {
+    if (!MatrixClientService.instance.isInitialized) return const {};
+    return MatrixChatService.instance.rooms
+        .where(MatrixChatService.instance.isMatrixGroupRoom)
+        .map((room) => room.canonicalAlias)
+        .map((alias) => alias.trim())
+        .where((alias) => alias.isNotEmpty)
+        .toSet();
+  }
+
+  bool _suggestedAliasMatchesJoined(
+    MatrixPublicGroup group,
+    Set<String> joinedAliases,
+  ) {
+    final alias = group.canonicalAlias?.trim() ?? '';
+    return alias.isNotEmpty && joinedAliases.contains(alias);
   }
 
   Widget _buildGroupsEmptyState(double topPadding) {
@@ -1797,11 +1865,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _joinSuggestedGroup(MatrixPublicGroup group) async {
     try {
-      await MatrixChatService.instance.joinGroup(
+      final joinedFrom = DateTime.now();
+      final room = await MatrixChatService.instance.joinGroup(
         group.canonicalAlias?.trim().isNotEmpty == true
             ? group.canonicalAlias!
             : group.roomId,
       );
+      if (room != null) {
+        await _chat.markGroupJoinedFrom(room.id, joinedFrom);
+      }
       await _chat.fetchConversations();
       await _loadLocalConversations();
       await _loadSuggestedGroups();
@@ -1814,6 +1886,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   bool _isOwnGroupConversation(ChatConversation conv) {
+    if (_chat.isCreatedGroupRoom(conv.id)) return true;
     final room = MatrixChatService.instance.getRoomById(conv.id);
     if (room == null || room.membership != Membership.join) return false;
     return MatrixChatService.instance.isGroupOwner(room);

@@ -48,6 +48,7 @@ class MessageBubble extends StatelessWidget {
   final String? replyPreview;
   final String? replySender;
   final bool animateOnMount;
+  final double? maxWidth;
 
   static const Color _blue = Color(0xFF4DA3FF);
   static const Color _incoming = Color(0xFF23262C);
@@ -74,6 +75,7 @@ class MessageBubble extends StatelessWidget {
     this.replyPreview,
     this.replySender,
     this.animateOnMount = true,
+    this.maxWidth,
   });
 
   static const double _tailW = 8.0;
@@ -137,7 +139,7 @@ class MessageBubble extends StatelessWidget {
               ),
     );
 
-    final maxBubbleWidth = MediaQuery.sizeOf(context).width * 0.78;
+    final maxBubbleWidth = maxWidth ?? MediaQuery.sizeOf(context).width * 0.78;
     final tail =
         showTail
             ? _buildTail(bubbleColor, incoming: !isMine)

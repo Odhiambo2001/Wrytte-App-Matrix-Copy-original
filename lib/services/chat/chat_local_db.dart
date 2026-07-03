@@ -651,6 +651,8 @@ class ChatLocalDb {
 
     final hydrated = <ChatConversation>[];
     var changed = false;
+
+
     for (final conversation in conversations) {
       final latest = await database.query(
         'messages',
@@ -887,6 +889,7 @@ class ChatLocalDb {
     return id.startsWith('!') && otherUserId == id && participants.length > 2;
   }
 
+
   Future<String?> findDirectConversationId({
     required String selfUserId,
     required String otherUserId,
@@ -898,6 +901,17 @@ class ChatLocalDb {
     final conversations = await loadConversations();
     ChatConversation? fallback;
     for (final conversation in conversations) {
+      // Never resolve a group as a direct room, even if the other user
+      // is a member of it.
+      if (_isStoredGroupConversation(
+            conversation.id,
+            conversation.otherUserId,
+            conversation.participants,
+            conversation.lastMessageType,
+          )) {
+        continue;
+      }
+
       final participants =
           conversation.participants.map(_conversationPeerKey).toSet();
       final otherId = _conversationPeerKey(conversation.otherUserId);
@@ -910,6 +924,8 @@ class ChatLocalDb {
     }
     return fallback?.id;
   }
+
+
 
   Future<List<String>> findConversationIdsByMessageIdentity({
     Iterable<String> userIds = const [],

@@ -389,10 +389,7 @@ class UserProfileService {
           if (profileImage.isNotEmpty) {
             await _storage.write(key: _profileImageKey, value: profileImage);
             if (localProfileImagePath.isEmpty) {
-              localProfileImagePath = await _cacheRemoteAvatarBestEffort(
-                uid,
-                profileImage,
-              );
+              unawaited(_cacheRemoteAvatarBestEffort(uid, profileImage));
             }
           }
         }
@@ -619,7 +616,7 @@ class UserProfileService {
                 'Authorization': 'Bearer ${token.trim()}',
             },
           )
-          .timeout(const Duration(seconds: 30));
+          .timeout(const Duration(seconds: 8));
       if (response.statusCode < 200 || response.statusCode >= 300) return '';
       if (response.bodyBytes.isEmpty) return '';
       final supportDir = await getApplicationSupportDirectory();

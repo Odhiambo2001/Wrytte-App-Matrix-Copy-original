@@ -22,6 +22,7 @@ import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ChatService {
   ChatService._internal();
@@ -71,6 +72,8 @@ class ChatService {
   final Map<String, ChatConversation> _conversationsMap = {};
   final Map<String, List<ChatMessage>> _messagesCache = {};
   final Map<String, Set<String>> _hiddenEventIdsByRoom = {};
+  final Map<String, DateTime> _groupJoinCutoffsByRoom = {};
+  final Set<String> _createdGroupRoomIds = {};
   final Set<String> _readConversationIds = {};
   final Set<String> _activeReadConversationIds = {};
   final Map<String, DateTime> _lastReadAtByConversation = {};
@@ -122,6 +125,8 @@ class ChatService {
         throw Exception('User not authenticated');
       }
       await ChatLocalDb.instance.bindOwner(_currentUserId);
+      await _loadGroupJoinCutoffs();
+      await _loadCreatedGroupRoomIds();
       _suppressRestoredRoomUnread = true;
 
       final expectedMatrixUserId = _expectedMatrixUserId(_currentUserId!);
@@ -164,6 +169,7 @@ class ChatService {
 
         final message = ChatMessage.fromMatrixEvent(event);
         if (message == null) return;
+        if (_isBeforeGroupJoinCutoff(message)) return;
 
         _cacheMessage(message);
 
@@ -506,10 +512,12 @@ class ChatService {
           message.id: message,
       };
       final hiddenIds = _hiddenEventIdsForRoom(room.id, room: room);
+      final groupJoinCutoff = _groupJoinCutoffForRoom(room);
       final messages = _messagesFromMatrixEvents(
         timeline.events,
         localById: localById,
         hiddenIds: hiddenIds,
+        groupJoinCutoff: groupJoinCutoff,
       );
 
       final latestRestoredAt =
@@ -562,6 +570,7 @@ class ChatService {
     Iterable<mx.Event> events, {
     required Map<String, ChatMessage> localById,
     required Set<String> hiddenIds,
+    DateTime? groupJoinCutoff,
   }) {
     final sortedEvents =
         events.toList()
@@ -570,6 +579,10 @@ class ChatService {
 
     for (final event in sortedEvents) {
       if (ChatMessage.matrixEditTargetId(event) != null) continue;
+      if (groupJoinCutoff != null &&
+          event.originServerTs.isBefore(groupJoinCutoff)) {
+        continue;
+      }
       final message = ChatMessage.fromMatrixEvent(event);
       if (message == null) continue;
       final local = localById[message.id];
@@ -1061,9 +1074,13 @@ class ChatService {
 
   List<ChatMessage> getConversationMessages(String conversationId) {
     final messages =
-        List<ChatMessage>.from(
-          _messagesCache[conversationId] ?? [],
-        ).where((message) => !_isHiddenForMe(message)).toList();
+        List<ChatMessage>.from(_messagesCache[conversationId] ?? [])
+            .where(
+              (message) =>
+                  !_isHiddenForMe(message) &&
+                  !_isBeforeGroupJoinCutoff(message),
+            )
+            .toList();
     messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return messages;
   }
@@ -1082,7 +1099,11 @@ class ChatService {
               unawaited(ChatLocalDb.instance.deleteMessageForMe(message.id));
               return message.copyWith(isDeletedForMe: true);
             })
-            .where((message) => !_isHiddenForMe(message))
+            .where(
+              (message) =>
+                  !_isHiddenForMe(message) &&
+                  !_isBeforeGroupJoinCutoff(message),
+            )
             .toList()
           ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     for (final message in visible) {
@@ -1631,6 +1652,7 @@ class ChatService {
       otherUserAvatar: room.avatar?.toString(),
     );
     _conversationsMap[room.id] = conversation;
+    await markGroupCreated(room.id);
     await ChatLocalDb.instance.saveConversations([conversation]);
     _emitConversations();
     return conversation;
@@ -1650,6 +1672,15 @@ class ChatService {
     final cleanRoomName = _cleanHumanName(room.getLocalizedDisplayname());
     if (isGroupRoom) {
       final last = room.lastEvent;
+      final lastMessage =
+          last == null ? null : ChatMessage.fromMatrixEvent(last);
+      final visibleLastMessage =
+          lastMessage != null &&
+                  _isDisplayableMessage(lastMessage) &&
+                  !_isHiddenForMe(lastMessage) &&
+                  !_isBeforeGroupJoinCutoff(lastMessage)
+              ? lastMessage
+              : null;
       final groupName = _groupDisplayName(room, existing);
       return ChatConversation(
         id: room.id,
@@ -1661,13 +1692,15 @@ class ChatService {
               .where((id) => id != client.userID),
         ],
         otherUserId: room.id,
-        lastMessage: last?.body ?? existing?.lastMessage ?? '',
+        lastMessage: visibleLastMessage?.content ?? '',
         lastMessageSenderId:
-            last?.senderId ?? existing?.lastMessageSenderId ?? '',
+            visibleLastMessage?.senderId ?? existing?.lastMessageSenderId ?? '',
         lastMessageTime:
-            last?.originServerTs ?? existing?.lastMessageTime ?? DateTime.now(),
+            visibleLastMessage?.timestamp ??
+            existing?.lastMessageTime ??
+            DateTime.now(),
         unreadCount: _displayableUnreadCountForRoom(room, client.userID),
-        lastMessageType: existing?.lastMessageType ?? 'group',
+        lastMessageType: 'group',
         otherUserName: groupName,
         otherUserAvatar: existing?.otherUserAvatar ?? room.avatar?.toString(),
       );
@@ -1711,16 +1744,19 @@ class ChatService {
   }
 
   bool _isGroupRoom(mx.Room room, ChatConversation? existing) {
-    final directPeer = room.directChatMatrixID?.trim() ?? '';
-    if (directPeer.isNotEmpty) return false;
-    final members = room.getParticipants();
-    if (existing?.lastMessageType == 'group') return true;
-    if (existing?.id.startsWith('!') == true &&
-        existing?.otherUserId == existing?.id &&
-        (existing?.participants.length ?? 0) > 2) {
+    if (room.isDirectChat) return false;
+    if (existing?.lastMessageType == 'group' &&
+        existing?.id.startsWith('!') == true &&
+        existing?.otherUserId == existing?.id) {
       return true;
     }
-    return members.length > 2;
+    if (MatrixChatService.instance.isMatrixGroupRoom(room)) return true;
+    if (existing?.id.startsWith('!') == true &&
+        existing?.otherUserId == existing?.id &&
+        !MatrixChatService.instance.looksLikeUnmarkedDirectRoom(room)) {
+      return true;
+    }
+    return false;
   }
 
   String _groupDisplayName(mx.Room room, ChatConversation? existing) {
@@ -1850,16 +1886,24 @@ class ChatService {
               ? null
               : ChatMessage.fromMatrixEvent(room.lastEvent!);
       final hasDisplayableMatrixLast =
-          _isDisplayableMessage(lastMessage) && !_isHiddenForMe(lastMessage!);
+          lastMessage != null &&
+          _isDisplayableMessage(lastMessage) &&
+          !_isHiddenForMe(lastMessage) &&
+          !_isBeforeGroupJoinCutoff(lastMessage);
       final hasCachedPreview = existing?.lastMessage.trim().isNotEmpty == true;
       final hasCachedMessages = (_messagesCache[room.id] ??
               const <ChatMessage>[])
-          .where((message) => !_isHiddenForMe(message))
+          .where(
+            (message) =>
+                !_isHiddenForMe(message) && !_isBeforeGroupJoinCutoff(message),
+          )
           .any(_isDisplayableMessage);
+      final isGroupRoom = _isGroupRoom(room, existing);
 
       if (!hasDisplayableMatrixLast &&
           !hasCachedPreview &&
-          !hasCachedMessages) {
+          !hasCachedMessages &&
+          !isGroupRoom) {
         continue;
       }
 
@@ -1938,8 +1982,14 @@ class ChatService {
         incoming.lastMessageType != 'group' &&
         incoming.otherUserId.trim().isNotEmpty &&
         !incoming.otherUserId.startsWith('!');
+    final room = _roomById(incoming.id) ?? _roomById(cached.id);
+    final looksDirect =
+        room != null &&
+        (room.isDirectChat ||
+            MatrixChatService.instance.looksLikeUnmarkedDirectRoom(room));
     final cachedIsGroup =
         !incomingIsDirect &&
+        !looksDirect &&
         (cached.lastMessageType == 'group' ||
             (cached.id.startsWith('!') &&
                 cached.otherUserId == cached.id &&
@@ -2130,17 +2180,19 @@ class ChatService {
     }
     final existing = _conversationsMap[convId];
     final room = _roomById(convId);
-    final directPeer = room?.directChatMatrixID?.trim() ?? '';
-    final isMatrixDirectRoom = directPeer.isNotEmpty;
+    final isMatrixDirectRoom =
+        room != null &&
+        (room.isDirectChat ||
+            MatrixChatService.instance.looksLikeUnmarkedDirectRoom(room));
+    final explicitlyStoredGroup =
+        existing?.lastMessageType == 'group' &&
+        existing?.id.startsWith('!') == true &&
+        existing?.otherUserId == existing?.id;
     final isGroupConversation =
-        !isMatrixDirectRoom &&
-        (message.receiverId.trim().startsWith('!') ||
-            (room != null && _isGroupRoom(room, existing)) ||
-            (room == null &&
-                (existing?.lastMessageType == 'group' ||
-                    (existing?.id.startsWith('!') == true &&
-                        existing?.otherUserId == existing?.id &&
-                        (existing?.participants.length ?? 0) > 2))));
+        explicitlyStoredGroup ||
+        (!isMatrixDirectRoom &&
+            (message.receiverId.trim().startsWith('!') ||
+                (room != null && _isGroupRoom(room, existing))));
     if (isGroupConversation) {
       final groupName =
           room == null
@@ -2353,6 +2405,110 @@ class ChatService {
     final readAt = _lastReadAtByConversation[conversationId];
     if (readAt == null) return true;
     return message.timestamp.isAfter(readAt);
+  }
+
+  String _groupJoinCutoffsKey(String ownerUserId) =>
+      'wrytte.group_join_cutoffs.$ownerUserId';
+
+  String _createdGroupRoomIdsKey(String ownerUserId) =>
+      'wrytte.created_group_room_ids.$ownerUserId';
+
+  Future<void> _loadGroupJoinCutoffs() async {
+    final owner = _currentUserId;
+    if (owner == null || owner.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final encoded =
+        prefs.getStringList(_groupJoinCutoffsKey(owner)) ?? const [];
+    _groupJoinCutoffsByRoom.clear();
+    for (final item in encoded) {
+      final separator = item.indexOf('|');
+      if (separator <= 0) continue;
+      final roomId = item.substring(0, separator).trim();
+      final millis = int.tryParse(item.substring(separator + 1).trim());
+      if (roomId.isEmpty || millis == null) continue;
+      _groupJoinCutoffsByRoom[roomId] = DateTime.fromMillisecondsSinceEpoch(
+        millis,
+      );
+    }
+  }
+
+  Future<void> _saveGroupJoinCutoffs() async {
+    final owner = _currentUserId;
+    if (owner == null || owner.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final encoded = _groupJoinCutoffsByRoom.entries
+        .map((entry) => '${entry.key}|${entry.value.millisecondsSinceEpoch}')
+        .toList(growable: false);
+    await prefs.setStringList(_groupJoinCutoffsKey(owner), encoded);
+  }
+
+  Future<void> _loadCreatedGroupRoomIds() async {
+    final owner = _currentUserId;
+    if (owner == null || owner.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList(_createdGroupRoomIdsKey(owner)) ?? const [];
+    _createdGroupRoomIds
+      ..clear()
+      ..addAll(ids.map((id) => id.trim()).where((id) => id.isNotEmpty));
+      MatrixChatService.instance.registerCreatedGroupRooms(_createdGroupRoomIds); // add
+  }
+
+  Future<void> _saveCreatedGroupRoomIds() async {
+    final owner = _currentUserId;
+    if (owner == null || owner.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _createdGroupRoomIdsKey(owner),
+      _createdGroupRoomIds.toList(growable: false),
+    );
+  }
+
+  Future<void> markGroupCreated(String roomId) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return;
+    if (_createdGroupRoomIds.add(id)) {
+      await _saveCreatedGroupRoomIds();
+      MatrixChatService.instance.registerCreatedGroupRoom(id); // add
+    }
+  }
+
+  bool isCreatedGroupRoom(String roomId) =>
+      _createdGroupRoomIds.contains(roomId.trim());
+
+  Set<String> get createdGroupRoomIds =>
+      Set<String>.unmodifiable(_createdGroupRoomIds);
+
+  Future<void> markGroupJoinedFrom(String roomId, DateTime joinedFrom) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return;
+    final existing = _groupJoinCutoffsByRoom[id];
+    if (existing == null || joinedFrom.isAfter(existing)) {
+      _groupJoinCutoffsByRoom[id] = joinedFrom;
+      await _saveGroupJoinCutoffs();
+    }
+    final cached = _messagesCache[id];
+    if (cached != null) {
+      final kept = <ChatMessage>[];
+      for (final message in cached) {
+        if (message.timestamp.isBefore(joinedFrom)) {
+          unawaited(ChatLocalDb.instance.deleteMessageForMe(message.id));
+        } else {
+          kept.add(message);
+        }
+      }
+      _messagesCache[id] = kept;
+      _emitRoomMessages(id);
+    }
+  }
+
+  DateTime? _groupJoinCutoffForRoom(mx.Room room) {
+    if (!MatrixChatService.instance.isMatrixGroupRoom(room)) return null;
+    return _groupJoinCutoffsByRoom[room.id];
+  }
+
+  bool _isBeforeGroupJoinCutoff(ChatMessage message) {
+    final cutoff = _groupJoinCutoffsByRoom[message.conversationId];
+    return cutoff != null && message.timestamp.isBefore(cutoff);
   }
 
   void _emitRoomMessages(String conversationId) {
@@ -2584,8 +2740,8 @@ class ChatService {
     final ownerUserId = (await AuthService.instance.getCurrentUserId())?.trim();
     if (ownerUserId == null || ownerUserId.isEmpty) return;
 
-    final contacts = await ContactLocalDb.loadSavedContacts(
-      ownerUserId: ownerUserId,
+    final contacts = await ContactService().getMatrixContactsCached(
+      ownerUserId,
     );
     if (contacts.isEmpty || _conversationsMap.isEmpty) return;
 
@@ -2806,7 +2962,7 @@ class ChatService {
     final name = _cleanHumanName(contact.displayName);
     if (name.isEmpty) return;
 
-    final changed = _applyContactToConversationCache(contact);
+    var changed = _applyContactToConversationCache(contact);
     if (changed) {
       unawaited(
         ChatLocalDb.instance.replaceConversations(
@@ -2824,7 +2980,21 @@ class ChatService {
           phones: contact.phones,
         );
     for (final conversationId in dbConversationIds) {
-      if (_conversationsMap.containsKey(conversationId)) continue;
+      final conversation = _conversationsMap[conversationId];
+      if (conversation != null) {
+        final next = conversation.copyWith(
+          otherUserName: name,
+          otherUserAvatar:
+              contact.avatarUrl?.trim().isNotEmpty == true
+                  ? contact.avatarUrl
+                  : conversation.otherUserAvatar,
+        );
+        if (next.otherUserName != conversation.otherUserName ||
+            next.otherUserAvatar != conversation.otherUserAvatar) {
+          _conversationsMap[conversationId] = next;
+          changed = true;
+        }
+      }
       unawaited(
         ChatLocalDb.instance.updateConversationUserInfo(
           conversationId: conversationId,
