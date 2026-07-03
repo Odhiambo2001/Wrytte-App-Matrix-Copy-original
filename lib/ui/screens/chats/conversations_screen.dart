@@ -909,6 +909,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final room = MatrixChatService.instance.getRoomById(conv.id);
       final roomName = _cleanGroupName(room?.name, room: room);
       if (roomName.isNotEmpty) return roomName;
+      final alias = _cleanGroupName(_displayGroupAlias(room), room: room);
+      if (alias.isNotEmpty) return alias;
       final groupName = _cleanGroupName(conv.otherUserName, room: room);
       if (groupName.isNotEmpty) return groupName;
       return 'Group';
@@ -950,6 +952,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final room = MatrixChatService.instance.getRoomById(conv.id);
       final roomName = _cleanGroupName(room?.name, room: room);
       if (roomName.isNotEmpty) return roomName;
+      final alias = _cleanGroupName(_displayGroupAlias(room), room: room);
+      if (alias.isNotEmpty) return alias;
       final groupName = _cleanGroupName(conv.otherUserName, room: room);
       if (groupName.isNotEmpty) return groupName;
       return 'Group';
@@ -1033,8 +1037,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   String? _avatarForConversation(ChatConversation conv) {
     if (_isGroupConversation(conv)) {
-      final roomAvatar =
-          MatrixChatService.instance.getRoomById(conv.id)?.avatar?.toString();
+      final roomAvatar = _groupRoomAvatarUrl(
+        MatrixChatService.instance.getRoomById(conv.id),
+      );
       if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
       final groupAvatar = conv.otherUserAvatar?.trim();
       return groupAvatar?.isNotEmpty == true ? groupAvatar : null;
@@ -1068,8 +1073,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     String? contactKey,
   ) {
     if (_isGroupConversation(conv)) {
-      final roomAvatar =
-          MatrixChatService.instance.getRoomById(conv.id)?.avatar?.toString();
+      final roomAvatar = _groupRoomAvatarUrl(
+        MatrixChatService.instance.getRoomById(conv.id),
+      );
       if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
       final groupAvatar = conv.otherUserAvatar?.trim();
       return groupAvatar?.isNotEmpty == true ? groupAvatar : null;
@@ -1254,7 +1260,21 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final name = _cleanHumanName(value);
     if (name.isEmpty || name.startsWith('gr.@')) return '';
     if (room != null && _looksLikeGroupMemberName(room, name)) return '';
+    if (_looksLikeKnownContactName(name)) return '';
     return name;
+  }
+
+  String _displayGroupAlias(mx.Room? room) {
+    final raw = room?.canonicalAlias.trim() ?? '';
+    if (raw.isEmpty) return '';
+    final withoutHash = raw.startsWith('#') ? raw.substring(1) : raw;
+    return withoutHash.split(':').first.trim();
+  }
+
+  String? _groupRoomAvatarUrl(mx.Room? room) {
+    final raw = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
+    final avatar = raw is String ? raw.trim() : '';
+    return avatar.isEmpty ? null : avatar;
   }
 
   bool _looksLikeGroupMemberName(mx.Room room, String name) {
@@ -1267,6 +1287,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       if (memberName.isNotEmpty && memberName == normalized) return true;
     }
     return false;
+  }
+
+  bool _looksLikeKnownContactName(String name) {
+    final normalized = name.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    return _contactNameCache.values.any(
+      (contactName) => contactName.trim().toLowerCase() == normalized,
+    );
   }
 
   String _extractPhone(String? value) {

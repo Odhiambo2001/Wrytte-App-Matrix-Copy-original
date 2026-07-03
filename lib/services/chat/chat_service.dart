@@ -1742,7 +1742,7 @@ class ChatService {
       unreadCount: 0,
       lastMessageType: 'group',
       otherUserName: name.trim(),
-      otherUserAvatar: room.avatar?.toString(),
+      otherUserAvatar: _groupRoomAvatarUrl(room),
     );
     _conversationsMap[room.id] = conversation;
     await markGroupCreated(room.id);
@@ -1762,7 +1762,7 @@ class ChatService {
     final client = MatrixClientService.instance.client;
     final existing = _conversationsMap[room.id];
     final isGroupRoom = _isGroupRoom(room, existing);
-    final cleanRoomName = _cleanHumanName(room.getLocalizedDisplayname());
+    final cleanRoomName = _cleanHumanName(room.name);
     if (isGroupRoom) {
       final last = room.lastEvent;
       final lastMessage =
@@ -1795,7 +1795,7 @@ class ChatService {
         unreadCount: _displayableUnreadCountForRoom(room, client.userID),
         lastMessageType: 'group',
         otherUserName: groupName,
-        otherUserAvatar: room.avatar?.toString(),
+        otherUserAvatar: _groupRoomAvatarUrl(room),
       );
     }
     final otherId =
@@ -1855,7 +1855,7 @@ class ChatService {
   String _groupDisplayName(mx.Room room, ChatConversation? existing) {
     for (final candidate in [
       room.name,
-      room.getLocalizedDisplayname(),
+      _displayAlias(room.canonicalAlias),
       _createdGroupRoomIds.contains(room.id) ? existing?.otherUserName : null,
     ]) {
       final name = _cleanHumanName(candidate);
@@ -1865,6 +1865,19 @@ class ChatService {
       return name;
     }
     return 'Group';
+  }
+
+  String? _groupRoomAvatarUrl(mx.Room room) {
+    final raw = room.getState(mx.EventTypes.RoomAvatar)?.content['url'];
+    final avatar = raw is String ? raw.trim() : '';
+    return avatar.isEmpty ? null : avatar;
+  }
+
+  String _displayAlias(String? alias) {
+    final raw = alias?.trim() ?? '';
+    if (raw.isEmpty) return '';
+    final withoutHash = raw.startsWith('#') ? raw.substring(1) : raw;
+    return withoutHash.split(':').first.trim();
   }
 
   bool _looksLikeDirectMemberNameForGroup(mx.Room room, String name) {
@@ -2167,7 +2180,7 @@ class ChatService {
     ChatConversation incoming,
     ChatConversation cached,
   ) {
-    final roomAvatar = room?.avatar?.toString().trim() ?? '';
+    final roomAvatar = room == null ? '' : _groupRoomAvatarUrl(room) ?? '';
     if (roomAvatar.isNotEmpty) return roomAvatar;
     final incomingAvatar = incoming.otherUserAvatar?.trim() ?? '';
     if (incomingAvatar.isNotEmpty) return incomingAvatar;
@@ -2200,6 +2213,7 @@ class ChatService {
   }
 
   void _cacheRoomIdentity(mx.Room room) {
+    if (_isGroupRoom(room, _conversationsMap[room.id])) return;
     final ownerUserId = _currentUserId;
     final peerId = _roomPeerMatrixId(room, MatrixClientService.instance.userId);
     if (ownerUserId == null ||
@@ -2373,7 +2387,7 @@ class ChatService {
         deletedAt: existing?.deletedAt,
         deletedBy: existing?.deletedBy ?? const [],
         otherUserName: groupName.isNotEmpty ? groupName : 'Group',
-        otherUserAvatar: existing?.otherUserAvatar ?? room?.avatar?.toString(),
+        otherUserAvatar: room == null ? null : _groupRoomAvatarUrl(room),
       );
       unawaited(_persistCachedMessage(message, _conversationsMap[convId]!));
       _emitRoomMessages(convId);
