@@ -1,10 +1,8 @@
 import 'dart:async';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/services/call_service.dart';
 import 'package:wrytte/ui/screens/calls/call_screen.dart';
-import 'package:wrytte/ui/screens/calls/calls_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IncomingCallScreen

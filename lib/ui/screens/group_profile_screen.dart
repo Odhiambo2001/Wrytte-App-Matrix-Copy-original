@@ -85,7 +85,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                       () => Navigator.pop(context),
                     ),
                     const Spacer(),
-                    _editButton(),
+                    if (_canEditGroup(room)) _editButton(),
                   ],
                 ),
               ),
@@ -226,7 +226,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   Widget _editButton() {
     return GestureDetector(
-      onTap: _changeGroupAvatar,
+      onTap: _openEditGroup,
       child: Container(
         height: 48,
         padding: const EdgeInsets.symmetric(horizontal: 22),
@@ -245,6 +245,12 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         ),
       ),
     );
+  }
+
+  bool _canEditGroup(mx.Room? room) {
+    return room != null &&
+        room.membership == mx.Membership.join &&
+        MatrixChatService.instance.isGroupOwner(room);
   }
 
   Widget _action(IconData icon, String label) {
@@ -473,26 +479,44 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     return RegExp(r'https?://[^\s]+').firstMatch(value)?.group(0);
   }
 
-  Future<void> _changeGroupAvatar() async {
+  Future<void> _openEditGroup() async {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     if (room == null) return;
-    final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
-    if (picked == null) return;
-    try {
-      final file = File(picked.path);
-      final matrixFile = mx.MatrixFile(
-        bytes: await file.readAsBytes(),
-        name: picked.name,
-      );
-      await room.setAvatar(matrixFile);
-      if (!mounted) return;
-      setState(() => _localAvatarOverride = picked.path);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to update group avatar: $e')),
-      );
+    final result = await Navigator.push<_GroupEditResult>(
+      context,
+      MaterialPageRoute(
+        builder:
+            (_) => _EditGroupScreen(
+              roomId: widget.roomId,
+              initialName: _displayTitle(
+                room.name,
+                widget.groupName,
+                _displayAlias(
+                  room.canonicalAlias.isNotEmpty
+                      ? room.canonicalAlias
+                      : widget.alias ?? '',
+                ),
+              ),
+              initialAlias: _displayAlias(
+                room.canonicalAlias.isNotEmpty
+                    ? room.canonicalAlias
+                    : widget.alias ?? '',
+              ),
+              initialAvatarUrl: widget.avatarUrl ?? room.avatar?.toString(),
+            ),
+      ),
+    );
+    if (!mounted || result == null) return;
+    if (result.closedProfile) {
+      Navigator.pop(context);
+      return;
     }
+    setState(() {
+      if (result.localAvatarPath != null) {
+        _localAvatarOverride = result.localAvatarPath;
+      }
+    });
+    _loadMemberProfiles();
   }
 
   Future<void> _openAddMembers() async {
@@ -687,6 +711,427 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     mx.Membership.join,
     mx.Membership.invite,
   ];
+}
+
+class _GroupEditResult {
+  final String? localAvatarPath;
+  final bool closedProfile;
+
+  const _GroupEditResult({this.localAvatarPath, this.closedProfile = false});
+}
+
+class _EditGroupScreen extends StatefulWidget {
+  final String roomId;
+  final String initialName;
+  final String initialAlias;
+  final String? initialAvatarUrl;
+
+  const _EditGroupScreen({
+    required this.roomId,
+    required this.initialName,
+    required this.initialAlias,
+    this.initialAvatarUrl,
+  });
+
+  @override
+  State<_EditGroupScreen> createState() => _EditGroupScreenState();
+}
+
+class _EditGroupScreenState extends State<_EditGroupScreen> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _descriptionController = TextEditingController();
+  final ImagePicker _picker = ImagePicker();
+
+  File? _pickedImageFile;
+  bool _saving = false;
+  bool _leaving = false;
+  bool _deleting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    _nameController.text = widget.initialName;
+    _descriptionController.text = room?.topic ?? '';
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final picked = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      setState(() => _pickedImageFile = File(picked.path));
+    } catch (_) {
+      _showSnack('Could not select photo.', isError: true);
+    }
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    if (room == null) {
+      _showSnack('Group is unavailable.', isError: true);
+      return;
+    }
+    final name = _nameController.text.trim();
+    if (name.isEmpty) {
+      _showSnack('Group name is required.', isError: true);
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      String? localAvatarPath;
+      if (_pickedImageFile != null) {
+        final matrixFile = mx.MatrixFile(
+          bytes: await _pickedImageFile!.readAsBytes(),
+          name: _pickedImageFile!.path.split(Platform.pathSeparator).last,
+        );
+        await room.setAvatar(matrixFile);
+        localAvatarPath = _pickedImageFile!.path;
+      }
+
+      if (name != room.name.trim()) {
+        await room.setName(name);
+      }
+
+      final description = _descriptionController.text.trim();
+      if (description != room.topic.trim()) {
+        await room.setDescription(description);
+      }
+
+      if (!mounted) return;
+      Navigator.pop(
+        context,
+        _GroupEditResult(localAvatarPath: localAvatarPath),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _showSnack('Failed to save group: $e', isError: true);
+    }
+  }
+
+  Future<void> _leaveGroup() async {
+    if (_leaving || _deleting) return;
+    setState(() => _leaving = true);
+    try {
+      await MatrixChatService.instance.leaveGroup(widget.roomId);
+      if (!mounted) return;
+      Navigator.pop(context, const _GroupEditResult(closedProfile: true));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _leaving = false);
+      _showSnack('Failed to leave group: $e', isError: true);
+    }
+  }
+
+  Future<void> _deleteGroup() async {
+    if (_deleting || _leaving) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (_) => AlertDialog(
+            backgroundColor: const Color(0xFF23262C),
+            title: const Text(
+              'Delete Group',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: const Text(
+              'This will leave and remove the group from this device.',
+              style: TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text(
+                  'Delete',
+                  style: TextStyle(color: Color(0xFFE85D75)),
+                ),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _deleting = true);
+    try {
+      final room = MatrixChatService.instance.getRoomById(widget.roomId);
+      if (room != null) {
+        if (room.membership == mx.Membership.join) {
+          await room.leave();
+        }
+        await room.forget();
+      }
+      if (!mounted) return;
+      Navigator.pop(context, const _GroupEditResult(closedProfile: true));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _deleting = false);
+      _showSnack('Failed to delete group: $e', isError: true);
+    }
+  }
+
+  void _showSnack(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor:
+            isError ? const Color(0xFFE05252) : const Color(0xFF4DA3FF),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  Widget _inputPill(
+    String hint,
+    TextEditingController controller, {
+    FontWeight fontWeight = FontWeight.w400,
+    Color? textColor,
+    int maxLines = 1,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF23262C),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: TextField(
+        controller: controller,
+        maxLines: maxLines,
+        style: TextStyle(
+          color: textColor ?? Colors.white,
+          fontSize: 16,
+          fontWeight: fontWeight,
+        ),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: const TextStyle(color: Color(0xFF9A9CA3)),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 14,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _valuePill(String label, String value, {Color? valueColor}) {
+    final hasLabel = label.trim().isNotEmpty;
+    return Container(
+      height: 54,
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF23262C),
+        borderRadius: BorderRadius.circular(27),
+      ),
+      child: Row(
+        children: [
+          if (hasLabel) ...[
+            Text(
+              label,
+              style: const TextStyle(color: Color(0xFF9A9CA3), fontSize: 16),
+            ),
+            const Spacer(),
+          ],
+          Text(
+            value,
+            style: TextStyle(color: valueColor ?? Colors.white, fontSize: 16),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _avatar() {
+    if (_pickedImageFile != null) {
+      return ClipOval(
+        child: Image.file(
+          _pickedImageFile!,
+          width: 142,
+          height: 142,
+          fit: BoxFit.cover,
+        ),
+      );
+    }
+
+    final imageUrl = widget.initialAvatarUrl?.trim() ?? '';
+    if (imageUrl.isNotEmpty) {
+      return UserAvatar(
+        size: 142,
+        imageUrl: imageUrl,
+        name: _nameController.text,
+      );
+    }
+
+    return Container(
+      width: 142,
+      height: 142,
+      decoration: const BoxDecoration(
+        color: Color(0xFF0E4B86),
+        shape: BoxShape.circle,
+      ),
+      child: const Icon(
+        Icons.camera_alt_rounded,
+        color: Color(0xFF4DA3FF),
+        size: 58,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const bg = Color(0xFF08090B);
+    const accent = Color(0xFF4DA3FF);
+    const danger = Color(0xFFE85D75);
+
+    return Scaffold(
+      backgroundColor: bg,
+      appBar: AppBar(
+        backgroundColor: bg,
+        elevation: 0,
+        automaticallyImplyLeading: false,
+        titleSpacing: 0,
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            TextButton(
+              onPressed: _saving ? null : () => Navigator.pop(context),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Colors.white, fontSize: 17),
+              ),
+            ),
+            TextButton(
+              onPressed: _saving ? null : _save,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child:
+                  _saving
+                      ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                      : const Text(
+                        'Save',
+                        style: TextStyle(color: Colors.white, fontSize: 17),
+                      ),
+            ),
+          ],
+        ),
+      ),
+      body: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 22),
+          child: Column(
+            children: [
+              const SizedBox(height: 34),
+              GestureDetector(onTap: _pickImage, child: _avatar()),
+              const SizedBox(height: 14),
+              GestureDetector(
+                onTap: _pickImage,
+                child: const Text(
+                  'Set new photo',
+                  style: TextStyle(color: accent, fontSize: 16),
+                ),
+              ),
+              const SizedBox(height: 28),
+              _inputPill(
+                'Group name',
+                _nameController,
+                fontWeight: FontWeight.w800,
+              ),
+              const SizedBox(height: 14),
+              _valuePill('', widget.initialAlias, valueColor: accent),
+              const SizedBox(height: 14),
+              _inputPill('Description', _descriptionController, maxLines: 1),
+              const SizedBox(height: 14),
+              _valuePill('Link', 'Add'),
+              const SizedBox(height: 14),
+              _valuePill('Channel', 'Add'),
+              const SizedBox(height: 180),
+              Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF23262C),
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: Column(
+                  children: [
+                    TextButton(
+                      onPressed: _deleting ? null : _deleteGroup,
+                      child:
+                          _deleting
+                              ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: danger,
+                                ),
+                              )
+                              : const Text(
+                                'Delete Group',
+                                style: TextStyle(color: danger, fontSize: 16),
+                              ),
+                    ),
+                    TextButton(
+                      onPressed: _leaving ? null : _leaveGroup,
+                      child:
+                          _leaving
+                              ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: danger,
+                                ),
+                              )
+                              : const Text(
+                                'Leave Group',
+                                style: TextStyle(color: danger, fontSize: 16),
+                              ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 40),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _AddGroupMembersScreen extends StatefulWidget {

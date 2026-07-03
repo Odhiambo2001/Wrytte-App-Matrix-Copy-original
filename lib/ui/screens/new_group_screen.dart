@@ -143,7 +143,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
               height: kToolbarHeight,
               child: Row(
                 children: [
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 14),
                   _roundButton(
                     Icons.arrow_back_ios_new,
                     () => Navigator.pop(context),
@@ -154,14 +154,14 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
                         'New Group',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 18,
+                          fontSize: 17,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
                   ),
                   Padding(
-                    padding: const EdgeInsets.only(right: 16),
+                    padding: const EdgeInsets.only(right: 14),
                     child: _nextButton(),
                   ),
                 ],
@@ -169,16 +169,16 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
             ),
             Expanded(
               child: ListView(
-                padding: EdgeInsets.fromLTRB(24, top > 0 ? 12 : 24, 24, 24),
+                padding: EdgeInsets.fromLTRB(24, top > 0 ? 10 : 20, 24, 24),
                 children: [
                   _nameCard(),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 16),
                   const Text(
                     "Private group can't be found in search,\nyou can join only if you were invited.",
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white70,
-                      fontSize: 13,
+                      fontSize: 12,
                       height: 1.35,
                       fontWeight: FontWeight.w600,
                     ),
@@ -189,13 +189,13 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
                     _isPublic == false,
                     () => _setPublic(false),
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 16),
                   const Text(
                     'Public group can be found in search,\nanyone can join.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white70,
-                      fontSize: 13,
+                      fontSize: 12,
                       height: 1.35,
                       fontWeight: FontWeight.w600,
                     ),
@@ -207,7 +207,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
                     () => _setPublic(true),
                   ),
                   if (_isPublic == true) ...[
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     _aliasField(),
                     if (_aliasError.isNotEmpty)
                       Padding(
@@ -216,7 +216,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
                           _aliasError,
                           style: const TextStyle(
                             color: Color(0xFFFF5A66),
-                            fontSize: 13,
+                            fontSize: 12,
                           ),
                         ),
                       ),
@@ -235,19 +235,19 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
       onTap: _canGoNext ? _goNext : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
-        height: 42,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 18),
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: const Color(0xFF15181D),
-          borderRadius: BorderRadius.circular(21),
+          borderRadius: BorderRadius.circular(19),
           border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         ),
         child: Text(
           'Next',
           style: TextStyle(
             color: _canGoNext ? Colors.white : Colors.white38,
-            fontSize: 16,
+            fontSize: 15,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -259,46 +259,50 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 44,
-        height: 44,
+        width: 40,
+        height: 40,
         decoration: BoxDecoration(
           color: const Color(0xFF15181D),
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(20),
         ),
-        child: Icon(icon, color: Colors.white, size: 18),
+        child: Icon(icon, color: Colors.white, size: 17),
       ),
     );
   }
 
   Widget _nameCard() {
     return Container(
-      height: 112,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      height: 86,
+      padding: const EdgeInsets.symmetric(horizontal: 18),
       decoration: BoxDecoration(
         color: const Color(0xFF23262C),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
         children: [
           Container(
-            width: 72,
-            height: 72,
+            width: 56,
+            height: 56,
             decoration: const BoxDecoration(
               color: Color(0xFF063B78),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.camera_alt, color: Color(0xFF4DA3FF)),
+            child: const Icon(
+              Icons.camera_alt,
+              color: Color(0xFF4DA3FF),
+              size: 24,
+            ),
           ),
-          const SizedBox(width: 18),
+          const SizedBox(width: 14),
           Expanded(
             child: TextField(
               controller: _nameController,
               autofocus: true,
-              style: const TextStyle(color: Colors.white, fontSize: 21),
+              style: const TextStyle(color: Colors.white, fontSize: 18),
               cursorColor: const Color(0xFF4DA3FF),
               decoration: const InputDecoration(
                 hintText: 'Group name',
-                hintStyle: TextStyle(color: Colors.white38),
+                hintStyle: TextStyle(color: Colors.white38, fontSize: 18),
                 border: InputBorder.none,
               ),
             ),
@@ -312,24 +316,24 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        height: 72,
-        padding: const EdgeInsets.symmetric(horizontal: 28),
+        height: 56,
+        padding: const EdgeInsets.symmetric(horizontal: 22),
         decoration: BoxDecoration(
           color: const Color(0xFF23262C),
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
           children: [
             Expanded(
               child: Text(
                 label,
-                style: const TextStyle(color: Colors.white, fontSize: 25),
+                style: const TextStyle(color: Colors.white, fontSize: 19),
               ),
             ),
             AnimatedContainer(
               duration: const Duration(milliseconds: 160),
-              width: 28,
-              height: 28,
+              width: 24,
+              height: 24,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: selected ? const Color(0xFF4DA3FF) : Colors.transparent,
@@ -340,7 +344,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
               ),
               child:
                   selected
-                      ? const Icon(Icons.check, color: Colors.white, size: 18)
+                      ? const Icon(Icons.check, color: Colors.white, size: 16)
                       : null,
             ),
           ],
@@ -358,20 +362,20 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
         child: CircularProgressIndicator(strokeWidth: 2),
       );
     } else if (_aliasHasBody && _aliasAvailable) {
-      suffix = const Icon(Icons.check, color: Colors.greenAccent, size: 28);
+      suffix = const Icon(Icons.check, color: Colors.greenAccent, size: 24);
     } else if (_aliasHasBody) {
       suffix = GestureDetector(
         onTap: () => _aliasController.text = 'gr.@',
-        child: const Icon(Icons.close, color: Colors.white54, size: 26),
+        child: const Icon(Icons.close, color: Colors.white54, size: 22),
       );
     }
 
     return Container(
-      height: 72,
-      padding: const EdgeInsets.symmetric(horizontal: 28),
+      height: 54,
+      padding: const EdgeInsets.symmetric(horizontal: 22),
       decoration: BoxDecoration(
         color: const Color(0xFF23262C),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
         children: [
@@ -381,7 +385,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
               keyboardType: TextInputType.visiblePassword,
               autocorrect: false,
               enableSuggestions: false,
-              style: const TextStyle(color: Color(0xFF4DA3FF), fontSize: 22),
+              style: const TextStyle(color: Color(0xFF4DA3FF), fontSize: 18),
               cursorColor: const Color(0xFF4DA3FF),
               decoration: const InputDecoration(
                 border: InputBorder.none,

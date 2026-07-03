@@ -240,11 +240,11 @@ class _PostScreenState extends State<PostScreen>
     final double bottomInset = MediaQuery.of(context).padding.bottom;
     final double screenHeight = MediaQuery.of(context).size.height;
 
-    const double _kTopSpacing = 16.0;
-    const double _kTabRowHeight = 44.0;
-    const double _kBottomGap = 12.0;
+    const double kTopSpacing = 16.0;
+    const double kTabRowHeight = 44.0;
+    const double kBottomGap = 12.0;
     final double headerHeight =
-        statusBarHeight + _kTopSpacing + _kTabRowHeight + _kBottomGap;
+        statusBarHeight + kTopSpacing + kTabRowHeight + kBottomGap;
 
     const double navPillHeight = 5.0;
     const double navBottomPadding = 4.0;
@@ -314,7 +314,7 @@ class _PostScreenState extends State<PostScreen>
             top: 0,
             left: 0,
             right: 0,
-            child: _buildTopBar(statusBarHeight, _kTopSpacing, isVideoTab),
+            child: _buildTopBar(statusBarHeight, kTopSpacing, isVideoTab),
           ),
         ],
       ),

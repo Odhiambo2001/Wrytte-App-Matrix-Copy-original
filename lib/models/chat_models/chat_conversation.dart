@@ -146,7 +146,7 @@ class ChatConversation {
       }
     });
 
-    DateTime? _toDateTime(dynamic val) {
+    DateTime? toDateTime(dynamic val) {
       if (val == null) return null;
       try {
         return (val as dynamic).toDate() as DateTime;
@@ -167,10 +167,10 @@ class ChatConversation {
       isArchived: data['isArchived'] as bool? ?? false,
       isMuted: data['isMuted'] as bool? ?? false,
       isPinned: data['isPinned'] as bool? ?? false,
-      mutedUntil: _toDateTime(data['mutedUntil']),
+      mutedUntil: toDateTime(data['mutedUntil']),
       lastSeen: lastSeen,
-      createdAt: _toDateTime(data['createdAt']),
-      deletedAt: _toDateTime(data['deletedAt']),
+      createdAt: toDateTime(data['createdAt']),
+      deletedAt: toDateTime(data['deletedAt']),
       deletedBy: List<String>.from(data['deletedBy'] ?? []),
       // otherUserName / otherUserAvatar come from SQLite.
     );

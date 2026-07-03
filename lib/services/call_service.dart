@@ -222,13 +222,13 @@ class CallService {
     final stream = wrapped.stream;
     if (stream == null) return;
     if (wrapped.isLocal()) {
-      _localStream = stream as webrtc.MediaStream;
+      _localStream = stream;
       if (_activeSession?.type == mx.CallType.kVideo) {
         _localStream!.getVideoTracks().forEach((track) => track.enabled = true);
       }
       _localStreamController.add(_localStream!);
     } else {
-      _remoteStream = stream as webrtc.MediaStream;
+      _remoteStream = stream;
       _remoteStreamController.add(_remoteStream!);
       _callStatusController.add(CallStatus.accepted);
     }
@@ -274,7 +274,7 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
 
   @override
   webrtc_iface.MediaDevices get mediaDevices =>
-      webrtc.navigator.mediaDevices as webrtc_iface.MediaDevices;
+      webrtc.navigator.mediaDevices;
 
   //@override
   //webrtc.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices;
