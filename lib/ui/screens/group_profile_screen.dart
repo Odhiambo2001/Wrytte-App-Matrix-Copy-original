@@ -69,123 +69,140 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
-      body: DefaultTabController(
-        length: 5,
-        child: Column(
-          children: [
-            SizedBox(height: top),
-            SizedBox(
-              height: kToolbarHeight,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  children: [
-                    _roundButton(
-                      Icons.arrow_back_ios_new,
-                      () => Navigator.pop(context),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxHeight < 560;
+          final avatarSize = compact ? 84.0 : 112.0;
+          final titleSize = compact ? 23.0 : 28.0;
+          final actionHeight = compact ? 62.0 : 74.0;
+
+          return DefaultTabController(
+            length: 5,
+            child: Column(
+              children: [
+                SizedBox(height: compact ? top * 0.5 : top),
+                SizedBox(
+                  height: compact ? 48 : kToolbarHeight,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        _roundButton(
+                          Icons.arrow_back_ios_new,
+                          () => Navigator.pop(context),
+                        ),
+                        const Spacer(),
+                        if (_canEditGroup(room)) _editButton(),
+                      ],
                     ),
-                    const Spacer(),
-                    if (_canEditGroup(room)) _editButton(),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 18),
-            UserAvatar(
-              size: 112,
-              imageUrl: widget.avatarUrl ?? room?.avatar?.toString(),
-              localImagePath: _localAvatarOverride,
-              name: title,
-            ),
-            const SizedBox(height: 18),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            if (alias.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                alias,
-                style: const TextStyle(
-                  color: Color(0xFF4DA3FF),
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-            const SizedBox(height: 4),
-            Text(
-              _memberCountLabel(memberCount),
-              style: const TextStyle(color: Colors.white54, fontSize: 16),
-            ),
-            const SizedBox(height: 28),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Row(
-                children: [
-                  _joinLeaveAction(),
-                  const SizedBox(width: 12),
-                  _action(Icons.volume_off_outlined, 'Mute'),
-                  const SizedBox(width: 12),
-                  _action(Icons.search, 'Search'),
-                  const SizedBox(width: 12),
-                  _action(Icons.more_horiz, 'More'),
-                ],
-              ),
-            ),
-            const SizedBox(height: 26),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Container(
-                height: 46,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF111318),
-                  borderRadius: BorderRadius.circular(23),
-                  border: Border.all(color: const Color(0xFF242830)),
-                ),
-                child: TabBar(
-                  isScrollable: true,
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 18),
-                  indicator: BoxDecoration(
-                    color: const Color(0xFF23262C),
-                    borderRadius: BorderRadius.circular(23),
                   ),
-                  labelColor: Colors.white,
-                  unselectedLabelColor: Colors.white54,
-                  labelStyle: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  dividerColor: Colors.transparent,
-                  tabs: const [
-                    Tab(text: 'Members'),
-                    Tab(text: 'Media'),
-                    Tab(text: 'Files'),
-                    Tab(text: 'Feed'),
-                    Tab(text: 'Links'),
-                  ],
                 ),
-              ),
-            ),
-            const SizedBox(height: 18),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  _membersTab(widget.roomId),
-                  _mediaTab(),
-                  _filesTab(),
-                  _emptyTab('No feed'),
-                  _linksTab(),
+                SizedBox(height: compact ? 8 : 18),
+                UserAvatar(
+                  size: avatarSize,
+                  imageUrl: widget.avatarUrl ?? room?.avatar?.toString(),
+                  localImagePath: _localAvatarOverride,
+                  name: title,
+                ),
+                SizedBox(height: compact ? 10 : 18),
+                Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: titleSize,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                if (alias.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    alias,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF4DA3FF),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ],
-              ),
+                const SizedBox(height: 4),
+                Text(
+                  _memberCountLabel(memberCount),
+                  style: const TextStyle(color: Colors.white54, fontSize: 16),
+                ),
+                SizedBox(height: compact ? 14 : 28),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Row(
+                    children: [
+                      _joinLeaveAction(height: actionHeight),
+                      const SizedBox(width: 12),
+                      _action(
+                        Icons.volume_off_outlined,
+                        'Mute',
+                        height: actionHeight,
+                      ),
+                      const SizedBox(width: 12),
+                      _action(Icons.search, 'Search', height: actionHeight),
+                      const SizedBox(width: 12),
+                      _action(Icons.more_horiz, 'More', height: actionHeight),
+                    ],
+                  ),
+                ),
+                SizedBox(height: compact ? 14 : 26),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Container(
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111318),
+                      borderRadius: BorderRadius.circular(23),
+                      border: Border.all(color: const Color(0xFF242830)),
+                    ),
+                    child: TabBar(
+                      isScrollable: true,
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 18),
+                      indicator: BoxDecoration(
+                        color: const Color(0xFF23262C),
+                        borderRadius: BorderRadius.circular(23),
+                      ),
+                      labelColor: Colors.white,
+                      unselectedLabelColor: Colors.white54,
+                      labelStyle: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      dividerColor: Colors.transparent,
+                      tabs: const [
+                        Tab(text: 'Members'),
+                        Tab(text: 'Media'),
+                        Tab(text: 'Files'),
+                        Tab(text: 'Feed'),
+                        Tab(text: 'Links'),
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(height: compact ? 10 : 18),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      _membersTab(widget.roomId),
+                      _mediaTab(),
+                      _filesTab(),
+                      _emptyTab('No feed'),
+                      _linksTab(),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -253,10 +270,10 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         MatrixChatService.instance.isGroupOwner(room);
   }
 
-  Widget _action(IconData icon, String label) {
+  Widget _action(IconData icon, String label, {double height = 74}) {
     return Expanded(
       child: Container(
-        height: 74,
+        height: height,
         decoration: BoxDecoration(
           color: const Color(0xFF15181D),
           borderRadius: BorderRadius.circular(14),
@@ -278,14 +295,14 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     );
   }
 
-  Widget _joinLeaveAction() {
+  Widget _joinLeaveAction({double height = 74}) {
     final label = _joined ? 'Leave' : 'Join';
     final icon = _joined ? Icons.logout_rounded : Icons.login_rounded;
     return Expanded(
       child: GestureDetector(
         onTap: _joiningOrLeaving ? null : _toggleMembership,
         child: Container(
-          height: 74,
+          height: height,
           decoration: BoxDecoration(
             color: const Color(0xFF15181D),
             borderRadius: BorderRadius.circular(14),

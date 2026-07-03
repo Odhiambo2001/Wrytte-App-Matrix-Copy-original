@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 
 class UserAvatar extends StatefulWidget {
   final double size;
@@ -106,9 +108,10 @@ class _UserAvatarState extends State<UserAvatar> {
 
     final localFile = _localImageFile();
     final imageUrl = _effectiveImageUrl();
-    final cachedProvider = imageUrl.isNotEmpty
-        ? _resolvedImageCache[_resolveImageUrl(imageUrl)]
-        : null;
+    final cachedProvider =
+        imageUrl.isNotEmpty
+            ? _resolvedImageCache[_resolveImageUrl(imageUrl)]
+            : null;
 
     if (widget.image != null) {
       avatarWidget = _buildFromImageProvider(widget.image!);
@@ -234,10 +237,35 @@ class _UserAvatarState extends State<UserAvatar> {
   String _resolveImageUrl(String? raw) {
     final url = raw?.trim() ?? '';
     if (url.isEmpty) return '';
+    if (url.startsWith('mxc://')) return _resolveMxcUrl(url);
     return url.startsWith('/') ? '${ApiService.baseUrl}$url' : url;
   }
 
+  String _resolveMxcUrl(String raw) {
+    final uri = Uri.tryParse(raw);
+    if (uri == null || !uri.isScheme('mxc')) return '';
+    final mediaId = uri.pathSegments.join('/');
+    if (uri.host.isEmpty || mediaId.isEmpty) return '';
+    final homeserver = Uri.tryParse(MatrixConfig.homeserver);
+    if (homeserver == null || !homeserver.hasScheme) return '';
+    return homeserver
+        .resolve(
+          '/_matrix/media/v3/download/'
+          '${Uri.encodeComponent(uri.host)}/'
+          '${Uri.encodeComponent(mediaId)}',
+        )
+        .toString();
+  }
+
   Map<String, String>? _authHeaders(String? token, {required String rawUrl}) {
+    if (rawUrl.trim().startsWith('mxc://')) {
+      final matrixToken =
+          MatrixClientService.instance.client.accessToken?.trim() ?? '';
+      return matrixToken.isEmpty
+          ? null
+          : {'Authorization': 'Bearer $matrixToken'};
+    }
+
     final clean = token?.trim() ?? '';
     if (clean.isEmpty) return null;
     final uri = Uri.tryParse(rawUrl);

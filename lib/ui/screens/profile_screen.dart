@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:matrix/matrix.dart' as mx;
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui';
 import 'package:wrytte/components/user_avatar.dart';
@@ -12,6 +13,7 @@ import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
+import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
@@ -30,19 +32,9 @@ class ProfileScreen extends StatefulWidget {
   /// When null — shows the current logged-in user's own profile.
   /// When provided — shows another user's profile (read-only).
   final String? uid;
-  final String? fallbackName;
-  final String? fallbackPhone;
-  final String? fallbackAvatarUrl;
   final String? conversationId;
 
-  const ProfileScreen({
-    super.key,
-    this.uid,
-    this.fallbackName,
-    this.fallbackPhone,
-    this.fallbackAvatarUrl,
-    this.conversationId,
-  });
+  const ProfileScreen({super.key, this.uid, this.conversationId});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -56,8 +48,6 @@ class _ProfileScreenState extends State<ProfileScreen>
   UserProfile? _profile;
   Contact? _savedContact;
   ContactIdentity? _identity;
-  String? _matrixDisplayName;
-  String? _matrixAvatarUrl;
   bool _profileLoading = true;
   List<ChatMessage> _conversationMessages = const [];
   StreamSubscription<UserProfile?>? _profileSub;
@@ -68,18 +58,11 @@ class _ProfileScreenState extends State<ProfileScreen>
     final uid = _validProfileUid(widget.uid);
     final ownUid = UserProfileService.instance.cachedProfile?.uid;
     if (uid != null && uid != ownUid) return true;
-    return (widget.fallbackPhone?.trim().isNotEmpty ?? false) ||
-        (widget.fallbackName?.trim().isNotEmpty ?? false) ||
-        (widget.fallbackAvatarUrl?.trim().isNotEmpty ?? false) ||
-        (widget.conversationId?.trim().isNotEmpty ?? false);
+    return widget.conversationId?.trim().isNotEmpty ?? false;
   }
 
   List<String> get _tabs =>
       _isOtherUser ? ['Media', 'Files', 'Feed', 'Links'] : ['Posts', 'Saved'];
-
-  bool get _hasImmediateProfileSeed {
-    return false;
-  }
 
   @override
   void initState() {
@@ -110,6 +93,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _loadProfile() async {
     var uid = _validProfileUid(widget.uid);
+    uid ??= await _resolveProfileUidFromConversation();
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     var identity =
         uid != null && ownerUserId != null && ownerUserId.isNotEmpty
@@ -118,10 +102,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               matrixUserId: uid,
             )
             : null;
-    var savedContact =
-        _isOtherUser
-            ? await _findSavedContact(uid ?? '', phone: widget.fallbackPhone)
-            : null;
+    var savedContact = _isOtherUser ? await _findSavedContact(uid ?? '') : null;
     uid =
         uid ??
         _validProfileUid(savedContact?.wrytteUserId) ??
@@ -135,31 +116,22 @@ class _ProfileScreenState extends State<ProfileScreen>
         matrixUserId: uid,
       );
     }
-    savedContact ??=
-        uid != null
-            ? await _findSavedContact(uid, phone: widget.fallbackPhone)
-            : null;
+    savedContact ??= uid != null ? await _findSavedContact(uid) : null;
     if (mounted && (identity != null || savedContact != null)) {
       setState(() {
         _identity = identity;
         _savedContact = savedContact;
-        _profile ??= _profileFromLocalProfileData(
-          uid: uid,
-          identity: identity,
-          savedContact: savedContact,
-        );
-        _profileLoading = false;
       });
     }
-    final fallbackPhone =
+    final profileLookupPhone =
         _phoneFromIdentifier(savedContact?.primaryPhone).isNotEmpty
             ? _phoneFromIdentifier(savedContact?.primaryPhone)
-            : identity?.phone ?? _phoneFromIdentifier(widget.fallbackPhone);
+            : identity?.phone ?? _phoneFromIdentifier(uid);
     final profile =
         uid != null
             ? await UserProfileService.instance.getProfileByUid(
               uid,
-              phone: fallbackPhone,
+              phone: profileLookupPhone,
               forceRefresh: true,
             )
             : _isOtherUser
@@ -170,7 +142,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
     if (!mounted) return;
     setState(() {
-      _profile = profile;
+      _profile = profile ?? _profile;
       _savedContact = savedContact;
       _identity = identity;
       _profileLoading = false;
@@ -199,7 +171,8 @@ class _ProfileScreenState extends State<ProfileScreen>
             await ContactLocalDb.refreshPublicProfileFields(
               ownerUserId: ownerUserId,
               wrytteUserId: uid,
-              phone: profile.phone.isNotEmpty ? profile.phone : fallbackPhone,
+              phone:
+                  profile.phone.isNotEmpty ? profile.phone : profileLookupPhone,
               avatarUrl: nextAvatar,
               bio: profile.bio,
             );
@@ -210,7 +183,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       await ContactIdentityCache.instance.upsert(
         ownerUserId: ownerUserId,
         matrixUserId: uid,
-        phone: profile?.phone ?? fallbackPhone,
+        phone: profile?.phone ?? profileLookupPhone,
         profileName:
             _cleanName(profile?.displayName).isNotEmpty
                 ? profile?.displayName
@@ -235,13 +208,64 @@ class _ProfileScreenState extends State<ProfileScreen>
 
     if (!mounted) return;
     setState(() {
-      _profile = profile;
+      _profile = profile ?? _profile;
       _savedContact = savedContact;
       _identity = identity;
-      _matrixDisplayName = matrixProfile?.$1;
-      _matrixAvatarUrl = matrixProfile?.$2;
       _profileLoading = false;
     });
+  }
+
+  Future<String?> _resolveProfileUidFromConversation() async {
+    final conversationId = widget.conversationId?.trim() ?? '';
+    if (conversationId.isEmpty) return null;
+
+    final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
+    final currentLocalpart = _matrixLocalpart(currentUserId);
+
+    String? peerFrom(String? raw) {
+      final value = _validProfileUid(raw);
+      if (value == null) return null;
+      if (currentLocalpart.isNotEmpty &&
+          _matrixLocalpart(value) == currentLocalpart) {
+        return null;
+      }
+      return value;
+    }
+
+    final room = MatrixChatService.instance.getRoomById(conversationId);
+    final directPeer = peerFrom(room?.directChatMatrixID);
+    if (directPeer != null) return directPeer;
+
+    if (room != null) {
+      for (final member in room.getParticipants([
+        mx.Membership.join,
+        mx.Membership.invite,
+      ])) {
+        final peer = peerFrom(member.id);
+        if (peer != null) return peer;
+      }
+    }
+
+    for (final message
+        in ChatService().cachedMessagesFor(conversationId).reversed) {
+      final sender = peerFrom(message.senderId);
+      if (sender != null) return sender;
+      final receiver = peerFrom(message.receiverId);
+      if (receiver != null) return receiver;
+    }
+
+    final localMessages = await ChatLocalDb.instance.loadMessages(
+      conversationId,
+    );
+    for (final message in localMessages.reversed) {
+      if (message.isDeleted) continue;
+      final sender = peerFrom(message.senderId);
+      if (sender != null) return sender;
+      final receiver = peerFrom(message.receiverId);
+      if (receiver != null) return receiver;
+    }
+
+    return null;
   }
 
   Future<void> _loadConversationMessages() async {
@@ -262,39 +286,10 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   void _seedProfileForFirstPaint() {
     if (_isOtherUser) {
-      final phone =
-          _phoneFromIdentifier(widget.fallbackPhone).isNotEmpty
-              ? _formatPhone(_phoneFromIdentifier(widget.fallbackPhone))
-              : '';
-      final fallbackName = _cleanName(widget.fallbackName);
-      final fallbackAvatar = widget.fallbackAvatarUrl?.trim() ?? '';
       final uid = _validProfileUid(widget.uid) ?? '';
-      final cached = UserProfileService.instance.cachedPublicProfileByUid(
-        uid,
-        phone: phone,
-      );
-      if (fallbackName.isNotEmpty ||
-          phone.isNotEmpty ||
-          fallbackAvatar.isNotEmpty) {
-        _profile = UserProfile(
-          uid: uid,
-          name: fallbackName,
-          username: fallbackName,
-          phone: phone,
-          bio: '',
-          profileImage: fallbackAvatar,
-          links: const [],
-        );
-        _profileLoading = false;
-      }
+      final cached = UserProfileService.instance.cachedPublicProfileByUid(uid);
       if (cached != null && _hasRenderableProfile(cached)) {
-        _profile = cached.copyWith(
-          name: fallbackName.isNotEmpty ? fallbackName : cached.name,
-          username: fallbackName.isNotEmpty ? fallbackName : cached.username,
-          phone: cached.phone.trim().isNotEmpty ? cached.phone : phone,
-          profileImage:
-              cached.hasProfileImage ? cached.profileImage : fallbackAvatar,
-        );
+        _profile = cached;
         _profileLoading = false;
         return;
       }
@@ -313,43 +308,6 @@ class _ProfileScreenState extends State<ProfileScreen>
         profile.hasProfileImage ||
         profile.localProfileImagePath.trim().isNotEmpty ||
         profile.bio.trim().isNotEmpty;
-  }
-
-  UserProfile? _profileFromLocalProfileData({
-    required String? uid,
-    ContactIdentity? identity,
-    Contact? savedContact,
-  }) {
-    final name =
-        _cleanName(savedContact?.formattedName).isNotEmpty
-            ? _cleanName(savedContact?.formattedName)
-            : _cleanName(identity?.savedName).isNotEmpty
-            ? _cleanName(identity?.savedName)
-            : _cleanName(identity?.profileName);
-    final phone =
-        _phoneFromIdentifier(savedContact?.primaryPhone).isNotEmpty
-            ? _phoneFromIdentifier(savedContact?.primaryPhone)
-            : _phoneFromIdentifier(identity?.phone);
-    final avatar =
-        savedContact?.avatarUrl?.trim().isNotEmpty == true
-            ? savedContact!.avatarUrl!.trim()
-            : identity?.avatarUrl?.trim() ?? '';
-    final bio =
-        savedContact?.bio?.trim().isNotEmpty == true
-            ? savedContact!.bio!.trim()
-            : identity?.bio?.trim() ?? '';
-    if (name.isEmpty && phone.isEmpty && avatar.isEmpty && bio.isEmpty) {
-      return null;
-    }
-    return UserProfile(
-      uid: uid ?? _validProfileUid(widget.uid) ?? '',
-      name: name,
-      username: name,
-      phone: phone.isNotEmpty ? _formatPhone(phone) : '',
-      bio: bio,
-      profileImage: avatar,
-      links: const [],
-    );
   }
 
   Future<Contact?> _findSavedContact(String uid, {String? phone}) async {
@@ -470,47 +428,20 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profileDisplayName() {
-    final savedName = _cleanName(_savedContact?.formattedName);
-    if (savedName.isNotEmpty) return savedName;
-
-    final savedIdentityName = _cleanName(_identity?.savedName);
-    if (savedIdentityName.isNotEmpty) return savedIdentityName;
-
     return _cleanName(_profile?.displayName).isNotEmpty
         ? _cleanName(_profile?.displayName)
-        : _cleanName(_identity?.profileName).isNotEmpty
-        ? _cleanName(_identity?.profileName)
-        : _cleanName(_matrixDisplayName).isNotEmpty
-        ? _cleanName(_matrixDisplayName)
         : '';
   }
 
   String? _profileAvatarUrl() {
-    final savedAvatar = _savedContact?.avatarUrl?.trim();
-    if (savedAvatar?.isNotEmpty == true) return savedAvatar;
-
-    final identityAvatar = _identity?.avatarUrl?.trim();
-    if (identityAvatar?.isNotEmpty == true) return identityAvatar;
-
     if (_profile?.hasProfileImage == true) return _profile!.profileImage;
-
-    final fallbackAvatar = widget.fallbackAvatarUrl?.trim();
-    if (fallbackAvatar?.isNotEmpty == true) return fallbackAvatar;
-
-    return _matrixAvatarUrl;
+    return null;
   }
 
   String _profilePhone() {
-    final candidates = [
-      _savedContact?.primaryPhone,
-      _profile?.phone,
-      _identity?.phone,
-    ];
-    for (final value in candidates) {
-      final phone = _phoneFromIdentifier(value);
-      if (phone.isNotEmpty) {
-        return _formatPhone(phone);
-      }
+    final phone = _phoneFromIdentifier(_profile?.phone);
+    if (phone.isNotEmpty) {
+      return _formatPhone(phone);
     }
     return '';
   }
@@ -677,7 +608,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   String _profileBio() {
     final profileBio = _profile?.bio.trim() ?? '';
     if (profileBio.isNotEmpty) return profileBio;
-    return _identity?.bio?.trim() ?? '';
+    return '';
   }
 
   @override
@@ -685,11 +616,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     final double statusBarHeight = MediaQuery.of(context).padding.top;
     final double topBarHeight = statusBarHeight + kToolbarHeight;
 
-    final hasProfile =
-        _profile != null ||
-        _identity != null ||
-        _cleanName(_matrixDisplayName).isNotEmpty ||
-        _hasImmediateProfileSeed;
+    final hasProfile = _profile != null;
     final String displayName =
         _profileLoading && !hasProfile ? '' : _profileDisplayName();
     final String phone = _profileLoading && !hasProfile ? '' : _profilePhone();
@@ -942,9 +869,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildQuickActions() {
     final showAddContact =
-        _savedContact == null &&
-        _cleanName(_identity?.savedName).isEmpty &&
-        !_looksLikeSavedFallbackName();
+        _savedContact == null && _cleanName(_identity?.savedName).isEmpty;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
@@ -974,13 +899,6 @@ class _ProfileScreenState extends State<ProfileScreen>
         ],
       ),
     );
-  }
-
-  bool _looksLikeSavedFallbackName() {
-    final fallbackName = _cleanName(widget.fallbackName);
-    if (fallbackName.isEmpty) return false;
-    return _phoneFromIdentifier(fallbackName).isEmpty &&
-        fallbackName == _profileDisplayName();
   }
 
   Widget _actionPill(IconData icon, String label, {VoidCallback? onTap}) {

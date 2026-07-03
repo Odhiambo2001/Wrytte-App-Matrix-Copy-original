@@ -951,10 +951,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String? _profilePeerId() {
+    final room = MatrixChatService.instance.getRoomById(_activeConversationId);
+    final directPeer = room?.directChatMatrixID?.trim();
+
     for (final candidate in [
       _receiverIdentity?.matrixUserId,
       widget.receiverId,
+      directPeer,
       ..._messagePeerIdentifiers(),
+      ..._roomPeerIdentifiers(),
     ]) {
       final value = candidate?.trim() ?? '';
       if (value.isEmpty) continue;
@@ -1040,6 +1045,7 @@ class _ChatScreenState extends State<ChatScreen> {
       widget.receiverId,
       widget.title,
       ..._messagePeerIdentifiers(),
+      ..._roomPeerIdentifiers(),
     ]);
     return phone.isNotEmpty ? _formatPhone(phone) : '';
   }
@@ -1069,6 +1075,18 @@ class _ChatScreenState extends State<ChatScreen> {
       } else {
         yield message.senderId;
       }
+    }
+  }
+
+  Iterable<String> _roomPeerIdentifiers() sync* {
+    final room = MatrixChatService.instance.getRoomById(_activeConversationId);
+    if (room == null) return;
+    final currentLocalpart = _matrixLocalpart(widget.currentUserId);
+    for (final member in room.getParticipants(_groupMemberships)) {
+      final id = member.id.trim();
+      if (id.isEmpty || id.startsWith('!') || id.startsWith('@!')) continue;
+      if (_matrixLocalpart(id) == currentLocalpart) continue;
+      yield id;
     }
   }
 
@@ -2760,22 +2778,6 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildAppBar(double statusBarH) {
     final isGroupChat = _isGroupChat;
     final displayName = _resolvedHeaderName;
-    final fallbackPhone =
-        (_receiverIdentity?.phone?.trim().isNotEmpty == true)
-            ? _receiverIdentity!.phone!.trim()
-            : _firstPhoneFrom([
-              widget.receiverId,
-              widget.title,
-              ..._messagePeerIdentifiers(),
-            ]);
-    final profileFallbackName =
-        displayName.trim().isNotEmpty
-            ? displayName.trim()
-            : _receiverIdentity?.profileName?.trim().isNotEmpty == true
-            ? _receiverIdentity!.profileName!.trim()
-            : _receiverProfile?.displayName.trim().isNotEmpty == true
-            ? _receiverProfile!.displayName.trim()
-            : null;
     final avatarUrl =
         isGroupChat
             ? _stableHeaderAvatarUrl
@@ -2838,21 +2840,12 @@ class _ChatScreenState extends State<ChatScreen> {
                             return;
                           }
                           final profileUid = _profilePeerId();
-                          if (profileUid == null && fallbackPhone.isEmpty) {
-                            return;
-                          }
                           await Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder:
                                   (_) => ProfileScreen(
                                     uid: profileUid,
-                                    fallbackName: profileFallbackName,
-                                    fallbackPhone:
-                                        fallbackPhone.isNotEmpty
-                                            ? fallbackPhone
-                                            : null,
-                                    fallbackAvatarUrl: avatarUrl,
                                     conversationId:
                                         _resolvedConversationId ??
                                         widget.conversationId,
