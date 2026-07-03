@@ -1444,7 +1444,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         final isGroup = _isGroupConversation(conv);
         final chatReceiverId = isGroup ? conv.id : conv.otherUserId;
 
-        await Navigator.push(
+        final closedGroup = await Navigator.push<bool>(
           context,
           PageRouteBuilder(
             transitionDuration: const Duration(milliseconds: 300),
@@ -1474,7 +1474,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             },
           ),
         );
-        if (mounted) await _loadLocalConversations();
+        if (!mounted) return;
+        await _loadLocalConversations();
+        if (closedGroup == true || isGroup) {
+          await _loadSuggestedGroups();
+        }
       },
     );
   }
@@ -1826,6 +1830,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Future<void> _openSuggestedGroup(MatrixPublicGroup group) async {
+    final previewMessages = await _chat.fetchPublicGroupPreview(
+      roomId: group.roomId,
+    );
     await Navigator.push(
       context,
       PageRouteBuilder(
@@ -1839,6 +1846,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               title: group.name,
               avatarUrl: group.avatarUrl,
               readOnlyUntilJoin: true,
+              initialMessages: previewMessages,
               initialMemberCount: group.memberCount,
               groupAlias: group.canonicalAlias,
             ),
@@ -1865,15 +1873,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _joinSuggestedGroup(MatrixPublicGroup group) async {
     try {
-      final joinedFrom = DateTime.now();
       final room = await MatrixChatService.instance.joinGroup(
         group.canonicalAlias?.trim().isNotEmpty == true
             ? group.canonicalAlias!
             : group.roomId,
       );
-      if (room != null) {
-        await _chat.markGroupJoinedFrom(room.id, joinedFrom);
-      }
       await _chat.fetchConversations();
       await _loadLocalConversations();
       await _loadSuggestedGroups();

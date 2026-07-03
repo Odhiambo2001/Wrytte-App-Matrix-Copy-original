@@ -1018,6 +1018,99 @@ class ChatService {
     }
   }
 
+  Future<List<ChatMessage>> fetchPublicGroupPreview({
+    required String roomId,
+    int limit = 60,
+  }) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return const [];
+    try {
+      return await _withMatrixTokenRetry('fetchPublicGroupPreview', () async {
+        await _waitForConnection();
+        final client = MatrixClientService.instance.client;
+        final response = await client.getRoomEvents(
+          id,
+          mx.Direction.b,
+          limit: limit,
+        );
+        final messages =
+            response.chunk
+                .map(
+                  (event) => _publicGroupPreviewMessage(
+                    event,
+                    roomId: id,
+                    client: client,
+                  ),
+                )
+                .whereType<ChatMessage>()
+                .toList()
+              ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        if (messages.isNotEmpty) {
+          _messagesCache[id] = messages;
+          await ChatLocalDb.instance.saveMessages(messages);
+        }
+        return messages;
+      });
+    } catch (e) {
+      debugPrint('[ChatService] public group preview failed: $e');
+      return const [];
+    }
+  }
+
+  ChatMessage? _publicGroupPreviewMessage(
+    mx.MatrixEvent event, {
+    required String roomId,
+    required mx.Client client,
+  }) {
+    if (event.type != mx.EventTypes.Message) return null;
+    final content = event.content;
+    final body = content['body']?.toString().trim() ?? '';
+    final url = content['url']?.toString().trim();
+    if (body.isEmpty && (url == null || url.isEmpty)) return null;
+    final msgType = content['msgtype']?.toString() ?? '';
+    final attachmentType =
+        content['wrytte.sent_as_file'] == true
+            ? 'file'
+            : _attachmentTypeFromMatrixMessageType(msgType);
+    return ChatMessage(
+      id: event.eventId,
+      conversationId: roomId,
+      senderId: event.senderId,
+      receiverId: roomId,
+      content: body,
+      timestamp: event.originServerTs,
+      status: MessageStatus.sent,
+      attachmentUrl: _matrixMediaDownloadUrl(url, client),
+      attachmentType: attachmentType,
+      senderName: content['wrytte.sender_name']?.toString(),
+      senderPhone: content['wrytte.sender_phone']?.toString(),
+      isForwarded: content['wrytte.forwarded'] == true,
+    );
+  }
+
+  String? _attachmentTypeFromMatrixMessageType(String msgType) {
+    switch (msgType) {
+      case mx.MessageTypes.Audio:
+        return 'voice';
+      case mx.MessageTypes.Image:
+        return 'image';
+      case mx.MessageTypes.Video:
+        return 'video';
+      case mx.MessageTypes.File:
+        return 'file';
+      default:
+        return null;
+    }
+  }
+
+  String? _matrixMediaDownloadUrl(String? rawUrl, mx.Client client) {
+    final value = rawUrl?.trim() ?? '';
+    if (value.isEmpty) return null;
+    final uri = Uri.tryParse(value);
+    if (uri == null || !uri.isScheme('mxc')) return value;
+    return uri.getDownloadLink(client).toString();
+  }
+
   Future<void> markConversationAsRead(String conversationId) async {
     try {
       await _withMatrixTokenRetry('markConversationAsRead', () async {
@@ -2450,7 +2543,9 @@ class ChatService {
     _createdGroupRoomIds
       ..clear()
       ..addAll(ids.map((id) => id.trim()).where((id) => id.isNotEmpty));
-      MatrixChatService.instance.registerCreatedGroupRooms(_createdGroupRoomIds); // add
+    MatrixChatService.instance.registerCreatedGroupRooms(
+      _createdGroupRoomIds,
+    ); // add
   }
 
   Future<void> _saveCreatedGroupRoomIds() async {
@@ -2477,6 +2572,20 @@ class ChatService {
 
   Set<String> get createdGroupRoomIds =>
       Set<String>.unmodifiable(_createdGroupRoomIds);
+
+  Future<void> removeConversationLocally(String conversationId) async {
+    final id = conversationId.trim();
+    if (id.isEmpty) return;
+    _conversationsMap.remove(id);
+    _messagesCache.remove(id);
+    _groupJoinCutoffsByRoom.remove(id);
+    _readConversationIds.remove(id);
+    _activeReadConversationIds.remove(id);
+    _lastReadAtByConversation.remove(id);
+    await ChatLocalDb.instance.deleteConversation(id);
+    await _saveGroupJoinCutoffs();
+    _emitConversations();
+  }
 
   Future<void> markGroupJoinedFrom(String roomId, DateTime joinedFrom) async {
     final id = roomId.trim();

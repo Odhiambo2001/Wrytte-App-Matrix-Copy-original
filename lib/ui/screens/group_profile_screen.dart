@@ -525,7 +525,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     );
     if (!mounted || result == null) return;
     if (result.closedProfile) {
-      Navigator.pop(context);
+      Navigator.pop(context, true);
       return;
     }
     setState(() {
@@ -549,26 +549,19 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   Future<void> _toggleMembership() async {
     if (_joiningOrLeaving) return;
+    if (_joined && !await _confirmLeaveGroup()) return;
     setState(() => _joiningOrLeaving = true);
     try {
       if (_joined) {
-        await MatrixChatService.instance.leaveGroup(widget.roomId);
+        await _leaveJoinedGroup();
         if (!mounted) return;
-        setState(() {
-          _joined = false;
-          _members = const [];
-          _joiningOrLeaving = false;
-        });
+        Navigator.pop(context, true);
       } else {
-        final joinedFrom = DateTime.now();
         final room = await MatrixChatService.instance.joinGroup(
           widget.alias?.trim().isNotEmpty == true
               ? widget.alias!
               : widget.roomId,
         );
-        if (room != null) {
-          await ChatService().markGroupJoinedFrom(room.id, joinedFrom);
-        }
         if (!mounted) return;
         setState(() {
           _joined = true;
@@ -583,6 +576,73 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text('Group update failed: $e')));
     }
+  }
+
+  Future<bool> _confirmLeaveGroup() async {
+    final title = _displayTitle(
+      MatrixChatService.instance.getRoomById(widget.roomId)?.name ?? '',
+      widget.groupName,
+      widget.alias ?? '',
+    );
+    return await showDialog<bool>(
+          context: context,
+          builder:
+              (_) => AlertDialog(
+                backgroundColor: const Color(0xFF111318),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                title: const Text(
+                  'Leave Group',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                content: Text(
+                  'Do you want to leave the group $title?',
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+                actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+                actions: [
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF23262C),
+                      foregroundColor: const Color(0xFFE85D75),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                    ),
+                    child: const Text('Leave'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF23262C),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                    ),
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              ),
+        ) ??
+        false;
+  }
+
+  Future<void> _leaveJoinedGroup() async {
+    final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    final alias = room?.canonicalAlias ?? widget.alias;
+    await MatrixChatService.instance.leaveGroup(widget.roomId);
+    await MatrixChatService.instance.dismissPublicGroup(
+      roomId: widget.roomId,
+      canonicalAlias: alias,
+    );
+    await ChatService().removeConversationLocally(widget.roomId);
   }
 
   int get _memberCount {
@@ -756,6 +816,7 @@ class _EditGroupScreen extends StatefulWidget {
 
 class _EditGroupScreenState extends State<_EditGroupScreen> {
   final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _aliasController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
   final ImagePicker _picker = ImagePicker();
 
@@ -769,12 +830,14 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     super.initState();
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     _nameController.text = widget.initialName;
+    _aliasController.text = widget.initialAlias;
     _descriptionController.text = room?.topic ?? '';
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _aliasController.dispose();
     _descriptionController.dispose();
     super.dispose();
   }
@@ -821,6 +884,12 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         await room.setName(name);
       }
 
+      final alias = _cleanAlias(_aliasController.text);
+      final currentAlias = _cleanAlias(room.canonicalAlias);
+      if (alias.isNotEmpty && alias != currentAlias) {
+        await room.setCanonicalAlias('#$alias:${MatrixConfig.serverName}');
+      }
+
       final description = _descriptionController.text.trim();
       if (description != room.topic.trim()) {
         await room.setDescription(description);
@@ -842,7 +911,13 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     if (_leaving || _deleting) return;
     setState(() => _leaving = true);
     try {
+      final room = MatrixChatService.instance.getRoomById(widget.roomId);
       await MatrixChatService.instance.leaveGroup(widget.roomId);
+      await MatrixChatService.instance.dismissPublicGroup(
+        roomId: widget.roomId,
+        canonicalAlias: room?.canonicalAlias,
+      );
+      await ChatService().removeConversationLocally(widget.roomId);
       if (!mounted) return;
       Navigator.pop(context, const _GroupEditResult(closedProfile: true));
     } catch (e) {
@@ -864,7 +939,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
               style: TextStyle(color: Colors.white),
             ),
             content: const Text(
-              'This will leave and remove the group from this device.',
+              'This will remove all joined and invited members, then leave and remove the group from this device.',
               style: TextStyle(color: Colors.white70),
             ),
             actions: [
@@ -889,13 +964,21 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
 
     setState(() => _deleting = true);
     try {
+      final shouldDelete = await _waitForDeleteUndo();
+      if (!shouldDelete) {
+        if (!mounted) return;
+        setState(() => _deleting = false);
+        return;
+      }
       final room = MatrixChatService.instance.getRoomById(widget.roomId);
       if (room != null) {
-        if (room.membership == mx.Membership.join) {
-          await room.leave();
-        }
-        await room.forget();
+        await _removeMembersAndClose(room);
+        await MatrixChatService.instance.dismissPublicGroup(
+          roomId: widget.roomId,
+          canonicalAlias: room.canonicalAlias,
+        );
       }
+      await ChatService().removeConversationLocally(widget.roomId);
       if (!mounted) return;
       Navigator.pop(context, const _GroupEditResult(closedProfile: true));
     } catch (e) {
@@ -903,6 +986,56 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       setState(() => _deleting = false);
       _showSnack('Failed to delete group: $e', isError: true);
     }
+  }
+
+  Future<bool> _waitForDeleteUndo() async {
+    var undone = false;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Deleting group...'),
+        duration: const Duration(seconds: 3),
+        backgroundColor: const Color(0xFF23262C),
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: const Color(0xFF4DA3FF),
+          onPressed: () => undone = true,
+        ),
+      ),
+    );
+    await Future<void>.delayed(const Duration(seconds: 3));
+    messenger.hideCurrentSnackBar();
+    return !undone;
+  }
+
+  String _cleanAlias(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return '';
+    final withoutHash =
+        trimmed.startsWith('#') ? trimmed.substring(1) : trimmed;
+    final localpart = withoutHash.split(':').first.trim();
+    return localpart.replaceAll(RegExp(r'\s+'), '');
+  }
+
+  Future<void> _removeMembersAndClose(mx.Room room) async {
+    final currentUserId = room.client.userID?.trim() ?? '';
+    final members =
+        room.getParticipants([
+          mx.Membership.join,
+          mx.Membership.invite,
+        ]).toList();
+
+    for (final member in members) {
+      final userId = member.id.trim();
+      if (userId.isEmpty || userId == currentUserId) continue;
+      await room.kick(userId);
+    }
+
+    if (room.membership == mx.Membership.join) {
+      await room.leave();
+    }
+    await room.forget();
   }
 
   void _showSnack(String message, {bool isError = false}) {
@@ -922,6 +1055,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     TextEditingController controller, {
     FontWeight fontWeight = FontWeight.w400,
     Color? textColor,
+    String? prefixText,
     int maxLines = 1,
   }) {
     return Container(
@@ -939,6 +1073,12 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         ),
         decoration: InputDecoration(
           hintText: hint,
+          prefixText: prefixText,
+          prefixStyle: TextStyle(
+            color: textColor ?? Colors.white,
+            fontSize: 16,
+            fontWeight: fontWeight,
+          ),
           hintStyle: const TextStyle(color: Color(0xFF9A9CA3)),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(
@@ -1089,7 +1229,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
                 fontWeight: FontWeight.w800,
               ),
               const SizedBox(height: 14),
-              _valuePill('', widget.initialAlias, valueColor: accent),
+              _inputPill('Alias', _aliasController, textColor: accent),
               const SizedBox(height: 14),
               _inputPill('Description', _descriptionController, maxLines: 1),
               const SizedBox(height: 14),

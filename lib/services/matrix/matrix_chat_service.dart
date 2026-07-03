@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:matrix/matrix.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/services/file_upload_limits.dart';
 
 import 'matrix_auth_service.dart';
@@ -38,6 +39,8 @@ class MatrixChatService {
   bool get initialSyncComplete => _initialSyncComplete;
   Future<void>? _syncAndJoinFuture;
   final Map<String, Future<Room>> _directRoomFutures = {};
+  final Set<String> _dismissedPublicGroupKeys = {};
+  String? _dismissedPublicGroupsLoadedFor;
 
   // Room IDs the app knows to be groups (created or restored via ChatService).
   // This is an authoritative signal that distinguishes a 2-member group from a
@@ -314,6 +317,7 @@ class MatrixChatService {
   Future<List<MatrixPublicGroup>> fetchPublicGroups({int? limit}) async {
     final client = await connect();
     if (!client.isLogged()) return const [];
+    await _loadDismissedPublicGroups();
 
     try {
       final response =
@@ -335,10 +339,72 @@ class MatrixChatService {
               worldReadable: room.worldReadable,
             ),
           )
+          .where((group) => !isPublicGroupDismissed(group))
           .toList();
     } catch (e) {
       apkLog('Matrix.groups', 'public rooms fetch failed error="$e"');
       return const [];
+    }
+  }
+
+  String _dismissedPublicGroupsKey(String userId) =>
+      'wrytte.dismissed_public_groups.$userId';
+
+  String _publicGroupKey(String value) => value.trim().toLowerCase();
+
+  Iterable<String> _publicGroupKeys({
+    required String roomId,
+    String? canonicalAlias,
+  }) sync* {
+    final id = _publicGroupKey(roomId);
+    if (id.isNotEmpty) yield id;
+    final alias = _publicGroupKey(canonicalAlias ?? '');
+    if (alias.isNotEmpty) yield alias;
+  }
+
+  Future<void> _loadDismissedPublicGroups() async {
+    final userId = MatrixClientService.instance.client.userID?.trim() ?? '';
+    if (userId.isEmpty) return;
+    if (_dismissedPublicGroupsLoadedFor == userId) return;
+    final prefs = await SharedPreferences.getInstance();
+    _dismissedPublicGroupKeys
+      ..clear()
+      ..addAll(
+        (prefs.getStringList(_dismissedPublicGroupsKey(userId)) ?? const [])
+            .map(_publicGroupKey)
+            .where((key) => key.isNotEmpty),
+      );
+    _dismissedPublicGroupsLoadedFor = userId;
+  }
+
+  Future<void> _saveDismissedPublicGroups() async {
+    final userId = MatrixClientService.instance.client.userID?.trim() ?? '';
+    if (userId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _dismissedPublicGroupsKey(userId),
+      _dismissedPublicGroupKeys.toList(growable: false),
+    );
+  }
+
+  bool isPublicGroupDismissed(MatrixPublicGroup group) {
+    return _publicGroupKeys(
+      roomId: group.roomId,
+      canonicalAlias: group.canonicalAlias,
+    ).any(_dismissedPublicGroupKeys.contains);
+  }
+
+  Future<void> dismissPublicGroup({
+    required String roomId,
+    String? canonicalAlias,
+  }) async {
+    await _loadDismissedPublicGroups();
+    final before = _dismissedPublicGroupKeys.length;
+    _dismissedPublicGroupKeys.addAll(
+      _publicGroupKeys(roomId: roomId, canonicalAlias: canonicalAlias),
+    );
+    if (_dismissedPublicGroupKeys.length != before) {
+      await _saveDismissedPublicGroups();
     }
   }
 

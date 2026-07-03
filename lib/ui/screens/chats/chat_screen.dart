@@ -2672,7 +2672,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _joinSuggestedGroup() async {
     if (_joiningSuggestedGroup) return;
-    final joinedFrom = DateTime.now();
     setState(() => _joiningSuggestedGroup = true);
     try {
       final room = await MatrixChatService.instance.joinGroup(
@@ -2682,9 +2681,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (room != null) {
         _resolvedConversationId = room.id;
-        await _chat.markGroupJoinedFrom(room.id, joinedFrom);
         await _chat.fetchConversations();
-        _replaceMessagesFromSharedCache(const []);
         unawaited(_loadGroupMemberProfiles(room.id));
       }
       if (!mounted) return;
@@ -2819,7 +2816,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         behavior: HitTestBehavior.opaque,
                         onTap: () async {
                           if (isGroupChat) {
-                            await Navigator.push(
+                            final closedGroup = await Navigator.push<bool>(
                               context,
                               MaterialPageRoute(
                                 builder:
@@ -2837,6 +2834,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                     ),
                               ),
                             );
+                            if (closedGroup == true && mounted) {
+                              Navigator.pop(context, true);
+                            }
                             return;
                           }
                           final profileUid = _profilePeerId();
@@ -2849,6 +2849,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                     conversationId:
                                         _resolvedConversationId ??
                                         widget.conversationId,
+                                    savedNameHint: _resolvedHeaderName,
                                   ),
                             ),
                           );

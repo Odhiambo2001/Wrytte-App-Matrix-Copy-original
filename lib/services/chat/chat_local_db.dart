@@ -554,6 +554,13 @@ class ChatLocalDb {
     );
   }
 
+  Future<void> deleteConversation(String conversationId) async {
+    final id = conversationId.trim();
+    if (id.isEmpty) return;
+    final database = await db;
+    await database.delete('conversations', where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<void> migrateConversationId({
     required String oldConversationId,
     required ChatConversation roomConversation,
@@ -651,7 +658,6 @@ class ChatLocalDb {
 
     final hydrated = <ChatConversation>[];
     var changed = false;
-
 
     for (final conversation in conversations) {
       final latest = await database.query(
@@ -889,7 +895,6 @@ class ChatLocalDb {
     return id.startsWith('!') && otherUserId == id && participants.length > 2;
   }
 
-
   Future<String?> findDirectConversationId({
     required String selfUserId,
     required String otherUserId,
@@ -904,11 +909,11 @@ class ChatLocalDb {
       // Never resolve a group as a direct room, even if the other user
       // is a member of it.
       if (_isStoredGroupConversation(
-            conversation.id,
-            conversation.otherUserId,
-            conversation.participants,
-            conversation.lastMessageType,
-          )) {
+        conversation.id,
+        conversation.otherUserId,
+        conversation.participants,
+        conversation.lastMessageType,
+      )) {
         continue;
       }
 
@@ -924,8 +929,6 @@ class ChatLocalDb {
     }
     return fallback?.id;
   }
-
-
 
   Future<List<String>> findConversationIdsByMessageIdentity({
     Iterable<String> userIds = const [],

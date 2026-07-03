@@ -33,8 +33,14 @@ class ProfileScreen extends StatefulWidget {
   /// When provided — shows another user's profile (read-only).
   final String? uid;
   final String? conversationId;
+  final String? savedNameHint;
 
-  const ProfileScreen({super.key, this.uid, this.conversationId});
+  const ProfileScreen({
+    super.key,
+    this.uid,
+    this.conversationId,
+    this.savedNameHint,
+  });
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -51,6 +57,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _profileLoading = true;
   List<ChatMessage> _conversationMessages = const [];
   StreamSubscription<UserProfile?>? _profileSub;
+  String? _seededSavedName;
 
   late final TabController _tabController;
 
@@ -67,6 +74,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   @override
   void initState() {
     super.initState();
+    _seededSavedName = _cleanName(
+      widget.savedNameHint,
+    ); // ← add, runs before first build
     _tabController = TabController(length: _tabs.length, vsync: this);
     _seedProfileForFirstPaint();
     if (!_isOtherUser) {
@@ -212,6 +222,15 @@ class _ProfileScreenState extends State<ProfileScreen>
       _savedContact = savedContact;
       _identity = identity;
       _profileLoading = false;
+      final resolvedSaved = _cleanName(
+        savedContact?.formattedName ?? identity?.savedName,
+      );
+      if (resolvedSaved.isNotEmpty) {
+        _seededSavedName = resolvedSaved;
+      } else if (savedContact == null && _seededSavedName != null) {
+        // Contact was deleted meanwhile — drop the hint so the public name shows.
+        _seededSavedName = null;
+      }
     });
   }
 
@@ -428,6 +447,18 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profileDisplayName() {
+    if (_isOtherUser) {
+      // Seeded from the caller (chat header) — present on the very first frame.
+      if (_seededSavedName != null && _seededSavedName!.isNotEmpty) {
+        return _seededSavedName!;
+      }
+      // Saved contact resolved during load.
+      final savedName = _cleanName(_savedContact?.formattedName);
+      if (savedName.isNotEmpty) return savedName;
+      // Identity cache saved name.
+      final savedIdentityName = _cleanName(_identity?.savedName);
+      if (savedIdentityName.isNotEmpty) return savedIdentityName;
+    }
     return _cleanName(_profile?.displayName).isNotEmpty
         ? _cleanName(_profile?.displayName)
         : '';
