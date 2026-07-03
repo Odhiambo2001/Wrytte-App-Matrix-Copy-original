@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
-import 'package:matrix/matrix.dart' show Membership;
+import 'package:matrix/matrix.dart' as mx;
 
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
@@ -906,11 +906,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   String _fallbackConversationTitle(ChatConversation conv) {
     if (_isGroupConversation(conv)) {
-      final roomName = _cleanHumanName(
-        MatrixChatService.instance.getRoomById(conv.id)?.name,
-      );
+      final room = MatrixChatService.instance.getRoomById(conv.id);
+      final roomName = _cleanGroupName(room?.name, room: room);
       if (roomName.isNotEmpty) return roomName;
-      final groupName = _cleanHumanName(conv.otherUserName);
+      final groupName = _cleanGroupName(conv.otherUserName, room: room);
       if (groupName.isNotEmpty) return groupName;
       return 'Group';
     }
@@ -948,11 +947,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   String _conversationTitle(ChatConversation conv) {
     if (_isGroupConversation(conv)) {
-      final roomName = _cleanHumanName(
-        MatrixChatService.instance.getRoomById(conv.id)?.name,
-      );
+      final room = MatrixChatService.instance.getRoomById(conv.id);
+      final roomName = _cleanGroupName(room?.name, room: room);
       if (roomName.isNotEmpty) return roomName;
-      final groupName = _cleanHumanName(conv.otherUserName);
+      final groupName = _cleanGroupName(conv.otherUserName, room: room);
       if (groupName.isNotEmpty) return groupName;
       return 'Group';
     }
@@ -1034,6 +1032,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   String? _avatarForConversation(ChatConversation conv) {
+    if (_isGroupConversation(conv)) {
+      final roomAvatar =
+          MatrixChatService.instance.getRoomById(conv.id)?.avatar?.toString();
+      if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
+      final groupAvatar = conv.otherUserAvatar?.trim();
+      return groupAvatar?.isNotEmpty == true ? groupAvatar : null;
+    }
+
     final contactKey = _contactKeyForConversation(conv);
     final contactAvatar =
         contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
@@ -1061,6 +1067,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     ChatConversation conv,
     String? contactKey,
   ) {
+    if (_isGroupConversation(conv)) {
+      final roomAvatar =
+          MatrixChatService.instance.getRoomById(conv.id)?.avatar?.toString();
+      if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
+      final groupAvatar = conv.otherUserAvatar?.trim();
+      return groupAvatar?.isNotEmpty == true ? groupAvatar : null;
+    }
+
     final contactAvatar =
         contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
     if (contactAvatar != null && contactAvatar.isNotEmpty) {
@@ -1234,6 +1248,25 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     }
     if (_looksLikePhone(trimmed) || _looksLikeMatrixId(trimmed)) return '';
     return trimmed;
+  }
+
+  String _cleanGroupName(String? value, {mx.Room? room}) {
+    final name = _cleanHumanName(value);
+    if (name.isEmpty || name.startsWith('gr.@')) return '';
+    if (room != null && _looksLikeGroupMemberName(room, name)) return '';
+    return name;
+  }
+
+  bool _looksLikeGroupMemberName(mx.Room room, String name) {
+    final normalized = name.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    for (final member in room.getParticipants([mx.Membership.join])) {
+      if (member.id == MatrixClientService.instance.userId) continue;
+      final memberName =
+          _cleanHumanName(member.calcDisplayname()).toLowerCase();
+      if (memberName.isNotEmpty && memberName == normalized) return true;
+    }
+    return false;
   }
 
   String _extractPhone(String? value) {
@@ -1873,7 +1906,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _joinSuggestedGroup(MatrixPublicGroup group) async {
     try {
-      final room = await MatrixChatService.instance.joinGroup(
+      await MatrixChatService.instance.joinGroup(
         group.canonicalAlias?.trim().isNotEmpty == true
             ? group.canonicalAlias!
             : group.roomId,
@@ -1892,7 +1925,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   bool _isOwnGroupConversation(ChatConversation conv) {
     if (_chat.isCreatedGroupRoom(conv.id)) return true;
     final room = MatrixChatService.instance.getRoomById(conv.id);
-    if (room == null || room.membership != Membership.join) return false;
+    if (room == null || room.membership != mx.Membership.join) return false;
     return MatrixChatService.instance.isGroupOwner(room);
   }
 

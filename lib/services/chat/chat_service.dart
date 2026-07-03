@@ -1795,7 +1795,7 @@ class ChatService {
         unreadCount: _displayableUnreadCountForRoom(room, client.userID),
         lastMessageType: 'group',
         otherUserName: groupName,
-        otherUserAvatar: existing?.otherUserAvatar ?? room.avatar?.toString(),
+        otherUserAvatar: room.avatar?.toString(),
       );
     }
     final otherId =
@@ -1855,15 +1855,27 @@ class ChatService {
   String _groupDisplayName(mx.Room room, ChatConversation? existing) {
     for (final candidate in [
       room.name,
-      existing?.otherUserName,
       room.getLocalizedDisplayname(),
+      _createdGroupRoomIds.contains(room.id) ? existing?.otherUserName : null,
     ]) {
       final name = _cleanHumanName(candidate);
       if (name.isEmpty) continue;
       if (name.startsWith('gr.@')) continue;
+      if (_looksLikeDirectMemberNameForGroup(room, name)) continue;
       return name;
     }
     return 'Group';
+  }
+
+  bool _looksLikeDirectMemberNameForGroup(mx.Room room, String name) {
+    final normalized = name.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    for (final user in room.getParticipants([mx.Membership.join])) {
+      if (user.id == MatrixClientService.instance.client.userID) continue;
+      final memberName = _cleanHumanName(user.calcDisplayname()).toLowerCase();
+      if (memberName.isNotEmpty && memberName == normalized) return true;
+    }
+    return false;
   }
 
   String? _usableConversationPeer(ChatConversation? conversation, String? me) {
@@ -2089,15 +2101,14 @@ class ChatService {
                 cached.participants.length > 2));
     if (!incomingHasMessage && cachedHasMessage) {
       if (cachedIsGroup) {
+        final groupName = _groupConversationName(room, incoming, cached);
+        final groupAvatar = _groupConversationAvatar(room, incoming, cached);
         return cached.copyWith(
           unreadCount: unreadCount,
           otherUserId: cached.id,
           lastMessageType: 'group',
-          otherUserName: _preferCachedDisplayValue(
-            incoming.otherUserName,
-            cached.otherUserName,
-          ),
-          otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
+          otherUserName: groupName,
+          otherUserAvatar: groupAvatar,
         );
       }
       return cached.copyWith(
@@ -2117,16 +2128,54 @@ class ChatService {
         otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
       );
     }
+    if (cachedIsGroup) {
+      return incoming.copyWith(
+        unreadCount: unreadCount,
+        otherUserId: incoming.id,
+        lastMessageType: 'group',
+        otherUserName: _groupConversationName(room, incoming, cached),
+        otherUserAvatar: _groupConversationAvatar(room, incoming, cached),
+      );
+    }
     return incoming.copyWith(
       unreadCount: unreadCount,
-      otherUserId: cachedIsGroup ? incoming.id : incoming.otherUserId,
-      lastMessageType: cachedIsGroup ? 'group' : incoming.lastMessageType,
+      otherUserId: incoming.otherUserId,
+      lastMessageType: incoming.lastMessageType,
       otherUserName: _preferCachedDisplayValue(
         cached.otherUserName,
         incoming.otherUserName,
       ),
       otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
     );
+  }
+
+  String _groupConversationName(
+    mx.Room? room,
+    ChatConversation incoming,
+    ChatConversation cached,
+  ) {
+    if (room != null) return _groupDisplayName(room, cached);
+    for (final candidate in [incoming.otherUserName, cached.otherUserName]) {
+      final name = _cleanHumanName(candidate);
+      if (name.isNotEmpty && name != 'Group') return name;
+    }
+    return 'Group';
+  }
+
+  String? _groupConversationAvatar(
+    mx.Room? room,
+    ChatConversation incoming,
+    ChatConversation cached,
+  ) {
+    final roomAvatar = room?.avatar?.toString().trim() ?? '';
+    if (roomAvatar.isNotEmpty) return roomAvatar;
+    final incomingAvatar = incoming.otherUserAvatar?.trim() ?? '';
+    if (incomingAvatar.isNotEmpty) return incomingAvatar;
+    if (_createdGroupRoomIds.contains(cached.id)) {
+      final cachedAvatar = cached.otherUserAvatar?.trim() ?? '';
+      if (cachedAvatar.isNotEmpty) return cachedAvatar;
+    }
+    return null;
   }
 
   String? _preferCachedDisplayValue(String? cached, String? incoming) {
