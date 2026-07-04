@@ -20,6 +20,7 @@ import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
 import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'package:wrytte/ui/widgets/wrytte_persistent_image.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class GroupProfileScreen extends StatefulWidget {
   final String roomId;
@@ -47,6 +48,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   final Map<String, String> _memberNames = {};
   final Map<String, String> _memberAvatars = {};
   List<mx.User> _members = const [];
+  List<String> _cachedMemberIds = const [];
   String? _localAvatarOverride;
   late bool _joined;
   bool _joiningOrLeaving = false;
@@ -337,6 +339,9 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   Widget _membersTab(String roomId) {
     final members = _members;
+    final matrixMemberIds = members.map((member) => member.id).toSet();
+    final cachedMembers =
+        _cachedMemberIds.where((id) => !matrixMemberIds.contains(id)).toList();
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       children: [
@@ -375,6 +380,18 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               );
               final avatar =
                   _memberAvatars[member.id] ?? member.avatarUrl?.toString();
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
+                title: Text(name, style: const TextStyle(color: Colors.white)),
+              );
+            },
+          ),
+        for (final memberId in cachedMembers)
+          Builder(
+            builder: (_) {
+              final name = _displayMemberName(memberId, memberId);
+              final avatar = _memberAvatars[memberId];
               return ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
@@ -549,15 +566,32 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   Future<void> _toggleMembership() async {
     if (_joiningOrLeaving) return;
-    if (_joined && !await _confirmLeaveGroup()) return;
+    if (_joined && !await _confirmLeaveGroup()) {
+      apkLog('GroupProfile.leave', 'confirmation cancelled');
+      return;
+    }
     setState(() => _joiningOrLeaving = true);
     try {
       if (_joined) {
+        final shouldLeave = await _showGroupUndoWindow(
+          context,
+          title: 'Leaving Group',
+          message: 'Leaving this group in',
+          logTag: 'GroupProfile.leave',
+          onShownLog: 'undo window shown',
+          onUndoLog: 'undo tapped',
+          onExpiredLog: 'countdown expired; leaving Matrix room',
+        );
+        if (!mounted) return;
+        if (!shouldLeave) {
+          setState(() => _joiningOrLeaving = false);
+          return;
+        }
         await _leaveJoinedGroup();
         if (!mounted) return;
         Navigator.pop(context, true);
       } else {
-        final room = await MatrixChatService.instance.joinGroup(
+        await MatrixChatService.instance.joinGroup(
           widget.alias?.trim().isNotEmpty == true
               ? widget.alias!
               : widget.roomId,
@@ -646,7 +680,12 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   }
 
   int get _memberCount {
-    if (_members.isNotEmpty) return _members.length;
+    if (_members.isNotEmpty || _cachedMemberIds.isNotEmpty) {
+      return {
+        ..._members.map((member) => member.id),
+        ..._cachedMemberIds,
+      }.length;
+    }
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     if (room != null) {
       final count = MatrixChatService.instance.groupMemberCount(room);
@@ -663,6 +702,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   void _loadMemberProfiles() {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    _loadCachedMemberProfiles();
     if (room == null || room.membership != mx.Membership.join) {
       _setMembers(const []);
       return;
@@ -679,6 +719,16 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
       );
     }
     unawaited(_requestFullMemberList(room));
+  }
+
+  void _loadCachedMemberProfiles() {
+    final cachedMembers = _cachedConversationMemberIds();
+    _setCachedMembers(cachedMembers);
+    for (final memberId in cachedMembers) {
+      unawaited(
+        _loadMemberProfile(memberId, fallbackName: _matrixLocalpart(memberId)),
+      );
+    }
   }
 
   Future<void> _requestFullMemberList(mx.Room room) async {
@@ -712,6 +762,27 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     }
     _members = unique;
     if (mounted) setState(() {});
+  }
+
+  void _setCachedMembers(List<String> memberIds) {
+    final seen = <String>{};
+    final unique = <String>[];
+    for (final memberId in memberIds) {
+      final id = memberId.trim();
+      if (id.isEmpty || id.startsWith('!')) continue;
+      if (seen.add(id)) unique.add(id);
+    }
+    _cachedMemberIds = unique;
+    if (mounted) setState(() {});
+  }
+
+  List<String> _cachedConversationMemberIds() {
+    for (final conversation in ChatService().cachedConversationsSnapshot) {
+      if (conversation.id == widget.roomId) {
+        return conversation.participants;
+      }
+    }
+    return const [];
   }
 
   Future<void> _loadMemberProfile(
@@ -795,6 +866,141 @@ class _GroupEditResult {
   final bool closedProfile;
 
   const _GroupEditResult({this.localAvatarPath, this.closedProfile = false});
+}
+
+Future<bool> _showGroupUndoWindow(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String? logTag,
+  String? onShownLog,
+  String? onUndoLog,
+  String? onExpiredLog,
+}) async {
+  if (logTag != null && onShownLog != null) {
+    apkLog(logTag, onShownLog);
+  }
+  return await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder:
+            (_) => _GroupUndoDialog(
+              title: title,
+              message: message,
+              logTag: logTag,
+              onUndoLog: onUndoLog,
+              onExpiredLog: onExpiredLog,
+            ),
+      ) ??
+      false;
+}
+
+class _GroupUndoDialog extends StatefulWidget {
+  final String title;
+  final String message;
+  final String? logTag;
+  final String? onUndoLog;
+  final String? onExpiredLog;
+
+  const _GroupUndoDialog({
+    required this.title,
+    required this.message,
+    this.logTag,
+    this.onUndoLog,
+    this.onExpiredLog,
+  });
+
+  @override
+  State<_GroupUndoDialog> createState() => _GroupUndoDialogState();
+}
+
+class _GroupUndoDialogState extends State<_GroupUndoDialog> {
+  static const int _undoSeconds = 3;
+  Timer? _timer;
+  int _remainingSeconds = _undoSeconds;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      if (_remainingSeconds <= 1) {
+        timer.cancel();
+        _writeLog(widget.onExpiredLog);
+        Navigator.of(context).pop(true);
+        return;
+      }
+      setState(() => _remainingSeconds -= 1);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _writeLog(String? message) {
+    final tag = widget.logTag;
+    if (tag == null || message == null) return;
+    apkLog(tag, message);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      child: Dialog(
+        backgroundColor: const Color(0xFF111318),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 42),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '${widget.message} $_remainingSeconds...',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 16,
+                  height: 1.3,
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () {
+                    _writeLog(widget.onUndoLog);
+                    Navigator.of(context).pop(false);
+                  },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF23262C),
+                    foregroundColor: const Color(0xFF4DA3FF),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                  ),
+                  child: const Text('Undo'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _EditGroupScreen extends StatefulWidget {
@@ -911,6 +1117,20 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     if (_leaving || _deleting) return;
     setState(() => _leaving = true);
     try {
+      final shouldLeave = await _showGroupUndoWindow(
+        context,
+        title: 'Leaving Group',
+        message: 'Leaving this group in',
+        logTag: 'GroupProfile.leave',
+        onShownLog: 'undo window shown',
+        onUndoLog: 'undo tapped',
+        onExpiredLog: 'countdown expired; leaving Matrix room',
+      );
+      if (!mounted) return;
+      if (!shouldLeave) {
+        setState(() => _leaving = false);
+        return;
+      }
       final room = MatrixChatService.instance.getRoomById(widget.roomId);
       await MatrixChatService.instance.leaveGroup(widget.roomId);
       await MatrixChatService.instance.dismissPublicGroup(
@@ -964,7 +1184,11 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
 
     setState(() => _deleting = true);
     try {
-      final shouldDelete = await _waitForDeleteUndo();
+      final shouldDelete = await _showGroupUndoWindow(
+        context,
+        title: 'Deleting Group',
+        message: 'Deleting this group in',
+      );
       if (!shouldDelete) {
         if (!mounted) return;
         setState(() => _deleting = false);
@@ -986,27 +1210,6 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       setState(() => _deleting = false);
       _showSnack('Failed to delete group: $e', isError: true);
     }
-  }
-
-  Future<bool> _waitForDeleteUndo() async {
-    var undone = false;
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        content: const Text('Deleting group...'),
-        duration: const Duration(seconds: 3),
-        backgroundColor: const Color(0xFF23262C),
-        action: SnackBarAction(
-          label: 'Undo',
-          textColor: const Color(0xFF4DA3FF),
-          onPressed: () => undone = true,
-        ),
-      ),
-    );
-    await Future<void>.delayed(const Duration(seconds: 3));
-    messenger.hideCurrentSnackBar();
-    return !undone;
   }
 
   String _cleanAlias(String value) {

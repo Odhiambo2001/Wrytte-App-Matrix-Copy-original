@@ -2997,6 +2997,26 @@ class _ChatScreenState extends State<ChatScreen> {
             : MatrixChatService.instance.groupMemberCount(room);
     if (roomCount > 0) return roomCount;
 
+    final cachedConversation = _chat.cachedConversationsSnapshot.firstWhere(
+      (conversation) =>
+          conversation.id == _activeConversationId ||
+          conversation.id == widget.conversationId,
+      orElse:
+          () => ChatConversation(
+            id: '',
+            participants: const [],
+            otherUserId: '',
+            lastMessage: '',
+            lastMessageSenderId: '',
+            lastMessageTime: DateTime.fromMillisecondsSinceEpoch(0),
+            unreadCount: 0,
+            lastMessageType: 'group',
+          ),
+    );
+    if (cachedConversation.participants.length > 1) {
+      return cachedConversation.participants.length;
+    }
+
     final ids = <String>{};
     for (final message in _messages) {
       final sender = message.senderId.trim();

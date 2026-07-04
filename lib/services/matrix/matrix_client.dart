@@ -114,7 +114,10 @@ class MatrixClientService {
           state: StateFilter(lazyLoadMembers: true),
           timeline: StateFilter(
             lazyLoadMembers: true,
-            limit: MatrixConfig.historyPageSize,
+            // CHANGED: was MatrixConfig.historyPageSize (3000). A sync only
+            // needs a few events per room for the conversation preview;
+            // asking for 3000 is what made /sync time out.
+            limit: MatrixConfig.syncTimelineLimit,
           ),
         ),
       ),

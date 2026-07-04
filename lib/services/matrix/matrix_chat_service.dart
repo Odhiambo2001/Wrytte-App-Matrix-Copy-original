@@ -31,6 +31,13 @@ class MatrixPublicGroup {
   });
 }
 
+class MatrixCreatedGroupRoom {
+  final String roomId;
+  final Room? room;
+
+  const MatrixCreatedGroupRoom({required this.roomId, this.room});
+}
+
 class MatrixChatService {
   MatrixChatService._();
   static final MatrixChatService instance = MatrixChatService._();
@@ -110,16 +117,22 @@ class MatrixChatService {
       try {
         final firstSync = client.firstSyncReceived;
         if (firstSync != null) {
-          await firstSync.timeout(const Duration(seconds: 8), onTimeout: () {});
+          // CHANGED: 8s -> 30s to match the slow dev homeserver.
+          await firstSync.timeout(const Duration(seconds: 30), onTimeout: () {});
         } else {
           await client
-              .oneShotSync(timeout: Duration.zero)
-              .timeout(const Duration(seconds: 8), onTimeout: () {});
+              .oneShotSync()
+              .timeout(const Duration(seconds: 30), onTimeout: () => '');
         }
       } catch (_) {
         // The background sync will keep running. We still inspect loaded rooms.
       }
       _initialSyncComplete = true;
+      // ADDED: visibility into whether rooms actually loaded.
+      apkLog(
+        'Matrix.sync',
+        'ensureSynced done rooms=${client.rooms.length} user_id="${client.userID}"',
+      );
     }
 
     await autoJoinTrustedDirectInvites();
@@ -234,7 +247,7 @@ class MatrixChatService {
     }
   }
 
-  Future<Room> createGroupRoom({
+  Future<MatrixCreatedGroupRoom> createGroupRoom({
     required String name,
     required bool isPublic,
     String? aliasLocalpart,
@@ -297,21 +310,31 @@ class MatrixChatService {
     }
     final room = getRoomById(roomId);
     if (room == null) {
-      throw StateError(
-        'Matrix group room $roomId was not available after sync.',
+      apkLog(
+        'Matrix.groups',
+        'created room_id="$roomId" but room not available after wait; continuing with local group shell',
       );
     }
     if (isPublic && cleanAlias != null && cleanAlias.isNotEmpty) {
-      try {
-        await room.setCanonicalAlias('#$cleanAlias:${MatrixConfig.serverName}');
-      } catch (e) {
+      if (room != null) {
+        try {
+          await room.setCanonicalAlias(
+            '#$cleanAlias:${MatrixConfig.serverName}',
+          );
+        } catch (e) {
+          apkLog(
+            'Matrix.alias',
+            'set canonical alias skipped room_id="$roomId" alias="$cleanAlias" error="$e"',
+          );
+        }
+      } else {
         apkLog(
           'Matrix.alias',
-          'set canonical alias skipped room_id="$roomId" alias="$cleanAlias" error="$e"',
+          'canonical alias deferred room_id="$roomId" alias="$cleanAlias" reason="room not synced"',
         );
       }
     }
-    return room;
+    return MatrixCreatedGroupRoom(roomId: roomId, room: room);
   }
 
   Future<List<MatrixPublicGroup>> fetchPublicGroups({int? limit}) async {

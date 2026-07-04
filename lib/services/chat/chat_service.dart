@@ -1721,33 +1721,39 @@ class ChatService {
             .where((id) => id != MatrixClientService.instance.client.userID)
             .toSet()
             .toList();
-    final room = await MatrixChatService.instance.createGroupRoom(
+    final createdRoom = await MatrixChatService.instance.createGroupRoom(
       name: name,
       isPublic: isPublic,
       aliasLocalpart: aliasLocalpart,
       invite: invites,
     );
+    final room = createdRoom.room;
+    final roomId = createdRoom.roomId;
     final now = DateTime.now();
     final conversation = ChatConversation(
-      id: room.id,
+      id: roomId,
       participants: [
         if (MatrixClientService.instance.client.userID != null)
           MatrixClientService.instance.client.userID!,
         ...invites,
       ],
-      otherUserId: room.id,
+      otherUserId: roomId,
       lastMessage: '',
       lastMessageSenderId: MatrixClientService.instance.client.userID ?? '',
       lastMessageTime: now,
       unreadCount: 0,
       lastMessageType: 'group',
       otherUserName: name.trim(),
-      otherUserAvatar: _groupRoomAvatarUrl(room),
+      otherUserAvatar: room == null ? null : _groupRoomAvatarUrl(room),
     );
-    _conversationsMap[room.id] = conversation;
-    await markGroupCreated(room.id);
+    _conversationsMap[roomId] = conversation;
+    await markGroupCreated(roomId);
     await ChatLocalDb.instance.saveConversations([conversation]);
     _emitConversations();
+    apkLog(
+      'ChatService.groupCreate',
+      'saved local group room_id="$roomId" name="${name.trim()}" participants=${conversation.participants.length}',
+    );
     return conversation;
   }
 
@@ -2182,12 +2188,9 @@ class ChatService {
   ) {
     final roomAvatar = room == null ? '' : _groupRoomAvatarUrl(room) ?? '';
     if (roomAvatar.isNotEmpty) return roomAvatar;
-    final incomingAvatar = incoming.otherUserAvatar?.trim() ?? '';
-    if (incomingAvatar.isNotEmpty) return incomingAvatar;
-    if (_createdGroupRoomIds.contains(cached.id)) {
-      final cachedAvatar = cached.otherUserAvatar?.trim() ?? '';
-      if (cachedAvatar.isNotEmpty) return cachedAvatar;
-    }
+    // Only trust a stored avatar if it actually came from a group room event.
+    // Do NOT fall back to cached.otherUserAvatar — it may be a member's avatar
+    // that leaked in through contact enrichment.
     return null;
   }
 
@@ -2635,6 +2638,16 @@ class ChatService {
 
   Set<String> get createdGroupRoomIds =>
       Set<String>.unmodifiable(_createdGroupRoomIds);
+  // A conversation is a group if we created it, it's explicitly typed 'group',
+  // or its live Matrix room classifies as a group. Contact/member enrichment
+  // must never touch these — group name/avatar come only from room state.
+  bool _isGroupConversationRow(ChatConversation conversation) {
+    if (_createdGroupRoomIds.contains(conversation.id)) return true;
+    if (conversation.lastMessageType == 'group') return true;
+    final room = _roomById(conversation.id);
+    if (room != null && _isGroupRoom(room, conversation)) return true;
+    return false;
+  }
 
   Future<void> removeConversationLocally(String conversationId) async {
     final id = conversationId.trim();
@@ -3112,6 +3125,7 @@ class ChatService {
     var changed = false;
     for (final entry in _conversationsMap.entries.toList()) {
       final conversation = entry.value;
+      if (_isGroupConversationRow(conversation)) continue; // ADDED: never enrich group
       final conversationKeys = _keysForConversation(conversation);
       if (!conversationKeys.any(identityKeys.contains)) continue;
 
@@ -3151,31 +3165,36 @@ class ChatService {
           ],
           phones: contact.phones,
         );
-    for (final conversationId in dbConversationIds) {
-      final conversation = _conversationsMap[conversationId];
-      if (conversation != null) {
-        final next = conversation.copyWith(
-          otherUserName: name,
-          otherUserAvatar:
-              contact.avatarUrl?.trim().isNotEmpty == true
-                  ? contact.avatarUrl
-                  : conversation.otherUserAvatar,
-        );
-        if (next.otherUserName != conversation.otherUserName ||
-            next.otherUserAvatar != conversation.otherUserAvatar) {
-          _conversationsMap[conversationId] = next;
-          changed = true;
-        }
-      }
-      unawaited(
-        ChatLocalDb.instance.updateConversationUserInfo(
-          conversationId: conversationId,
-          name: name,
-          avatar: contact.avatarUrl,
-        ),
-      );
-    }
+    
 
+    for (final conversationId in dbConversationIds) {
+        final conversation = _conversationsMap[conversationId];
+        if (_createdGroupRoomIds.contains(conversationId) ||
+            (conversation != null && _isGroupConversationRow(conversation))) {
+          continue; // covers loaded AND unloaded groups
+        }
+        if (conversation != null) {
+          final next = conversation.copyWith(
+            otherUserName: name,
+            otherUserAvatar:
+                contact.avatarUrl?.trim().isNotEmpty == true
+                    ? contact.avatarUrl
+                    : conversation.otherUserAvatar,
+          );
+          if (next.otherUserName != conversation.otherUserName ||
+              next.otherUserAvatar != conversation.otherUserAvatar) {
+            _conversationsMap[conversationId] = next;
+            changed = true;
+          }
+        }
+        unawaited(
+          ChatLocalDb.instance.updateConversationUserInfo(
+            conversationId: conversationId,
+            name: name,
+            avatar: contact.avatarUrl,
+          ),
+        );
+      }
     if (changed) _emitConversations();
   }
 
@@ -3193,6 +3212,7 @@ class ChatService {
     var changed = false;
     for (final entry in _conversationsMap.entries.toList()) {
       final conversation = entry.value;
+      if (_isGroupConversationRow(conversation)) continue; // ADDED: never enrich group
       final conversationKeys = _keysForConversation(conversation);
       if (!conversationKeys.any(identityKeys.contains)) continue;
 
@@ -3220,6 +3240,7 @@ class ChatService {
           phones: contact.phones,
         );
     for (final conversationId in dbConversationIds) {
+      if (_createdGroupRoomIds.contains(conversationId)) continue; // ADDED
       if (_conversationsMap.containsKey(conversationId)) continue;
       unawaited(
         ChatLocalDb.instance.updateConversationUserInfo(
@@ -3239,6 +3260,12 @@ class ChatService {
   }
 
   Set<String> _keysForConversation(ChatConversation conversation) {
+    // Groups must not be matchable by member identity — that's how a member's
+    // avatar leaks onto the group. Match groups only by their own room id.
+    if (_isGroupConversationRow(conversation)) {
+      return _conversationIdentityKeys(conversation.id).toSet()
+        ..removeWhere((key) => key.isEmpty);
+    }
     return <String>{
       ..._conversationIdentityKeys(conversation.otherUserId),
       ..._conversationIdentityKeys(conversation.lastMessageSenderId),

@@ -44,6 +44,9 @@ class MatrixAuthService {
         'Matrix.auth',
         'restore already logged user_id="${client.userID}"',
       );
+      // ADDED: even on a warm restore, make sure the sync loop is running and
+      // a first sync has actually landed before callers read client.rooms.
+      await _primeSync(client);
       return client;
     }
 
@@ -64,6 +67,7 @@ class MatrixAuthService {
         'Matrix.auth',
         'restore skipped credentials; already logged user_id="${client.userID}"',
       );
+      await _primeSync(client); // ADDED
       return client;
     }
     await MatrixClientService.instance.initWithCredentials(
@@ -72,11 +76,44 @@ class MatrixAuthService {
       accessToken: token,
       deviceId: deviceId,
     );
+    final restored = MatrixClientService.instance.client;
     apkLog(
       'Matrix.auth',
-      'restore ready logged=${MatrixClientService.instance.client.isLogged()} user_id="${MatrixClientService.instance.client.userID}"',
+      'restore ready logged=${restored.isLogged()} user_id="${restored.userID}"',
     );
-    return MatrixClientService.instance.client;
+    // ADDED: drive + await the first sync so rooms populate deterministically.
+    await _primeSync(restored);
+    return restored;
+  }
+
+  // ADDED: turns on the background sync loop and waits for exactly one /sync
+  // to complete, with a generous window for the slow dev homeserver. With the
+  // reduced sync timeline limit this returns in well under a second normally,
+  // but we never block the app for more than 30s even if the server stalls.
+  Future<void> _primeSync(Client client) async {
+    if (!client.isLogged()) return;
+    try {
+      client.backgroundSync = true;
+      // If a first sync already completed in a prior session, this is cheap.
+      final firstSync = client.firstSyncReceived;
+      if (firstSync != null) {
+        await firstSync.timeout(
+          const Duration(seconds: 30),
+          onTimeout: () {},
+        );
+      } else {
+        await client
+            .oneShotSync()
+            .timeout(const Duration(seconds: 30), onTimeout: () => '');
+      }
+      apkLog(
+        'Matrix.auth',
+        'first sync primed rooms=${client.rooms.length} user_id="${client.userID}"',
+      );
+    } catch (e) {
+      // Background sync keeps running; callers inspect whatever loaded.
+      apkLog('Matrix.auth', 'first sync prime slow/failed error="$e"');
+    }
   }
 
   Future<LoginResponse> login({

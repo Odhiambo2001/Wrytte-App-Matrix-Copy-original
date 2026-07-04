@@ -28,6 +28,7 @@ import 'package:wrytte/ui/screens/chats/widgets/mini_chat_window.dart';
 import 'package:wrytte/ui/screens/chats/widgets/top_bar.dart';
 import 'package:wrytte/ui/screens/firebase_new_chat_screen.dart';
 import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'widgets/search_bar.dart' as local_widgets;
 import 'widgets/tab_bar_section.dart';
 
@@ -992,6 +993,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   bool _isGroupConversation(ChatConversation conv) {
+    if (_chat.isCreatedGroupRoom(conv.id)) return true;
+
     final explicitlyStoredGroup =
         conv.lastMessageType == 'group' &&
         conv.id.startsWith('!') &&
@@ -1040,9 +1043,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final roomAvatar = _groupRoomAvatarUrl(
         MatrixChatService.instance.getRoomById(conv.id),
       );
-      if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
-      final groupAvatar = conv.otherUserAvatar?.trim();
-      return groupAvatar?.isNotEmpty == true ? groupAvatar : null;
+      return roomAvatar?.trim().isNotEmpty == true ? roomAvatar!.trim() : null;
     }
 
     final contactKey = _contactKeyForConversation(conv);
@@ -1067,20 +1068,16 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     return null;
   }
-
   String? _preferredAvatarForConversation(
-    ChatConversation conv,
-    String? contactKey,
-  ) {
-    if (_isGroupConversation(conv)) {
-      final roomAvatar = _groupRoomAvatarUrl(
-        MatrixChatService.instance.getRoomById(conv.id),
-      );
-      if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
-      final groupAvatar = conv.otherUserAvatar?.trim();
-      return groupAvatar?.isNotEmpty == true ? groupAvatar : null;
-    }
-
+      ChatConversation conv,
+      String? contactKey,
+    ) {
+      if (_isGroupConversation(conv)) {
+        final roomAvatar = _groupRoomAvatarUrl(
+          MatrixChatService.instance.getRoomById(conv.id),
+        );
+        return roomAvatar?.trim().isNotEmpty == true ? roomAvatar!.trim() : null;
+      }
     final contactAvatar =
         contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
     if (contactAvatar != null && contactAvatar.isNotEmpty) {
@@ -1518,6 +1515,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   title: name,
                   avatarUrl: avatar,
                   initialMessages: initialMessages,
+                  initialMemberCount:
+                      isGroup && conv.participants.length > 1
+                          ? conv.participants.length
+                          : null,
                 ),
             transitionsBuilder: (_, animation, __, child) {
               final curved = CurvedAnimation(
@@ -1655,12 +1656,28 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   Widget _buildGroupsTab(double topPadding) {
     final allGroups =
         _conversations.where(_isDisplayableGroupConversation).toList();
-    final ownGroups = allGroups.where(_isOwnGroupConversation).toList();
+    final createdIds = _chat.createdGroupRoomIds;
+    final shouldPromotePublicGroupsAsOwn =
+        allGroups.isEmpty &&
+        createdIds.isNotEmpty &&
+        MatrixChatService.instance.rooms.isEmpty;
+    final promotedOwnGroups =
+    shouldPromotePublicGroupsAsOwn
+        ? _suggestedGroups
+            .where((g) => createdIds.contains(g.roomId))
+            .map(_publicGroupAsOwnedConversation)
+            .toList()
+        : const <ChatConversation>[];
+    final ownGroups = [
+      ...allGroups.where(_isOwnGroupConversation),
+      ...promotedOwnGroups,
+    ];
     final joinedGroups =
         allGroups.where((group) => !_isOwnGroupConversation(group)).toList();
-    final createdIds = _chat.createdGroupRoomIds;
+    final localGroupNames = allGroups.map(_normalizedGroupTitle).toSet();
     final joinedIds = {
       ...allGroups.map((group) => group.id),
+      ...promotedOwnGroups.map((group) => group.id),
       ..._joinedMatrixGroupRoomIds(),
       ...createdIds,
     };
@@ -1670,9 +1687,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             .where(
               (group) =>
                   !joinedIds.contains(group.roomId) &&
-                  !_suggestedAliasMatchesJoined(group, joinedAliases),
+                  !_suggestedAliasMatchesJoined(group, joinedAliases) &&
+                  !_suggestedNameMatchesLocalGroup(group, localGroupNames),
             )
             .toList();
+
+    apkLog(
+      'Groups.tab',
+      'all=${allGroups.length} own=${ownGroups.length} joined=${joinedGroups.length} '
+          'created_ids=${createdIds.length} suggested=${suggested.length} '
+          'promoted=${promotedOwnGroups.length} local_names="${localGroupNames.join(',')}"',
+    );
 
     if (allGroups.isEmpty && suggested.isEmpty && _initialCacheWarmup) {
       return _buildConversationTab(
@@ -1772,6 +1797,40 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   ) {
     final alias = group.canonicalAlias?.trim() ?? '';
     return alias.isNotEmpty && joinedAliases.contains(alias);
+  }
+
+  bool _suggestedNameMatchesLocalGroup(
+    MatrixPublicGroup group,
+    Set<String> localGroupNames,
+  ) {
+    final name = _normalizedGroupName(group.name);
+    return name.isNotEmpty && localGroupNames.contains(name);
+  }
+
+  ChatConversation _publicGroupAsOwnedConversation(MatrixPublicGroup group) {
+    final now = DateTime.now();
+    return ChatConversation(
+      id: group.roomId,
+      participants: [
+        if (_currentUserId.trim().isNotEmpty) _currentUserId.trim(),
+      ],
+      otherUserId: group.roomId,
+      lastMessage: '',
+      lastMessageSenderId: _currentUserId,
+      lastMessageTime: now,
+      unreadCount: 0,
+      lastMessageType: 'group',
+      otherUserName: group.name,
+      otherUserAvatar: group.avatarUrl,
+    );
+  }
+
+  String _normalizedGroupTitle(ChatConversation conversation) {
+    return _normalizedGroupName(_conversationTitle(conversation));
+  }
+
+  String _normalizedGroupName(String value) {
+    return _cleanHumanName(value).trim().toLowerCase();
   }
 
   Widget _buildGroupsEmptyState(double topPadding) {
