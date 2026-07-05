@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -65,7 +66,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 6,
+      version: 7,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -117,7 +118,9 @@ class ChatLocalDb {
             isPinned             INTEGER NOT NULL DEFAULT 0,
             otherUserName        TEXT,
             otherUserAvatar      TEXT,
-            lastReadTime         INTEGER
+            lastReadTime         INTEGER,
+            deletedAt            INTEGER,
+            deletedBy            TEXT
           )
         ''');
 
@@ -182,6 +185,15 @@ class ChatLocalDb {
             'isEdited',
             'INTEGER NOT NULL DEFAULT 0',
           );
+        }
+        if (oldVersion < 7) {
+          await _addColumnIfMissing(
+            db,
+            'conversations',
+            'deletedAt',
+            'INTEGER',
+          );
+          await _addColumnIfMissing(db, 'conversations', 'deletedBy', 'TEXT');
         }
       },
     );
@@ -471,6 +483,8 @@ class ChatLocalDb {
         'otherUserName': c.otherUserName ?? existingName,
         'otherUserAvatar': c.otherUserAvatar ?? existingAvatar,
         'lastReadTime': nextLastReadTime,
+        'deletedAt': c.deletedAt?.millisecondsSinceEpoch,
+        'deletedBy': _encodeStringList(c.deletedBy),
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
@@ -529,6 +543,8 @@ class ChatLocalDb {
                   ? c.otherUserAvatar
                   : existingAvatars[c.id],
           'lastReadTime': nextLastReadTime,
+          'deletedAt': c.deletedAt?.millisecondsSinceEpoch,
+          'deletedBy': _encodeStringList(c.deletedBy),
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
@@ -609,6 +625,8 @@ class ChatLocalDb {
         'otherUserName': roomConversation.otherUserName,
         'otherUserAvatar': roomConversation.otherUserAvatar,
         'lastReadTime': existingLastReadTime,
+        'deletedAt': roomConversation.deletedAt?.millisecondsSinceEpoch,
+        'deletedBy': _encodeStringList(roomConversation.deletedBy),
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     });
   }
@@ -660,6 +678,11 @@ class ChatLocalDb {
     var changed = false;
 
     for (final conversation in conversations) {
+      if (conversation.deletedAt != null ||
+          conversation.lastMessageType == 'group_deleted') {
+        hydrated.add(conversation);
+        continue;
+      }
       final latest = await database.query(
         'messages',
         where: 'conversationId = ? AND isDeletedForMe = ?',
@@ -1038,9 +1061,47 @@ class ChatLocalDb {
       isArchived: (row['isArchived'] as int? ?? 0) == 1,
       isMuted: (row['isMuted'] as int? ?? 0) == 1,
       isPinned: (row['isPinned'] as int? ?? 0) == 1,
+      deletedAt: _dateTimeFromMillis(row['deletedAt']),
+      deletedBy: _decodeStringList(row['deletedBy']),
       otherUserName: rawName != null ? _sanitize(rawName) : null,
       otherUserAvatar: row['otherUserAvatar'] as String?,
     );
+  }
+
+  DateTime? _dateTimeFromMillis(Object? value) {
+    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+    if (value is num) {
+      return DateTime.fromMillisecondsSinceEpoch(value.toInt());
+    }
+    return null;
+  }
+
+  String _encodeStringList(List<String> values) => jsonEncode(
+    values
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toList(),
+  );
+
+  List<String> _decodeStringList(Object? value) {
+    final raw = value?.toString().trim() ?? '';
+    if (raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) {
+        return decoded
+            .map((item) => item.toString().trim())
+            .where((item) => item.isNotEmpty)
+            .toList();
+      }
+    } catch (_) {
+      return raw
+          .split(',')
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty)
+          .toList();
+    }
+    return const [];
   }
 
   // ── Mark conversation as read ──────────────────────────────────────────────

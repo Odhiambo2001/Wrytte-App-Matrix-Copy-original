@@ -1188,6 +1188,10 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         context,
         title: 'Deleting Group',
         message: 'Deleting this group in',
+        logTag: 'GroupProfile.delete',
+        onShownLog: 'undo window shown',
+        onUndoLog: 'undo tapped',
+        onExpiredLog: 'countdown expired; announcing deletion',
       );
       if (!shouldDelete) {
         if (!mounted) return;
@@ -1196,13 +1200,39 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       }
       final room = MatrixChatService.instance.getRoomById(widget.roomId);
       if (room != null) {
+        final deletedAt = DateTime.now().toUtc();
+        final title =
+            _nameController.text.trim().isNotEmpty
+                ? _nameController.text.trim()
+                : widget.initialName;
+        await _announceGroupDeleted(room, deletedAt);
+        await ChatService().markGroupDeletedLocally(
+          roomId: widget.roomId,
+          name: title,
+          avatarUrl: widget.initialAvatarUrl ?? room.avatar?.toString(),
+          participants:
+              room.getParticipants().map((member) => member.id).toList(),
+          deletedAt: deletedAt,
+          deletedBy: room.client.userID,
+        );
         await _removeMembersAndClose(room);
         await MatrixChatService.instance.dismissPublicGroup(
           roomId: widget.roomId,
           canonicalAlias: room.canonicalAlias,
         );
+      } else {
+        final deletedAt = DateTime.now().toUtc();
+        await ChatService().markGroupDeletedLocally(
+          roomId: widget.roomId,
+          name: widget.initialName,
+          avatarUrl: widget.initialAvatarUrl,
+          deletedAt: deletedAt,
+        );
+        await MatrixChatService.instance.dismissPublicGroup(
+          roomId: widget.roomId,
+          canonicalAlias: widget.initialAlias,
+        );
       }
-      await ChatService().removeConversationLocally(widget.roomId);
       if (!mounted) return;
       Navigator.pop(context, const _GroupEditResult(closedProfile: true));
     } catch (e) {
@@ -1239,6 +1269,22 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       await room.leave();
     }
     await room.forget();
+  }
+
+  Future<void> _announceGroupDeleted(mx.Room room, DateTime deletedAt) async {
+    final deletedBy = room.client.userID?.trim() ?? '';
+    final timestamp = deletedAt.toIso8601String();
+    apkLog(
+      'GroupProfile.delete',
+      'announcing deleted room_id="${room.id}" deleted_at="$timestamp" deleted_by="$deletedBy"',
+    );
+    await room.sendEvent({
+      'msgtype': mx.MessageTypes.Notice,
+      'body': 'This group has been deleted at $timestamp',
+      ChatService.groupDeletedEventKey: true,
+      ChatService.groupDeletedAtKey: timestamp,
+      if (deletedBy.isNotEmpty) ChatService.groupDeletedByKey: deletedBy,
+    }, displayPendingEvent: false);
   }
 
   void _showSnack(String message, {bool isError = false}) {

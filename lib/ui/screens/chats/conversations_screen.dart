@@ -994,9 +994,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   bool _isGroupConversation(ChatConversation conv) {
     if (_chat.isCreatedGroupRoom(conv.id)) return true;
+    if (conv.lastMessageType == ChatService.groupDeletedMessageType) {
+      return true;
+    }
+    if (conv.deletedAt != null && conv.id.startsWith('!')) return true;
 
     final explicitlyStoredGroup =
-        conv.lastMessageType == 'group' &&
+        (conv.lastMessageType == 'group' ||
+            conv.lastMessageType == ChatService.groupDeletedMessageType) &&
         conv.id.startsWith('!') &&
         conv.otherUserId == conv.id;
     if (explicitlyStoredGroup) return true;
@@ -1068,16 +1073,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     return null;
   }
+
   String? _preferredAvatarForConversation(
-      ChatConversation conv,
-      String? contactKey,
-    ) {
-      if (_isGroupConversation(conv)) {
-        final roomAvatar = _groupRoomAvatarUrl(
-          MatrixChatService.instance.getRoomById(conv.id),
-        );
-        return roomAvatar?.trim().isNotEmpty == true ? roomAvatar!.trim() : null;
-      }
+    ChatConversation conv,
+    String? contactKey,
+  ) {
+    if (_isGroupConversation(conv)) {
+      final roomAvatar = _groupRoomAvatarUrl(
+        MatrixChatService.instance.getRoomById(conv.id),
+      );
+      return roomAvatar?.trim().isNotEmpty == true ? roomAvatar!.trim() : null;
+    }
     final contactAvatar =
         contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
     if (contactAvatar != null && contactAvatar.isNotEmpty) {
@@ -1662,12 +1668,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         createdIds.isNotEmpty &&
         MatrixChatService.instance.rooms.isEmpty;
     final promotedOwnGroups =
-    shouldPromotePublicGroupsAsOwn
-        ? _suggestedGroups
-            .where((g) => createdIds.contains(g.roomId))
-            .map(_publicGroupAsOwnedConversation)
-            .toList()
-        : const <ChatConversation>[];
+        shouldPromotePublicGroupsAsOwn
+            ? _suggestedGroups
+                .where((g) => createdIds.contains(g.roomId))
+                .where(
+                  (g) => !MatrixChatService.instance.isPublicGroupDismissed(g),
+                )
+                .map(_publicGroupAsOwnedConversation)
+                .toList()
+            : const <ChatConversation>[];
     final ownGroups = [
       ...allGroups.where(_isOwnGroupConversation),
       ...promotedOwnGroups,
@@ -1686,6 +1695,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         _suggestedGroups
             .where(
               (group) =>
+                  !MatrixChatService.instance.isPublicGroupDismissed(group) &&
                   !joinedIds.contains(group.roomId) &&
                   !_suggestedAliasMatchesJoined(group, joinedAliases) &&
                   !_suggestedNameMatchesLocalGroup(group, localGroupNames),
@@ -1993,11 +2003,25 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _joinSuggestedGroup(MatrixPublicGroup group) async {
     try {
-      await MatrixChatService.instance.joinGroup(
+      final room = await MatrixChatService.instance.joinGroup(
         group.canonicalAlias?.trim().isNotEmpty == true
             ? group.canonicalAlias!
             : group.roomId,
       );
+      final roomId = room?.id ?? group.roomId;
+      await _chat.saveJoinedGroupShell(
+        roomId: roomId,
+        name: group.name,
+        avatarUrl: group.avatarUrl,
+      );
+      if (mounted) {
+        setState(() {
+          _suggestedGroups =
+              _suggestedGroups
+                  .where((candidate) => candidate.roomId != group.roomId)
+                  .toList();
+        });
+      }
       await _chat.fetchConversations();
       await _loadLocalConversations();
       await _loadSuggestedGroups();

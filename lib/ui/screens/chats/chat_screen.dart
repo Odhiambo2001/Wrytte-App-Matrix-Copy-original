@@ -2681,6 +2681,13 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (room != null) {
         _resolvedConversationId = room.id;
+      }
+      await _chat.saveJoinedGroupShell(
+        roomId: room?.id ?? _activeConversationId,
+        name: _resolvedHeaderName,
+        avatarUrl: _stableHeaderAvatarUrl,
+      );
+      if (room != null) {
         await _chat.fetchConversations();
         unawaited(_loadGroupMemberProfiles(room.id));
       }

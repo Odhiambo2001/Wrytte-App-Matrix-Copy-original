@@ -83,6 +83,11 @@ class MatrixChatService {
     if (id.isNotEmpty) _createdGroupRoomIds.add(id);
   }
 
+  void unregisterCreatedGroupRoom(String roomId) {
+    final id = roomId.trim();
+    if (id.isNotEmpty) _createdGroupRoomIds.remove(id);
+  }
+
   /// Register many room IDs as known groups (e.g. ChatService's persisted set).
   void registerCreatedGroupRooms(Iterable<String> roomIds) {
     for (final id in roomIds) {
@@ -118,11 +123,15 @@ class MatrixChatService {
         final firstSync = client.firstSyncReceived;
         if (firstSync != null) {
           // CHANGED: 8s -> 30s to match the slow dev homeserver.
-          await firstSync.timeout(const Duration(seconds: 30), onTimeout: () {});
+          await firstSync.timeout(
+            const Duration(seconds: 30),
+            onTimeout: () {},
+          );
         } else {
-          await client
-              .oneShotSync()
-              .timeout(const Duration(seconds: 30), onTimeout: () => '');
+          await client.oneShotSync().timeout(
+            const Duration(seconds: 30),
+            onTimeout: () => '',
+          );
         }
       } catch (_) {
         // The background sync will keep running. We still inspect loaded rooms.
@@ -447,9 +456,16 @@ class MatrixChatService {
           target.startsWith('!')
               ? await client.joinRoomById(target)
               : await client.joinRoom(target);
-      await client
-          .waitForRoomInSync(roomId, join: true)
-          .timeout(const Duration(seconds: 12));
+      try {
+        await client
+            .waitForRoomInSync(roomId, join: true)
+            .timeout(const Duration(seconds: 12));
+      } catch (e) {
+        apkLog(
+          'Matrix.groups',
+          'join room_id="$roomId" succeeded but room not available after wait error="$e"',
+        );
+      }
       return getRoomById(roomId);
     } catch (e) {
       apkLog('Matrix.groups', 'join failed target="$target" error="$e"');
