@@ -2810,6 +2810,13 @@ class ChatService {
   bool isCreatedGroupRoom(String roomId) =>
       _createdGroupRoomIds.contains(roomId.trim());
 
+  bool isConversationDeleted(String conversationId) {
+    final conv = _conversationsMap[conversationId.trim()];
+    if (conv == null) return false;
+    return conv.deletedAt != null ||
+        conv.lastMessageType == groupDeletedMessageType;
+  }
+
   Set<String> get createdGroupRoomIds =>
       Set<String>.unmodifiable(_createdGroupRoomIds);
   // A conversation is a group if we created it, it's explicitly typed 'group',

@@ -66,6 +66,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     final alias = _displayAlias(room?.canonicalAlias ?? widget.alias ?? '');
     final title = _displayTitle(room?.name ?? '', widget.groupName, alias);
+    final isDeleted = ChatService().isConversationDeleted(widget.roomId);
     final memberCount = _memberCount;
     final top = MediaQuery.of(context).padding.top;
 
@@ -105,6 +106,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                   imageUrl: widget.avatarUrl ?? room?.avatar?.toString(),
                   localImagePath: _localAvatarOverride,
                   name: title,
+                  isDeleted: isDeleted,
                 ),
                 SizedBox(height: compact ? 10 : 18),
                 Text(
@@ -680,6 +682,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   }
 
   int get _memberCount {
+    if (ChatService().isConversationDeleted(widget.roomId)) return 0;
     if (_members.isNotEmpty || _cachedMemberIds.isNotEmpty) {
       return {
         ..._members.map((member) => member.id),

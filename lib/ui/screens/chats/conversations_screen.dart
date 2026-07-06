@@ -1457,6 +1457,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       avatarUrl: avatar,
       localAvatarPath: localAvatarPath,
       unreadCount: conv.unreadCount,
+      isDeleted:
+          conv.deletedAt != null ||
+          conv.lastMessageType == ChatService.groupDeletedMessageType,
       isSelectionMode: _isSelectionMode,
       isSelected: selected,
       onSelectionToggle: () => _toggleSelection(conv.id),

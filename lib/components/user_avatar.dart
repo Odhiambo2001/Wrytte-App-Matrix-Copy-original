@@ -15,6 +15,7 @@ class UserAvatar extends StatefulWidget {
   final String? name;
   final VoidCallback? onTap;
   final String? heroTag;
+  final bool isDeleted;
 
   const UserAvatar({
     super.key,
@@ -25,6 +26,7 @@ class UserAvatar extends StatefulWidget {
     this.name,
     this.onTap,
     this.heroTag,
+    this.isDeleted = false,
   });
 
   @override
@@ -106,7 +108,12 @@ class _UserAvatarState extends State<UserAvatar> {
   Widget build(BuildContext context) {
     Widget avatarWidget;
 
+    if (widget.isDeleted) {
+      return _wrapAvatar(_buildDeletedGhost());
+    }
+
     final localFile = _localImageFile();
+
     final imageUrl = _effectiveImageUrl();
     final cachedProvider =
         imageUrl.isNotEmpty
@@ -148,6 +155,10 @@ class _UserAvatarState extends State<UserAvatar> {
       avatarWidget = _buildPlaceholder();
     }
 
+    return _wrapAvatar(avatarWidget);
+  }
+
+  Widget _wrapAvatar(Widget avatarWidget) {
     final wrapped = GestureDetector(
       onTap: widget.onTap,
       child: SizedBox(
@@ -156,10 +167,23 @@ class _UserAvatarState extends State<UserAvatar> {
         child: avatarWidget,
       ),
     );
-
     return widget.heroTag != null
         ? Hero(tag: widget.heroTag!, child: wrapped)
         : wrapped;
+  }
+
+  Widget _buildDeletedGhost() {
+    return Container(
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        color: Color(0xFF2A6BD4),
+      ),
+      child: Icon(
+        Icons.person_off_rounded,
+        size: widget.size * 0.55,
+        color: Colors.white,
+      ),
+    );
   }
 
   Widget _buildFromImageProvider(ImageProvider provider) {

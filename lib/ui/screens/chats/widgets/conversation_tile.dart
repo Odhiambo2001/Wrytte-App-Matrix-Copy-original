@@ -9,6 +9,7 @@ class ConversationTile extends StatelessWidget {
   final String? localAvatarPath;
   final int unreadCount;
   final bool isOnline;
+  final bool isDeleted;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
 
@@ -28,6 +29,7 @@ class ConversationTile extends StatelessWidget {
     this.localAvatarPath,
     this.unreadCount = 0,
     this.isOnline = false,
+    this.isDeleted = false,
     this.onTap,
     this.onLongPress,
     this.isSelectionMode = false,
@@ -70,6 +72,7 @@ class ConversationTile extends StatelessWidget {
                     imageUrl: avatarUrl,
                     localImagePath: localAvatarPath,
                     name: name,
+                    isDeleted: isDeleted,
                   ),
 
                   if (isOnline && !isSelectionMode)

@@ -1138,6 +1138,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     if (text.isEmpty || _isSending) return;
+    if (_isDeletedConversation) return;
     final editing = _editingMessage;
     if (editing != null) {
       await _sendEditedMessage(editing, text);
@@ -1291,6 +1292,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _showSelfConversationError();
       return;
     }
+    if (_isDeletedConversation) return;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final realConvId = await _resolveMatrixConversationIdForSend();
@@ -1347,6 +1349,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _recordAndSendVideoMessage() async {
+    if (_isDeletedConversation) return;
     final result = await Navigator.of(context).push<VideoMessageResult>(
       MaterialPageRoute(
         builder:
@@ -1365,6 +1368,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _showSelfConversationError();
       return;
     }
+    if (_isDeletedConversation) return;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final realConvId = await _resolveMatrixConversationIdForSend();
@@ -1421,6 +1425,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _pickCameraAttachment() async {
+    if (_isDeletedConversation) return;
     final picker = ImagePicker();
     final picked = await picker.pickImage(
       source: ImageSource.camera,
@@ -1431,6 +1436,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _pickGalleryAttachment() async {
+    if (_isDeletedConversation) return;
     final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: const Color(0xFF111318),
@@ -1473,6 +1479,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _pickFileAttachment() async {
+    if (_isDeletedConversation) return;
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
@@ -1510,6 +1517,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _showSelfConversationError();
       return;
     }
+    if (_isDeletedConversation) return;
     if (!await File(filePath).exists()) return;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
@@ -2312,6 +2320,8 @@ class _ChatScreenState extends State<ChatScreen> {
                             _buildEditComposerBanner(),
                           if (_isReadOnlySuggestedGroup)
                             _buildJoinGroupBottomBar()
+                          else if (_isDeletedConversation)
+                            _buildDeletedGroupBottomBar()
                           else
                             MessageInputField(
                               controller: _controller,
@@ -2670,6 +2680,50 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Widget _buildDeletedGroupBottomBar() {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 10, 24, 14),
+        child: Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF15181D),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: const Color(0xFF23262C), width: 1),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.lock_outline_rounded,
+                size: 18,
+                color: Color(0xFF8B949E),
+              ),
+              SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'This group has been deleted',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF8B949E),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _joinSuggestedGroup() async {
     if (_joiningSuggestedGroup) return;
     setState(() => _joiningSuggestedGroup = true);
@@ -2884,6 +2938,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                       imageUrl: avatarUrl,
                                       localImagePath: localAvatarPath,
                                       name: displayName,
+                                      isDeleted: _isDeletedConversation,
                                     ),
                                   ),
                                 ),
@@ -2990,6 +3045,7 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── HELPERS ───────────────────────────────────────────────────────────────
 
   int _groupMemberCount() {
+    if (_isDeletedConversation) return 0;
     if (_isReadOnlySuggestedGroup &&
         widget.initialMemberCount != null &&
         widget.initialMemberCount! > 0) {
@@ -3053,6 +3109,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final room = MatrixChatService.instance.getRoomById(_activeConversationId);
     return room == null || room.membership != mx.Membership.join;
   }
+
+  bool get _isDeletedConversation =>
+      _chat.isConversationDeleted(_activeConversationId);
 
   bool _cachedConversationIsGroup(String conversationId) {
     final room = MatrixChatService.instance.getRoomById(conversationId);
