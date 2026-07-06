@@ -420,12 +420,18 @@ class MatrixChatService {
   }
 
   bool isPublicGroupDismissed(MatrixPublicGroup group) {
-    return _publicGroupKeys(
+    final dismissed = _publicGroupKeys(
       roomId: group.roomId,
       canonicalAlias: group.canonicalAlias,
     ).any(_dismissedPublicGroupKeys.contains);
+    apkLog(
+      'Matrix.groups',
+      'check name="${group.name}" room_id="${group.roomId}" '
+      'alias="${group.canonicalAlias}" dismissed=$dismissed '
+      'keys=${_dismissedPublicGroupKeys.length}',
+    );
+    return dismissed;
   }
-
   Future<void> dismissPublicGroup({
     required String roomId,
     String? canonicalAlias,
@@ -438,6 +444,12 @@ class MatrixChatService {
     if (_dismissedPublicGroupKeys.length != before) {
       await _saveDismissedPublicGroups();
     }
+    apkLog(
+      'Matrix.groups',
+      'dismissed room_id="$roomId" alias="$canonicalAlias" '
+      'total_keys=${_dismissedPublicGroupKeys.length} '
+      'user="${MatrixClientService.instance.client.userID}"',
+    );
   }
 
   Future<Room?> joinGroup(String roomIdOrAlias) async {

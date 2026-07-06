@@ -79,6 +79,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   Timer? _conversationBatchTimer;
 
   final ScrollController _scrollCtrl = ScrollController();
+  final GlobalKey _tabControllerContextKey = GlobalKey();
   double _searchBarProgress = 0.0;
 
   // ── Priority 1: saved contact names keyed by phone, Matrix ID, and localpart.
@@ -1547,6 +1548,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         if (closedGroup == true || isGroup) {
           await _loadSuggestedGroups();
         }
+        if (closedGroup == true) {
+          _showGroupsHomepage();
+        }
       },
     );
   }
@@ -1963,7 +1967,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final previewMessages = await _chat.fetchPublicGroupPreview(
       roomId: group.roomId,
     );
-    await Navigator.push(
+    final closedGroup = await Navigator.push<bool>(
       context,
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 300),
@@ -1999,6 +2003,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     if (!mounted) return;
     await _loadLocalConversations();
     unawaited(_loadSuggestedGroups());
+    if (closedGroup == true) {
+      _showGroupsHomepage();
+    }
+  }
+
+  void _showGroupsHomepage() {
+    final tabContext = _tabControllerContextKey.currentContext;
+    if (tabContext == null) return;
+    DefaultTabController.maybeOf(tabContext)?.animateTo(2);
   }
 
   Future<void> _joinSuggestedGroup(MatrixPublicGroup group) async {
@@ -2090,6 +2103,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       body: DefaultTabController(
         length: 3,
         child: Stack(
+          key: _tabControllerContextKey,
           children: [
             // ── Tab content ──────────────────────────────────────────────
             Positioned.fill(

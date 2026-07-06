@@ -671,11 +671,11 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   Future<void> _leaveJoinedGroup() async {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     final alias = room?.canonicalAlias ?? widget.alias;
-    await MatrixChatService.instance.leaveGroup(widget.roomId);
     await MatrixChatService.instance.dismissPublicGroup(
       roomId: widget.roomId,
       canonicalAlias: alias,
     );
+    await MatrixChatService.instance.leaveGroup(widget.roomId);
     await ChatService().removeConversationLocally(widget.roomId);
   }
 
@@ -1198,6 +1198,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         setState(() => _deleting = false);
         return;
       }
+
       final room = MatrixChatService.instance.getRoomById(widget.roomId);
       if (room != null) {
         final deletedAt = DateTime.now().toUtc();
@@ -1205,7 +1206,17 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
             _nameController.text.trim().isNotEmpty
                 ? _nameController.text.trim()
                 : widget.initialName;
-        await _announceGroupDeleted(room, deletedAt);
+
+        // Dismiss FIRST — cheap local write, must persist even if the
+        // network steps below rate-limit. Otherwise the group returns to
+        // Suggested via the public directory.
+        await MatrixChatService.instance.dismissPublicGroup(
+          roomId: widget.roomId,
+          canonicalAlias:
+              room.canonicalAlias.isNotEmpty
+                  ? room.canonicalAlias
+                  : widget.initialAlias,
+        );
         await ChatService().markGroupDeletedLocally(
           roomId: widget.roomId,
           name: title,
@@ -1215,11 +1226,18 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
           deletedAt: deletedAt,
           deletedBy: room.client.userID,
         );
-        await _removeMembersAndClose(room);
-        await MatrixChatService.instance.dismissPublicGroup(
-          roomId: widget.roomId,
-          canonicalAlias: room.canonicalAlias,
-        );
+
+        // Best-effort network cleanup — allowed to fail on M_LIMIT_EXCEEDED
+        // without reverting the dismissal above.
+        try {
+          await _announceGroupDeleted(room, deletedAt);
+          await _removeMembersAndClose(room);
+        } catch (e) {
+          apkLog(
+            'GroupProfile.delete',
+            'network cleanup failed (dismissal already persisted) room_id="${widget.roomId}" error="$e"',
+          );
+        }
       } else {
         final deletedAt = DateTime.now().toUtc();
         await ChatService().markGroupDeletedLocally(
