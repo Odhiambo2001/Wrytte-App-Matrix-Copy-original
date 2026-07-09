@@ -247,6 +247,7 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
               title: _sanitize(contact.formattedName),
               avatarUrl: contact.avatarUrl,
               initialMessages: initialMessages,
+              conversationKind: ConversationKind.direct,
             ),
         transitionsBuilder: (_, animation, __, child) {
           final curved = CurvedAnimation(

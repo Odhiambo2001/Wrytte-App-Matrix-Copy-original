@@ -467,10 +467,14 @@ class ChatLocalDb {
           existing.isNotEmpty
               ? existing.first['conversationKind'] as String?
               : null;
+      final normalizedExistingKind = ConversationKind.normalize(existingKind);
       final conversationKind =
-          c.hasExplicitKind
-              ? c.conversationKind
-              : ConversationKind.normalize(existingKind);
+          c.hasExplicitKind ? c.conversationKind : normalizedExistingKind;
+      final kindChanged =
+          c.hasExplicitKind &&
+          normalizedExistingKind != ConversationKind.unknown &&
+          normalizedExistingKind != c.conversationKind;
+      final preservableExistingAvatar = kindChanged ? null : existingAvatar;
       final existingLastReadTime =
           existing.isNotEmpty ? existing.first['lastReadTime'] as int? : null;
       final nextLastReadTime =
@@ -498,7 +502,7 @@ class ChatLocalDb {
         'isPinned': c.isPinned ? 1 : 0,
         // Keep existing cached name/avatar — don't overwrite with null
         'otherUserName': c.otherUserName ?? existingName,
-        'otherUserAvatar': c.otherUserAvatar ?? existingAvatar,
+        'otherUserAvatar': c.otherUserAvatar ?? preservableExistingAvatar,
         'conversationKind': conversationKind,
         'lastReadTime': nextLastReadTime,
         'deletedAt': c.deletedAt?.millisecondsSinceEpoch,
@@ -556,6 +560,11 @@ class ChatLocalDb {
             c.hasExplicitKind
                 ? c.conversationKind
                 : ConversationKind.normalize(existingKinds[c.id]);
+        final existingKind = ConversationKind.normalize(existingKinds[c.id]);
+        final kindChanged =
+            c.hasExplicitKind &&
+            existingKind != ConversationKind.unknown &&
+            existingKind != c.conversationKind;
         await txn.insert('conversations', {
           'id': c.id,
           'participants': c.participants.join(','),
@@ -573,6 +582,8 @@ class ChatLocalDb {
           'otherUserAvatar':
               cleanAvatar.isNotEmpty
                   ? c.otherUserAvatar
+                  : kindChanged
+                  ? null
                   : existingAvatars[c.id],
           'conversationKind': conversationKind,
           'lastReadTime': nextLastReadTime,
@@ -924,14 +935,11 @@ class ChatLocalDb {
     ChatConversation conversation,
     String ownerId,
   ) async {
-    if (conversation.id.startsWith('!') ||
-        _isGroupDeletedPreview(conversation.lastMessage)) {
+    if (_isGroupDeletedPreview(conversation.lastMessage)) {
       return conversation.copyWith(
         otherUserId: conversation.id.startsWith('!') ? conversation.id : null,
-        lastMessageType:
-            _isGroupDeletedPreview(conversation.lastMessage)
-                ? 'group_deleted'
-                : conversation.lastMessageType,
+        lastMessageType: 'group_deleted',
+        conversationKind: ConversationKind.group,
       );
     }
     if (_isStableGroupConversation(conversation)) {

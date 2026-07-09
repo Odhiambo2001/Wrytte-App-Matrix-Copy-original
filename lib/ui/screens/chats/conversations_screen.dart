@@ -100,6 +100,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   List<ChatConversation>? _pendingConversationBatch;
   bool _conversationBatchInFlight = false;
   bool _loadingSuggestedGroups = false;
+  DateTime? _lastSuggestedGroupsLoadAt;
+  static const Duration _suggestedGroupsRefreshInterval = Duration(seconds: 8);
 
   // ===========================================================================
   //  LIFECYCLE
@@ -221,8 +223,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     });
   }
 
-  Future<void> _loadSuggestedGroups() async {
+  Future<void> _loadSuggestedGroups({bool force = false}) async {
     if (_loadingSuggestedGroups) return;
+    final now = DateTime.now();
+    final lastLoad = _lastSuggestedGroupsLoadAt;
+    if (!force &&
+        lastLoad != null &&
+        now.difference(lastLoad) < _suggestedGroupsRefreshInterval) {
+      return;
+    }
+    _lastSuggestedGroupsLoadAt = now;
     _loadingSuggestedGroups = true;
     try {
       final groups = await MatrixChatService.instance.fetchPublicGroups();
@@ -563,13 +573,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final futures = <Future<void>>[];
 
     for (final conversation in conversations) {
-      final url = _resolveAvatarUrl(_avatarForConversation(conversation));
+      final rawAvatar = _avatarForConversation(conversation);
+      final url = _resolveAvatarUrl(rawAvatar);
       if (url.isEmpty || !seen.add(url)) continue;
       futures.add(
         _warmAvatarImage(
           CachedNetworkImageProvider(
             url,
-            headers: _avatarAuthHeaders(url, token),
+            headers: _avatarAuthHeaders(url, token, rawUrl: rawAvatar),
           ),
         ).catchError((e) {
           debugPrint(
@@ -604,11 +615,39 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   String _resolveAvatarUrl(String? raw) {
     final url = raw?.trim() ?? '';
     if (url.isEmpty) return '';
+    if (url.startsWith('mxc://')) return _resolveMxcAvatarUrl(url);
     if (url.startsWith('/')) return '${ApiService.baseUrl}$url';
     return url;
   }
 
-  Map<String, String>? _avatarAuthHeaders(String url, String? token) {
+  String _resolveMxcAvatarUrl(String raw) {
+    final uri = Uri.tryParse(raw);
+    if (uri == null || !uri.isScheme('mxc')) return '';
+    final mediaId = uri.pathSegments.join('/');
+    if (uri.host.isEmpty || mediaId.isEmpty) return '';
+    final homeserver = Uri.tryParse(MatrixConfig.homeserver);
+    if (homeserver == null || !homeserver.hasScheme) return '';
+    return homeserver
+        .resolve(
+          '/_matrix/media/v3/download/'
+          '${Uri.encodeComponent(uri.host)}/'
+          '${Uri.encodeComponent(mediaId)}',
+        )
+        .toString();
+  }
+
+  Map<String, String>? _avatarAuthHeaders(
+    String url,
+    String? token, {
+    String? rawUrl,
+  }) {
+    if (rawUrl?.trim().startsWith('mxc://') == true) {
+      final matrixToken =
+          MatrixClientService.instance.client.accessToken?.trim() ?? '';
+      return matrixToken.isEmpty
+          ? null
+          : {'Authorization': 'Bearer $matrixToken'};
+    }
     final clean = token?.trim() ?? '';
     if (clean.isEmpty) return null;
     final uri = Uri.tryParse(url);
@@ -1098,9 +1137,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       return cachedPublicAvatar;
     }
 
-    final direct = _safeDirectAvatarUrl(conv.otherUserAvatar);
-    if (direct != null) return direct;
-
     final identityAvatar = _safeDirectAvatarUrl(
       _identityForConversation(conv)?.avatarUrl,
     );
@@ -1140,9 +1176,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       return cachedPublicAvatar;
     }
 
-    final direct = _safeDirectAvatarUrl(conv.otherUserAvatar);
-    if (direct != null) return direct;
-
     final identityAvatar = _safeDirectAvatarUrl(
       _identityForConversation(conv)?.avatarUrl,
     );
@@ -1154,7 +1187,33 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   String? _safeDirectAvatarUrl(String? avatarUrl) {
-    return ContactAvatarSanitizer.sanitizeAvatarUrl(avatarUrl);
+    final safe = ContactAvatarSanitizer.sanitizeAvatarUrl(avatarUrl);
+    if (safe == null || _isKnownGroupAvatar(safe)) return null;
+    return safe;
+  }
+
+  bool _isKnownGroupAvatar(String? avatarUrl) {
+    final key = _normaliseAvatarIdentity(avatarUrl);
+    if (key.isEmpty) return false;
+    for (final conversation in _conversations) {
+      if (!_isGroupConversation(conversation)) continue;
+      if (_normaliseAvatarIdentity(conversation.otherUserAvatar) == key) {
+        return true;
+      }
+      final roomAvatar = _groupRoomAvatarUrl(
+        MatrixChatService.instance.getRoomById(conversation.id),
+      );
+      if (_normaliseAvatarIdentity(roomAvatar) == key) return true;
+    }
+    if (MatrixClientService.instance.isInitialized) {
+      for (final room in MatrixChatService.instance.rooms) {
+        if (!MatrixChatService.instance.isMatrixGroupRoom(room)) continue;
+        if (_normaliseAvatarIdentity(_groupRoomAvatarUrl(room)) == key) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   String? _cachedPublicAvatarForConversation(ChatConversation conv) {
@@ -1455,6 +1514,20 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     if (uri.scheme == 'mxc') {
       return 'mxc://${uri.host}${uri.path}';
     }
+    final segments = uri.pathSegments;
+    final mediaIndex = segments.indexOf('media');
+    if (mediaIndex >= 1 &&
+        mediaIndex + 4 < segments.length &&
+        segments[mediaIndex - 1] == '_matrix' &&
+        segments[mediaIndex + 1] == 'v3' &&
+        (segments[mediaIndex + 2] == 'download' ||
+            segments[mediaIndex + 2] == 'thumbnail')) {
+      final serverName = segments[mediaIndex + 3];
+      final mediaId = segments.sublist(mediaIndex + 4).join('/');
+      if (serverName.isNotEmpty && mediaId.isNotEmpty) {
+        return 'mxc://$serverName/$mediaId';
+      }
+    }
     return trimmed;
   }
 
@@ -1731,7 +1804,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         if (!mounted) return;
         await _loadLocalConversations();
         if (closedGroup == true || isGroup) {
-          await _loadSuggestedGroups();
+          await _loadSuggestedGroups(force: true);
         }
         if (closedGroup == true) {
           _showGroupsHomepage();
@@ -1919,7 +1992,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         await _loadSavedContacts();
         await _loadLocalConversations();
         await _chat.fetchConversations();
-        await _loadSuggestedGroups();
+        await _loadSuggestedGroups(force: true);
       },
       child: ScrollConfiguration(
         behavior: const _ConversationsScrollBehavior(),
@@ -2188,7 +2261,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     );
     if (!mounted) return;
     await _loadLocalConversations();
-    unawaited(_loadSuggestedGroups());
+    unawaited(_loadSuggestedGroups(force: true));
     if (closedGroup == true) {
       _showGroupsHomepage();
     }
@@ -2221,7 +2294,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       }
       await _chat.fetchConversations();
       await _loadLocalConversations();
-      await _loadSuggestedGroups();
+      await _loadSuggestedGroups(force: true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(

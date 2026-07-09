@@ -48,6 +48,9 @@ class MatrixChatService {
   final Map<String, Future<Room>> _directRoomFutures = {};
   final Set<String> _dismissedPublicGroupKeys = {};
   String? _dismissedPublicGroupsLoadedFor;
+  List<MatrixPublicGroup>? _cachedPublicGroups;
+  DateTime? _cachedPublicGroupsAt;
+  static const Duration _publicGroupsCacheTtl = Duration(seconds: 10);
 
   // Room IDs the app knows to be groups (created or restored via ChatService).
   // This is an authoritative signal that distinguishes a 2-member group from a
@@ -350,29 +353,44 @@ class MatrixChatService {
     final client = await connect();
     if (!client.isLogged()) return const [];
     await _loadDismissedPublicGroups();
+    final now = DateTime.now();
+    final cached = _cachedPublicGroups;
+    final cachedAt = _cachedPublicGroupsAt;
+    if (limit == null &&
+        cached != null &&
+        cachedAt != null &&
+        now.difference(cachedAt) < _publicGroupsCacheTtl) {
+      return cached;
+    }
 
     try {
       final response =
           limit == null
               ? await client.queryPublicRooms()
               : await client.queryPublicRooms(limit: limit);
-      return response.chunk
-          .map(
-            (room) => MatrixPublicGroup(
-              roomId: room.roomId,
-              name:
-                  room.name?.trim().isNotEmpty == true
-                      ? room.name!.trim()
-                      : _displayAlias(room.canonicalAlias) ?? 'Group',
-              avatarUrl: room.avatarUrl?.toString(),
-              canonicalAlias: room.canonicalAlias,
-              topic: room.topic,
-              memberCount: room.numJoinedMembers,
-              worldReadable: room.worldReadable,
-            ),
-          )
-          .where((group) => !isPublicGroupDismissed(group))
-          .toList();
+      final groups =
+          response.chunk
+              .map(
+                (room) => MatrixPublicGroup(
+                  roomId: room.roomId,
+                  name:
+                      room.name?.trim().isNotEmpty == true
+                          ? room.name!.trim()
+                          : _displayAlias(room.canonicalAlias) ?? 'Group',
+                  avatarUrl: room.avatarUrl?.toString(),
+                  canonicalAlias: room.canonicalAlias,
+                  topic: room.topic,
+                  memberCount: room.numJoinedMembers,
+                  worldReadable: room.worldReadable,
+                ),
+              )
+              .where((group) => !isPublicGroupDismissed(group))
+              .toList();
+      if (limit == null) {
+        _cachedPublicGroups = groups;
+        _cachedPublicGroupsAt = now;
+      }
+      return groups;
     } catch (e) {
       apkLog('Matrix.groups', 'public rooms fetch failed error="$e"');
       return const [];
@@ -424,14 +442,16 @@ class MatrixChatService {
       roomId: group.roomId,
       canonicalAlias: group.canonicalAlias,
     ).any(_dismissedPublicGroupKeys.contains);
-    apkLog(
-      'Matrix.groups',
-      'check name="${group.name}" room_id="${group.roomId}" '
-      'alias="${group.canonicalAlias}" dismissed=$dismissed '
-      'keys=${_dismissedPublicGroupKeys.length}',
-    );
+    if (dismissed) {
+      apkLog(
+        'Matrix.groups',
+        'dismissed match name="${group.name}" room_id="${group.roomId}" '
+            'alias="${group.canonicalAlias}" keys=${_dismissedPublicGroupKeys.length}',
+      );
+    }
     return dismissed;
   }
+
   Future<void> dismissPublicGroup({
     required String roomId,
     String? canonicalAlias,
@@ -443,12 +463,14 @@ class MatrixChatService {
     );
     if (_dismissedPublicGroupKeys.length != before) {
       await _saveDismissedPublicGroups();
+      _cachedPublicGroups = null;
+      _cachedPublicGroupsAt = null;
     }
     apkLog(
       'Matrix.groups',
       'dismissed room_id="$roomId" alias="$canonicalAlias" '
-      'total_keys=${_dismissedPublicGroupKeys.length} '
-      'user="${MatrixClientService.instance.client.userID}"',
+          'total_keys=${_dismissedPublicGroupKeys.length} '
+          'user="${MatrixClientService.instance.client.userID}"',
     );
   }
 

@@ -2851,9 +2851,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final avatarUrl =
         isGroupChat
             ? _stableHeaderAvatarUrl
-            : _receiverProfile?.hasProfileImage == true
-            ? _receiverProfile!.profileImage
-            : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl;
+            : _safePersonHeaderAvatar(
+              _receiverProfile?.hasProfileImage == true
+                  ? _receiverProfile!.profileImage
+                  : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
+            );
     final localAvatarPath =
         _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
             ? _receiverProfile!.localProfileImagePath.trim()
@@ -3132,9 +3134,7 @@ class _ChatScreenState extends State<ChatScreen> {
           MatrixChatService.instance.getRoomById(widget.receiverId);
       return _safeGroupRoomAvatarUrl(room);
     }
-    return widget.avatarUrl?.trim().isNotEmpty == true
-        ? widget.avatarUrl!.trim()
-        : null;
+    return _safePersonHeaderAvatar(widget.avatarUrl);
   }
 
   bool _isKnownGroupConversationId(String value) {
@@ -3180,7 +3180,47 @@ class _ChatScreenState extends State<ChatScreen> {
     if (uri.scheme == 'mxc') {
       return 'mxc://${uri.host}${uri.path}';
     }
+    final segments = uri.pathSegments;
+    final mediaIndex = segments.indexOf('media');
+    if (mediaIndex >= 1 &&
+        mediaIndex + 4 < segments.length &&
+        segments[mediaIndex - 1] == '_matrix' &&
+        segments[mediaIndex + 1] == 'v3' &&
+        (segments[mediaIndex + 2] == 'download' ||
+            segments[mediaIndex + 2] == 'thumbnail')) {
+      final serverName = segments[mediaIndex + 3];
+      final mediaId = segments.sublist(mediaIndex + 4).join('/');
+      if (serverName.isNotEmpty && mediaId.isNotEmpty) {
+        return 'mxc://$serverName/$mediaId';
+      }
+    }
     return trimmed;
+  }
+
+  String? _safePersonHeaderAvatar(String? avatarUrl) {
+    final clean = avatarUrl?.trim() ?? '';
+    if (clean.isEmpty || _isKnownGroupAvatar(clean)) return null;
+    return clean;
+  }
+
+  bool _isKnownGroupAvatar(String avatarUrl) {
+    final key = _normaliseAvatarIdentity(avatarUrl);
+    if (key.isEmpty) return false;
+    if (MatrixClientService.instance.isInitialized) {
+      for (final room in MatrixChatService.instance.rooms) {
+        if (!MatrixChatService.instance.isMatrixGroupRoom(room)) continue;
+        if (_normaliseAvatarIdentity(_safeGroupRoomAvatarUrl(room)) == key) {
+          return true;
+        }
+      }
+    }
+    for (final conversation in _chat.cachedConversationsSnapshot) {
+      if (!(conversation.isGroupKind || conversation.isChannelKind)) continue;
+      if (_normaliseAvatarIdentity(conversation.otherUserAvatar) == key) {
+        return true;
+      }
+    }
+    return false;
   }
 
   bool get _isReadOnlySuggestedGroup {

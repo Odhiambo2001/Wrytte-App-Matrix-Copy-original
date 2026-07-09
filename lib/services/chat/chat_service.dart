@@ -1291,6 +1291,7 @@ class ChatService {
       );
     }
     await _backfillConversationKinds();
+    await _scrubDirectAvatarsMatchingGroups();
     await _applySavedContactsToHydratedConversations();
     _emitConversations();
     for (final conversation in conversations) {
@@ -1357,6 +1358,61 @@ class ChatService {
       'ChatService.kindMigration',
       'stamped conversationKind on ${upgraded.length} legacy rows',
     );
+  }
+
+  Future<void> _scrubDirectAvatarsMatchingGroups() async {
+    final groupAvatars = _knownGroupAvatarIdentities();
+    if (groupAvatars.isEmpty) return;
+
+    final changed = <ChatConversation>[];
+    for (final entry in _conversationsMap.entries.toList()) {
+      final conversation = entry.value;
+      if (_isGroupConversationRow(conversation)) continue;
+      final avatarKey = _normaliseAvatarIdentity(conversation.otherUserAvatar);
+      if (avatarKey.isEmpty || !groupAvatars.contains(avatarKey)) continue;
+
+      final scrubbed = conversation.copyWith(otherUserAvatar: '');
+      _conversationsMap[entry.key] = scrubbed;
+      changed.add(scrubbed);
+    }
+
+    if (changed.isEmpty) return;
+    await ChatLocalDb.instance.saveConversations(changed);
+    apkLog(
+      'ChatService.avatarScrub',
+      'cleared group avatars from ${changed.length} direct conversations',
+    );
+  }
+
+  Set<String> _knownGroupAvatarIdentities() {
+    final values = <String>{};
+    for (final conversation in _conversationsMap.values) {
+      if (!_isGroupConversationRow(conversation)) continue;
+      values.add(_normaliseAvatarIdentity(conversation.otherUserAvatar));
+      final room = _roomById(conversation.id);
+      if (room != null) {
+        values.add(_normaliseAvatarIdentity(_groupRoomAvatarUrl(room)));
+      }
+    }
+    if (MatrixClientService.instance.isInitialized) {
+      for (final room in MatrixChatService.instance.rooms) {
+        if (!_isGroupRoom(room, _conversationsMap[room.id])) continue;
+        values.add(_normaliseAvatarIdentity(_groupRoomAvatarUrl(room)));
+      }
+    }
+    values.removeWhere((value) => value.isEmpty);
+    return values;
+  }
+
+  bool _isKnownGroupAvatar(String? avatarUrl) {
+    final key = _normaliseAvatarIdentity(avatarUrl);
+    return key.isNotEmpty && _knownGroupAvatarIdentities().contains(key);
+  }
+
+  String? _safePersonAvatar(String? avatarUrl) {
+    final clean = avatarUrl?.trim() ?? '';
+    if (clean.isEmpty || _isKnownGroupAvatar(clean)) return null;
+    return clean;
   }
 
   Future<void> _syncLocalReadMarkerToMatrix(String conversationId) async {
@@ -2145,6 +2201,20 @@ class ChatService {
     if (uri == null) return trimmed;
     if (uri.scheme == 'mxc') {
       return 'mxc://${uri.host}${uri.path}';
+    }
+    final segments = uri.pathSegments;
+    final mediaIndex = segments.indexOf('media');
+    if (mediaIndex >= 1 &&
+        mediaIndex + 4 < segments.length &&
+        segments[mediaIndex - 1] == '_matrix' &&
+        segments[mediaIndex + 1] == 'v3' &&
+        (segments[mediaIndex + 2] == 'download' ||
+            segments[mediaIndex + 2] == 'thumbnail')) {
+      final serverName = segments[mediaIndex + 3];
+      final mediaId = segments.sublist(mediaIndex + 4).join('/');
+      if (serverName.isNotEmpty && mediaId.isNotEmpty) {
+        return 'mxc://$serverName/$mediaId';
+      }
     }
     return trimmed;
   }
@@ -3505,7 +3575,9 @@ class ChatService {
     final name = _cleanHumanName(contact.displayName);
     if (name.isEmpty) return false;
 
-    final avatar = contact.avatarUrl?.trim();
+    final avatar = _safePersonAvatar(contact.avatarUrl);
+    final blockedGroupAvatar =
+        (contact.avatarUrl?.trim().isNotEmpty ?? false) && avatar == null;
     final identityKeys = <String>{
       ..._conversationIdentityKeys(contact.wrytteUserId),
       for (final phone in contact.phones) ..._conversationIdentityKeys(phone),
@@ -3524,7 +3596,11 @@ class ChatService {
       final next = conversation.copyWith(
         otherUserName: name,
         otherUserAvatar:
-            avatar?.isNotEmpty == true ? avatar : conversation.otherUserAvatar,
+            avatar?.isNotEmpty == true
+                ? avatar
+                : blockedGroupAvatar
+                ? ''
+                : conversation.otherUserAvatar,
       );
       if (next.otherUserName == conversation.otherUserName &&
           next.otherUserAvatar == conversation.otherUserAvatar) {
@@ -3541,6 +3617,9 @@ class ChatService {
     if (name.isEmpty) return;
 
     var changed = _applyContactToConversationCache(contact);
+    final avatar = _safePersonAvatar(contact.avatarUrl);
+    final blockedGroupAvatar =
+        (contact.avatarUrl?.trim().isNotEmpty ?? false) && avatar == null;
     if (changed) {
       unawaited(
         ChatLocalDb.instance.replaceConversations(
@@ -3567,8 +3646,10 @@ class ChatService {
         final next = conversation.copyWith(
           otherUserName: name,
           otherUserAvatar:
-              contact.avatarUrl?.trim().isNotEmpty == true
-                  ? contact.avatarUrl
+              avatar?.trim().isNotEmpty == true
+                  ? avatar
+                  : blockedGroupAvatar
+                  ? ''
                   : conversation.otherUserAvatar,
         );
         if (next.otherUserName != conversation.otherUserName ||
@@ -3581,7 +3662,8 @@ class ChatService {
         ChatLocalDb.instance.updateConversationUserInfo(
           conversationId: conversationId,
           name: name,
-          avatar: contact.avatarUrl,
+          avatar: avatar,
+          clearAvatar: blockedGroupAvatar,
         ),
       );
     }
@@ -3592,7 +3674,9 @@ class ChatService {
     final phone = _firstUsablePhone(contact.phones);
     if (phone.isEmpty) return;
 
-    final avatar = contact.avatarUrl?.trim();
+    final avatar = _safePersonAvatar(contact.avatarUrl);
+    final blockedGroupAvatar =
+        (contact.avatarUrl?.trim().isNotEmpty ?? false) && avatar == null;
     final identityKeys = <String>{
       ..._conversationIdentityKeys(contact.wrytteUserId),
       for (final phone in contact.phones) ..._conversationIdentityKeys(phone),
@@ -3611,7 +3695,11 @@ class ChatService {
       _conversationsMap[entry.key] = conversation.copyWith(
         otherUserName: phone,
         otherUserAvatar:
-            avatar?.isNotEmpty == true ? avatar : conversation.otherUserAvatar,
+            avatar?.isNotEmpty == true
+                ? avatar
+                : blockedGroupAvatar
+                ? ''
+                : conversation.otherUserAvatar,
       );
       changed = true;
       unawaited(
@@ -3619,6 +3707,7 @@ class ChatService {
           conversationId: entry.key,
           name: phone,
           avatar: avatar,
+          clearAvatar: blockedGroupAvatar,
         ),
       );
     }

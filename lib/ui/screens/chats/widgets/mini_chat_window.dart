@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/user_avatar.dart';
+import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
@@ -94,6 +95,7 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
               currentUserId: widget.currentUserId,
               title: widget.name,
               avatarUrl: widget.avatarUrl,
+              conversationKind: ConversationKind.direct,
             ),
         transitionsBuilder: (_, animation, __, child) {
           final curved = CurvedAnimation(
