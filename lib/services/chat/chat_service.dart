@@ -75,8 +75,11 @@ class ChatService {
   StreamSubscription? _timelineSub;
   StreamSubscription? _syncSub;
   bool _handlingSync = false;
+  Timer? _roomsRefreshTimer;
+  DateTime? _lastRoomsRefreshAt;
 
   static const int _matrixHistoryPageSize = MatrixConfig.historyPageSize;
+  static const Duration _roomsRefreshMinInterval = Duration(milliseconds: 1200);
 
   final Map<String, ChatConversation> _conversationsMap = {};
   final Map<String, List<ChatMessage>> _messagesCache = {};
@@ -1361,8 +1364,18 @@ class ChatService {
   }
 
   Future<void> _scrubDirectAvatarsMatchingGroups() async {
+    final changed = _scrubDirectAvatarsMatchingGroupsInMemory();
+    if (changed.isEmpty) return;
+    await ChatLocalDb.instance.saveConversations(changed);
+    apkLog(
+      'ChatService.avatarScrub',
+      'cleared group avatars from ${changed.length} direct conversations',
+    );
+  }
+
+  List<ChatConversation> _scrubDirectAvatarsMatchingGroupsInMemory() {
     final groupAvatars = _knownGroupAvatarIdentities();
-    if (groupAvatars.isEmpty) return;
+    if (groupAvatars.isEmpty) return const <ChatConversation>[];
 
     final changed = <ChatConversation>[];
     for (final entry in _conversationsMap.entries.toList()) {
@@ -1375,13 +1388,7 @@ class ChatService {
       _conversationsMap[entry.key] = scrubbed;
       changed.add(scrubbed);
     }
-
-    if (changed.isEmpty) return;
-    await ChatLocalDb.instance.saveConversations(changed);
-    apkLog(
-      'ChatService.avatarScrub',
-      'cleared group avatars from ${changed.length} direct conversations',
-    );
+    return changed;
   }
 
   Set<String> _knownGroupAvatarIdentities() {
@@ -1827,6 +1834,9 @@ class ChatService {
     _isConnected = false;
     _connectFuture = null;
     _historyRestoreFuture = null;
+    _roomsRefreshTimer?.cancel();
+    _roomsRefreshTimer = null;
+    _lastRoomsRefreshAt = null;
     _currentUserId = null;
     _currentUserPhone = null;
     _currentUserName = null;
@@ -2324,7 +2334,27 @@ class ChatService {
     return null;
   }
 
-  void _refreshConversationsFromRooms() {
+  void _refreshConversationsFromRooms({bool force = false}) {
+    final now = DateTime.now();
+    final lastRefresh = _lastRoomsRefreshAt;
+    if (!force && lastRefresh != null) {
+      final elapsed = now.difference(lastRefresh);
+      if (elapsed < _roomsRefreshMinInterval) {
+        _roomsRefreshTimer ??= Timer(_roomsRefreshMinInterval - elapsed, () {
+          _roomsRefreshTimer = null;
+          _refreshConversationsFromRooms(force: true);
+        });
+        return;
+      }
+    }
+
+    _roomsRefreshTimer?.cancel();
+    _roomsRefreshTimer = null;
+    _lastRoomsRefreshAt = now;
+    _refreshConversationsFromRoomsNow();
+  }
+
+  void _refreshConversationsFromRoomsNow() {
     // ✅ Snapshot to avoid ConcurrentModificationError when sync
     // updates arrive while we're iterating.
     final rooms = List<mx.Room>.from(MatrixClientService.instance.client.rooms);
@@ -2393,10 +2423,17 @@ class ChatService {
     _conversationsMap
       ..clear()
       ..addAll(merged);
+    final scrubbed = _scrubDirectAvatarsMatchingGroupsInMemory();
     apkLog(
       'ChatService.rooms',
       'merged conversations total=${_conversationsMap.length} matrix=$refreshedFromMatrix cached=$restoredFromCache',
     );
+    if (scrubbed.isNotEmpty) {
+      apkLog(
+        'ChatService.avatarScrub',
+        'cleared group avatars from ${scrubbed.length} direct conversations',
+      );
+    }
     unawaited(
       ChatLocalDb.instance.replaceConversations(
         _conversationsMap.values.toList(),
