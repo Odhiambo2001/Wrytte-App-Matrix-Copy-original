@@ -13,6 +13,7 @@ import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
+import 'package:wrytte/services/contacts/contact_avatar_sanitizer.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
@@ -60,7 +61,13 @@ class ConversationsScreen extends StatefulWidget {
 }
 //final Map<String, (String?, String?)?> _matrixProfileCache = {};
 
-class _ConversationsScreenState extends State<ConversationsScreen> {
+class _ConversationsScreenState extends State<ConversationsScreen>
+    with SingleTickerProviderStateMixin {
+  static const List<mx.Membership> _groupMemberships = [
+    mx.Membership.join,
+    mx.Membership.invite,
+  ];
+
   final ChatService _chat = ChatService();
   final UserSearchService _userSearchService = UserSearchService();
   final Map<String, (String?, String?)?> _matrixProfileCache = {};
@@ -78,8 +85,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   StreamSubscription<String>? _contactsChangedSub;
   Timer? _conversationBatchTimer;
 
+  late final TabController _tabController;
   final ScrollController _scrollCtrl = ScrollController();
-  final GlobalKey _tabControllerContextKey = GlobalKey();
   double _searchBarProgress = 0.0;
 
   // ── Priority 1: saved contact names keyed by phone, Matrix ID, and localpart.
@@ -101,6 +108,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
     _seedSavedContacts(widget.initialSavedContacts);
     _seedCachedConversations();
     _scrollCtrl.addListener(_onScroll);
@@ -116,6 +124,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     _conversationBatchTimer?.cancel();
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
+    _tabController.dispose();
     super.dispose();
   }
 
@@ -620,15 +629,25 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     // Saved contact names always win. Matrix displayname is the registered
     // profile name, not necessarily this user's saved contact label.
-    return deduped.map((c) {
-      final title = _conversationTitle(c);
-      final contactKey = _contactKeyForConversation(c);
-      final fallbackTitle = _fallbackConversationTitle(c);
-      return c.copyWith(
-        otherUserName: title.trim().isEmpty ? fallbackTitle : title,
-        otherUserAvatar: _preferredAvatarForConversation(c, contactKey),
-      );
-    }).toList();
+    final enriched =
+        deduped.map((c) {
+          if (_isGroupConversation(c)) {
+            final groupTitle = _conversationTitle(c);
+            return c.copyWith(
+              otherUserName: groupTitle.trim().isEmpty ? 'Group' : groupTitle,
+              otherUserAvatar: _preferredAvatarForConversation(c, null),
+            );
+          }
+          final title = _conversationTitle(c);
+          final contactKey = _contactKeyForConversation(c);
+          final fallbackTitle = _fallbackConversationTitle(c);
+          return c.copyWith(
+            otherUserName: title.trim().isEmpty ? fallbackTitle : title,
+            otherUserAvatar: _preferredAvatarForConversation(c, contactKey),
+          );
+        }).toList();
+
+    return _dedupePeerConversations(enriched);
   }
 
   List<ChatConversation> _mergeConversationLists(
@@ -715,8 +734,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         contactKey == null
             ? ''
             : _cleanHumanName(_contactNameCache[contactKey]);
-    final contactAvatar =
-        contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
+    final contactAvatar = _safeDirectAvatarUrl(
+      contactKey == null ? null : _contactAvatarCache[contactKey],
+    );
     final phone = _fallbackPhoneForConversation(conv);
     final name =
         contactName.isNotEmpty
@@ -724,23 +744,20 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             : phone.isNotEmpty
             ? _formatPhone(phone)
             : '';
-    final existingAvatar = conv.otherUserAvatar?.trim();
-    final identityAvatar = _identityForConversation(conv)?.avatarUrl?.trim();
-    final profileAvatar =
-        profile?.hasProfileImage == true ? profile!.profileImage.trim() : '';
-    final matrixAvatar = matrixProfile?.$2?.trim();
+    final existingAvatar = _safeDirectAvatarUrl(conv.otherUserAvatar);
+    final identityAvatar = _safeDirectAvatarUrl(
+      _identityForConversation(conv)?.avatarUrl,
+    );
+    final profileAvatar = _safeDirectAvatarUrl(
+      profile?.hasProfileImage == true ? profile!.profileImage : null,
+    );
+    final matrixAvatar = _safeDirectAvatarUrl(matrixProfile?.$2);
     final avatar =
-        contactAvatar?.isNotEmpty == true
-            ? contactAvatar
-            : profileAvatar.isNotEmpty
-            ? profileAvatar
-            : matrixAvatar?.isNotEmpty == true
-            ? matrixAvatar
-            : existingAvatar?.isNotEmpty == true
-            ? existingAvatar
-            : identityAvatar?.isNotEmpty == true
-            ? identityAvatar
-            : null;
+        contactAvatar ??
+        profileAvatar ??
+        matrixAvatar ??
+        existingAvatar ??
+        identityAvatar;
     if ((avatar ?? '').trim().isNotEmpty &&
         avatar?.trim() != conv.otherUserAvatar?.trim()) {
       unawaited(
@@ -791,6 +808,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         conversationId: conv.id,
         name: resolvedName.trim(),
         avatar: avatar,
+        clearAvatar:
+            avatar == null &&
+            ContactAvatarSanitizer.sanitizeAvatarUrl(conv.otherUserAvatar) ==
+                null &&
+            (conv.otherUserAvatar?.trim().isNotEmpty ?? false),
       );
       final identity = ContactIdentity(
         matrixUserId: profileUid,
@@ -994,10 +1016,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   bool _isGroupConversation(ChatConversation conv) {
+    if (conv.hasExplicitKind) {
+      return conv.isGroupKind || conv.isChannelKind;
+    }
     if (_chat.isCreatedGroupRoom(conv.id)) return true;
     if (conv.lastMessageType == ChatService.groupDeletedMessageType) {
       return true;
     }
+    if (ChatService.isGroupDeletedPreview(conv.lastMessage)) return true;
     if (conv.deletedAt != null && conv.id.startsWith('!')) return true;
 
     final explicitlyStoredGroup =
@@ -1049,26 +1075,36 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final roomAvatar = _groupRoomAvatarUrl(
         MatrixChatService.instance.getRoomById(conv.id),
       );
-      return roomAvatar?.trim().isNotEmpty == true ? roomAvatar!.trim() : null;
+      if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
+      if (conv.isGroupKind || conv.isChannelKind) {
+        final stored = conv.otherUserAvatar?.trim() ?? '';
+        if (stored.isNotEmpty) return stored;
+      }
+      return null;
     }
 
     final contactKey = _contactKeyForConversation(conv);
-    final contactAvatar =
-        contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
-    if (contactAvatar != null && contactAvatar.isNotEmpty) {
+    final contactAvatar = _safeDirectAvatarUrl(
+      contactKey == null ? null : _contactAvatarCache[contactKey],
+    );
+    if (contactAvatar != null) {
       return contactAvatar;
     }
 
-    final cachedPublicAvatar = _cachedPublicAvatarForConversation(conv);
-    if (cachedPublicAvatar != null && cachedPublicAvatar.isNotEmpty) {
+    final cachedPublicAvatar = _safeDirectAvatarUrl(
+      _cachedPublicAvatarForConversation(conv),
+    );
+    if (cachedPublicAvatar != null) {
       return cachedPublicAvatar;
     }
 
-    final direct = conv.otherUserAvatar?.trim();
-    if (direct != null && direct.isNotEmpty) return direct;
+    final direct = _safeDirectAvatarUrl(conv.otherUserAvatar);
+    if (direct != null) return direct;
 
-    final identityAvatar = _identityForConversation(conv)?.avatarUrl?.trim();
-    if (identityAvatar != null && identityAvatar.isNotEmpty) {
+    final identityAvatar = _safeDirectAvatarUrl(
+      _identityForConversation(conv)?.avatarUrl,
+    );
+    if (identityAvatar != null) {
       return identityAvatar;
     }
 
@@ -1083,28 +1119,42 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final roomAvatar = _groupRoomAvatarUrl(
         MatrixChatService.instance.getRoomById(conv.id),
       );
-      return roomAvatar?.trim().isNotEmpty == true ? roomAvatar!.trim() : null;
+      if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
+      if (conv.isGroupKind || conv.isChannelKind) {
+        final stored = conv.otherUserAvatar?.trim() ?? '';
+        if (stored.isNotEmpty) return stored;
+      }
+      return null;
     }
-    final contactAvatar =
-        contactKey == null ? null : _contactAvatarCache[contactKey]?.trim();
-    if (contactAvatar != null && contactAvatar.isNotEmpty) {
+    final contactAvatar = _safeDirectAvatarUrl(
+      contactKey == null ? null : _contactAvatarCache[contactKey],
+    );
+    if (contactAvatar != null) {
       return contactAvatar;
     }
 
-    final cachedPublicAvatar = _cachedPublicAvatarForConversation(conv);
-    if (cachedPublicAvatar != null && cachedPublicAvatar.isNotEmpty) {
+    final cachedPublicAvatar = _safeDirectAvatarUrl(
+      _cachedPublicAvatarForConversation(conv),
+    );
+    if (cachedPublicAvatar != null) {
       return cachedPublicAvatar;
     }
 
-    final direct = conv.otherUserAvatar?.trim();
-    if (direct != null && direct.isNotEmpty) return direct;
+    final direct = _safeDirectAvatarUrl(conv.otherUserAvatar);
+    if (direct != null) return direct;
 
-    final identityAvatar = _identityForConversation(conv)?.avatarUrl?.trim();
-    if (identityAvatar != null && identityAvatar.isNotEmpty) {
+    final identityAvatar = _safeDirectAvatarUrl(
+      _identityForConversation(conv)?.avatarUrl,
+    );
+    if (identityAvatar != null) {
       return identityAvatar;
     }
 
     return null;
+  }
+
+  String? _safeDirectAvatarUrl(String? avatarUrl) {
+    return ContactAvatarSanitizer.sanitizeAvatarUrl(avatarUrl);
   }
 
   String? _cachedPublicAvatarForConversation(ChatConversation conv) {
@@ -1119,6 +1169,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   String? _localAvatarPathForConversation(ChatConversation conv) {
+    if (_isGroupConversation(conv)) return null;
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final uid = _profileUidForConversation(conv);
     if (uid == null) return null;
@@ -1171,6 +1222,102 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     }).toList();
   }
 
+  List<ChatConversation> _dedupePeerConversations(
+    List<ChatConversation> conversations,
+  ) {
+    final byKey = <String, ChatConversation>{};
+
+    for (final conversation in conversations) {
+      final key = _dedupePeerKey(conversation);
+      final existing = byKey[key];
+      byKey[key] =
+          existing == null
+              ? conversation
+              : _preferPeerDedupeConversation(existing, conversation);
+    }
+
+    final deduped =
+        byKey.values.toList()
+          ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
+    return deduped;
+  }
+
+  String _dedupePeerKey(ChatConversation conv) {
+    if (_isGroupConversation(conv)) return 'group:${conv.id}';
+
+    final contactKey = _contactKeyForConversation(conv);
+    if (contactKey != null && contactKey.trim().isNotEmpty) {
+      return 'contact:${_canonicalIdentityKey(contactKey)}';
+    }
+
+    final identity = _identityForConversation(conv);
+    final identityKey = _canonicalIdentityKey(
+      identity?.matrixUserId ?? identity?.phone ?? '',
+    );
+    if (identityKey.isNotEmpty) return 'identity:$identityKey';
+
+    final phone = _fallbackPhoneForConversation(conv);
+    final phoneKey = _canonicalIdentityKey(phone);
+    if (phoneKey.startsWith('p:')) return 'phone:$phoneKey';
+
+    final uid = _profileUidForConversation(conv);
+    final uidKey = _canonicalIdentityKey(uid ?? '');
+    if (uidKey.isNotEmpty) return 'uid:$uidKey';
+
+    final title = _cleanHumanName(conv.otherUserName).toLowerCase();
+    final avatar = _normaliseAvatarIdentity(_avatarForConversation(conv));
+    if (title.isNotEmpty && avatar.isNotEmpty) {
+      return 'name-avatar:$title|$avatar';
+    }
+
+    return 'conversation:${conv.id}';
+  }
+
+  String _canonicalIdentityKey(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty) return '';
+    final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.length >= 6) return 'p:$digits';
+    final localpart = _matrixLocalpart(value) ?? value;
+    final cleaned = localpart.trim().toLowerCase();
+    return cleaned.isEmpty ? '' : 'u:$cleaned';
+  }
+
+  ChatConversation _preferPeerDedupeConversation(
+    ChatConversation a,
+    ChatConversation b,
+  ) {
+    final aHasMessage = a.lastMessage.trim().isNotEmpty;
+    final bHasMessage = b.lastMessage.trim().isNotEmpty;
+    final chosen =
+        aHasMessage != bHasMessage
+            ? (aHasMessage ? a : b)
+            : b.lastMessageTime.isAfter(a.lastMessageTime)
+            ? b
+            : a;
+    final other = identical(chosen, a) ? b : a;
+    final mergedParticipants =
+        <String>{
+          ...chosen.participants,
+          ...other.participants,
+        }.where((participant) => participant.trim().isNotEmpty).toList();
+    final unread =
+        chosen.unreadCount > other.unreadCount
+            ? chosen.unreadCount
+            : other.unreadCount;
+    final chosenName = _cleanHumanName(chosen.otherUserName);
+    final otherName = _cleanHumanName(other.otherUserName);
+    return chosen.copyWith(
+      participants: mergedParticipants,
+      unreadCount: unread,
+      otherUserName: chosenName.isNotEmpty ? chosen.otherUserName : otherName,
+      otherUserAvatar:
+          chosen.otherUserAvatar?.trim().isNotEmpty == true
+              ? chosen.otherUserAvatar
+              : other.otherUserAvatar,
+    );
+  }
+
   String? _contactKeyForConversation(ChatConversation conv) {
     for (final key in _conversationKeys(conv)) {
       if (_contactNameCache.containsKey(key)) return key;
@@ -1200,7 +1347,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   void _cacheContactName(String? raw, String name, String? avatarUrl) {
-    final avatar = avatarUrl?.isNotEmpty == true ? avatarUrl : null;
+    final avatar = _safeDirectAvatarUrl(avatarUrl);
     for (final key in _identityKeys(raw)) {
       _contactNameCache[key] = name;
       _contactAvatarCache[key] = avatar;
@@ -1278,7 +1425,37 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   String? _groupRoomAvatarUrl(mx.Room? room) {
     final raw = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
     final avatar = raw is String ? raw.trim() : '';
-    return avatar.isEmpty ? null : avatar;
+    if (avatar.isEmpty || _matchesGroupParticipantAvatar(room, avatar)) {
+      return null;
+    }
+    return avatar;
+  }
+
+  bool _matchesGroupParticipantAvatar(mx.Room? room, String avatarUrl) {
+    if (room == null) return false;
+    final normalizedAvatar = _normaliseAvatarIdentity(avatarUrl);
+    if (normalizedAvatar.isEmpty) return false;
+    for (final member in room.getParticipants(_groupMemberships)) {
+      if (member.id == MatrixClientService.instance.userId) continue;
+      final memberAvatar = _normaliseAvatarIdentity(
+        member.avatarUrl?.toString(),
+      );
+      if (memberAvatar.isNotEmpty && memberAvatar == normalizedAvatar) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _normaliseAvatarIdentity(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return '';
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return trimmed;
+    if (uri.scheme == 'mxc') {
+      return 'mxc://${uri.host}${uri.path}';
+    }
+    return trimmed;
   }
 
   bool _looksLikeGroupMemberName(mx.Room room, String name) {
@@ -1459,7 +1636,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       unreadCount: conv.unreadCount,
       isDeleted:
           conv.deletedAt != null ||
-          conv.lastMessageType == ChatService.groupDeletedMessageType,
+          conv.lastMessageType == ChatService.groupDeletedMessageType ||
+          ChatService.isGroupDeletedPreview(conv.lastMessage),
       isSelectionMode: _isSelectionMode,
       isSelected: selected,
       onSelectionToggle: () => _toggleSelection(conv.id),
@@ -1529,6 +1707,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       isGroup && conv.participants.length > 1
                           ? conv.participants.length
                           : null,
+                  conversationKind:
+                      isGroup
+                          ? ConversationKind.group
+                          : ConversationKind.direct,
                 ),
             transitionsBuilder: (_, animation, __, child) {
               final curved = CurvedAnimation(
@@ -1986,6 +2168,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               initialMessages: previewMessages,
               initialMemberCount: group.memberCount,
               groupAlias: group.canonicalAlias,
+              conversationKind: ConversationKind.group,
             ),
         transitionsBuilder: (_, animation, __, child) {
           final curved = CurvedAnimation(
@@ -2012,9 +2195,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   void _showGroupsHomepage() {
-    final tabContext = _tabControllerContextKey.currentContext;
-    if (tabContext == null) return;
-    DefaultTabController.maybeOf(tabContext)?.animateTo(2);
+    _tabController.animateTo(2);
   }
 
   Future<void> _joinSuggestedGroup(MatrixPublicGroup group) async {
@@ -2103,93 +2284,90 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 ),
               ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      body: DefaultTabController(
-        length: 3,
-        child: Stack(
-          key: _tabControllerContextKey,
-          children: [
-            // ── Tab content ──────────────────────────────────────────────
-            Positioned.fill(
-              child: TabBarView(
-                children: [
-                  _buildChatsTab(headerH),
-                  Center(
-                    child: Padding(
-                      padding: EdgeInsets.only(top: headerH),
-                      child: const Text(
-                        'Channels coming soon',
-                        style: TextStyle(color: Colors.grey),
-                      ),
+      body: Stack(
+        children: [
+          // ── Tab content ──────────────────────────────────────────────
+          Positioned.fill(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _buildChatsTab(headerH),
+                Center(
+                  child: Padding(
+                    padding: EdgeInsets.only(top: headerH),
+                    child: const Text(
+                      'Channels coming soon',
+                      style: TextStyle(color: Colors.grey),
                     ),
                   ),
-                  _buildGroupsTab(headerH),
-                ],
-              ),
+                ),
+                _buildGroupsTab(headerH),
+              ],
             ),
+          ),
 
-            // ── Gradient ─────────────────────────────────────────────────
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              height: gradientH,
-              child: IgnorePointer(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      stops: const [0.0, 0.6, 1.0],
-                      colors: [
-                        const Color(0xFF08090B).withValues(alpha: 0.95),
-                        const Color(0xFF08090B).withValues(alpha: 0.75),
-                        const Color(0xFF08090B).withValues(alpha: 0.0),
-                      ],
-                    ),
+          // ── Gradient ─────────────────────────────────────────────────
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: gradientH,
+            child: IgnorePointer(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: const [0.0, 0.6, 1.0],
+                    colors: [
+                      const Color(0xFF08090B).withValues(alpha: 0.95),
+                      const Color(0xFF08090B).withValues(alpha: 0.75),
+                      const Color(0xFF08090B).withValues(alpha: 0.0),
+                    ],
                   ),
                 ),
               ),
             ),
+          ),
 
-            // ── Sticky header ─────────────────────────────────────────────
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TopBar(
-                    isSelectionMode: _isSelectionMode,
-                    selectedCount: _selectedIds.length,
-                    onEditPressed: _enterSelection,
-                    onSelectionClose: _exitSelection,
-                    onMarkAsRead: _onMarkAsRead,
-                    onPin: _onPin,
-                    onMute: _onMute,
-                    onArchive: _onArchive,
-                    onDelete: _onDelete,
-                  ),
-                  Transform.translate(
-                    offset: Offset(0, -searchBarOffset),
-                    child: Opacity(
-                      opacity: (1.0 - _searchBarProgress).clamp(0.0, 1.0),
-                      child: SizedBox(
-                        height: _kSearchBarHeight,
-                        child: local_widgets.SearchBar(),
-                      ),
+          // ── Sticky header ─────────────────────────────────────────────
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TopBar(
+                  isSelectionMode: _isSelectionMode,
+                  selectedCount: _selectedIds.length,
+                  onEditPressed: _enterSelection,
+                  onSelectionClose: _exitSelection,
+                  onMarkAsRead: _onMarkAsRead,
+                  onPin: _onPin,
+                  onMute: _onMute,
+                  onArchive: _onArchive,
+                  onDelete: _onDelete,
+                ),
+                Transform.translate(
+                  offset: Offset(0, -searchBarOffset),
+                  child: Opacity(
+                    opacity: (1.0 - _searchBarProgress).clamp(0.0, 1.0),
+                    child: SizedBox(
+                      height: _kSearchBarHeight,
+                      child: local_widgets.SearchBar(),
                     ),
                   ),
-                  Transform.translate(
-                    offset: Offset(0, -searchBarOffset),
-                    child: const TabBarSection(),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-              ),
+                ),
+                Transform.translate(
+                  offset: Offset(0, -searchBarOffset),
+                  child: TabBarSection(controller: _tabController),
+                ),
+                const SizedBox(height: 8),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

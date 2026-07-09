@@ -8,6 +8,7 @@ import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/contacts/contact_avatar_sanitizer.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
@@ -124,10 +125,10 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
     final saved = await ContactLocalDb.loadSavedContacts(
       ownerUserId: ownerUserId,
     );
-    if (saved.isNotEmpty) return saved;
+    if (saved.isNotEmpty) return ContactAvatarSanitizer.sanitizeAll(saved);
 
     final cached = await ContactLocalDb.loadContacts(ownerUserId: ownerUserId);
-    if (cached.isNotEmpty) return cached;
+    if (cached.isNotEmpty) return ContactAvatarSanitizer.sanitizeAll(cached);
 
     return const [];
   }
@@ -138,15 +139,16 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
         currentUserId,
       );
       if (matrixContacts.isEmpty || !mounted) return;
+      final cleanContacts = ContactAvatarSanitizer.sanitizeAll(matrixContacts);
 
       await ContactLocalDb.saveContacts(
-        matrixContacts,
+        cleanContacts,
         ownerUserId: currentUserId,
       );
 
       if (mounted) {
         setState(() {
-          _setContacts(matrixContacts);
+          _setContacts(cleanContacts);
           _isLoading = false;
         });
       }
@@ -156,8 +158,9 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
   }
 
   void _setContacts(List<Contact> contacts) {
-    _wrytteContacts = contacts.where((c) => c.isOnWrytte).toList();
-    _nonWrytteContacts = contacts.where((c) => !c.isOnWrytte).toList();
+    final cleanContacts = ContactAvatarSanitizer.sanitizeAll(contacts);
+    _wrytteContacts = cleanContacts.where((c) => c.isOnWrytte).toList();
+    _nonWrytteContacts = cleanContacts.where((c) => !c.isOnWrytte).toList();
     _applyContactFilter(_searchController.text.toLowerCase());
   }
 
@@ -228,6 +231,7 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
                 title: contact.formattedName,
                 avatarUrl: contact.avatarUrl,
                 initialMessages: chatOpenData.messages,
+                conversationKind: ConversationKind.direct,
               ),
           transitionsBuilder: (_, animation, __, child) {
             final curved = CurvedAnimation(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/contact_model.dart';
+import 'package:wrytte/services/contacts/contact_avatar_sanitizer.dart';
 
 class ContactItem extends StatelessWidget {
   final Contact contact;
@@ -28,7 +29,9 @@ class ContactItem extends StatelessWidget {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           leading: UserAvatar(
             size: 44,
-            imageUrl: contact.avatarUrl,
+            imageUrl: ContactAvatarSanitizer.sanitizeAvatarUrl(
+              contact.avatarUrl,
+            ),
             name: contact.formattedName,
           ),
           title: Text(

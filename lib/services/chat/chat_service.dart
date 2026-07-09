@@ -35,6 +35,11 @@ class ChatService {
   static const String groupDeletedAtKey = 'wrytte.deleted_at';
   static const String groupDeletedByKey = 'wrytte.deleted_by';
 
+  static bool isGroupDeletedPreview(String? value) {
+    final text = value?.trim().toLowerCase() ?? '';
+    return text.startsWith('this group has been deleted');
+  }
+
   final _messageController = StreamController<ChatMessage>.broadcast();
   final _errorController = StreamController<String>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
@@ -1285,6 +1290,7 @@ class ChatService {
         ),
       );
     }
+    await _backfillConversationKinds();
     await _applySavedContactsToHydratedConversations();
     _emitConversations();
     for (final conversation in conversations) {
@@ -1294,6 +1300,63 @@ class ChatService {
       }
     }
     _emitConversations();
+  }
+
+  Future<void> _backfillConversationKinds() async {
+    final upgraded = <ChatConversation>[];
+    for (final entry in _conversationsMap.entries.toList()) {
+      final conv = entry.value;
+      if (conv.hasExplicitKind) continue;
+
+      String kind = ConversationKind.unknown;
+      final room = _roomById(conv.id);
+      final storedAsGroup =
+          (conv.lastMessageType == 'group' ||
+              conv.lastMessageType == groupDeletedMessageType) &&
+          conv.id.startsWith('!') &&
+          conv.otherUserId == conv.id;
+      final inRegistry = _createdGroupRoomIds.contains(conv.id.trim());
+      final liveGroup =
+          room != null && MatrixChatService.instance.isMatrixGroupRoom(room);
+
+      if (storedAsGroup || inRegistry || liveGroup) {
+        kind = ConversationKind.group;
+      } else if (room != null && room.isDirectChat) {
+        kind = ConversationKind.direct;
+      } else if (!conv.id.startsWith('!') &&
+          conv.otherUserId.startsWith('@') &&
+          !conv.otherUserId.startsWith('@!') &&
+          conv.otherUserId != conv.id &&
+          conv.lastMessageType != 'group' &&
+          conv.lastMessageType != groupDeletedMessageType) {
+        kind = ConversationKind.direct;
+      }
+
+      if (kind == ConversationKind.unknown) continue;
+      final stamped = conv.copyWith(
+        conversationKind: kind,
+        otherUserId: kind == ConversationKind.group ? conv.id : null,
+        otherUserAvatar:
+            kind == ConversationKind.group
+                ? (room != null ? (_groupRoomAvatarUrl(room) ?? '') : '')
+                : null,
+        otherUserName:
+            kind == ConversationKind.group && room != null
+                ? _groupDisplayName(room, conv)
+                : null,
+      );
+      _conversationsMap[entry.key] = stamped;
+      upgraded.add(stamped);
+      if (kind == ConversationKind.group) {
+        unawaited(markGroupCreated(conv.id));
+      }
+    }
+    if (upgraded.isEmpty) return;
+    await ChatLocalDb.instance.saveConversations(upgraded);
+    apkLog(
+      'ChatService.kindMigration',
+      'stamped conversationKind on ${upgraded.length} legacy rows',
+    );
   }
 
   Future<void> _syncLocalReadMarkerToMatrix(String conversationId) async {
@@ -1794,6 +1857,7 @@ class ChatService {
       lastMessageType: 'group',
       otherUserName: name.trim(),
       otherUserAvatar: room == null ? null : _groupRoomAvatarUrl(room),
+      conversationKind: ConversationKind.group,
     );
     _conversationsMap[roomId] = conversation;
     await markGroupCreated(roomId);
@@ -1830,12 +1894,17 @@ class ChatService {
       lastMessageType: 'group',
       otherUserName: name.trim().isEmpty ? 'Group' : name.trim(),
       otherUserAvatar: avatarUrl,
+      conversationKind: ConversationKind.group,
     );
+    await markGroupCreated(id);
     final existing = _conversationsMap[id];
     _conversationsMap[id] =
         existing == null
             ? conversation
-            : _preferImmediateConversation(existing, conversation);
+            : _preferImmediateConversation(
+              existing,
+              conversation,
+            ).copyWith(conversationKind: ConversationKind.group);
     await ChatLocalDb.instance.saveConversations([_conversationsMap[id]!]);
     _emitConversations();
     return _conversationsMap[id]!;
@@ -1892,6 +1961,7 @@ class ChatService {
               ? existing!.otherUserName
               : 'Deleted Group',
       otherUserAvatar: avatarUrl ?? existing?.otherUserAvatar,
+      conversationKind: ConversationKind.group,
     );
     _conversationsMap[id] = conversation;
     await ChatLocalDb.instance.saveConversations([conversation]);
@@ -1946,6 +2016,10 @@ class ChatService {
             DateTime.now(),
         unreadCount: _displayableUnreadCountForRoom(room, client.userID),
         lastMessageType: deletedAt == null ? 'group' : groupDeletedMessageType,
+        conversationKind:
+            existing?.hasExplicitKind == true
+                ? existing!.conversationKind
+                : ConversationKind.group,
         deletedAt: deletedAt,
         deletedBy:
             last != null && _isGroupDeletedMatrixEvent(last)
@@ -1993,10 +2067,19 @@ class ChatService {
               ? cleanRoomName
               : existing?.otherUserName,
       otherUserAvatar: existing?.otherUserAvatar ?? room.avatar?.toString(),
+      conversationKind:
+          existing?.hasExplicitKind == true
+              ? existing!.conversationKind
+              : (room.isDirectChat
+                  ? ConversationKind.direct
+                  : ConversationKind.unknown),
     );
   }
 
   bool _isGroupRoom(mx.Room room, ChatConversation? existing) {
+    if (existing != null && existing.hasExplicitKind) {
+      return existing.isGroupKind || existing.isChannelKind;
+    }
     if (room.isDirectChat) return false;
     if (existing?.lastMessageType == groupDeletedMessageType) return true;
     if (existing?.lastMessageType == 'group' &&
@@ -2031,7 +2114,39 @@ class ChatService {
   String? _groupRoomAvatarUrl(mx.Room room) {
     final raw = room.getState(mx.EventTypes.RoomAvatar)?.content['url'];
     final avatar = raw is String ? raw.trim() : '';
-    return avatar.isEmpty ? null : avatar;
+    if (avatar.isEmpty || _matchesGroupParticipantAvatar(room, avatar)) {
+      return null;
+    }
+    return avatar;
+  }
+
+  bool _matchesGroupParticipantAvatar(mx.Room room, String avatarUrl) {
+    final normalizedAvatar = _normaliseAvatarIdentity(avatarUrl);
+    if (normalizedAvatar.isEmpty) return false;
+    for (final member in room.getParticipants([
+      mx.Membership.join,
+      mx.Membership.invite,
+    ])) {
+      if (member.id == MatrixClientService.instance.userId) continue;
+      final memberAvatar = _normaliseAvatarIdentity(
+        member.avatarUrl?.toString(),
+      );
+      if (memberAvatar.isNotEmpty && memberAvatar == normalizedAvatar) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _normaliseAvatarIdentity(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return '';
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return trimmed;
+    if (uri.scheme == 'mxc') {
+      return 'mxc://${uri.host}${uri.path}';
+    }
+    return trimmed;
   }
 
   String _displayAlias(String? alias) {
@@ -2285,13 +2400,22 @@ class ChatService {
         room != null &&
         (room.isDirectChat ||
             MatrixChatService.instance.looksLikeUnmarkedDirectRoom(room));
+    final explicitKind =
+        cached.hasExplicitKind
+            ? cached.conversationKind
+            : incoming.hasExplicitKind
+            ? incoming.conversationKind
+            : ConversationKind.unknown;
     final cachedIsGroup =
-        !incomingIsDirect &&
-        !looksDirect &&
-        (cached.lastMessageType == 'group' ||
-            (cached.id.startsWith('!') &&
-                cached.otherUserId == cached.id &&
-                cached.participants.length > 2));
+        explicitKind != ConversationKind.unknown
+            ? explicitKind == ConversationKind.group ||
+                explicitKind == ConversationKind.channel
+            : !incomingIsDirect &&
+                !looksDirect &&
+                (cached.lastMessageType == 'group' ||
+                    (cached.id.startsWith('!') &&
+                        cached.otherUserId == cached.id &&
+                        cached.participants.length > 2));
     if (!incomingHasMessage && cachedHasMessage) {
       if (cachedIsGroup) {
         final groupName = _groupConversationName(room, incoming, cached);
@@ -2302,6 +2426,10 @@ class ChatService {
           lastMessageType: 'group',
           otherUserName: groupName,
           otherUserAvatar: groupAvatar,
+          conversationKind:
+              explicitKind != ConversationKind.unknown
+                  ? explicitKind
+                  : ConversationKind.group,
         );
       }
       return cached.copyWith(
@@ -2319,6 +2447,7 @@ class ChatService {
           incoming.otherUserName,
         ),
         otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
+        conversationKind: explicitKind,
       );
     }
     if (cachedIsGroup) {
@@ -2328,6 +2457,10 @@ class ChatService {
         lastMessageType: 'group',
         otherUserName: _groupConversationName(room, incoming, cached),
         otherUserAvatar: _groupConversationAvatar(room, incoming, cached),
+        conversationKind:
+            explicitKind != ConversationKind.unknown
+                ? explicitKind
+                : ConversationKind.group,
       );
     }
     return incoming.copyWith(
@@ -2339,6 +2472,7 @@ class ChatService {
         incoming.otherUserName,
       ),
       otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
+      conversationKind: explicitKind,
     );
   }
 
@@ -2521,11 +2655,16 @@ class ChatService {
         existing?.lastMessageType == 'group' &&
         existing?.id.startsWith('!') == true &&
         existing?.otherUserId == existing?.id;
-    final isGroupConversation =
-        explicitlyStoredGroup ||
-        (!isMatrixDirectRoom &&
-            (message.receiverId.trim().startsWith('!') ||
-                (room != null && _isGroupRoom(room, existing))));
+    final bool isGroupConversation;
+    if (existing != null && existing.hasExplicitKind) {
+      isGroupConversation = existing.isGroupKind || existing.isChannelKind;
+    } else {
+      isGroupConversation =
+          explicitlyStoredGroup ||
+          (!isMatrixDirectRoom &&
+              (message.receiverId.trim().startsWith('!') ||
+                  (room != null && _isGroupRoom(room, existing))));
+    }
     if (isGroupConversation) {
       final groupName =
           room == null
@@ -2555,6 +2694,10 @@ class ChatService {
                 ? (existing?.unreadCount ?? 0) + 1
                 : existing?.unreadCount ?? 0,
         lastMessageType: 'group',
+        conversationKind:
+            existing?.hasExplicitKind == true
+                ? existing!.conversationKind
+                : ConversationKind.group,
         isArchived: existing?.isArchived ?? false,
         isMuted: existing?.isMuted ?? false,
         isPinned: existing?.isPinned ?? false,
@@ -2814,7 +2957,8 @@ class ChatService {
     final conv = _conversationsMap[conversationId.trim()];
     if (conv == null) return false;
     return conv.deletedAt != null ||
-        conv.lastMessageType == groupDeletedMessageType;
+        conv.lastMessageType == groupDeletedMessageType ||
+        isGroupDeletedPreview(conv.lastMessage);
   }
 
   Set<String> get createdGroupRoomIds =>
@@ -2823,6 +2967,9 @@ class ChatService {
   // or its live Matrix room classifies as a group. Contact/member enrichment
   // must never touch these — group name/avatar come only from room state.
   bool _isGroupConversationRow(ChatConversation conversation) {
+    if (conversation.hasExplicitKind) {
+      return conversation.isGroupKind || conversation.isChannelKind;
+    }
     if (_createdGroupRoomIds.contains(conversation.id)) return true;
     if (conversation.lastMessageType == groupDeletedMessageType) return true;
     if (conversation.deletedAt != null && conversation.id.startsWith('!')) {
@@ -2834,9 +2981,49 @@ class ChatService {
     return false;
   }
 
+  /// Like [_isGroupConversationRow], but works even when the conversation
+  /// isn't currently loaded in [_conversationsMap] — e.g. a joined (not
+  /// created) group that was left, deleted, or simply hasn't been refreshed
+  /// back into memory since app start. Without this, contact/profile
+  /// enrichment can stamp a 1:1 contact's name/avatar onto a group's DB row,
+  /// because every earlier check silently defaults to "not a group" when it
+  /// has no in-memory conversation to inspect.
+  Future<bool> _isGroupConversationId(
+    String conversationId,
+    ChatConversation? loaded,
+  ) async {
+    if (loaded != null && loaded.hasExplicitKind) {
+      return loaded.isGroupKind || loaded.isChannelKind;
+    }
+    if (_createdGroupRoomIds.contains(conversationId)) return true;
+    if (loaded != null && _isGroupConversationRow(loaded)) return true;
+
+    final room = _roomById(conversationId);
+    if (room != null && MatrixChatService.instance.isMatrixGroupRoom(room)) {
+      return true;
+    }
+
+    // Room object is gone too (left/deleted) — fall back to what's actually
+    // persisted, since that's the only remaining source of truth.
+    if (loaded == null) {
+      final persisted = await ChatLocalDb.instance.loadConversation(
+        conversationId,
+      );
+      if (persisted != null && persisted.hasExplicitKind) {
+        return persisted.isGroupKind || persisted.isChannelKind;
+      }
+      if (persisted != null && _isGroupConversationRow(persisted)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   bool _isGroupDeletedMatrixEvent(mx.Event event) {
     if (event.type != mx.EventTypes.Message) return false;
-    return event.content[groupDeletedEventKey] == true;
+    return event.content[groupDeletedEventKey] == true ||
+        isGroupDeletedPreview(event.content['body']?.toString() ?? event.body);
   }
 
   DateTime? _groupDeletedAtFromEvent(mx.Event event) {
@@ -3328,8 +3515,9 @@ class ChatService {
     var changed = false;
     for (final entry in _conversationsMap.entries.toList()) {
       final conversation = entry.value;
-      if (_isGroupConversationRow(conversation))
+      if (_isGroupConversationRow(conversation)) {
         continue; // ADDED: never enrich group
+      }
       final conversationKeys = _keysForConversation(conversation);
       if (!conversationKeys.any(identityKeys.contains)) continue;
 
@@ -3372,9 +3560,8 @@ class ChatService {
 
     for (final conversationId in dbConversationIds) {
       final conversation = _conversationsMap[conversationId];
-      if (_createdGroupRoomIds.contains(conversationId) ||
-          (conversation != null && _isGroupConversationRow(conversation))) {
-        continue; // covers loaded AND unloaded groups
+      if (await _isGroupConversationId(conversationId, conversation)) {
+        continue; // covers loaded, unloaded, and left/deleted groups
       }
       if (conversation != null) {
         final next = conversation.copyWith(
@@ -3415,8 +3602,9 @@ class ChatService {
     var changed = false;
     for (final entry in _conversationsMap.entries.toList()) {
       final conversation = entry.value;
-      if (_isGroupConversationRow(conversation))
+      if (_isGroupConversationRow(conversation)) {
         continue; // ADDED: never enrich group
+      }
       final conversationKeys = _keysForConversation(conversation);
       if (!conversationKeys.any(identityKeys.contains)) continue;
 
@@ -3444,7 +3632,12 @@ class ChatService {
           phones: contact.phones,
         );
     for (final conversationId in dbConversationIds) {
-      if (_createdGroupRoomIds.contains(conversationId)) continue; // ADDED
+      if (await _isGroupConversationId(
+        conversationId,
+        _conversationsMap[conversationId],
+      )) {
+        continue;
+      }
       if (_conversationsMap.containsKey(conversationId)) continue;
       unawaited(
         ChatLocalDb.instance.updateConversationUserInfo(

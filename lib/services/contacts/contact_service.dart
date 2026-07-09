@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_contacts/flutter_contacts.dart' as fc;
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/contacts/contact_avatar_sanitizer.dart';
 import 'package:wrytte/services/contacts/contact_backend_service.dart';
 import 'package:wrytte/services/contacts/contact_directory_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
@@ -52,6 +53,9 @@ class ContactService {
         _matrixContactsCacheOwner!.trim().toLowerCase() ==
             owner.toLowerCase() &&
         _matrixContactsCache!.isNotEmpty) {
+      _matrixContactsCache = ContactAvatarSanitizer.sanitizeAll(
+        _matrixContactsCache!,
+      );
       return _matrixContactsCache!;
     }
 
@@ -72,7 +76,7 @@ class ContactService {
 
     final contacts = await getMatrixContacts(owner);
     if (contacts.isNotEmpty) {
-      _matrixContactsCache = contacts;
+      _matrixContactsCache = ContactAvatarSanitizer.sanitizeAll(contacts);
       _matrixContactsCacheOwner = owner;
     }
     return contacts;
@@ -265,14 +269,19 @@ class ContactService {
     final localContacts = await ContactLocalDb.loadSavedContacts(
       ownerUserId: owner,
     );
-    var contacts = _sortSavedContacts(localContacts);
+    var contacts = _sortSavedContacts(
+      ContactAvatarSanitizer.sanitizeAll(localContacts),
+    );
 
     if (contacts.isEmpty) {
       final recoveredContacts = await ContactLocalDb.loadRecoverableContacts(
         ownerUserId: owner,
       );
       if (recoveredContacts.isNotEmpty) {
-        contacts = _mergeSavedContacts(contacts, recoveredContacts);
+        contacts = _mergeSavedContacts(
+          contacts,
+          ContactAvatarSanitizer.sanitizeAll(recoveredContacts),
+        );
         await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
         apkLog(
           'Contact.recover',
@@ -286,18 +295,21 @@ class ContactService {
         ownerUserId: owner,
       );
       if (backendContacts.isNotEmpty) {
-        contacts = _mergeSavedContacts(contacts, backendContacts);
+        contacts = _mergeSavedContacts(
+          contacts,
+          ContactAvatarSanitizer.sanitizeAll(backendContacts),
+        );
         await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
         ContactService.notifyContactsChanged(owner);
         unawaited(_refreshBackendContactProfiles(owner, backendContacts));
       }
-      _matrixContactsCache = contacts;
+      _matrixContactsCache = ContactAvatarSanitizer.sanitizeAll(contacts);
       _matrixContactsCacheOwner = owner;
       debugPrint('Loaded ${contacts.length} contacts');
       return contacts;
     } catch (e) {
       debugPrint('Failed to load backend contacts: $e');
-      _matrixContactsCache = contacts;
+      _matrixContactsCache = ContactAvatarSanitizer.sanitizeAll(contacts);
       _matrixContactsCacheOwner = owner;
       return contacts;
     }
@@ -326,11 +338,11 @@ class ContactService {
         ownerUserId: owner,
       );
       final mergedContacts = _mergeSavedContacts(
-        currentContacts,
-        refreshedContacts,
+        ContactAvatarSanitizer.sanitizeAll(currentContacts),
+        ContactAvatarSanitizer.sanitizeAll(refreshedContacts),
       );
       await ContactLocalDb.saveContacts(mergedContacts, ownerUserId: owner);
-      _matrixContactsCache = mergedContacts;
+      _matrixContactsCache = ContactAvatarSanitizer.sanitizeAll(mergedContacts);
       _matrixContactsCacheOwner = owner;
       ContactService.notifyContactsChanged(owner);
     } catch (e) {
@@ -348,10 +360,10 @@ class ContactService {
     List<Contact> incoming,
   ) {
     final byKey = <String, Contact>{};
-    for (final contact in current) {
+    for (final contact in ContactAvatarSanitizer.sanitizeAll(current)) {
       byKey[_dedupeKey(contact)] = contact.copyWith(isSaved: true);
     }
-    for (final contact in incoming) {
+    for (final contact in ContactAvatarSanitizer.sanitizeAll(incoming)) {
       final savedContact = contact.copyWith(isSaved: true);
       final key = _dedupeKey(savedContact);
       final existing = byKey[key];

@@ -557,6 +557,7 @@ class _NewContactPageState extends State<NewContactPage> {
                 currentUserId: selfId,
                 title: contactName,
                 avatarUrl: profileOneAvatar,
+                conversationKind: ConversationKind.direct,
               ),
           transitionsBuilder: (_, animation, __, child) {
             final curved = CurvedAnimation(

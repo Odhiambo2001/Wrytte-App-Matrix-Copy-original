@@ -47,6 +47,9 @@ class GroupProfileScreen extends StatefulWidget {
 class _GroupProfileScreenState extends State<GroupProfileScreen> {
   final Map<String, String> _memberNames = {};
   final Map<String, String> _memberAvatars = {};
+  final Map<String, String> _memberPhones = {};
+  final Map<String, String> _savedContactNamesByUserId = {};
+  final Map<String, String> _savedContactNamesByPhone = {};
   List<mx.User> _members = const [];
   List<String> _cachedMemberIds = const [];
   String? _localAvatarOverride;
@@ -58,7 +61,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     super.initState();
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     _joined = widget.initiallyJoined || room?.membership == mx.Membership.join;
-    _loadMemberProfiles();
+    unawaited(_initialiseMemberProfiles());
   }
 
   @override
@@ -103,7 +106,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 SizedBox(height: compact ? 8 : 18),
                 UserAvatar(
                   size: avatarSize,
-                  imageUrl: widget.avatarUrl ?? room?.avatar?.toString(),
+                  imageUrl: _safeGroupRoomAvatarUrl(room),
                   localImagePath: _localAvatarOverride,
                   name: title,
                   isDeleted: isDeleted,
@@ -340,6 +343,9 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   }
 
   Widget _membersTab(String roomId) {
+    if (ChatService().isConversationDeleted(roomId)) {
+      return _emptyTab('No members');
+    }
     final members = _members;
     final matrixMemberIds = members.map((member) => member.id).toSet();
     final cachedMembers =
@@ -380,6 +386,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 member.id,
                 member.calcDisplayname(),
               );
+              if (name == null) return const SizedBox.shrink();
               final avatar =
                   _memberAvatars[member.id] ?? member.avatarUrl?.toString();
               return ListTile(
@@ -393,6 +400,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
           Builder(
             builder: (_) {
               final name = _displayMemberName(memberId, memberId);
+              if (name == null) return const SizedBox.shrink();
               final avatar = _memberAvatars[memberId];
               return ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -538,7 +546,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                     ? room.canonicalAlias
                     : widget.alias ?? '',
               ),
-              initialAvatarUrl: widget.avatarUrl ?? room.avatar?.toString(),
+              initialAvatarUrl: _safeGroupRoomAvatarUrl(room),
             ),
       ),
     );
@@ -703,8 +711,19 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     return count == 1 ? '1 member' : '$count members';
   }
 
+  Future<void> _initialiseMemberProfiles() async {
+    await _loadOwnerSavedContactNames();
+    if (!mounted) return;
+    _loadMemberProfiles();
+  }
+
   void _loadMemberProfiles() {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    if (ChatService().isConversationDeleted(widget.roomId)) {
+      _setMembers(const []);
+      _setCachedMembers(const []);
+      return;
+    }
     _loadCachedMemberProfiles();
     if (room == null || room.membership != mx.Membership.join) {
       _setMembers(const []);
@@ -735,6 +754,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   }
 
   Future<void> _requestFullMemberList(mx.Room room) async {
+    if (ChatService().isConversationDeleted(widget.roomId)) return;
     try {
       final members = await room.requestParticipants(
         _groupMemberships,
@@ -742,6 +762,11 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         true,
       );
       if (!mounted) return;
+      if (ChatService().isConversationDeleted(widget.roomId)) {
+        _setMembers(const []);
+        _setCachedMembers(const []);
+        return;
+      }
       _setMembers(members);
       for (final member in members) {
         unawaited(
@@ -794,7 +819,10 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     String? fallbackAvatar,
   }) async {
     final fallback = _cleanMemberName(fallbackName);
-    if (fallback.isNotEmpty && !_memberNames.containsKey(matrixId)) {
+    final savedName = _savedContactNameFor(matrixId);
+    if (savedName != null) {
+      _memberNames[matrixId] = savedName;
+    } else if (fallback.isNotEmpty && !_memberNames.containsKey(matrixId)) {
       _memberNames[matrixId] = fallback;
     }
     final avatar = fallbackAvatar?.trim() ?? '';
@@ -822,8 +850,18 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
       final profileName = _cleanMemberName(profile.displayName);
       final profileAvatar = profile.profileImage.trim();
+      final profilePhone = _normalizePhone(profile.phone);
+      final ownerSavedName = _savedContactNameFor(
+        matrixId,
+        phone: profilePhone,
+      );
       setState(() {
-        if (profileName.isNotEmpty) _memberNames[matrixId] = profileName;
+        if (profilePhone.isNotEmpty) _memberPhones[matrixId] = profilePhone;
+        if (ownerSavedName != null) {
+          _memberNames[matrixId] = ownerSavedName;
+        } else if (profileName.isNotEmpty) {
+          _memberNames[matrixId] = profileName;
+        }
         if (profileAvatar.isNotEmpty) _memberAvatars[matrixId] = profileAvatar;
       });
     } catch (_) {
@@ -831,12 +869,112 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     }
   }
 
-  String _displayMemberName(String matrixId, String fallbackName) {
+  Future<void> _loadOwnerSavedContactNames() async {
+    try {
+      final currentUserId = await AuthService.instance.getCurrentUserId();
+      if (currentUserId == null || currentUserId.trim().isEmpty) return;
+      final contacts = await ContactLocalDb.loadSavedContacts(
+        ownerUserId: currentUserId,
+      );
+      if (!mounted) return;
+
+      final byUserId = <String, String>{};
+      final byPhone = <String, String>{};
+      for (final contact in contacts) {
+        final savedName = _cleanMemberName(contact.formattedName);
+        if (savedName.isEmpty) continue;
+
+        for (final key in _contactUserKeys(contact.wrytteUserId)) {
+          byUserId[key] = savedName;
+        }
+        for (final phone in contact.phones) {
+          final normalized = _normalizePhone(phone);
+          if (normalized.isNotEmpty) byPhone[normalized] = savedName;
+        }
+      }
+
+      setState(() {
+        _savedContactNamesByUserId
+          ..clear()
+          ..addAll(byUserId);
+        _savedContactNamesByPhone
+          ..clear()
+          ..addAll(byPhone);
+
+        for (final member in _members) {
+          final savedName = _savedContactNameFor(member.id);
+          if (savedName != null) _memberNames[member.id] = savedName;
+        }
+        for (final memberId in _cachedMemberIds) {
+          final savedName = _savedContactNameFor(memberId);
+          if (savedName != null) _memberNames[memberId] = savedName;
+        }
+      });
+    } catch (e) {
+      apkLog('GroupProfile.members', 'saved contact names unavailable: $e');
+    }
+  }
+
+  String? _displayMemberName(String matrixId, String fallbackName) {
+    final savedName = _savedContactNameFor(matrixId);
+    if (savedName != null) return savedName;
     final resolved = _cleanMemberName(_memberNames[matrixId] ?? '');
     if (resolved.isNotEmpty) return resolved;
     final fallback = _cleanMemberName(fallbackName);
     if (fallback.isNotEmpty) return fallback;
-    return 'Member';
+    return null;
+  }
+
+  String? _savedContactNameFor(String matrixId, {String? phone}) {
+    for (final key in _contactUserKeys(matrixId)) {
+      final name = _cleanMemberName(_savedContactNamesByUserId[key] ?? '');
+      if (name.isNotEmpty) return name;
+    }
+    final normalizedPhone = _normalizePhone(
+      phone ?? _memberPhones[matrixId] ?? '',
+    );
+    if (normalizedPhone.isNotEmpty) {
+      final name = _cleanMemberName(
+        _savedContactNamesByPhone[normalizedPhone] ?? '',
+      );
+      if (name.isNotEmpty) return name;
+    }
+    return null;
+  }
+
+  Iterable<String> _contactUserKeys(String? value) sync* {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return;
+    yield trimmed.toLowerCase();
+    final localpart = _matrixLocalpart(trimmed);
+    if (localpart.isNotEmpty) yield localpart.toLowerCase();
+    final matrixId = _toMatrixUserId(localpart);
+    if (matrixId.isNotEmpty) yield matrixId.toLowerCase();
+  }
+
+  String _normalizePhone(String phone) {
+    var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleaned.startsWith('00') && cleaned.length > 4) {
+      cleaned = '+${cleaned.substring(2)}';
+    }
+    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
+    return _stripInvalidNorthAmericaPrefix(cleaned);
+  }
+
+  String _stripInvalidNorthAmericaPrefix(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (!phone.startsWith('+1')) return phone;
+    if (digits.length <= 11) return phone;
+    return '+${digits.substring(1)}';
+  }
+
+  String _toMatrixUserId(String localpart) {
+    final cleanLocalpart = localpart.trim().replaceAll(
+      RegExp(r'[^A-Za-z0-9._=-]'),
+      '',
+    );
+    if (cleanLocalpart.isEmpty) return '';
+    return '@$cleanLocalpart:${MatrixConfig.serverName}';
   }
 
   String _cleanMemberName(String value) {
@@ -862,6 +1000,42 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     mx.Membership.join,
     mx.Membership.invite,
   ];
+
+  String? _safeGroupRoomAvatarUrl(mx.Room? room) {
+    final raw = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
+    final avatar = raw is String ? raw.trim() : '';
+    if (avatar.isEmpty || _matchesGroupParticipantAvatar(room, avatar)) {
+      return null;
+    }
+    return avatar;
+  }
+
+  bool _matchesGroupParticipantAvatar(mx.Room? room, String avatarUrl) {
+    if (room == null) return false;
+    final normalizedAvatar = _normaliseAvatarIdentity(avatarUrl);
+    if (normalizedAvatar.isEmpty) return false;
+    for (final member in room.getParticipants(_groupMemberships)) {
+      if (member.id == room.client.userID) continue;
+      final memberAvatar = _normaliseAvatarIdentity(
+        member.avatarUrl?.toString(),
+      );
+      if (memberAvatar.isNotEmpty && memberAvatar == normalizedAvatar) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _normaliseAvatarIdentity(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return '';
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return trimmed;
+    if (uri.scheme == 'mxc') {
+      return 'mxc://${uri.host}${uri.path}';
+    }
+    return trimmed;
+  }
 }
 
 class _GroupEditResult {
@@ -1024,9 +1198,12 @@ class _EditGroupScreen extends StatefulWidget {
 }
 
 class _EditGroupScreenState extends State<_EditGroupScreen> {
+  static const String _groupInfoStateType = 'com.wrytte.group.info';
+
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _aliasController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
+  final TextEditingController _linkController = TextEditingController();
   final ImagePicker _picker = ImagePicker();
 
   File? _pickedImageFile;
@@ -1041,6 +1218,8 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     _nameController.text = widget.initialName;
     _aliasController.text = widget.initialAlias;
     _descriptionController.text = room?.topic ?? '';
+    _linkController.text =
+        room?.getState(_groupInfoStateType)?.content['link']?.toString() ?? '';
   }
 
   @override
@@ -1048,6 +1227,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     _nameController.dispose();
     _aliasController.dispose();
     _descriptionController.dispose();
+    _linkController.dispose();
     super.dispose();
   }
 
@@ -1102,6 +1282,25 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       final description = _descriptionController.text.trim();
       if (description != room.topic.trim()) {
         await room.setDescription(description);
+      }
+
+      final link = _linkController.text.trim();
+      final currentInfo = Map<String, dynamic>.from(
+        room.getState(_groupInfoStateType)?.content ?? const {},
+      );
+      final currentLink = currentInfo['link']?.toString().trim() ?? '';
+      if (link != currentLink) {
+        if (link.isEmpty) {
+          currentInfo.remove('link');
+        } else {
+          currentInfo['link'] = link;
+        }
+        await room.client.setRoomStateWithKey(
+          room.id,
+          _groupInfoStateType,
+          '',
+          currentInfo,
+        );
       }
 
       if (!mounted) return;
@@ -1223,7 +1422,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         await ChatService().markGroupDeletedLocally(
           roomId: widget.roomId,
           name: title,
-          avatarUrl: widget.initialAvatarUrl ?? room.avatar?.toString(),
+          avatarUrl: null,
           participants:
               room.getParticipants().map((member) => member.id).toList(),
           deletedAt: deletedAt,
@@ -1360,31 +1559,67 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     );
   }
 
-  Widget _valuePill(String label, String value, {Color? valueColor}) {
+  Widget _valuePill(
+    String label,
+    String value, {
+    Color? valueColor,
+    VoidCallback? onTap,
+    bool alignValueRight = true,
+  }) {
     final hasLabel = label.trim().isNotEmpty;
-    return Container(
-      height: 54,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      decoration: BoxDecoration(
-        color: const Color(0xFF23262C),
-        borderRadius: BorderRadius.circular(27),
-      ),
-      child: Row(
-        children: [
-          if (hasLabel) ...[
-            Text(
-              label,
-              style: const TextStyle(color: Color(0xFF9A9CA3), fontSize: 16),
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        height: 54,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        decoration: BoxDecoration(
+          color: const Color(0xFF23262C),
+          borderRadius: BorderRadius.circular(27),
+        ),
+        child: Row(
+          children: [
+            if (hasLabel) ...[
+              SizedBox(
+                width: 92,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF9A9CA3),
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: alignValueRight ? TextAlign.right : TextAlign.left,
+                style: TextStyle(
+                  color: valueColor ?? Colors.white,
+                  fontSize: 16,
+                ),
+              ),
             ),
-            const Spacer(),
           ],
-          Text(
-            value,
-            style: TextStyle(color: valueColor ?? Colors.white, fontSize: 16),
-          ),
-        ],
+        ),
       ),
     );
+  }
+
+  Future<void> _editLink() async {
+    final result = await showDialog<String>(
+      context: context,
+      builder:
+          (context) => _GroupLinkDialog(initialValue: _linkController.text),
+    );
+    if (result == null || !mounted) return;
+    setState(() => _linkController.text = result.trim());
   }
 
   Widget _avatar() {
@@ -1503,7 +1738,18 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
               const SizedBox(height: 14),
               _inputPill('Description', _descriptionController, maxLines: 1),
               const SizedBox(height: 14),
-              _valuePill('Link', 'Add'),
+              _valuePill(
+                'Link',
+                _linkController.text.trim().isEmpty
+                    ? 'Add'
+                    : _linkController.text.trim(),
+                valueColor:
+                    _linkController.text.trim().isEmpty
+                        ? null
+                        : const Color(0xFF4DA3FF),
+                onTap: _saving ? null : _editLink,
+                alignValueRight: _linkController.text.trim().isEmpty,
+              ),
               const SizedBox(height: 14),
               _valuePill('Channel', 'Add'),
               const SizedBox(height: 180),
@@ -1557,6 +1803,78 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _GroupLinkDialog extends StatefulWidget {
+  final String initialValue;
+
+  const _GroupLinkDialog({required this.initialValue});
+
+  @override
+  State<_GroupLinkDialog> createState() => _GroupLinkDialogState();
+}
+
+class _GroupLinkDialogState extends State<_GroupLinkDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _close([String? value]) {
+    Navigator.pop(context, value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF23262C),
+      title: const Text('Group Link', style: TextStyle(color: Colors.white)),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.url,
+        textInputAction: TextInputAction.done,
+        style: const TextStyle(color: Colors.white),
+        decoration: const InputDecoration(
+          hintText: 'https://example.com',
+          hintStyle: TextStyle(color: Color(0xFF9A9CA3)),
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFF4DA3FF)),
+          ),
+          focusedBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFF4DA3FF)),
+          ),
+        ),
+        onSubmitted: (_) => _close(_controller.text),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _close,
+          child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+        ),
+        TextButton(
+          onPressed: () => _close(''),
+          child: const Text(
+            'Remove',
+            style: TextStyle(color: Color(0xFFE85D75)),
+          ),
+        ),
+        TextButton(
+          onPressed: () => _close(_controller.text),
+          child: const Text('Done', style: TextStyle(color: Color(0xFF4DA3FF))),
+        ),
+      ],
     );
   }
 }

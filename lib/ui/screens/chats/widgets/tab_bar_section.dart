@@ -2,7 +2,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 class TabBarSection extends StatelessWidget {
-  const TabBarSection({super.key});
+  final TabController? controller;
+
+  const TabBarSection({super.key, this.controller});
 
   @override
   Widget build(BuildContext context) {
@@ -24,6 +26,7 @@ class TabBarSection extends StatelessWidget {
             ),
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
             child: TabBar(
+              controller: controller,
               isScrollable: false,
               padding: EdgeInsets.zero,
               labelPadding: EdgeInsets.zero,

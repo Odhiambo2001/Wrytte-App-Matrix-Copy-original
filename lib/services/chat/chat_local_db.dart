@@ -66,7 +66,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 7,
+      version: 8,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -118,6 +118,7 @@ class ChatLocalDb {
             isPinned             INTEGER NOT NULL DEFAULT 0,
             otherUserName        TEXT,
             otherUserAvatar      TEXT,
+            conversationKind      TEXT NOT NULL DEFAULT '',
             lastReadTime         INTEGER,
             deletedAt            INTEGER,
             deletedBy            TEXT
@@ -194,6 +195,14 @@ class ChatLocalDb {
             'INTEGER',
           );
           await _addColumnIfMissing(db, 'conversations', 'deletedBy', 'TEXT');
+        }
+        if (oldVersion < 8) {
+          await _addColumnIfMissing(
+            db,
+            'conversations',
+            'conversationKind',
+            "TEXT NOT NULL DEFAULT ''",
+          );
         }
       },
     );
@@ -454,6 +463,14 @@ class ChatLocalDb {
           existing.isNotEmpty
               ? existing.first['otherUserAvatar'] as String?
               : null;
+      final existingKind =
+          existing.isNotEmpty
+              ? existing.first['conversationKind'] as String?
+              : null;
+      final conversationKind =
+          c.hasExplicitKind
+              ? c.conversationKind
+              : ConversationKind.normalize(existingKind);
       final existingLastReadTime =
           existing.isNotEmpty ? existing.first['lastReadTime'] as int? : null;
       final nextLastReadTime =
@@ -482,6 +499,7 @@ class ChatLocalDb {
         // Keep existing cached name/avatar — don't overwrite with null
         'otherUserName': c.otherUserName ?? existingName,
         'otherUserAvatar': c.otherUserAvatar ?? existingAvatar,
+        'conversationKind': conversationKind,
         'lastReadTime': nextLastReadTime,
         'deletedAt': c.deletedAt?.millisecondsSinceEpoch,
         'deletedBy': _encodeStringList(c.deletedBy),
@@ -495,7 +513,13 @@ class ChatLocalDb {
     final database = await db;
     final existingRows = await database.query(
       'conversations',
-      columns: ['id', 'lastReadTime', 'otherUserName', 'otherUserAvatar'],
+      columns: [
+        'id',
+        'lastReadTime',
+        'otherUserName',
+        'otherUserAvatar',
+        'conversationKind',
+      ],
     );
     final existingLastReadTimes = <String, int?>{
       for (final row in existingRows)
@@ -508,6 +532,10 @@ class ChatLocalDb {
     final existingAvatars = <String, String?>{
       for (final row in existingRows)
         row['id'] as String: row['otherUserAvatar'] as String?,
+    };
+    final existingKinds = <String, String?>{
+      for (final row in existingRows)
+        row['id'] as String: row['conversationKind'] as String?,
     };
     await database.transaction((txn) async {
       await txn.delete('conversations');
@@ -524,6 +552,10 @@ class ChatLocalDb {
                 : c.unreadCount;
         final cleanName = c.otherUserName?.trim() ?? '';
         final cleanAvatar = c.otherUserAvatar?.trim() ?? '';
+        final conversationKind =
+            c.hasExplicitKind
+                ? c.conversationKind
+                : ConversationKind.normalize(existingKinds[c.id]);
         await txn.insert('conversations', {
           'id': c.id,
           'participants': c.participants.join(','),
@@ -542,6 +574,7 @@ class ChatLocalDb {
               cleanAvatar.isNotEmpty
                   ? c.otherUserAvatar
                   : existingAvatars[c.id],
+          'conversationKind': conversationKind,
           'lastReadTime': nextLastReadTime,
           'deletedAt': c.deletedAt?.millisecondsSinceEpoch,
           'deletedBy': _encodeStringList(c.deletedBy),
@@ -555,12 +588,15 @@ class ChatLocalDb {
     required String conversationId,
     required String name,
     String? avatar,
+    bool clearAvatar = false,
   }) async {
     final database = await db;
     final values = <String, Object?>{'otherUserName': name};
     final cleanAvatar = avatar?.trim() ?? '';
     if (cleanAvatar.isNotEmpty) {
       values['otherUserAvatar'] = cleanAvatar;
+    } else if (clearAvatar) {
+      values['otherUserAvatar'] = null;
     }
     await database.update(
       'conversations',
@@ -624,6 +660,7 @@ class ChatLocalDb {
         'isPinned': roomConversation.isPinned ? 1 : 0,
         'otherUserName': roomConversation.otherUserName,
         'otherUserAvatar': roomConversation.otherUserAvatar,
+        'conversationKind': roomConversation.conversationKind,
         'lastReadTime': existingLastReadTime,
         'deletedAt': roomConversation.deletedAt?.millisecondsSinceEpoch,
         'deletedBy': _encodeStringList(roomConversation.deletedBy),
@@ -666,6 +703,25 @@ class ChatLocalDb {
         byId.values.toList()
           ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
     return merged;
+  }
+
+  /// Load a single conversation row by id, straight from SQLite, with no
+  /// message-derived preview repair or group-rebuild logic applied. Used
+  /// where we need to know a conversation's actual persisted type (e.g.
+  /// whether it's a group) even if it isn't currently loaded in memory —
+  /// such as when deciding whether contact enrichment is allowed to touch it.
+  Future<ChatConversation?> loadConversation(String conversationId) async {
+    final id = conversationId.trim();
+    if (id.isEmpty) return null;
+    final database = await db;
+    final rows = await database.query(
+      'conversations',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return _rowToConversation(rows.first);
   }
 
   Future<List<ChatConversation>> _hydrateConversationPreviewsFromMessages(
@@ -712,11 +768,21 @@ class ChatLocalDb {
       }
 
       final message = _rowToMessage(latest.first);
+      final preserveGroupType = _isStoredGroupConversation(
+        conversation.id,
+        conversation.otherUserId,
+        conversation.participants,
+        conversation.lastMessageType,
+        conversation.conversationKind,
+      );
+      final repairedType =
+          preserveGroupType
+              ? conversation.lastMessageType
+              : message.attachmentType ?? conversation.lastMessageType;
       if (conversation.lastMessage == message.content &&
           conversation.lastMessageSenderId == message.senderId &&
           conversation.lastMessageTime == message.timestamp &&
-          conversation.lastMessageType ==
-              (message.attachmentType ?? conversation.lastMessageType)) {
+          conversation.lastMessageType == repairedType) {
         hydrated.add(conversation);
         continue;
       }
@@ -725,7 +791,7 @@ class ChatLocalDb {
         lastMessage: message.content,
         lastMessageSenderId: message.senderId,
         lastMessageTime: message.timestamp,
-        lastMessageType: message.attachmentType ?? conversation.lastMessageType,
+        lastMessageType: repairedType,
       );
       hydrated.add(repaired);
       changed = true;
@@ -736,7 +802,7 @@ class ChatLocalDb {
           'lastMessage': message.content,
           'lastMessageSenderId': message.senderId,
           'lastMessageTime': message.timestamp.millisecondsSinceEpoch,
-          'lastMessageType': message.attachmentType ?? repaired.lastMessageType,
+          'lastMessageType': repairedType,
         },
         where: 'id = ?',
         whereArgs: [conversation.id],
@@ -781,6 +847,7 @@ class ChatLocalDb {
           'lastMessageType',
           'otherUserName',
           'otherUserAvatar',
+          'conversationKind',
         ],
         where: 'id = ?',
         whereArgs: [message.conversationId],
@@ -791,12 +858,27 @@ class ChatLocalDb {
       final lastReadTime = existing['lastReadTime'] as int?;
       final existingLastMessageType =
           existing['lastMessageType'] as String? ?? '';
+      final existingConversationKind = ConversationKind.normalize(
+        existing['conversationKind'] as String?,
+      );
       final existingParticipants =
           ((existing['participants'] as String?) ?? '')
               .split(',')
               .where((id) => id.trim().isNotEmpty)
               .toList();
       final existingOtherUserId = existing['otherUserId'] as String? ?? '';
+      final storedGroup =
+          existingConversationKind == ConversationKind.group ||
+          existingConversationKind == ConversationKind.channel ||
+          _isStoredGroupConversation(
+            message.conversationId,
+            existingOtherUserId,
+            existingParticipants,
+            existingLastMessageType,
+            existingConversationKind,
+          ) ||
+          (message.conversationId.startsWith('!') &&
+              _isGroupDeletedPreview(message.content));
       final wasMarkedRead = (existing['unreadCount'] as int? ?? 0) == 0;
       final isAlreadyRead =
           lastReadTime != null
@@ -809,26 +891,21 @@ class ChatLocalDb {
         unreadCount: isAlreadyRead ? 0 : null,
         participants:
             existingParticipants.isNotEmpty ? existingParticipants : null,
-        otherUserId:
-            _isStoredGroupConversation(
-                  message.conversationId,
-                  existingOtherUserId,
-                  existingParticipants,
-                  existingLastMessageType,
-                )
-                ? message.conversationId
-                : null,
+        otherUserId: storedGroup ? message.conversationId : null,
         lastMessageType:
-            _isStoredGroupConversation(
-                  message.conversationId,
-                  existingOtherUserId,
-                  existingParticipants,
-                  existingLastMessageType,
-                )
-                ? 'group'
+            storedGroup
+                ? _isGroupDeletedPreview(message.content)
+                    ? 'group_deleted'
+                    : 'group'
                 : message.attachmentType,
         otherUserName: existing['otherUserName'] as String?,
         otherUserAvatar: existing['otherUserAvatar'] as String?,
+        conversationKind:
+            storedGroup
+                ? ConversationKind.group
+                : existingConversationKind == ConversationKind.direct
+                ? ConversationKind.direct
+                : null,
       );
       conversations.add(
         await _repairConversationPeerFromMessages(
@@ -847,6 +924,16 @@ class ChatLocalDb {
     ChatConversation conversation,
     String ownerId,
   ) async {
+    if (conversation.id.startsWith('!') ||
+        _isGroupDeletedPreview(conversation.lastMessage)) {
+      return conversation.copyWith(
+        otherUserId: conversation.id.startsWith('!') ? conversation.id : null,
+        lastMessageType:
+            _isGroupDeletedPreview(conversation.lastMessage)
+                ? 'group_deleted'
+                : conversation.lastMessageType,
+      );
+    }
     if (_isStableGroupConversation(conversation)) {
       return conversation;
     }
@@ -905,6 +992,7 @@ class ChatLocalDb {
       conversation.otherUserId,
       conversation.participants,
       conversation.lastMessageType,
+      conversation.conversationKind,
     );
   }
 
@@ -912,10 +1000,23 @@ class ChatLocalDb {
     String id,
     String otherUserId,
     List<String> participants,
-    String lastMessageType,
-  ) {
-    if (lastMessageType == 'group') return true;
+    String lastMessageType, [
+    String conversationKind = ConversationKind.unknown,
+  ]) {
+    final kind = ConversationKind.normalize(conversationKind);
+    if (kind == ConversationKind.group || kind == ConversationKind.channel) {
+      return true;
+    }
+    if (kind == ConversationKind.direct) return false;
+    if (lastMessageType == 'group' || lastMessageType == 'group_deleted') {
+      return true;
+    }
     return id.startsWith('!') && otherUserId == id && participants.length > 2;
+  }
+
+  bool _isGroupDeletedPreview(String? value) {
+    final text = value?.trim().toLowerCase() ?? '';
+    return text.startsWith('this group has been deleted');
   }
 
   Future<String?> findDirectConversationId({
@@ -936,6 +1037,7 @@ class ChatLocalDb {
         conversation.otherUserId,
         conversation.participants,
         conversation.lastMessageType,
+        conversation.conversationKind,
       )) {
         continue;
       }
@@ -1011,6 +1113,7 @@ class ChatLocalDb {
       );
 
       for (final conversationId in ids) {
+        if (conversationId.trim().startsWith('!')) continue;
         final messages = await loadMessages(conversationId);
         final visible =
             messages.where((message) => !message.isDeletedForMe).toList()
@@ -1018,6 +1121,7 @@ class ChatLocalDb {
         if (visible.isEmpty) continue;
 
         final latest = visible.last;
+        if (_isGroupDeletedPreview(latest.content)) continue;
         final conversation = await _repairConversationPeerFromMessages(
           await db,
           ChatConversation.fromMessage(latest, ownerUserId).copyWith(
@@ -1065,6 +1169,9 @@ class ChatLocalDb {
       deletedBy: _decodeStringList(row['deletedBy']),
       otherUserName: rawName != null ? _sanitize(rawName) : null,
       otherUserAvatar: row['otherUserAvatar'] as String?,
+      conversationKind: ConversationKind.normalize(
+        row['conversationKind'] as String?,
+      ),
     );
   }
 

@@ -117,6 +117,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
               title: conversation.otherUserName ?? _nameController.text,
               avatarUrl: conversation.otherUserAvatar,
               initialMemberCount: conversation.participants.length,
+              conversationKind: ConversationKind.group,
             ),
       ),
     );

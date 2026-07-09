@@ -47,6 +47,7 @@ class ChatScreen extends StatefulWidget {
   final bool readOnlyUntilJoin;
   final int? initialMemberCount;
   final String? groupAlias;
+  final String conversationKind;
 
   const ChatScreen({
     super.key,
@@ -59,6 +60,7 @@ class ChatScreen extends StatefulWidget {
     this.readOnlyUntilJoin = false,
     this.initialMemberCount,
     this.groupAlias,
+    this.conversationKind = ConversationKind.unknown,
   });
 
   @override
@@ -437,8 +439,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _chat.activateConversationRead(widget.conversationId);
-    _stableHeaderAvatarUrl =
-        widget.avatarUrl?.trim().isNotEmpty == true ? widget.avatarUrl : null;
+    _stableHeaderAvatarUrl = _initialStableHeaderAvatarUrl();
     apkLog(
       'ChatScreen',
       '── initState ──  '
@@ -717,7 +718,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final realConvId = await _resolveConversationId();
     _chat.activateConversationRead(realConvId);
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
-    if (realConvId.startsWith('!') && !_isReadOnlySuggestedGroup) {
+    if (_isKnownGroupConversationId(realConvId) && !_isReadOnlySuggestedGroup) {
       unawaited(_loadGroupMemberProfiles(realConvId));
     }
 
@@ -822,7 +823,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final roomConversation = ChatConversation.fromMessage(
       latest.copyWith(conversationId: roomId),
       widget.currentUserId,
-    ).copyWith(otherUserName: widget.title, otherUserAvatar: widget.avatarUrl);
+    ).copyWith(
+      otherUserName: widget.title,
+      otherUserAvatar: widget.avatarUrl,
+      conversationKind:
+          _isGroupChat ? ConversationKind.group : ConversationKind.direct,
+      otherUserId: _isGroupChat ? roomId : null,
+      lastMessageType: _isGroupChat ? 'group' : null,
+    );
 
     await ChatLocalDb.instance.migrateConversationId(
       oldConversationId: widget.conversationId,
@@ -1276,7 +1284,11 @@ class _ChatScreenState extends State<ChatScreen> {
     await ChatLocalDb.instance.saveConversations([
       ChatConversation.fromMessage(message, widget.currentUserId).copyWith(
         otherUserName: widget.title,
-        otherUserAvatar: widget.avatarUrl,
+        otherUserAvatar: _isGroupChat ? null : widget.avatarUrl,
+        conversationKind:
+            _isGroupChat ? ConversationKind.group : ConversationKind.direct,
+        otherUserId: _isGroupChat ? message.conversationId : null,
+        lastMessageType: _isGroupChat ? 'group' : null,
       ),
     ]);
   }
@@ -3097,12 +3109,79 @@ class _ChatScreenState extends State<ChatScreen> {
     return count == 1 ? '1 member' : '$count members';
   }
 
-  bool get _isGroupChat =>
-      widget.readOnlyUntilJoin ||
-      widget.receiverId.trim().startsWith('!') ||
-      _cachedConversationIsGroup(widget.conversationId) ||
-      (_resolvedConversationId != null &&
-          _cachedConversationIsGroup(_resolvedConversationId!));
+  bool get _isGroupChat {
+    final kind = ConversationKind.normalize(widget.conversationKind);
+    if (kind == ConversationKind.group || kind == ConversationKind.channel) {
+      return true;
+    }
+    if (kind == ConversationKind.direct) return false;
+    return widget.readOnlyUntilJoin ||
+        _isKnownGroupConversationId(widget.receiverId) ||
+        _isKnownGroupConversationId(widget.conversationId) ||
+        _cachedConversationIsGroup(widget.conversationId) ||
+        (_resolvedConversationId != null &&
+            _cachedConversationIsGroup(_resolvedConversationId!));
+  }
+
+  String? _initialStableHeaderAvatarUrl() {
+    if (_isKnownGroupConversationId(widget.conversationId) ||
+        _isKnownGroupConversationId(widget.receiverId) ||
+        widget.readOnlyUntilJoin) {
+      final room =
+          MatrixChatService.instance.getRoomById(widget.conversationId) ??
+          MatrixChatService.instance.getRoomById(widget.receiverId);
+      return _safeGroupRoomAvatarUrl(room);
+    }
+    return widget.avatarUrl?.trim().isNotEmpty == true
+        ? widget.avatarUrl!.trim()
+        : null;
+  }
+
+  bool _isKnownGroupConversationId(String value) {
+    final id = value.trim();
+    if (id.isEmpty || !id.startsWith('!')) return false;
+    final room = MatrixChatService.instance.getRoomById(id);
+    if (room != null) {
+      return MatrixChatService.instance.isMatrixGroupRoom(room);
+    }
+    return _cachedConversationIsGroup(id);
+  }
+
+  String? _safeGroupRoomAvatarUrl(mx.Room? room) {
+    final raw = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
+    final avatar = raw is String ? raw.trim() : '';
+    if (avatar.isEmpty || _matchesGroupParticipantAvatar(room, avatar)) {
+      return null;
+    }
+    return avatar;
+  }
+
+  bool _matchesGroupParticipantAvatar(mx.Room? room, String avatarUrl) {
+    if (room == null) return false;
+    final normalizedAvatar = _normaliseAvatarIdentity(avatarUrl);
+    if (normalizedAvatar.isEmpty) return false;
+    for (final member in room.getParticipants(_groupMemberships)) {
+      if (member.id == MatrixClientService.instance.userId) continue;
+      final memberAvatar = _normaliseAvatarIdentity(
+        member.avatarUrl?.toString(),
+      );
+      if (memberAvatar.isNotEmpty && memberAvatar == normalizedAvatar) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _normaliseAvatarIdentity(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return '';
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return trimmed;
+    if (uri.scheme == 'mxc') {
+      return 'mxc://${uri.host}${uri.path}';
+    }
+    return trimmed;
+  }
 
   bool get _isReadOnlySuggestedGroup {
     if (!widget.readOnlyUntilJoin || _joinedSuggestedGroup) return false;
@@ -3111,7 +3190,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool get _isDeletedConversation =>
-      _chat.isConversationDeleted(_activeConversationId);
+      _chat.isConversationDeleted(_activeConversationId) ||
+      _messages.any(
+        (message) => ChatService.isGroupDeletedPreview(message.content),
+      );
 
   bool _cachedConversationIsGroup(String conversationId) {
     final room = MatrixChatService.instance.getRoomById(conversationId);
@@ -3123,9 +3205,16 @@ class _ChatScreenState extends State<ChatScreen> {
         .cast<ChatConversation?>()
         .firstWhere((item) => item != null, orElse: () => null);
     if (conversation == null) return false;
-    return conversation.lastMessageType == 'group' ||
-        (conversation.id.startsWith('!') &&
-            conversation.otherUserId == conversation.id);
+    if (conversation.hasExplicitKind) {
+      return conversation.isGroupKind || conversation.isChannelKind;
+    }
+    if (conversation.lastMessageType == 'group' ||
+        conversation.lastMessageType == ChatService.groupDeletedMessageType ||
+        ChatService.isGroupDeletedPreview(conversation.lastMessage)) {
+      return true;
+    }
+    return conversation.id.startsWith('!') &&
+        conversation.participants.length > 2;
   }
 
   String get _activeConversationId =>

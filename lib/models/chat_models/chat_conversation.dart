@@ -18,6 +18,30 @@ bool _validMatrixUserId(String? value) {
   return trimmed.split(':').length == 2 && trimmed.split(':').last.isNotEmpty;
 }
 
+/// Product identity for tab placement and UI treatment.
+///
+/// Matrix room IDs are transport identity: both DMs and groups use `!room:host`.
+/// This field is the app-level identity that keeps Chats and Groups separate.
+abstract class ConversationKind {
+  static const String direct = 'direct';
+  static const String group = 'group';
+  static const String channel = 'channel';
+  static const String unknown = '';
+
+  static String normalize(String? value) {
+    switch (value?.trim().toLowerCase()) {
+      case direct:
+        return direct;
+      case group:
+        return group;
+      case channel:
+        return channel;
+      default:
+        return unknown;
+    }
+  }
+}
+
 class ChatConversation {
   final String id;
   final List<String> participants;
@@ -41,7 +65,15 @@ class ChatConversation {
   final String? otherUserName;
   final String? otherUserAvatar;
 
+  /// Authoritative persisted conversation type.
+  final String conversationKind;
+
   String get conversationId => id;
+
+  bool get hasExplicitKind => conversationKind != ConversationKind.unknown;
+  bool get isGroupKind => conversationKind == ConversationKind.group;
+  bool get isDirectKind => conversationKind == ConversationKind.direct;
+  bool get isChannelKind => conversationKind == ConversationKind.channel;
 
   const ChatConversation({
     required this.id,
@@ -62,6 +94,7 @@ class ChatConversation {
     this.deletedBy = const [],
     this.otherUserName,
     this.otherUserAvatar,
+    this.conversationKind = ConversationKind.unknown,
   });
 
   // ── Factory: from a single ChatMessage ────────────────────────────────────
@@ -81,10 +114,32 @@ class ChatConversation {
       lastMessageSenderId: message.senderId,
       lastMessageTime: message.timestamp,
       unreadCount: isFromMe ? 0 : 1,
+      conversationKind: ConversationKind.direct,
     );
   }
 
-  factory ChatConversation.fromMatrixRoom(mx.Room room, String currentUserId) {
+  factory ChatConversation.fromMatrixRoom(
+    mx.Room room,
+    String currentUserId, {
+    String conversationKind = ConversationKind.unknown,
+  }) {
+    final kind = ConversationKind.normalize(conversationKind);
+    if (kind == ConversationKind.group || kind == ConversationKind.channel) {
+      final last = room.lastEvent;
+      return ChatConversation(
+        id: room.id,
+        participants: [currentUserId],
+        otherUserId: room.id,
+        lastMessage: last?.body ?? '',
+        lastMessageSenderId: last?.senderId ?? '',
+        lastMessageTime: last?.originServerTs ?? DateTime.now(),
+        unreadCount:
+            last != null && !_sameUser(last.senderId, currentUserId) ? 1 : 0,
+        otherUserName: room.displayname,
+        otherUserAvatar: room.avatar?.toString(),
+        conversationKind: kind,
+      );
+    }
     final last = room.lastEvent;
     final directUserId = room.directChatMatrixID;
     final otherId =
@@ -107,6 +162,7 @@ class ChatConversation {
           last != null && !_sameUser(last.senderId, currentUserId) ? 1 : 0,
       otherUserName: room.displayname,
       otherUserAvatar: room.avatar?.toString(),
+      conversationKind: kind,
     );
   }
 
@@ -155,15 +211,28 @@ class ChatConversation {
       }
     }
 
+    final storedType = data['lastMessageType']?.toString() ?? 'text';
+    var kind = ConversationKind.normalize(data['conversationKind']?.toString());
+    if (kind == ConversationKind.unknown) {
+      final legacyGroup =
+          (storedType == 'group' || storedType == 'group_deleted') &&
+          docId.startsWith('!');
+      if (legacyGroup) kind = ConversationKind.group;
+    }
+
     return ChatConversation(
       id: docId,
       participants: participants,
-      otherUserId: otherId,
+      otherUserId:
+          kind == ConversationKind.group || kind == ConversationKind.channel
+              ? docId
+              : otherId,
       lastMessage: data['lastMessage']?.toString() ?? '',
       lastMessageSenderId: data['lastMessageSender']?.toString() ?? '',
       lastMessageTime: lastMsgTime,
       unreadCount: unread,
-      lastMessageType: data['lastMessageType']?.toString() ?? 'text',
+      lastMessageType: storedType,
+      conversationKind: kind,
       isArchived: data['isArchived'] as bool? ?? false,
       isMuted: data['isMuted'] as bool? ?? false,
       isPinned: data['isPinned'] as bool? ?? false,
@@ -184,6 +253,11 @@ class ChatConversation {
   ) {
     final isNewer = message.timestamp.isAfter(lastMessageTime);
     final isFromMe = _sameUser(message.senderId, currentUserId);
+    final preserveMarker =
+        isGroupKind ||
+        isChannelKind ||
+        lastMessageType == 'group' ||
+        lastMessageType == 'group_deleted';
     return ChatConversation(
       id: id,
       participants: participants,
@@ -192,7 +266,11 @@ class ChatConversation {
       lastMessageSenderId: isNewer ? message.senderId : lastMessageSenderId,
       lastMessageTime: isNewer ? message.timestamp : lastMessageTime,
       unreadCount: unreadCount + (isFromMe ? 0 : 1),
-      lastMessageType: isNewer ? 'text' : lastMessageType,
+      lastMessageType:
+          preserveMarker
+              ? lastMessageType
+              : (isNewer ? 'text' : lastMessageType),
+      conversationKind: conversationKind,
       isArchived: isArchived,
       isMuted: isMuted,
       isPinned: isPinned,
@@ -227,7 +305,13 @@ class ChatConversation {
     List<String>? deletedBy,
     String? otherUserName,
     String? otherUserAvatar,
+    String? conversationKind,
   }) {
+    final requestedKind = ConversationKind.normalize(conversationKind);
+    final resolvedKind =
+        requestedKind == ConversationKind.unknown
+            ? this.conversationKind
+            : requestedKind;
     return ChatConversation(
       id: id ?? this.id,
       participants: participants ?? this.participants,
@@ -247,11 +331,12 @@ class ChatConversation {
       deletedBy: deletedBy ?? this.deletedBy,
       otherUserName: otherUserName ?? this.otherUserName,
       otherUserAvatar: otherUserAvatar ?? this.otherUserAvatar,
+      conversationKind: resolvedKind,
     );
   }
 
   @override
   String toString() =>
-      'ChatConversation(id: $id, other: $otherUserId, '
-      'last: "$lastMessage", unread: $unreadCount)';
+      'ChatConversation(id: $id, kind: $conversationKind, '
+      'other: $otherUserId, last: "$lastMessage", unread: $unreadCount)';
 }
