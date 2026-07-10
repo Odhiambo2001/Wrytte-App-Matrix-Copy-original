@@ -252,9 +252,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   Future<void> _warmSuggestedGroupPreviews(
     List<MatrixPublicGroup> groups,
   ) async {
-    final previewable = groups
-        .where((group) => group.worldReadable)
-        .toList(growable: false);
+    // Dendrite's public-room directory can report world_readable=false even
+    // when authoritative room state permits previewing. Attempt every public
+    // suggestion and let the room history endpoint enforce access.
+    final previewable = groups.toList(growable: false);
     const concurrency = 3;
     for (var start = 0; start < previewable.length; start += concurrency) {
       final end =

@@ -311,6 +311,36 @@ class MatrixChatService {
       ],
     );
 
+    // Dendrite may accept createRoom.initial_state before the room is visible
+    // in the local sync store. Write the preview policy directly by room ID as
+    // well, then read it back so a public/suggested group is never silently
+    // created with restricted history.
+    if (isPublic) {
+      await client.setRoomStateWithKey(
+        roomId,
+        EventTypes.HistoryVisibility,
+        '',
+        {'history_visibility': HistoryVisibility.worldReadable.text},
+      );
+      final historyState = await client.getRoomStateWithKey(
+        roomId,
+        EventTypes.HistoryVisibility,
+        '',
+      );
+      final appliedVisibility =
+          historyState['history_visibility']?.toString() ?? '';
+      if (appliedVisibility != HistoryVisibility.worldReadable.text) {
+        throw StateError(
+          'Public group $roomId was created without world-readable history.',
+        );
+      }
+      apkLog(
+        'Matrix.groups',
+        'history visibility verified room_id="$roomId" '
+            'history_visibility="$appliedVisibility"',
+      );
+    }
+
     // Register immediately so this room is authoritatively known as a group,
     // even if it only has 2 members (creator + one invitee).
     registerCreatedGroupRoom(roomId);
