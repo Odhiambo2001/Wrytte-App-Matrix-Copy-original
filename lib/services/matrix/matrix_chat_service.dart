@@ -301,7 +301,9 @@ class MatrixChatService {
           content: {
             'history_visibility':
                 isPublic
-                    ? HistoryVisibility.joined.text
+                    // Suggested groups are previewable before joining so a
+                    // prospective member can read the conversation first.
+                    ? HistoryVisibility.worldReadable.text
                     : HistoryVisibility.invited.text,
           },
           type: EventTypes.HistoryVisibility,
@@ -394,6 +396,40 @@ class MatrixChatService {
     } catch (e) {
       apkLog('Matrix.groups', 'public rooms fetch failed error="$e"');
       return const [];
+    }
+  }
+
+  /// Makes future events in existing public groups owned by this user
+  /// previewable before joining. Matrix applies history visibility at the
+  /// event level, so this cannot expose older events that were sent while the
+  /// room was restricted to joined/invited members.
+  Future<void> upgradeOwnedPublicGroupsHistoryVisibility() async {
+    final client = await connect();
+    if (!client.isLogged()) return;
+
+    for (final room in client.rooms) {
+      if (room.membership != Membership.join ||
+          room.joinRules != JoinRules.public ||
+          !isGroupOwner(room) ||
+          room.historyVisibility == HistoryVisibility.worldReadable ||
+          !room.canChangeHistoryVisibility) {
+        continue;
+      }
+
+      final previousVisibility = room.historyVisibility?.text ?? 'unknown';
+      try {
+        await room.setHistoryVisibility(HistoryVisibility.worldReadable);
+        apkLog(
+          'Matrix.groups',
+          'history visibility upgraded room_id="${room.id}" '
+              'from="$previousVisibility" to="world_readable"',
+        );
+      } catch (e) {
+        apkLog(
+          'Matrix.groups',
+          'history visibility upgrade failed room_id="${room.id}" error="$e"',
+        );
+      }
     }
   }
 

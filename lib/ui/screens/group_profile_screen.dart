@@ -714,7 +714,47 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   Future<void> _initialiseMemberProfiles() async {
     await _loadOwnerSavedContactNames();
     if (!mounted) return;
+    await _loadSuggestedPreviewMemberProfiles();
+    if (!mounted) return;
     _loadMemberProfiles();
+  }
+
+  Future<void> _loadSuggestedPreviewMemberProfiles() async {
+    if (_joined) return;
+    try {
+      final members = await ChatService().loadSuggestedPreviewMembers(
+        widget.roomId,
+      );
+      final memberIds = <String>[];
+      for (final member in members) {
+        final userId = member['userId']?.toString().trim() ?? '';
+        if (userId.isEmpty) continue;
+        memberIds.add(userId);
+        final displayName = member['displayName']?.toString().trim() ?? '';
+        final avatarUrl = member['avatarUrl']?.toString().trim() ?? '';
+        if (displayName.isNotEmpty) _memberNames[userId] = displayName;
+        if (avatarUrl.isNotEmpty) _memberAvatars[userId] = avatarUrl;
+      }
+      _setCachedMembers(memberIds);
+      for (final userId in memberIds) {
+        unawaited(
+          _loadMemberProfile(
+            userId,
+            fallbackName: _memberNames[userId] ?? _matrixLocalpart(userId),
+            fallbackAvatar: _memberAvatars[userId],
+          ),
+        );
+      }
+      apkLog(
+        'SuggestedPreview',
+        'members loaded room_id="${widget.roomId}" members=${memberIds.length}',
+      );
+    } catch (e) {
+      apkLog(
+        'SuggestedPreview',
+        'members load failed room_id="${widget.roomId}" error="$e"',
+      );
+    }
   }
 
   void _loadMemberProfiles() {
@@ -744,7 +784,8 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   }
 
   void _loadCachedMemberProfiles() {
-    final cachedMembers = _cachedConversationMemberIds();
+    final cachedMembers =
+        {..._cachedMemberIds, ..._cachedConversationMemberIds()}.toList();
     _setCachedMembers(cachedMembers);
     for (final memberId in cachedMembers) {
       unawaited(

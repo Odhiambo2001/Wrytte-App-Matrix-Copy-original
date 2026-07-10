@@ -66,7 +66,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 8,
+      version: 9,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -129,6 +129,8 @@ class ChatLocalDb {
           CREATE INDEX idx_conversations_time
           ON conversations (lastMessageTime DESC)
         ''');
+
+        await _createSuggestedPreviewTables(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -204,6 +206,9 @@ class ChatLocalDb {
             "TEXT NOT NULL DEFAULT ''",
           );
         }
+        if (oldVersion < 9) {
+          await _createSuggestedPreviewTables(db);
+        }
       },
     );
   }
@@ -233,6 +238,104 @@ class ChatLocalDb {
     if (!exists) {
       await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
     }
+  }
+
+  static Future<void> _createSuggestedPreviewTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS suggested_preview_sync (
+        roomId          TEXT PRIMARY KEY,
+        status          TEXT NOT NULL,
+        messageCount    INTEGER NOT NULL DEFAULT 0,
+        pageCount       INTEGER NOT NULL DEFAULT 0,
+        isComplete      INTEGER NOT NULL DEFAULT 0,
+        lastFetchedAt   INTEGER NOT NULL,
+        lastError       TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS suggested_preview_members (
+        roomId          TEXT NOT NULL,
+        userId          TEXT NOT NULL,
+        membership      TEXT NOT NULL,
+        displayName     TEXT,
+        avatarUrl       TEXT,
+        eventTimestamp  INTEGER NOT NULL,
+        PRIMARY KEY (roomId, userId)
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_suggested_members_room
+      ON suggested_preview_members (roomId, membership)
+    ''');
+  }
+
+  Future<void> saveSuggestedPreviewSync({
+    required String roomId,
+    required String status,
+    required int messageCount,
+    required int pageCount,
+    required bool isComplete,
+    String? lastError,
+  }) async {
+    final database = await db;
+    await database.insert('suggested_preview_sync', {
+      'roomId': roomId,
+      'status': status,
+      'messageCount': messageCount,
+      'pageCount': pageCount,
+      'isComplete': isComplete ? 1 : 0,
+      'lastFetchedAt': DateTime.now().millisecondsSinceEpoch,
+      'lastError': lastError,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> saveSuggestedPreviewMembers(
+    String roomId,
+    List<Map<String, dynamic>> members,
+  ) async {
+    final database = await db;
+    await database.transaction((txn) async {
+      await txn.delete(
+        'suggested_preview_members',
+        where: 'roomId = ?',
+        whereArgs: [roomId],
+      );
+      final batch = txn.batch();
+      for (final member in members) {
+        batch.insert(
+          'suggested_preview_members',
+          {'roomId': roomId, ...member},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> loadSuggestedPreviewMembers(
+    String roomId,
+  ) async {
+    final database = await db;
+    final rows = await database.query(
+      'suggested_preview_members',
+      where: 'roomId = ? AND membership = ?',
+      whereArgs: [roomId, 'join'],
+      orderBy: 'displayName COLLATE NOCASE, userId',
+    );
+    return rows
+        .map(
+          (row) => <String, dynamic>{
+            'userId': row['userId'],
+            'membership': row['membership'],
+            'displayName':
+                row['displayName'] == null
+                    ? null
+                    : _sanitize(row['displayName'] as String),
+            'avatarUrl': row['avatarUrl'],
+            'eventTimestamp': row['eventTimestamp'],
+          },
+        )
+        .toList();
   }
 
   // ── Messages ───────────────────────────────────────────────────────────────

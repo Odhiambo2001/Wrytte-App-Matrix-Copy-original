@@ -90,6 +90,7 @@ class ChatService {
   final Set<String> _activeReadConversationIds = {};
   final Map<String, DateTime> _lastReadAtByConversation = {};
   final Map<String, Future<void>> _profileRefreshInFlight = {};
+  final Map<String, Future<List<ChatMessage>>> _suggestedPreviewInFlight = {};
   bool _suppressRestoredRoomUnread = false;
 
   bool get isConnected => _isConnected;
@@ -1064,19 +1065,37 @@ class ChatService {
 
   Future<List<ChatMessage>> fetchPublicGroupPreview({
     required String roomId,
-    int limit = 250,
+    int? limit,
   }) async {
     final id = roomId.trim();
     if (id.isEmpty) return const [];
+    final existing = _suggestedPreviewInFlight[id];
+    if (existing != null) return existing;
+    final request = _fetchPublicGroupPreview(id, limit: limit);
+    _suggestedPreviewInFlight[id] = request;
+    try {
+      return await request;
+    } finally {
+      _suggestedPreviewInFlight.remove(id);
+    }
+  }
+
+  Future<List<ChatMessage>> _fetchPublicGroupPreview(
+    String id, {
+    int? limit,
+  }) async {
+    apkLog('SuggestedPreview', 'fetch started room_id="$id"');
     try {
       return await _withMatrixTokenRetry('fetchPublicGroupPreview', () async {
         await _waitForConnection();
         final client = MatrixClientService.instance.client;
         final messages = <ChatMessage>[];
+        final latestMembers = <String, mx.MatrixEvent>{};
         String? from;
+        var pageCount = 0;
 
-        while (messages.length < limit) {
-          final remaining = limit - messages.length;
+        while (limit == null || messages.length < limit) {
+          final remaining = limit == null ? 80 : limit - messages.length;
           final pageLimit = remaining > 80 ? 80 : remaining;
           final response = await client.getRoomEvents(
             id,
@@ -1084,6 +1103,10 @@ class ChatService {
             from: from,
             limit: pageLimit,
           );
+          pageCount++;
+          for (final event in response.chunk) {
+            _collectSuggestedPreviewMember(event, latestMembers);
+          }
           final pageMessages =
               response.chunk
                   .map(
@@ -1093,26 +1116,89 @@ class ChatService {
                       client: client,
                     ),
                   )
-                  .whereType<ChatMessage>();
+                  .whereType<ChatMessage>()
+                  .toList();
           messages.addAll(pageMessages);
 
           final next = response.end?.trim();
+          apkLog(
+            'SuggestedPreview',
+            'page fetched room_id="$id" page=$pageCount '
+                'events=${response.chunk.length} messages=${pageMessages.length} '
+                'next_token=${next != null && next.isNotEmpty && next != from}',
+          );
           if (next == null || next.isEmpty || next == from) break;
           from = next;
         }
 
         messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        final memberRows =
+            latestMembers.values.map(_suggestedPreviewMemberRow).toList();
+        await ChatLocalDb.instance.saveSuggestedPreviewMembers(id, memberRows);
         if (messages.isNotEmpty) {
           _messagesCache[id] = messages;
           await ChatLocalDb.instance.saveMessages(messages);
         }
+        await ChatLocalDb.instance.saveSuggestedPreviewSync(
+          roomId: id,
+          status: 'complete',
+          messageCount: messages.length,
+          pageCount: pageCount,
+          isComplete: true,
+        );
+        apkLog(
+          'SuggestedPreview',
+          'fetch complete room_id="$id" messages=${messages.length} '
+              'members=${memberRows.where((row) => row['membership'] == 'join').length} '
+              'pages=$pageCount sqlite_saved=true',
+        );
         return messages;
       });
     } catch (e) {
-      debugPrint('[ChatService] public group preview failed: $e');
+      await ChatLocalDb.instance.saveSuggestedPreviewSync(
+        roomId: id,
+        status: 'failed',
+        messageCount: 0,
+        pageCount: 0,
+        isComplete: false,
+        lastError: e.toString(),
+      );
+      apkLog(
+        'SuggestedPreview',
+        'fetch failed room_id="$id" '
+            'reason="server refused history or request failed" error="$e"',
+      );
       return const [];
     }
   }
+
+  void _collectSuggestedPreviewMember(
+    mx.MatrixEvent event,
+    Map<String, mx.MatrixEvent> latestMembers,
+  ) {
+    if (event.type != mx.EventTypes.RoomMember) return;
+    final userId = event.stateKey?.trim() ?? '';
+    if (userId.isEmpty) return;
+    final existing = latestMembers[userId];
+    if (existing == null ||
+        event.originServerTs.isAfter(existing.originServerTs)) {
+      latestMembers[userId] = event;
+    }
+  }
+
+  Map<String, dynamic> _suggestedPreviewMemberRow(mx.MatrixEvent event) {
+    return {
+      'userId': event.stateKey,
+      'membership': event.content['membership']?.toString() ?? 'leave',
+      'displayName': event.content['displayname']?.toString(),
+      'avatarUrl': event.content['avatar_url']?.toString(),
+      'eventTimestamp': event.originServerTs.millisecondsSinceEpoch,
+    };
+  }
+
+  Future<List<Map<String, dynamic>>> loadSuggestedPreviewMembers(
+    String roomId,
+  ) => ChatLocalDb.instance.loadSuggestedPreviewMembers(roomId);
 
   ChatMessage? _publicGroupPreviewMessage(
     mx.MatrixEvent event, {
@@ -1296,6 +1382,9 @@ class ChatService {
     await _backfillConversationKinds();
     await _scrubDirectAvatarsMatchingGroups();
     await _applySavedContactsToHydratedConversations();
+    unawaited(
+      MatrixChatService.instance.upgradeOwnedPublicGroupsHistoryVisibility(),
+    );
     _emitConversations();
     for (final conversation in conversations) {
       await loadCachedMessages(conversation.id);
@@ -1963,6 +2052,7 @@ class ChatService {
       conversationKind: ConversationKind.group,
     );
     await markGroupCreated(id);
+    await clearGroupJoinCutoff(id);
     final existing = _conversationsMap[id];
     _conversationsMap[id] =
         existing == null
@@ -3181,6 +3271,32 @@ class ChatService {
       _messagesCache[id] = kept;
       _emitRoomMessages(id);
     }
+  }
+
+  /// Suggested public groups deliberately expose their available history, so
+  /// an old join cutoff must not hide or delete previewed/pre-join messages.
+  Future<void> clearGroupJoinCutoff(String roomId) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return;
+    if (_groupJoinCutoffsByRoom.remove(id) != null) {
+      await _saveGroupJoinCutoffs();
+    }
+  }
+
+  /// Restores all server-available history after joining a suggested group.
+  Future<void> backfillGroupHistory(String roomId) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return;
+    await clearGroupJoinCutoff(id);
+    final room = _roomById(id);
+    if (room == null) {
+      apkLog(
+        'Matrix.history',
+        'backfill skipped room_id="$id" reason="room not available after join"',
+      );
+      return;
+    }
+    await _restoreRoomHistoryFromServer(room);
   }
 
   DateTime? _groupJoinCutoffForRoom(mx.Room room) {

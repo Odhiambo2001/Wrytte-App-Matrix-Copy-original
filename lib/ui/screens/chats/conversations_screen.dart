@@ -238,8 +238,36 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       final groups = await MatrixChatService.instance.fetchPublicGroups();
       if (!mounted) return;
       setState(() => _suggestedGroups = groups);
+      apkLog(
+        'SuggestedPreview',
+        'discovery complete groups=${groups.length} '
+            'world_readable=${groups.where((group) => group.worldReadable).length}',
+      );
+      unawaited(_warmSuggestedGroupPreviews(groups));
     } finally {
       _loadingSuggestedGroups = false;
+    }
+  }
+
+  Future<void> _warmSuggestedGroupPreviews(
+    List<MatrixPublicGroup> groups,
+  ) async {
+    final previewable = groups
+        .where((group) => group.worldReadable)
+        .toList(growable: false);
+    const concurrency = 3;
+    for (var start = 0; start < previewable.length; start += concurrency) {
+      final end =
+          start + concurrency < previewable.length
+              ? start + concurrency
+              : previewable.length;
+      await Future.wait(
+        previewable
+            .sublist(start, end)
+            .map(
+              (group) => _chat.fetchPublicGroupPreview(roomId: group.roomId),
+            ),
+      );
     }
   }
 
@@ -2284,6 +2312,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         name: group.name,
         avatarUrl: group.avatarUrl,
       );
+      await _chat.backfillGroupHistory(roomId);
       if (mounted) {
         setState(() {
           _suggestedGroups =
