@@ -8,16 +8,41 @@ import 'package:wrytte/services/auth/auth_service.dart';
 class AvatarPreloadService {
   AvatarPreloadService._();
 
+  static final Map<String, Future<void>> _inFlight = {};
+  static final Map<String, DateTime> _failedAt = {};
+  static const Duration _failureCooldown = Duration(minutes: 5);
+
   static Future<void> warm(String? rawUrl) async {
     final url = _resolveAvatarUrl(rawUrl);
     if (url.isEmpty) return;
 
+    final failedAt = _failedAt[url];
+    if (failedAt != null &&
+        DateTime.now().difference(failedAt) < _failureCooldown) {
+      return;
+    }
+    final pending = _inFlight[url];
+    if (pending != null) return pending;
+
+    final request = _warm(url);
+    _inFlight[url] = request;
+    return request.whenComplete(() {
+      if (identical(_inFlight[url], request)) _inFlight.remove(url);
+    });
+  }
+
+  static Future<void> _warm(String url) async {
     final token = await AuthService.instance.getValidBackendToken();
     final provider = CachedNetworkImageProvider(
       url,
       headers: _authHeaders(url, token),
     );
-    await _warmImage(provider);
+    try {
+      await _warmImage(provider).timeout(const Duration(seconds: 12));
+      _failedAt.remove(url);
+    } catch (_) {
+      _failedAt[url] = DateTime.now();
+    }
   }
 
   static Future<void> replace({

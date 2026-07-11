@@ -34,6 +34,7 @@ class UserProfileService {
   final Map<String, UserProfile> _publicProfileCache = {};
   final Map<String, Future<UserProfile?>> _publicProfileInFlight = {};
   final Map<String, Future<String>> _remoteAvatarInFlight = {};
+  final Map<String, DateTime> _remoteAvatarFailedAt = {};
   final Map<String, DateTime> _publicProfileFetchedAt = {};
   final Set<String> _publicProfileMisses = {};
   final StreamController<UserProfile?> _profileController =
@@ -217,6 +218,15 @@ class UserProfileService {
     String? phone,
     bool forceRefresh = false,
   }) async {
+    final requestedUid = uid.trim();
+    if (requestedUid.isEmpty ||
+        requestedUid.startsWith('!') ||
+        requestedUid.startsWith('@!')) {
+      debugPrint(
+        '[UserProfileService] skipped room-scoped profile lookup: "$requestedUid"',
+      );
+      return null;
+    }
     final currentUid = await AuthService.instance.getCurrentUserId();
 
     // If it's the current user, use the full local profile
@@ -313,6 +323,7 @@ class UserProfileService {
     _publicProfileCache.clear();
     _publicProfileInFlight.clear();
     _remoteAvatarInFlight.clear();
+    _remoteAvatarFailedAt.clear();
     _publicProfileFetchedAt.clear();
     _publicProfileMisses.clear();
     _profileController.add(null);
@@ -588,6 +599,11 @@ class UserProfileService {
     if (existingLocalPath.isNotEmpty) return existingLocalPath;
 
     final key = '${_matrixLocalpart(uid).toLowerCase()}|$cleanUrl';
+    final failedAt = _remoteAvatarFailedAt[key];
+    if (failedAt != null &&
+        DateTime.now().difference(failedAt) < const Duration(minutes: 5)) {
+      return '';
+    }
     final pending = _remoteAvatarInFlight[key];
     if (pending != null) return pending;
 
@@ -616,7 +632,7 @@ class UserProfileService {
                 'Authorization': 'Bearer ${token.trim()}',
             },
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode < 200 || response.statusCode >= 300) return '';
       if (response.bodyBytes.isEmpty) return '';
       final supportDir = await getApplicationSupportDirectory();
@@ -631,8 +647,13 @@ class UserProfileService {
       await file.writeAsBytes(response.bodyBytes, flush: true);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_localProfileImageKey(uid), file.path);
+      _remoteAvatarFailedAt.remove(
+        '${_matrixLocalpart(uid).toLowerCase()}|$url',
+      );
       return file.path;
     } catch (e) {
+      _remoteAvatarFailedAt['${_matrixLocalpart(uid).toLowerCase()}|$url'] =
+          DateTime.now();
       debugPrint('[UserProfileService] Remote avatar cache skipped: $e');
       return '';
     }

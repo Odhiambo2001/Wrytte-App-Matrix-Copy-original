@@ -100,6 +100,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   List<ChatConversation>? _pendingConversationBatch;
   bool _conversationBatchInFlight = false;
   bool _loadingSuggestedGroups = false;
+  final Set<String> _openingSuggestedGroupIds = {};
   DateTime? _lastSuggestedGroupsLoadAt;
   static const Duration _suggestedGroupsRefreshInterval = Duration(seconds: 8);
 
@@ -243,7 +244,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         'discovery complete groups=${groups.length} '
             'world_readable=${groups.where((group) => group.worldReadable).length}',
       );
-      unawaited(_warmSuggestedGroupPreviews(groups));
+      unawaited(
+        _warmSuggestedGroupPreviews(_previewEligibleSuggestedGroups(groups)),
+      );
     } finally {
       _loadingSuggestedGroups = false;
     }
@@ -299,6 +302,32 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         'removed zero-member suggestion room_id="${group.roomId}"',
       );
     }
+  }
+
+  List<MatrixPublicGroup> _previewEligibleSuggestedGroups(
+    List<MatrixPublicGroup> groups,
+  ) {
+    final allGroups =
+        _conversations.where(_isDisplayableGroupConversation).toList();
+    final createdIds = _chat.createdGroupRoomIds;
+    final joinedIds = {
+      ...allGroups.map((group) => group.id),
+      ..._joinedMatrixGroupRoomIds(),
+      ...createdIds,
+    };
+    final joinedAliases = _joinedMatrixGroupAliases();
+    final localGroupNames = allGroups.map(_normalizedGroupTitle).toSet();
+    return groups
+        .where(
+          (group) =>
+              group.memberCount > 0 &&
+              !MatrixChatService.instance.isPublicGroupDismissed(group) &&
+              !_chat.isConversationDeleted(group.roomId) &&
+              !joinedIds.contains(group.roomId) &&
+              !_suggestedAliasMatchesJoined(group, joinedAliases) &&
+              !_suggestedNameMatchesLocalGroup(group, localGroupNames),
+        )
+        .toList(growable: false);
   }
 
   void _queueConversationBatch(List<ChatConversation> incoming) {
@@ -2221,8 +2250,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Widget _suggestedGroupTile(MatrixPublicGroup group) {
+    final opening = _openingSuggestedGroupIds.contains(group.roomId);
     return InkWell(
-      onTap: () => _openSuggestedGroup(group),
+      onTap: opening ? null : () => _openSuggestedGroup(group),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
@@ -2282,48 +2312,57 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Future<void> _openSuggestedGroup(MatrixPublicGroup group) async {
-    final previewMessages = await _chat.fetchPublicGroupPreview(
-      roomId: group.roomId,
-    );
-    final closedGroup = await Navigator.push<bool>(
-      context,
-      PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 300),
-        reverseTransitionDuration: const Duration(milliseconds: 220),
-        pageBuilder:
-            (_, __, ___) => ChatScreen(
-              conversationId: group.roomId,
-              receiverId: group.roomId,
-              currentUserId: _currentUserId,
-              title: group.name,
-              avatarUrl: group.avatarUrl,
-              readOnlyUntilJoin: true,
-              initialMessages: previewMessages,
-              initialMemberCount: group.memberCount,
-              groupAlias: group.canonicalAlias,
-              conversationKind: ConversationKind.group,
-            ),
-        transitionsBuilder: (_, animation, __, child) {
-          final curved = CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-            reverseCurve: Curves.easeInCubic,
-          );
-          return SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(1, 0),
-              end: Offset.zero,
-            ).animate(curved),
-            child: child,
-          );
-        },
-      ),
-    );
-    if (!mounted) return;
-    await _loadLocalConversations();
-    unawaited(_loadSuggestedGroups(force: true));
-    if (closedGroup == true) {
-      _showGroupsHomepage();
+    if (_openingSuggestedGroupIds.contains(group.roomId)) return;
+    setState(() => _openingSuggestedGroupIds.add(group.roomId));
+    try {
+      final previewMessages = await _chat.fetchPublicGroupPreview(
+        roomId: group.roomId,
+      );
+      if (!mounted) return;
+      final closedGroup = await Navigator.push<bool>(
+        context,
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 300),
+          reverseTransitionDuration: const Duration(milliseconds: 220),
+          pageBuilder:
+              (_, __, ___) => ChatScreen(
+                conversationId: group.roomId,
+                receiverId: group.roomId,
+                currentUserId: _currentUserId,
+                title: group.name,
+                avatarUrl: group.avatarUrl,
+                readOnlyUntilJoin: true,
+                initialMessages: previewMessages,
+                initialMemberCount: group.memberCount,
+                groupAlias: group.canonicalAlias,
+                conversationKind: ConversationKind.group,
+              ),
+          transitionsBuilder: (_, animation, __, child) {
+            final curved = CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+              reverseCurve: Curves.easeInCubic,
+            );
+            return SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(1, 0),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            );
+          },
+        ),
+      );
+      if (!mounted) return;
+      await _loadLocalConversations();
+      unawaited(_loadSuggestedGroups(force: true));
+      if (closedGroup == true) {
+        _showGroupsHomepage();
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _openingSuggestedGroupIds.remove(group.roomId));
+      }
     }
   }
 
