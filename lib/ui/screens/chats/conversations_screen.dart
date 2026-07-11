@@ -2315,9 +2315,20 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     if (_openingSuggestedGroupIds.contains(group.roomId)) return;
     setState(() => _openingSuggestedGroupIds.add(group.roomId));
     try {
-      final previewMessages = await _chat.fetchPublicGroupPreview(
-        roomId: group.roomId,
+      final fresh = await ChatLocalDb.instance.isSuggestedPreviewFresh(
+        group.roomId,
       );
+      final previewMessages =
+          fresh
+              ? await _chat.hydrateConversation(group.roomId)
+              : await _chat.fetchPublicGroupPreview(roomId: group.roomId);
+      if (fresh) {
+        apkLog(
+          'SuggestedPreview',
+          'open reused fresh preview room_id="${group.roomId}" '
+              'messages=${previewMessages.length}',
+        );
+      }
       if (!mounted) return;
       final closedGroup = await Navigator.push<bool>(
         context,

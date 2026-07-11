@@ -398,6 +398,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final CallService _call = CallService.instance;
 
   StreamSubscription<List<ChatMessage>>? _messagesSub;
+  StreamSubscription<mx.SyncUpdate>? _roomProfileSyncSub;
 
   final List<ChatMessage> _messages = [];
   final List<ChatMessage> _initialStreamBuffer = [];
@@ -423,7 +424,7 @@ class _ChatScreenState extends State<ChatScreen> {
   ChatMessage? _replyingTo;
   ChatMessage? _editingMessage;
   double? _stableStatusBarH;
-  late final String? _stableHeaderAvatarUrl;
+  String? _stableHeaderAvatarUrl;
 
   // ── debug overlay ──────────────────────────────────────────────────────────
   bool _showDebug = false;
@@ -440,6 +441,7 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _chat.activateConversationRead(widget.conversationId);
     _stableHeaderAvatarUrl = _initialStableHeaderAvatarUrl();
+    _subscribeToRoomProfileUpdates();
     apkLog(
       'ChatScreen',
       '── initState ──  '
@@ -476,6 +478,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _chat.deactivateConversationRead(widget.conversationId);
+    _roomProfileSyncSub?.cancel();
     final resolvedConversationId = _resolvedConversationId;
     if (resolvedConversationId != null &&
         resolvedConversationId != widget.conversationId) {
@@ -489,6 +492,24 @@ class _ChatScreenState extends State<ChatScreen> {
     _debugScrollCtrl.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _subscribeToRoomProfileUpdates() {
+    if (!_isGroupChat) return;
+    _roomProfileSyncSub = MatrixChatService.instance.syncStream.listen((_) {
+      if (!mounted) return;
+      final room = MatrixChatService.instance.getRoomById(
+        _resolvedConversationId ?? widget.conversationId,
+      );
+      if (room == null) return;
+      final latestAvatar = _safeGroupRoomAvatarUrl(room);
+      if (latestAvatar == _stableHeaderAvatarUrl) {
+        // Name/topic/custom profile state may still have changed.
+        setState(() {});
+        return;
+      }
+      setState(() => _stableHeaderAvatarUrl = latestAvatar);
+    });
   }
 
   void _onInputFocusChanged() {

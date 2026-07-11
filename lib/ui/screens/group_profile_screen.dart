@@ -11,6 +11,7 @@ import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
+import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
@@ -47,6 +48,7 @@ class GroupProfileScreen extends StatefulWidget {
 }
 
 class _GroupProfileScreenState extends State<GroupProfileScreen> {
+  static const String _groupInfoStateType = 'com.wrytte.group.info';
   final Map<String, String> _memberNames = {};
   final Map<String, String> _memberAvatars = {};
   final Map<String, String> _memberPhones = {};
@@ -152,6 +154,34 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                     ),
                   ),
                 ],
+                if (_roomDescription(room).isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Text(
+                      _roomDescription(room),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ],
+                if (_roomProfileLink(room).isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    _roomProfileLink(room),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF4DA3FF),
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 4),
                 Text(
                   _memberCountLabel(memberCount),
@@ -248,6 +278,12 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     }
     return 'Group';
   }
+
+  String _roomDescription(mx.Room? room) => room?.topic.trim() ?? '';
+
+  String _roomProfileLink(mx.Room? room) =>
+      room?.getState(_groupInfoStateType)?.content['link']?.toString().trim() ??
+      '';
 
   Widget _roundButton(IconData icon, VoidCallback onTap) {
     return GestureDetector(
@@ -761,7 +797,13 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         final room = MatrixChatService.instance.getRoomById(widget.roomId);
         _joined = room?.membership == mx.Membership.join || _joined;
         _loadMemberProfiles();
-        setState(() {}); // Re-read room name/avatar state using this roomId.
+        setState(() {
+          // The local file is only an immediate post-edit preview. Once Matrix
+          // sync exposes authoritative room avatar state, stop overriding it.
+          if (_safeGroupRoomAvatarUrl(room)?.isNotEmpty == true) {
+            _localAvatarOverride = null;
+          }
+        }); // Re-read the complete room profile using this roomId.
       });
     });
   }
@@ -931,10 +973,39 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
       _memberAvatars[matrixId] = avatar;
     }
     if (mounted) setState(() {});
+    // Profile 2 is the complete local saved-contact representation and wins.
+    if (savedName != null) return;
 
     try {
       final localpart = _matrixLocalpart(matrixId);
       final currentUserId = await AuthService.instance.getCurrentUserId();
+      final localProfile1 =
+          currentUserId == null || currentUserId.trim().isEmpty
+              ? null
+              : await ContactIdentityCache.instance.findByMatrixId(
+                ownerUserId: currentUserId,
+                matrixUserId: matrixId,
+              );
+      if (localProfile1 != null && mounted) {
+        final profile1Name = _cleanMemberName(localProfile1.profileName ?? '');
+        final profile1Avatar = localProfile1.avatarUrl?.trim() ?? '';
+        final profile1Phone = _normalizePhone(localProfile1.phone ?? '');
+        setState(() {
+          if (_savedContactNameFor(matrixId, phone: profile1Phone) == null &&
+              profile1Name.isNotEmpty) {
+            _memberNames[matrixId] = profile1Name;
+          }
+          if (profile1Avatar.isNotEmpty) {
+            _memberAvatars[matrixId] = profile1Avatar;
+          }
+          if (profile1Phone.isNotEmpty) {
+            _memberPhones[matrixId] = profile1Phone;
+          }
+        });
+        // A local Profile 1 exists; the BE is only consulted when neither
+        // local Profile 2 nor local Profile 1 is available.
+        return;
+      }
       final isMe =
           localpart.isNotEmpty &&
           _matrixLocalpart(currentUserId ?? '') == localpart;
@@ -965,6 +1036,16 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         }
         if (profileAvatar.isNotEmpty) _memberAvatars[matrixId] = profileAvatar;
       });
+      if (currentUserId != null && currentUserId.trim().isNotEmpty) {
+        await ContactIdentityCache.instance.upsert(
+          ownerUserId: currentUserId,
+          matrixUserId: matrixId,
+          phone: profilePhone,
+          profileName: profileName,
+          avatarUrl: profileAvatar,
+          bio: profile.bio,
+        );
+      }
     } catch (_) {
       // Keep the Matrix fallback if the backend profile is unavailable.
     }
@@ -1393,6 +1474,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     setState(() => _saving = true);
     try {
       String? localAvatarPath;
+      var profileChanged = false;
       if (_pickedImageFile != null) {
         final matrixFile = mx.MatrixFile(
           bytes: await _pickedImageFile!.readAsBytes(),
@@ -1400,21 +1482,25 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         );
         await room.setAvatar(matrixFile);
         localAvatarPath = _pickedImageFile!.path;
+        profileChanged = true;
       }
 
       if (name != room.name.trim()) {
         await room.setName(name);
+        profileChanged = true;
       }
 
       final alias = _cleanAlias(_aliasController.text);
       final currentAlias = _cleanAlias(room.canonicalAlias);
       if (alias.isNotEmpty && alias != currentAlias) {
         await room.setCanonicalAlias('#$alias:${MatrixConfig.serverName}');
+        profileChanged = true;
       }
 
       final description = _descriptionController.text.trim();
       if (description != room.topic.trim()) {
         await room.setDescription(description);
+        profileChanged = true;
       }
 
       final link = _linkController.text.trim();
@@ -1428,6 +1514,13 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         } else {
           currentInfo['link'] = link;
         }
+        profileChanged = true;
+      }
+      if (profileChanged) {
+        final previousVersion =
+            int.tryParse(currentInfo['profile_version']?.toString() ?? '') ?? 0;
+        currentInfo['profile_version'] = previousVersion + 1;
+        currentInfo['updated_at'] = DateTime.now().toUtc().toIso8601String();
         await room.client.setRoomStateWithKey(
           room.id,
           _groupInfoStateType,

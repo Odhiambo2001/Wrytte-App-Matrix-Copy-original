@@ -280,41 +280,12 @@ class UserProfileService {
     final fetchedAt = DateTime.now();
     var profile = _profileFromBackendFields(uid, remote, fallbackPhone: phone);
     profile = _reuseStablePublicAvatar(cacheKey, profile);
-    if (profile.profileImage.trim().isNotEmpty) {
-      final localProfileImagePath = await _readLocalProfileImagePath(uid);
-      if (localProfileImagePath.isNotEmpty) {
-        profile = profile.copyWith(
-          localProfileImagePath: localProfileImagePath,
-        );
-      }
-      unawaited(
-        _cachePublicAvatarInBackground(
-          cacheKey: cacheKey,
-          profile: profile,
-          uid: uid,
-        ),
-      );
-    }
+    // Public/member avatars remain URL-backed and are cached lazily by
+    // CachedNetworkImage when rendered. Eager file downloads here duplicated
+    // that cache and repeatedly timed out for profiles not on screen.
     _publicProfileCache[cacheKey] = profile;
     _publicProfileFetchedAt[cacheKey] = fetchedAt;
     return profile;
-  }
-
-  Future<void> _cachePublicAvatarInBackground({
-    required String cacheKey,
-    required UserProfile profile,
-    required String uid,
-  }) async {
-    final localPath = await _cacheRemoteAvatarBestEffort(
-      uid,
-      profile.profileImage,
-    );
-    if (localPath.isEmpty) return;
-    final cached = _publicProfileCache[cacheKey];
-    if (cached == null || cached.profileImage != profile.profileImage) return;
-    _publicProfileCache[cacheKey] = cached.copyWith(
-      localProfileImagePath: localPath,
-    );
   }
 
   /// Wipe cache on logout.
