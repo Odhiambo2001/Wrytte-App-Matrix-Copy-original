@@ -1575,8 +1575,12 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
 
       final alias = _cleanAlias(_aliasController.text);
       final currentAlias = _cleanAlias(room.canonicalAlias);
-      if (alias.isNotEmpty && alias != currentAlias) {
-        await room.setCanonicalAlias('#$alias:${MatrixConfig.serverName}');
+      if (alias != currentAlias) {
+        await MatrixChatService.instance.replaceGroupAlias(
+          roomId: room.id,
+          oldAlias: room.canonicalAlias,
+          newAliasLocalpart: alias,
+        );
         profileChanged = true;
         aliasChanged = true;
       }

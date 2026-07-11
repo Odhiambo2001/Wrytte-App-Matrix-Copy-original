@@ -374,6 +374,58 @@ class MatrixChatService {
     }
   }
 
+  String _fullRoomAlias(String aliasLocalpart) {
+    final trimmed = aliasLocalpart.trim();
+    if (trimmed.isEmpty) return '';
+    final withoutHash =
+        trimmed.startsWith('#') ? trimmed.substring(1) : trimmed;
+    final localpart = withoutHash.split(':').first.trim();
+    return localpart.isEmpty ? '' : '#$localpart:${MatrixConfig.serverName}';
+  }
+
+  Future<void> replaceGroupAlias({
+    required String roomId,
+    required String oldAlias,
+    required String newAliasLocalpart,
+  }) async {
+    final client = await connect();
+    final room = getRoomById(roomId);
+    if (room == null) throw StateError('Unknown Matrix room: $roomId');
+    final oldFull = _fullRoomAlias(oldAlias);
+    final newFull = _fullRoomAlias(newAliasLocalpart);
+    if (oldFull == newFull) return;
+
+    if (newFull.isNotEmpty) {
+      try {
+        final resolved = await client.getRoomIdByAlias(newFull);
+        if (resolved.roomId != roomId) {
+          throw StateError('The group alias $newFull is already in use.');
+        }
+      } catch (error) {
+        final text = error.toString().toUpperCase();
+        final available = text.contains('404') || text.contains('M_NOT_FOUND');
+        if (!available) rethrow;
+        await client.setRoomAlias(newFull, roomId);
+      }
+    }
+
+    await client.setRoomStateWithKey(
+      roomId,
+      EventTypes.RoomCanonicalAlias,
+      '',
+      newFull.isEmpty ? <String, dynamic>{} : {'alias': newFull},
+    );
+
+    if (oldFull.isNotEmpty) {
+      try {
+        await client.deleteRoomAlias(oldFull);
+      } catch (error) {
+        final text = error.toString().toUpperCase();
+        if (!text.contains('404') && !text.contains('M_NOT_FOUND')) rethrow;
+      }
+    }
+  }
+
   Future<MatrixCreatedGroupRoom> createGroupRoom({
     required String name,
     required bool isPublic,
@@ -399,6 +451,16 @@ class MatrixChatService {
     final creatorId = client.userID!;
 
     await ensureSyncedAndAutoJoinInvites();
+
+    if (isPublic && cleanAlias != null && cleanAlias.isNotEmpty) {
+      final available = await isRoomAliasAvailable(cleanAlias);
+      if (!available) {
+        throw StateError(
+          'The group alias ${_fullRoomAlias(cleanAlias)} is already in use. '
+          'Choose another alias.',
+        );
+      }
+    }
 
     final roomId = await client.createRoom(
       name: cleanName,
