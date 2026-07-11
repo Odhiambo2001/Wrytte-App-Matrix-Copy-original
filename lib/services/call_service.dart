@@ -129,6 +129,23 @@ class CallService {
     return session.callId;
   }
 
+  Future<String> makeGroupVoiceCall({required String roomId}) async {
+    await _requestMediaPermissions(CallType.voice);
+    await ChatService().connect();
+    final room = MatrixChatService.instance.getRoomById(roomId);
+    if (room == null || room.membership != mx.Membership.join) {
+      throw StateError('The Matrix group room is not joined or available.');
+    }
+    final session = await MatrixCallService.instance.invite(
+      delegate: _delegate,
+      roomId: roomId,
+      video: false,
+    );
+    _attachSession(session);
+    _callStatusController.add(CallStatus.ringing);
+    return session.callId;
+  }
+
   Future<void> acceptCall(CallData call) async {
     await _requestMediaPermissions(call.type);
     final session = call.matrixSession ?? _activeSession;
@@ -273,8 +290,7 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
   }
 
   @override
-  webrtc_iface.MediaDevices get mediaDevices =>
-      webrtc.navigator.mediaDevices;
+  webrtc_iface.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices;
 
   //@override
   //webrtc.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices;

@@ -9,6 +9,7 @@ import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/call_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
@@ -17,6 +18,7 @@ import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
+import 'package:wrytte/ui/screens/calls/call_screen.dart';
 import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
 import 'package:wrytte/ui/widgets/full_screen_video_viewer.dart';
 import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
@@ -207,7 +209,9 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   child: Row(
                     children: [
-                      _joinLeaveAction(height: actionHeight),
+                      _joined
+                          ? _voiceChatAction(height: actionHeight)
+                          : _joinLeaveAction(height: actionHeight),
                       const SizedBox(width: 12),
                       _action(
                         Icons.volume_off_outlined,
@@ -370,8 +374,8 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   }
 
   Widget _joinLeaveAction({double height = 74}) {
-    final label = _joined ? 'Leave' : 'Join';
-    final icon = _joined ? Icons.logout_rounded : Icons.login_rounded;
+    const label = 'Join';
+    const icon = Icons.login_rounded;
     return Expanded(
       child: GestureDetector(
         onTap: _joiningOrLeaving ? null : _toggleMembership,
@@ -407,6 +411,65 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         ),
       ),
     );
+  }
+
+  Widget _voiceChatAction({double height = 74}) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: _startVoiceChat,
+        child: Container(
+          height: height,
+          decoration: BoxDecoration(
+            color: const Color(0xFF15181D),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF242830)),
+          ),
+          child: const Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.call_outlined, color: Colors.white, size: 24),
+              SizedBox(height: 7),
+              Text(
+                'Voice Chat',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _startVoiceChat() async {
+    try {
+      await CallService.instance.makeGroupVoiceCall(roomId: widget.roomId);
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder:
+              (_) => CallScreen(
+                remoteUserId: widget.roomId,
+                remoteUserName: _displayTitle(
+                  MatrixChatService.instance.getRoomById(widget.roomId)?.name ??
+                      '',
+                  widget.groupName,
+                  widget.alias ?? '',
+                ),
+                remoteUserAvatar: _safeGroupRoomAvatarUrl(
+                  MatrixChatService.instance.getRoomById(widget.roomId),
+                ),
+                type: CallType.voice,
+                isCaller: true,
+              ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not start voice chat: $error')),
+      );
+    }
   }
 
   Widget _membersTab(String roomId) {
@@ -2082,7 +2145,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
                               ),
                     ),
                     TextButton(
-                      onPressed: _leaving ? null : _leaveGroup,
+                      onPressed: null,
                       child:
                           _leaving
                               ? const SizedBox(

@@ -1453,6 +1453,9 @@ class ChatService {
     unawaited(
       MatrixChatService.instance.upgradeOwnedPublicGroupsHistoryVisibility(),
     );
+    unawaited(
+      MatrixChatService.instance.upgradeCreatedGroupOwnershipProfiles(),
+    );
     _emitConversations();
     for (final conversation in conversations) {
       await loadCachedMessages(conversation.id);

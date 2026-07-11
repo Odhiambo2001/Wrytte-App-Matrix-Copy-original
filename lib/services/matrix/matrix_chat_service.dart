@@ -396,6 +396,7 @@ class MatrixChatService {
             .where((id) => id.startsWith('@') && id.contains(':'))
             .toSet()
             .toList();
+    final creatorId = client.userID!;
 
     await ensureSyncedAndAutoJoinInvites();
 
@@ -407,7 +408,31 @@ class MatrixChatService {
       visibility: isPublic ? Visibility.public : Visibility.private,
       preset:
           isPublic ? CreateRoomPreset.publicChat : CreateRoomPreset.privateChat,
+      powerLevelContentOverride: {
+        'users': {creatorId: 100},
+        'users_default': 0,
+        'events_default': 0,
+        'state_default': 50,
+        'invite': 50,
+        'kick': 50,
+        'ban': 50,
+        'redact': 50,
+      },
       initialState: [
+        StateEvent(
+          content: {
+            'owner_user_id': creatorId,
+            'group_origin': 'user_created',
+            'avatar_version': 0,
+            'name_version': 0,
+            'description_version': 0,
+            'link_version': 0,
+            'alias_version': 0,
+            'profile_version': 0,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          },
+          type: 'com.wrytte.group.info',
+        ),
         StateEvent(
           content: {'join_rule': isPublic ? 'public' : 'invite'},
           type: EventTypes.RoomJoinRules,
@@ -468,6 +493,18 @@ class MatrixChatService {
       // The background sync may still have the room; inspect loaded rooms below.
     }
     final room = getRoomById(roomId);
+    final powerLevels = await client.getRoomStateWithKey(
+      roomId,
+      EventTypes.RoomPowerLevels,
+      '',
+    );
+    final creatorLevel =
+        (powerLevels['users'] as Map?)?[creatorId]?.toString() ?? '';
+    if (creatorLevel != '100') {
+      throw StateError(
+        'Created group $roomId did not grant admin power to $creatorId.',
+      );
+    }
     if (room == null) {
       apkLog(
         'Matrix.groups',
@@ -583,6 +620,62 @@ class MatrixChatService {
         apkLog(
           'Matrix.groups',
           'history visibility upgrade failed room_id="${room.id}" error="$e"',
+        );
+      }
+    }
+  }
+
+  Future<void> upgradeCreatedGroupOwnershipProfiles() async {
+    final client = await connect();
+    final userId = client.userID?.trim() ?? '';
+    if (userId.isEmpty) return;
+    for (final room in client.rooms) {
+      if (!_createdGroupRoomIds.contains(room.id) ||
+          room.membership != Membership.join ||
+          (!room.creatorUserIds.contains(userId) &&
+              room.ownPowerLevel.level < 100)) {
+        continue;
+      }
+      try {
+        if (room.ownPowerLevel.level < 100) await room.setPower(userId, 100);
+        final current = Map<String, dynamic>.from(
+          room.getState('com.wrytte.group.info')?.content ?? const {},
+        );
+        var changed = false;
+        if (!current.containsKey('owner_user_id')) {
+          current['owner_user_id'] = userId;
+          changed = true;
+        }
+        if (!current.containsKey('group_origin')) {
+          current['group_origin'] = 'user_created';
+          changed = true;
+        }
+        for (final key in const [
+          'avatar_version',
+          'name_version',
+          'description_version',
+          'link_version',
+          'alias_version',
+          'profile_version',
+        ]) {
+          if (!current.containsKey(key)) {
+            current[key] = 0;
+            changed = true;
+          }
+        }
+        if (changed) {
+          current['updated_at'] = DateTime.now().toUtc().toIso8601String();
+          await client.setRoomStateWithKey(
+            room.id,
+            'com.wrytte.group.info',
+            '',
+            current,
+          );
+        }
+      } catch (error) {
+        apkLog(
+          'Matrix.groups',
+          'created profile upgrade failed room_id="${room.id}" error="$error"',
         );
       }
     }
