@@ -3,7 +3,6 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
@@ -33,8 +32,6 @@ class UserProfileService {
   DateTime? _lastPendingAvatarAttemptAt;
   final Map<String, UserProfile> _publicProfileCache = {};
   final Map<String, Future<UserProfile?>> _publicProfileInFlight = {};
-  final Map<String, Future<String>> _remoteAvatarInFlight = {};
-  final Map<String, DateTime> _remoteAvatarFailedAt = {};
   final Map<String, DateTime> _publicProfileFetchedAt = {};
   final Set<String> _publicProfileMisses = {};
   final StreamController<UserProfile?> _profileController =
@@ -293,8 +290,6 @@ class UserProfileService {
     _cache = null;
     _publicProfileCache.clear();
     _publicProfileInFlight.clear();
-    _remoteAvatarInFlight.clear();
-    _remoteAvatarFailedAt.clear();
     _publicProfileFetchedAt.clear();
     _publicProfileMisses.clear();
     _profileController.add(null);
@@ -370,9 +365,6 @@ class UserProfileService {
           await _storage.write(key: _bioKey, value: bio);
           if (profileImage.isNotEmpty) {
             await _storage.write(key: _profileImageKey, value: profileImage);
-            if (localProfileImagePath.isEmpty) {
-              unawaited(_cacheRemoteAvatarBestEffort(uid, profileImage));
-            }
           }
         }
       }
@@ -560,74 +552,6 @@ class UserProfileService {
       if (lower.endsWith(ext)) return ext;
     }
     return '.jpg';
-  }
-
-  Future<String> _cacheRemoteAvatarBestEffort(String uid, String url) async {
-    final cleanUrl = url.trim();
-    if (cleanUrl.isEmpty) return '';
-
-    final existingLocalPath = await _readLocalProfileImagePath(uid);
-    if (existingLocalPath.isNotEmpty) return existingLocalPath;
-
-    final key = '${_matrixLocalpart(uid).toLowerCase()}|$cleanUrl';
-    final failedAt = _remoteAvatarFailedAt[key];
-    if (failedAt != null &&
-        DateTime.now().difference(failedAt) < const Duration(minutes: 5)) {
-      return '';
-    }
-    final pending = _remoteAvatarInFlight[key];
-    if (pending != null) return pending;
-
-    final future = _cacheRemoteAvatarBestEffortUncached(uid, cleanUrl);
-    _remoteAvatarInFlight[key] = future;
-    return future.whenComplete(() {
-      if (identical(_remoteAvatarInFlight[key], future)) {
-        _remoteAvatarInFlight.remove(key);
-      }
-    });
-  }
-
-  Future<String> _cacheRemoteAvatarBestEffortUncached(
-    String uid,
-    String url,
-  ) async {
-    try {
-      final uri = Uri.tryParse(url);
-      if (uri == null || !uri.hasScheme) return '';
-      final token = await AuthService.instance.getValidBackendToken();
-      final response = await http
-          .get(
-            uri,
-            headers: {
-              if (token != null && token.trim().isNotEmpty)
-                'Authorization': 'Bearer ${token.trim()}',
-            },
-          )
-          .timeout(const Duration(seconds: 15));
-      if (response.statusCode < 200 || response.statusCode >= 300) return '';
-      if (response.bodyBytes.isEmpty) return '';
-      final supportDir = await getApplicationSupportDirectory();
-      final avatarDir = Directory('${supportDir.path}/profile_avatars');
-      if (!avatarDir.existsSync()) {
-        await avatarDir.create(recursive: true);
-      }
-      final safeUid = _matrixLocalpart(
-        uid,
-      ).replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-      final file = File('${avatarDir.path}/$safeUid-remote.jpg');
-      await file.writeAsBytes(response.bodyBytes, flush: true);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_localProfileImageKey(uid), file.path);
-      _remoteAvatarFailedAt.remove(
-        '${_matrixLocalpart(uid).toLowerCase()}|$url',
-      );
-      return file.path;
-    } catch (e) {
-      _remoteAvatarFailedAt['${_matrixLocalpart(uid).toLowerCase()}|$url'] =
-          DateTime.now();
-      debugPrint('[UserProfileService] Remote avatar cache skipped: $e');
-      return '';
-    }
   }
 
   Future<bool> _syncPendingAvatarUploadForUid(String uid) async {

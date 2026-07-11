@@ -845,7 +845,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final profileUid =
         _profileUidForConversation(conv) ??
         await _profileUidFromPhone(fallbackPhone);
-    if (profileUid == null) return conv;
+    if (profileUid == null ||
+        profileUid.trim().startsWith('!') ||
+        profileUid.trim().startsWith('@!')) {
+      return conv;
+    }
 
     final profile = await UserProfileService.instance.getProfileByUid(
       profileUid,
