@@ -7,6 +7,7 @@ class ConversationTile extends StatelessWidget {
   final String time;
   final String? avatarUrl;
   final String? localAvatarPath;
+  final String? avatarCacheIdentity;
   final int unreadCount;
   final bool isOnline;
   final bool isDeleted;
@@ -27,6 +28,7 @@ class ConversationTile extends StatelessWidget {
     required this.time,
     this.avatarUrl,
     this.localAvatarPath,
+    this.avatarCacheIdentity,
     this.unreadCount = 0,
     this.isOnline = false,
     this.isDeleted = false,
@@ -71,6 +73,7 @@ class ConversationTile extends StatelessWidget {
                     size: 60,
                     imageUrl: avatarUrl,
                     localImagePath: localAvatarPath,
+                    cacheIdentity: avatarCacheIdentity,
                     name: name,
                     isDeleted: isDeleted,
                   ),

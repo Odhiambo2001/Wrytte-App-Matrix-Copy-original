@@ -3027,6 +3027,25 @@ class _ChatScreenState extends State<ChatScreen> {
                                     child: UserAvatar(
                                       size: _kHeaderPillH,
                                       imageUrl: avatarUrl,
+                                      cacheIdentity:
+                                          isGroupChat
+                                              ? MatrixChatService.instance
+                                                  .roomProfileCacheIdentity(
+                                                    accountId:
+                                                        widget.currentUserId,
+                                                    roomId:
+                                                        _resolvedConversationId ??
+                                                        widget.conversationId,
+                                                    avatarUrl: avatarUrl,
+                                                    room: MatrixChatService
+                                                        .instance
+                                                        .getRoomById(
+                                                          _resolvedConversationId ??
+                                                              widget
+                                                                  .conversationId,
+                                                        ),
+                                                  )
+                                              : null,
                                       localImagePath: localAvatarPath,
                                       name: displayName,
                                       isDeleted: _isDeletedConversation,

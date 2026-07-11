@@ -1796,6 +1796,15 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       lastMessage: _conversationPreview(conv.lastMessage),
       time: _formatTime(conv.lastMessageTime),
       avatarUrl: avatar,
+      avatarCacheIdentity:
+          _isGroupConversation(conv)
+              ? MatrixChatService.instance.roomProfileCacheIdentity(
+                accountId: _currentUserId,
+                roomId: conv.id,
+                avatarUrl: avatar,
+                room: MatrixChatService.instance.getRoomById(conv.id),
+              )
+              : null,
       localAvatarPath: localAvatarPath,
       unreadCount: conv.unreadCount,
       isDeleted:
@@ -2261,7 +2270,24 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
-            UserAvatar(size: 60, imageUrl: group.avatarUrl, name: group.name),
+            UserAvatar(
+              key: ValueKey(
+                MatrixChatService.instance.roomProfileCacheIdentity(
+                  accountId: _currentUserId,
+                  roomId: group.roomId,
+                  avatarUrl: group.avatarUrl,
+                ),
+              ),
+              size: 60,
+              imageUrl: group.avatarUrl,
+              cacheIdentity: MatrixChatService.instance
+                  .roomProfileCacheIdentity(
+                    accountId: _currentUserId,
+                    roomId: group.roomId,
+                    avatarUrl: group.avatarUrl,
+                  ),
+              name: group.name,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(

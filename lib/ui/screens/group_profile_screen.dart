@@ -123,8 +123,23 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 ),
                 SizedBox(height: compact ? 8 : 18),
                 UserAvatar(
+                  key: ValueKey(
+                    MatrixChatService.instance.roomProfileCacheIdentity(
+                      accountId: room?.client.userID ?? '',
+                      roomId: widget.roomId,
+                      avatarUrl: _safeGroupRoomAvatarUrl(room),
+                      room: room,
+                    ),
+                  ),
                   size: avatarSize,
                   imageUrl: _safeGroupRoomAvatarUrl(room),
+                  cacheIdentity: MatrixChatService.instance
+                      .roomProfileCacheIdentity(
+                        accountId: room?.client.userID ?? '',
+                        roomId: widget.roomId,
+                        avatarUrl: _safeGroupRoomAvatarUrl(room),
+                        room: room,
+                      ),
                   localImagePath: _localAvatarOverride,
                   name: title,
                   isDeleted: isDeleted,

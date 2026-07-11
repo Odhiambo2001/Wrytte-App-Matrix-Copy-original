@@ -137,6 +137,27 @@ class MatrixChatService {
     return null;
   }
 
+  int roomProfileVersion(Room? room) {
+    if (room == null) return 0;
+    final raw =
+        room.getState('com.wrytte.group.info')?.content['profile_version'];
+    return int.tryParse(raw?.toString() ?? '') ?? 0;
+  }
+
+  String roomProfileCacheIdentity({
+    required String accountId,
+    required String roomId,
+    required String? avatarUrl,
+    Room? room,
+    int? profileVersion,
+  }) {
+    final owner = accountId.trim().toLowerCase();
+    final id = roomId.trim().toLowerCase();
+    final version = profileVersion ?? roomProfileVersion(room);
+    final avatar = avatarUrl?.trim() ?? '';
+    return 'room-profile:$owner:$id:v$version:$avatar';
+  }
+
   Future<void> ensureSyncedAndAutoJoinInvites({bool forceSync = false}) {
     _syncAndJoinFuture ??= _ensureSyncedAndAutoJoinInvites(
       forceSync: forceSync,

@@ -15,6 +15,7 @@ class UserAvatar extends StatefulWidget {
   final String? name;
   final VoidCallback? onTap;
   final String? heroTag;
+  final String? cacheIdentity;
   final bool isDeleted;
 
   const UserAvatar({
@@ -26,6 +27,7 @@ class UserAvatar extends StatefulWidget {
     this.name,
     this.onTap,
     this.heroTag,
+    this.cacheIdentity,
     this.isDeleted = false,
   });
 
@@ -65,6 +67,10 @@ class _UserAvatarState extends State<UserAvatar> {
   @override
   void didUpdateWidget(covariant UserAvatar oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.cacheIdentity != widget.cacheIdentity) {
+      _lastGoodImageUrl = null;
+      _lastGoodLocalImagePath = null;
+    }
     _rememberStableSources();
     if (oldWidget.imageUrl != widget.imageUrl) {
       _warmAuthToken();
@@ -117,7 +123,7 @@ class _UserAvatarState extends State<UserAvatar> {
     final imageUrl = _effectiveImageUrl();
     final cachedProvider =
         imageUrl.isNotEmpty
-            ? _resolvedImageCache[_resolveImageUrl(imageUrl)]
+            ? _resolvedImageCache[_providerCacheKey(imageUrl)]
             : null;
 
     if (widget.image != null) {
@@ -221,16 +227,18 @@ class _UserAvatarState extends State<UserAvatar> {
   Widget _buildNetworkOrPlaceholder(String rawUrl) {
     final url = _resolveImageUrl(rawUrl);
     if (url.isEmpty) return _buildPlaceholder();
+    final providerKey = _providerCacheKey(rawUrl);
     return ClipOval(
       child: CachedNetworkImage(
         imageUrl: url,
+        cacheKey: providerKey,
         imageBuilder: (context, imageProvider) {
           _lastGoodImageUrl = rawUrl;
           // Remember this provider so every future build (including in
           // other UserAvatar instances for the same URL — other screens,
           // conversation tiles, profile page, etc.) can skip straight to
           // painting it with zero placeholder frame.
-          _resolvedImageCache[url] = imageProvider;
+          _resolvedImageCache[providerKey] = imageProvider;
           return Image(
             image: imageProvider,
             width: widget.size,
@@ -256,6 +264,12 @@ class _UserAvatarState extends State<UserAvatar> {
         },
       ),
     );
+  }
+
+  String _providerCacheKey(String rawUrl) {
+    final url = _resolveImageUrl(rawUrl);
+    final identity = widget.cacheIdentity?.trim() ?? '';
+    return identity.isEmpty ? url : '$identity|$url';
   }
 
   String _resolveImageUrl(String? raw) {
