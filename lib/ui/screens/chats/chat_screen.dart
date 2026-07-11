@@ -846,6 +846,10 @@ class _ChatScreenState extends State<ChatScreen> {
     bool publish = true,
     bool forceRefresh = true,
   }) async {
+    // A group has no receiver profile. Its identity is the room ID and its
+    // avatar may only come from the room's m.room.avatar state event. Looking
+    // through message peers here can otherwise select a member as "receiver".
+    if (_isGroupChat) return;
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     final profileUid = _profilePeerId();
     if (profileUid == null) return;
@@ -959,6 +963,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String? _profilePeerId() {
+    if (_isGroupChat) return null;
     final room = MatrixChatService.instance.getRoomById(_activeConversationId);
     final directPeer = room?.directChatMatrixID?.trim();
 
@@ -1061,7 +1066,11 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _persistResolvedReceiverInfo() async {
     final name = _resolvedHeaderName.trim();
     final avatar =
-        _receiverProfile?.hasProfileImage == true
+        _isGroupChat
+            ? _safeGroupRoomAvatarUrl(
+              MatrixChatService.instance.getRoomById(_activeConversationId),
+            )
+            : _receiverProfile?.hasProfileImage == true
             ? _receiverProfile!.profileImage
             : _receiverIdentity?.avatarUrl ?? widget.avatarUrl;
     if (name.isEmpty && (avatar ?? '').trim().isEmpty) return;
@@ -2857,7 +2866,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
             );
     final localAvatarPath =
-        _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
+        isGroupChat
+            ? null
+            : _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
             ? _receiverProfile!.localProfileImagePath.trim()
             : null;
 
