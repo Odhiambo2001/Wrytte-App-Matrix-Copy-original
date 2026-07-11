@@ -64,7 +64,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 9,
+      version: 10,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -207,6 +207,9 @@ class ChatLocalDb {
         if (oldVersion < 9) {
           await _createSuggestedPreviewTables(db);
         }
+        if (oldVersion < 10) {
+          await _createSuggestedPreviewTables(db);
+        }
       },
     );
   }
@@ -265,6 +268,45 @@ class ChatLocalDb {
       CREATE INDEX IF NOT EXISTS idx_suggested_members_room
       ON suggested_preview_members (roomId, membership)
     ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS suggested_room_profiles (
+        roomId              TEXT PRIMARY KEY,
+        name                TEXT,
+        avatarUrl           TEXT,
+        canonicalAlias      TEXT,
+        description         TEXT,
+        link                TEXT,
+        avatarVersion       INTEGER NOT NULL DEFAULT 0,
+        nameVersion         INTEGER NOT NULL DEFAULT 0,
+        descriptionVersion  INTEGER NOT NULL DEFAULT 0,
+        linkVersion         INTEGER NOT NULL DEFAULT 0,
+        aliasVersion        INTEGER NOT NULL DEFAULT 0,
+        updatedAt           INTEGER NOT NULL
+      )
+    ''');
+  }
+
+  Future<void> saveSuggestedRoomProfile(
+    String roomId,
+    Map<String, dynamic> profile,
+  ) async {
+    final database = await db;
+    await database.insert('suggested_room_profiles', {
+      'roomId': roomId,
+      ...profile,
+      'updatedAt': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<Map<String, dynamic>?> loadSuggestedRoomProfile(String roomId) async {
+    final database = await db;
+    final rows = await database.query(
+      'suggested_room_profiles',
+      where: 'roomId = ?',
+      whereArgs: [roomId],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
   }
 
   Future<void> saveSuggestedPreviewSync({

@@ -1108,6 +1108,7 @@ class ChatService {
         final client = MatrixClientService.instance.client;
         final messages = <ChatMessage>[];
         final latestMembers = <String, mx.MatrixEvent>{};
+        final latestProfileState = <String, mx.MatrixEvent>{};
         String? from;
         var pageCount = 0;
 
@@ -1123,6 +1124,7 @@ class ChatService {
           pageCount++;
           for (final event in response.chunk) {
             _collectSuggestedPreviewMember(event, latestMembers);
+            _collectSuggestedRoomProfileState(event, latestProfileState);
           }
           final pageMessages =
               response.chunk
@@ -1152,6 +1154,10 @@ class ChatService {
         final memberRows =
             latestMembers.values.map(_suggestedPreviewMemberRow).toList();
         await ChatLocalDb.instance.saveSuggestedPreviewMembers(id, memberRows);
+        await ChatLocalDb.instance.saveSuggestedRoomProfile(
+          id,
+          _suggestedRoomProfileRow(latestProfileState),
+        );
         if (messages.isNotEmpty) {
           _messagesCache[id] = messages;
           await ChatLocalDb.instance.saveMessages(messages);
@@ -1202,6 +1208,51 @@ class ChatService {
       latestMembers[userId] = event;
     }
   }
+
+  void _collectSuggestedRoomProfileState(
+    mx.MatrixEvent event,
+    Map<String, mx.MatrixEvent> latest,
+  ) {
+    const supported = {
+      mx.EventTypes.RoomAvatar,
+      mx.EventTypes.RoomName,
+      mx.EventTypes.RoomTopic,
+      mx.EventTypes.RoomCanonicalAlias,
+      'com.wrytte.group.info',
+    };
+    if (!supported.contains(event.type) || (event.stateKey ?? '').isNotEmpty) {
+      return;
+    }
+    final existing = latest[event.type];
+    if (existing == null ||
+        event.originServerTs.isAfter(existing.originServerTs)) {
+      latest[event.type] = event;
+    }
+  }
+
+  Map<String, dynamic> _suggestedRoomProfileRow(
+    Map<String, mx.MatrixEvent> state,
+  ) {
+    final info = state['com.wrytte.group.info']?.content ?? const {};
+    int version(String key) => int.tryParse(info[key]?.toString() ?? '') ?? 0;
+    return {
+      'name': state[mx.EventTypes.RoomName]?.content['name']?.toString(),
+      'avatarUrl': state[mx.EventTypes.RoomAvatar]?.content['url']?.toString(),
+      'canonicalAlias':
+          state[mx.EventTypes.RoomCanonicalAlias]?.content['alias']?.toString(),
+      'description':
+          state[mx.EventTypes.RoomTopic]?.content['topic']?.toString(),
+      'link': info['link']?.toString(),
+      'avatarVersion': version('avatar_version'),
+      'nameVersion': version('name_version'),
+      'descriptionVersion': version('description_version'),
+      'linkVersion': version('link_version'),
+      'aliasVersion': version('alias_version'),
+    };
+  }
+
+  Future<Map<String, dynamic>?> loadSuggestedRoomProfile(String roomId) =>
+      ChatLocalDb.instance.loadSuggestedRoomProfile(roomId);
 
   Map<String, dynamic> _suggestedPreviewMemberRow(mx.MatrixEvent event) {
     return {

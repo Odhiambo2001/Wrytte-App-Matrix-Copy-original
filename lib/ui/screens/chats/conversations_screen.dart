@@ -238,7 +238,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _lastSuggestedGroupsLoadAt = now;
     _loadingSuggestedGroups = true;
     try {
-      final groups = await MatrixChatService.instance.fetchPublicGroups();
+      final discovered = await MatrixChatService.instance.fetchPublicGroups();
+      final groups = await Future.wait(
+        discovered.map((group) async {
+          final profile = await _chat.loadSuggestedRoomProfile(group.roomId);
+          return profile == null ? group : group.copyWithProfile(profile);
+        }),
+      );
       if (!mounted) return;
       setState(() => _suggestedGroups = groups);
       apkLog(
@@ -274,6 +280,19 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           'SuggestedPreview',
           'warm skipped fresh room_id="${group.roomId}"',
         );
+      }
+      final profile = await _chat.loadSuggestedRoomProfile(group.roomId);
+      if (profile != null && mounted) {
+        setState(() {
+          _suggestedGroups = _suggestedGroups
+              .map(
+                (candidate) =>
+                    candidate.roomId == group.roomId
+                        ? candidate.copyWithProfile(profile)
+                        : candidate,
+              )
+              .toList(growable: false);
+        });
       }
       final complete = await ChatLocalDb.instance.isSuggestedPreviewComplete(
         group.roomId,
@@ -1208,10 +1227,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         MatrixChatService.instance.getRoomById(conv.id),
       );
       if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
-      if (conv.isGroupKind || conv.isChannelKind) {
-        final stored = conv.otherUserAvatar?.trim() ?? '';
-        if (stored.isNotEmpty) return stored;
-      }
       return null;
     }
 
@@ -1249,10 +1264,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         MatrixChatService.instance.getRoomById(conv.id),
       );
       if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
-      if (conv.isGroupKind || conv.isChannelKind) {
-        final stored = conv.otherUserAvatar?.trim() ?? '';
-        if (stored.isNotEmpty) return stored;
-      }
       return null;
     }
     final contactAvatar = _safeDirectAvatarUrl(
@@ -2358,6 +2369,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                   accountId: _currentUserId,
                   roomId: group.roomId,
                   avatarUrl: group.avatarUrl,
+                  profileVersion: group.profileVersionFingerprint,
                 ),
               ),
               size: 60,
@@ -2367,6 +2379,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                     accountId: _currentUserId,
                     roomId: group.roomId,
                     avatarUrl: group.avatarUrl,
+                    profileVersion: group.profileVersionFingerprint,
                   ),
               name: group.name,
             ),
@@ -2459,6 +2472,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                 initialMemberCount: group.memberCount,
                 groupAlias: group.canonicalAlias,
                 conversationKind: ConversationKind.group,
+                initialRoomProfileVersion: group.profileVersionFingerprint,
               ),
           transitionsBuilder: (_, animation, __, child) {
             final curved = CurvedAnimation(

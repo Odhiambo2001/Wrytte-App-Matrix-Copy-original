@@ -19,6 +19,12 @@ class MatrixPublicGroup {
   final String? topic;
   final int memberCount;
   final bool worldReadable;
+  final int avatarVersion;
+  final int nameVersion;
+  final int descriptionVersion;
+  final int linkVersion;
+  final int aliasVersion;
+  final String? link;
 
   const MatrixPublicGroup({
     required this.roomId,
@@ -28,7 +34,54 @@ class MatrixPublicGroup {
     this.topic,
     required this.memberCount,
     required this.worldReadable,
+    this.avatarVersion = 0,
+    this.nameVersion = 0,
+    this.descriptionVersion = 0,
+    this.linkVersion = 0,
+    this.aliasVersion = 0,
+    this.link,
   });
+
+  int get profileVersionFingerprint {
+    var value = 17;
+    for (final version in [
+      avatarVersion,
+      nameVersion,
+      descriptionVersion,
+      linkVersion,
+      aliasVersion,
+    ]) {
+      value = 37 * value + version;
+    }
+    return value;
+  }
+
+  MatrixPublicGroup copyWithProfile(Map<String, dynamic> profile) =>
+      MatrixPublicGroup(
+        roomId: roomId,
+        name:
+            profile['name']?.toString().trim().isNotEmpty == true
+                ? profile['name'].toString().trim()
+                : name,
+        avatarUrl:
+            profile['avatarUrl']?.toString().trim().isNotEmpty == true
+                ? profile['avatarUrl'].toString().trim()
+                : avatarUrl,
+        canonicalAlias:
+            profile['canonicalAlias']?.toString().trim().isNotEmpty == true
+                ? profile['canonicalAlias'].toString().trim()
+                : canonicalAlias,
+        topic: profile['description']?.toString() ?? topic,
+        memberCount: memberCount,
+        worldReadable: worldReadable,
+        avatarVersion: profile['avatarVersion'] as int? ?? avatarVersion,
+        nameVersion: profile['nameVersion'] as int? ?? nameVersion,
+        descriptionVersion:
+            profile['descriptionVersion'] as int? ?? descriptionVersion,
+        linkVersion: profile['linkVersion'] as int? ?? linkVersion,
+        aliasVersion: profile['aliasVersion'] as int? ?? aliasVersion,
+        link: profile['link']?.toString() ?? link,
+      );
 }
 
 class MatrixCreatedGroupRoom {
@@ -139,9 +192,23 @@ class MatrixChatService {
 
   int roomProfileVersion(Room? room) {
     if (room == null) return 0;
-    final raw =
-        room.getState('com.wrytte.group.info')?.content['profile_version'];
-    return int.tryParse(raw?.toString() ?? '') ?? 0;
+    final content = room.getState('com.wrytte.group.info')?.content ?? const {};
+    const fields = [
+      'avatar_version',
+      'name_version',
+      'description_version',
+      'link_version',
+      'alias_version',
+    ];
+    var fingerprint = 17;
+    for (final field in fields) {
+      final value = int.tryParse(content[field]?.toString() ?? '') ?? 0;
+      fingerprint = 37 * fingerprint + value;
+    }
+    // Retain compatibility with profiles written before per-field versions.
+    final legacy =
+        int.tryParse(content['profile_version']?.toString() ?? '') ?? 0;
+    return 37 * fingerprint + legacy;
   }
 
   String roomProfileCacheIdentity({

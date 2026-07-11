@@ -1230,9 +1230,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   String? _safeGroupRoomAvatarUrl(mx.Room? room) {
     final raw = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
-    final stateAvatar = raw is String ? raw.trim() : '';
-    final avatar =
-        stateAvatar.isNotEmpty ? stateAvatar : widget.avatarUrl?.trim() ?? '';
+    final avatar = raw is String ? raw.trim() : '';
     if (avatar.isEmpty || _matchesGroupParticipantAvatar(room, avatar)) {
       return null;
     }
@@ -1490,6 +1488,11 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     try {
       String? localAvatarPath;
       var profileChanged = false;
+      var avatarChanged = false;
+      var nameChanged = false;
+      var aliasChanged = false;
+      var descriptionChanged = false;
+      var linkChanged = false;
       if (_pickedImageFile != null) {
         final matrixFile = mx.MatrixFile(
           bytes: await _pickedImageFile!.readAsBytes(),
@@ -1498,11 +1501,13 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         await room.setAvatar(matrixFile);
         localAvatarPath = _pickedImageFile!.path;
         profileChanged = true;
+        avatarChanged = true;
       }
 
       if (name != room.name.trim()) {
         await room.setName(name);
         profileChanged = true;
+        nameChanged = true;
       }
 
       final alias = _cleanAlias(_aliasController.text);
@@ -1510,12 +1515,14 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       if (alias.isNotEmpty && alias != currentAlias) {
         await room.setCanonicalAlias('#$alias:${MatrixConfig.serverName}');
         profileChanged = true;
+        aliasChanged = true;
       }
 
       final description = _descriptionController.text.trim();
       if (description != room.topic.trim()) {
         await room.setDescription(description);
         profileChanged = true;
+        descriptionChanged = true;
       }
 
       final link = _linkController.text.trim();
@@ -1530,8 +1537,20 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
           currentInfo['link'] = link;
         }
         profileChanged = true;
+        linkChanged = true;
       }
       if (profileChanged) {
+        void incrementVersion(String key) {
+          final previous =
+              int.tryParse(currentInfo[key]?.toString() ?? '') ?? 0;
+          currentInfo[key] = previous + 1;
+        }
+
+        if (avatarChanged) incrementVersion('avatar_version');
+        if (nameChanged) incrementVersion('name_version');
+        if (aliasChanged) incrementVersion('alias_version');
+        if (descriptionChanged) incrementVersion('description_version');
+        if (linkChanged) incrementVersion('link_version');
         final previousVersion =
             int.tryParse(currentInfo['profile_version']?.toString() ?? '') ?? 0;
         currentInfo['profile_version'] = previousVersion + 1;

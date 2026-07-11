@@ -48,6 +48,7 @@ class ChatScreen extends StatefulWidget {
   final int? initialMemberCount;
   final String? groupAlias;
   final String conversationKind;
+  final int? initialRoomProfileVersion;
 
   const ChatScreen({
     super.key,
@@ -61,6 +62,7 @@ class ChatScreen extends StatefulWidget {
     this.initialMemberCount,
     this.groupAlias,
     this.conversationKind = ConversationKind.unknown,
+    this.initialRoomProfileVersion,
   });
 
   @override
@@ -3044,6 +3046,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                                               widget
                                                                   .conversationId,
                                                         ),
+                                                    profileVersion:
+                                                        widget
+                                                            .initialRoomProfileVersion,
                                                   )
                                               : null,
                                       localImagePath: localAvatarPath,
