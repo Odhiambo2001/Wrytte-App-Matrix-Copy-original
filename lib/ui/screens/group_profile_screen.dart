@@ -1392,6 +1392,15 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
 
   Future<void> _deleteGroup() async {
     if (_deleting || _leaving) return;
+    final ownedRoom = MatrixChatService.instance.getRoomById(widget.roomId);
+    if (ownedRoom == null ||
+        !MatrixChatService.instance.isGroupOwner(ownedRoom)) {
+      _showSnack(
+        'Only the user who created this group can delete it.',
+        isError: true,
+      );
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder:
@@ -1424,6 +1433,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
           ),
     );
     if (confirmed != true) return;
+    if (!mounted) return;
 
     setState(() => _deleting = true);
     try {
@@ -1453,12 +1463,13 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         // Dismiss FIRST — cheap local write, must persist even if the
         // network steps below rate-limit. Otherwise the group returns to
         // Suggested via the public directory.
-        await MatrixChatService.instance.dismissPublicGroup(
+        await MatrixChatService.instance.markPublicGroupDeleted(
           roomId: widget.roomId,
           canonicalAlias:
               room.canonicalAlias.isNotEmpty
                   ? room.canonicalAlias
                   : widget.initialAlias,
+          deletedAt: deletedAt,
         );
         await ChatService().markGroupDeletedLocally(
           roomId: widget.roomId,
@@ -1489,9 +1500,10 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
           avatarUrl: widget.initialAvatarUrl,
           deletedAt: deletedAt,
         );
-        await MatrixChatService.instance.dismissPublicGroup(
+        await MatrixChatService.instance.markPublicGroupDeleted(
           roomId: widget.roomId,
           canonicalAlias: widget.initialAlias,
+          deletedAt: deletedAt,
         );
       }
       if (!mounted) return;
@@ -1513,6 +1525,30 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
   }
 
   Future<void> _removeMembersAndClose(mx.Room room) async {
+    // The creator can immediately remove the room from public discovery even
+    // though the final database purge requires a Dendrite server admin.
+    try {
+      await room.client.setRoomVisibilityOnDirectory(
+        room.id,
+        visibility: mx.Visibility.private,
+      );
+    } catch (e) {
+      apkLog(
+        'GroupProfile.delete',
+        'directory unpublish failed room_id="${room.id}" error="$e"',
+      );
+    }
+    try {
+      if (room.canChangeJoinRules) {
+        await room.setJoinRules(mx.JoinRules.invite);
+      }
+    } catch (e) {
+      apkLog(
+        'GroupProfile.delete',
+        'join rule close failed room_id="${room.id}" error="$e"',
+      );
+    }
+
     final currentUserId = room.client.userID?.trim() ?? '';
     final members =
         room.getParticipants([
@@ -1523,7 +1559,14 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     for (final member in members) {
       final userId = member.id.trim();
       if (userId.isEmpty || userId == currentUserId) continue;
-      await room.kick(userId);
+      try {
+        await room.kick(userId);
+      } catch (e) {
+        apkLog(
+          'GroupProfile.delete',
+          'member removal failed room_id="${room.id}" user_id="$userId" error="$e"',
+        );
+      }
     }
 
     if (room.membership == mx.Membership.join) {

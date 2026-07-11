@@ -47,6 +47,30 @@ class MatrixChatService {
   Future<void>? _syncAndJoinFuture;
   final Map<String, Future<Room>> _directRoomFutures = {};
   final Set<String> _dismissedPublicGroupKeys = {};
+  static const String _deletedGroupsAccountDataType =
+      'com.wrytte.deleted_groups';
+  // These keys were written by the short-lived preview-membership heuristic.
+  // A public preview can hide membership state from non-members, so they are
+  // not evidence that a room is empty. Remove the contaminated tombstones once.
+  static const Set<String> _invalidPreviewTombstoneKeys = {
+    '!uvu0qyktfifvoigk:matrix.wrytte.com',
+    '#gr.@4:matrix.wrytte.com',
+    '!wfdut1xfcavbf0tb:matrix.wrytte.com',
+    '#gr.@5:matrix.wrytte.com',
+    '!wppezazplsl6xd8n:matrix.wrytte.com',
+    '#gr.@carsandtrucks:matrix.wrytte.com',
+    '!sxrcjldzespwe5dq:matrix.wrytte.com',
+    '#gr.@6:matrix.wrytte.com',
+    '!cpmghoq0lopmbi8x:matrix.wrytte.com',
+    '#gr.@1:matrix.wrytte.com',
+    '!zac19tjual2e0jcz:matrix.wrytte.com',
+    '!jamy5uubhighb0b:matrix.wrytte.com',
+    '#gr.@3:matrix.wrytte.com',
+    '!2ybwyj3kq4xbuiie:matrix.wrytte.com',
+    '#gr.@testgr1:matrix.wrytte.com',
+    '!h76radouv5igaacn:matrix.wrytte.com',
+    '#gr.@2:matrix.wrytte.com',
+  };
   String? _dismissedPublicGroupsLoadedFor;
   List<MatrixPublicGroup>? _cachedPublicGroups;
   DateTime? _cachedPublicGroupsAt;
@@ -416,6 +440,10 @@ class MatrixChatService {
                   worldReadable: room.worldReadable,
                 ),
               )
+              // Empty rooms are abandoned/deleted groups. Dendrite can keep
+              // advertising them after every user has left or forgotten the
+              // room, but they must never be suggestions in Wrytte.
+              .where((group) => group.memberCount > 0)
               .where((group) => !isPublicGroupDismissed(group))
               .toList();
       if (limit == null) {
@@ -481,16 +509,80 @@ class MatrixChatService {
   Future<void> _loadDismissedPublicGroups() async {
     final userId = MatrixClientService.instance.client.userID?.trim() ?? '';
     if (userId.isEmpty) return;
-    if (_dismissedPublicGroupsLoadedFor == userId) return;
-    final prefs = await SharedPreferences.getInstance();
-    _dismissedPublicGroupKeys
-      ..clear()
-      ..addAll(
-        (prefs.getStringList(_dismissedPublicGroupsKey(userId)) ?? const [])
-            .map(_publicGroupKey)
-            .where((key) => key.isNotEmpty),
+    if (_dismissedPublicGroupsLoadedFor != userId) {
+      final prefs = await SharedPreferences.getInstance();
+      _dismissedPublicGroupKeys
+        ..clear()
+        ..addAll(
+          (prefs.getStringList(_dismissedPublicGroupsKey(userId)) ?? const [])
+              .map(_publicGroupKey)
+              .where((key) => key.isNotEmpty),
+        );
+      _dismissedPublicGroupsLoadedFor = userId;
+    }
+    // Merge this on every discovery request: account data can arrive in a
+    // later /sync after the first public-room query on a fresh installation.
+    final serverDeletedGroups =
+        MatrixClientService
+            .instance
+            .client
+            .accountData[_deletedGroupsAccountDataType]
+            ?.content['groups'];
+    if (serverDeletedGroups is Map) {
+      _dismissedPublicGroupKeys.addAll(
+        serverDeletedGroups.keys
+            .map((key) => _publicGroupKey(key.toString()))
+            .where(
+              (key) =>
+                  key.isNotEmpty && !_invalidPreviewTombstoneKeys.contains(key),
+            ),
       );
-    _dismissedPublicGroupsLoadedFor = userId;
+    }
+    await _rollbackInvalidPreviewTombstones(userId);
+  }
+
+  String _previewTombstoneRollbackKey(String userId) =>
+      'wrytte.preview_tombstone_rollback_v1.$userId';
+
+  Future<void> _rollbackInvalidPreviewTombstones(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final migrationKey = _previewTombstoneRollbackKey(userId);
+    if (prefs.getBool(migrationKey) == true) return;
+
+    _dismissedPublicGroupKeys.removeAll(_invalidPreviewTombstoneKeys);
+    await _saveDismissedPublicGroups();
+
+    final client = MatrixClientService.instance.client;
+    final existing = client.accountData[_deletedGroupsAccountDataType];
+    final existingGroups = existing?.content['groups'];
+    if (existingGroups is Map) {
+      final groups = <String, Object?>{};
+      for (final entry in existingGroups.entries) {
+        final key = _publicGroupKey(entry.key.toString());
+        if (!_invalidPreviewTombstoneKeys.contains(key)) {
+          groups[entry.key.toString()] = entry.value;
+        }
+      }
+      try {
+        await client.setAccountData(userId, _deletedGroupsAccountDataType, {
+          'groups': groups,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      } catch (e) {
+        apkLog(
+          'Matrix.groups',
+          'preview tombstone rollback sync failed user="$userId" error="$e"',
+        );
+        return;
+      }
+    }
+    await prefs.setBool(migrationKey, true);
+    _cachedPublicGroups = null;
+    _cachedPublicGroupsAt = null;
+    apkLog(
+      'Matrix.groups',
+      'invalid preview tombstones rolled back user="$userId"',
+    );
   }
 
   Future<void> _saveDismissedPublicGroups() async {
@@ -537,6 +629,82 @@ class MatrixChatService {
       'dismissed room_id="$roomId" alias="$canonicalAlias" '
           'total_keys=${_dismissedPublicGroupKeys.length} '
           'user="${MatrixClientService.instance.client.userID}"',
+    );
+  }
+
+  /// Permanently tombstones a deleted group for this Matrix account.
+  ///
+  /// Unlike SharedPreferences this follows the user across devices and app
+  /// reinstalls. The homeserver purge is still performed by the trusted Wrytte
+  /// backend because Dendrite admin credentials must never be shipped in the
+  /// mobile application.
+  Future<void> markPublicGroupDeleted({
+    required String roomId,
+    String? canonicalAlias,
+    DateTime? deletedAt,
+  }) => markPublicGroupsDeleted([
+    MatrixPublicGroup(
+      roomId: roomId,
+      name: '',
+      canonicalAlias: canonicalAlias,
+      memberCount: 0,
+      worldReadable: false,
+    ),
+  ], deletedAt: deletedAt);
+
+  Future<void> markPublicGroupsDeleted(
+    Iterable<MatrixPublicGroup> deletedGroups, {
+    DateTime? deletedAt,
+  }) async {
+    final deleted = deletedGroups.toList(growable: false);
+    if (deleted.isEmpty) return;
+    await _loadDismissedPublicGroups();
+    final timestamp = (deletedAt ?? DateTime.now()).toUtc().toIso8601String();
+    for (final group in deleted) {
+      for (final key in _publicGroupKeys(
+        roomId: group.roomId,
+        canonicalAlias: group.canonicalAlias,
+      )) {
+        _dismissedPublicGroupKeys.add(key);
+      }
+    }
+    await _saveDismissedPublicGroups();
+    _cachedPublicGroups = null;
+    _cachedPublicGroupsAt = null;
+
+    try {
+      final client = await connect();
+      final userId = client.userID?.trim() ?? '';
+      if (userId.isEmpty) return;
+      final existing = client.accountData[_deletedGroupsAccountDataType];
+      final existingGroups = existing?.content['groups'];
+      final groups = <String, Object?>{};
+      if (existingGroups is Map) {
+        for (final entry in existingGroups.entries) {
+          groups[entry.key.toString()] = entry.value;
+        }
+      }
+      for (final group in deleted) {
+        for (final key in _publicGroupKeys(
+          roomId: group.roomId,
+          canonicalAlias: group.canonicalAlias,
+        )) {
+          groups[key] = {'deleted_at': timestamp};
+        }
+      }
+      await client.setAccountData(userId, _deletedGroupsAccountDataType, {
+        'groups': groups,
+        'updated_at': timestamp,
+      });
+    } catch (e) {
+      apkLog(
+        'Matrix.groups',
+        'deleted group account sync failed count=${deleted.length} error="$e"',
+      );
+    }
+    apkLog(
+      'Matrix.groups',
+      'deleted group tombstones persisted count=${deleted.length}',
     );
   }
 

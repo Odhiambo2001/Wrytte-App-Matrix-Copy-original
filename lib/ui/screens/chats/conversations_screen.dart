@@ -263,11 +263,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
               ? start + concurrency
               : previewable.length;
       await Future.wait(
-        previewable
-            .sublist(start, end)
-            .map(
-              (group) => _chat.fetchPublicGroupPreview(roomId: group.roomId),
-            ),
+        previewable.sublist(start, end).map((group) async {
+          await _chat.fetchPublicGroupPreview(roomId: group.roomId);
+        }),
       );
     }
   }
@@ -1986,7 +1984,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         _suggestedGroups
             .where(
               (group) =>
+                  group.memberCount > 0 &&
                   !MatrixChatService.instance.isPublicGroupDismissed(group) &&
+                  !_chat.isConversationDeleted(group.roomId) &&
                   !joinedIds.contains(group.roomId) &&
                   !_suggestedAliasMatchesJoined(group, joinedAliases) &&
                   !_suggestedNameMatchesLocalGroup(group, localGroupNames),
