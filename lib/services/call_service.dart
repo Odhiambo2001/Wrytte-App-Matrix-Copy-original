@@ -9,6 +9,7 @@ import 'package:matrix/matrix.dart' as mx;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_call_service.dart';
+import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 
