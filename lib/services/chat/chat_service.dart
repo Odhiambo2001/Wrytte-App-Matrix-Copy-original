@@ -747,6 +747,12 @@ class ChatService {
         await _waitForConnection();
         final client = MatrixClientService.instance.client;
         final room = _roomForMessage(message);
+        if (message.conversationId.trim() != room.id) {
+          throw StateError(
+            'Message room mismatch: ${message.conversationId} != ${room.id}',
+          );
+        }
+        final isGroupRoom = MatrixChatService.instance.isMatrixGroupRoom(room);
         if (!message.receiverId.trim().startsWith('!')) {
           await MatrixChatService.instance.ensurePeerInvited(
             roomId: room.id,
@@ -766,7 +772,7 @@ class ChatService {
           id: eventId ?? message.id,
           conversationId: room.id,
           senderId: client.userID ?? _currentUserId ?? '',
-          receiverId: message.receiverId,
+          receiverId: isGroupRoom ? room.id : message.receiverId,
           timestamp: DateTime.now(),
           status: MessageStatus.sent,
           senderPhone: _currentUserPhone,
@@ -788,11 +794,24 @@ class ChatService {
     required String receiverID,
     required String filePath,
     required int durationSeconds,
+    String? conversationId,
     String senderName = 'New voice message',
   }) async {
     await _withMatrixTokenRetry('sendVoiceMessage', () async {
       await _waitForConnection();
-      final room = await _directRoom(receiverID);
+      final requestedRoomId = conversationId?.trim() ?? '';
+      final room =
+          requestedRoomId.isNotEmpty
+              ? _roomById(requestedRoomId)
+              : receiverID.trim().startsWith('!')
+              ? _roomById(receiverID.trim())
+              : await _directRoom(receiverID);
+      if (room == null) {
+        throw StateError(
+          'Unknown Matrix room: ${conversationId ?? receiverID}',
+        );
+      }
+      final isGroupRoom = MatrixChatService.instance.isMatrixGroupRoom(room);
       await FileUploadLimits.validatePath(
         filePath,
         maxBytes: FileUploadLimits.voiceMessageMaxBytes,
@@ -814,7 +833,7 @@ class ChatService {
         conversationId: room.id,
         senderId:
             MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
-        receiverId: _toMatrixUserId(receiverID),
+        receiverId: isGroupRoom ? room.id : _toMatrixUserId(receiverID),
         content: 'Voice message',
         timestamp: DateTime.now(),
         status: MessageStatus.sent,
@@ -838,10 +857,23 @@ class ChatService {
     required String receiverID,
     required String filePath,
     required int durationSeconds,
+    String? conversationId,
   }) async {
     await _withMatrixTokenRetry('sendVideoMessage', () async {
       await _waitForConnection();
-      final room = await _directRoom(receiverID);
+      final requestedRoomId = conversationId?.trim() ?? '';
+      final room =
+          requestedRoomId.isNotEmpty
+              ? _roomById(requestedRoomId)
+              : receiverID.trim().startsWith('!')
+              ? _roomById(receiverID.trim())
+              : await _directRoom(receiverID);
+      if (room == null) {
+        throw StateError(
+          'Unknown Matrix room: ${conversationId ?? receiverID}',
+        );
+      }
+      final isGroupRoom = MatrixChatService.instance.isMatrixGroupRoom(room);
       await FileUploadLimits.validatePath(
         filePath,
         maxBytes: FileUploadLimits.videoMessageMaxBytes,
@@ -860,7 +892,7 @@ class ChatService {
         conversationId: room.id,
         senderId:
             MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
-        receiverId: _toMatrixUserId(receiverID),
+        receiverId: isGroupRoom ? room.id : _toMatrixUserId(receiverID),
         content: 'Video message',
         timestamp: DateTime.now(),
         status: MessageStatus.sent,
@@ -1160,7 +1192,7 @@ class ChatService {
         );
         if (messages.isNotEmpty) {
           _messagesCache[id] = messages;
-          await ChatLocalDb.instance.saveMessages(messages);
+          await ChatLocalDb.instance.saveSuggestedPreviewMessages(id, messages);
         }
         await ChatLocalDb.instance.saveSuggestedPreviewSync(
           roomId: id,

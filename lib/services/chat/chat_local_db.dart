@@ -64,7 +64,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 10,
+      version: 11,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -87,7 +87,8 @@ class ChatLocalDb {
             isStarred        INTEGER NOT NULL DEFAULT 0,
             isDeletedForMe   INTEGER NOT NULL DEFAULT 0,
             isDeletedForEveryone INTEGER NOT NULL DEFAULT 0,
-            isEdited         INTEGER NOT NULL DEFAULT 0
+            isEdited         INTEGER NOT NULL DEFAULT 0,
+            isPreviewOnly    INTEGER NOT NULL DEFAULT 0
           )
         ''');
 
@@ -209,6 +210,25 @@ class ChatLocalDb {
         }
         if (oldVersion < 10) {
           await _createSuggestedPreviewTables(db);
+        }
+        if (oldVersion < 11) {
+          await _addColumnIfMissing(
+            db,
+            'messages',
+            'isPreviewOnly',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.execute('''
+            UPDATE messages
+            SET isPreviewOnly = 1
+            WHERE conversationId IN (
+              SELECT roomId FROM suggested_preview_sync
+            )
+          ''');
+          await db.execute('''
+            DELETE FROM conversations
+            WHERE id IN (SELECT roomId FROM suggested_preview_sync)
+          ''');
         }
       },
     );
@@ -418,7 +438,10 @@ class ChatLocalDb {
   // ── Messages ───────────────────────────────────────────────────────────────
 
   /// Insert or replace a batch of messages in a single transaction.
-  Future<void> saveMessages(List<ChatMessage> messages) async {
+  Future<void> saveMessages(
+    List<ChatMessage> messages, {
+    bool previewOnly = false,
+  }) async {
     if (messages.isEmpty) return;
     final database = await db;
     final batch = database.batch();
@@ -445,6 +468,7 @@ class ChatLocalDb {
         'isDeletedForMe': m.isDeletedForMe ? 1 : 0,
         'isDeletedForEveryone': m.isDeletedForEveryone ? 1 : 0,
         'isEdited': m.isEdited ? 1 : 0,
+        'isPreviewOnly': previewOnly ? 1 : 0,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
 
@@ -453,6 +477,22 @@ class ChatLocalDb {
 
   /// Save a single message — used on optimistic send and on receive.
   Future<void> saveMessage(ChatMessage message) => saveMessages([message]);
+
+  Future<void> saveSuggestedPreviewMessages(
+    String roomId,
+    List<ChatMessage> messages,
+  ) async {
+    if (messages.any((message) => message.conversationId != roomId)) {
+      throw StateError('Suggested preview messages must belong to $roomId.');
+    }
+    await saveMessages(messages, previewOnly: true);
+    final database = await db;
+    await database.delete(
+      'conversations',
+      where: 'id = ?',
+      whereArgs: [roomId],
+    );
+  }
 
   Future<bool> hasMessage(String messageId) async {
     final id = messageId.trim();
@@ -1014,12 +1054,12 @@ class ChatLocalDb {
       INNER JOIN (
         SELECT conversationId, MAX(timestamp) AS maxTimestamp
         FROM messages
-        WHERE isDeletedForMe = 0
+        WHERE isDeletedForMe = 0 AND isPreviewOnly = 0
         GROUP BY conversationId
       ) latest
         ON latest.conversationId = m.conversationId
        AND latest.maxTimestamp = m.timestamp
-      WHERE m.isDeletedForMe = 0
+      WHERE m.isDeletedForMe = 0 AND m.isPreviewOnly = 0
       ORDER BY m.timestamp DESC
     ''');
     if (rows.isEmpty) return const [];
@@ -1257,6 +1297,8 @@ class ChatLocalDb {
     final rows = await database.query(
       'messages',
       columns: ['conversationId', 'senderId', 'receiverId', 'senderPhone'],
+      where: 'isPreviewOnly = ?',
+      whereArgs: [0],
       orderBy: 'timestamp DESC',
     );
 

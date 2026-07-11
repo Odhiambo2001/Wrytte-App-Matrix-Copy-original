@@ -1393,6 +1393,7 @@ class _ChatScreenState extends State<ChatScreen> {
         receiverID: normalisedReceiverId,
         filePath: filePath,
         durationSeconds: durationSeconds,
+        conversationId: realConvId,
       );
       if (mounted) {
         setState(() => _messages.removeWhere((m) => m.id == placeholderId));
@@ -1469,6 +1470,7 @@ class _ChatScreenState extends State<ChatScreen> {
         receiverID: normalisedReceiverId,
         filePath: filePath,
         durationSeconds: durationSeconds,
+        conversationId: realConvId,
       );
       if (mounted) {
         setState(() => _messages.removeWhere((m) => m.id == placeholderId));
