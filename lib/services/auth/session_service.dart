@@ -5,9 +5,7 @@ class SessionService {
   SessionService._();
   static final SessionService instance = SessionService._();
 
-  static const _storage = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  static const _storage = FlutterSecureStorage();
 
   static const _tokenKey = 'auth_token';
   static const _userIdKey = 'user_id';

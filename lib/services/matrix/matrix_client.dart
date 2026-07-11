@@ -108,7 +108,10 @@ class MatrixClientService {
 
     final client = Client(
       MatrixConfig.appServiceName,
-      requestHistoryOnLimitedTimeline: true,
+      // History is restored explicitly when a conversation is opened. Letting
+      // the SDK request it for every limited room during startup creates a
+      // second, uncontrolled request wave and trips the homeserver limiter.
+      requestHistoryOnLimitedTimeline: false,
       syncFilter: Filter(
         room: RoomFilter(
           state: StateFilter(lazyLoadMembers: true),

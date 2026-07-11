@@ -180,6 +180,11 @@ class _AuthWrapperState extends State<AuthWrapper> {
       final userId = user?.userId;
 
       if (loggedIn && userId != null && userId.isNotEmpty) {
+        // Establish the owner-scoped Matrix client before any background
+        // service reads it. This removes the startup "not initialized" race.
+        await MatrixClientService.instance.ensureInitialized(
+          storeNamespace: userId,
+        );
         await AuthService.instance.getValidBackendToken().timeout(
           const Duration(seconds: 2),
           onTimeout: () => '',
@@ -191,9 +196,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
         await ChatService()
             .hydrateLocalConversations(syncReadMarkers: false)
             .timeout(const Duration(seconds: 2), onTimeout: () {});
-        await _prewarmInitialSavedContactAvatars(
-          savedContacts,
-        ).timeout(const Duration(seconds: 2), onTimeout: () {});
+        unawaited(_prewarmInitialSavedContactAvatars(savedContacts));
         _initServicesInBackground(userId: userId, nickname: user.username);
 
         final name = profile?.username ?? user.username;
@@ -245,23 +248,18 @@ class _AuthWrapperState extends State<AuthWrapper> {
   ) async {
     final token = AuthService.instance.cachedBackendToken;
     final seen = <String>{};
-    final futures = <Future<void>>[];
-
     for (final contact in contacts) {
       final url = _resolveAvatarUrl(contact.avatarUrl);
       if (url.isEmpty || !seen.add(url)) continue;
-      futures.add(
-        _warmImage(
-          CachedNetworkImageProvider(
-            url,
-            headers: _avatarAuthHeaders(url, token),
-          ),
-        ).catchError((_) {}),
-      );
+      await _warmImage(
+            CachedNetworkImageProvider(
+              url,
+              headers: _avatarAuthHeaders(url, token),
+            ),
+          )
+          .timeout(const Duration(seconds: 4), onTimeout: () {})
+          .catchError((_) {});
     }
-
-    if (futures.isEmpty) return;
-    await Future.wait(futures);
   }
 
   Future<void> _warmImage(ImageProvider provider) {

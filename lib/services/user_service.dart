@@ -8,6 +8,10 @@ import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 
 class UserService {
+  // The development backend currently exposes no FCM registration route.
+  // Keep this null until the backend publishes one canonical endpoint; probing
+  // several guessed URLs creates repeated 404s and unnecessary startup work.
+  static const String? _fcmTokenEndpoint = null;
   Future<Map<String, dynamic>> getCurrentUserData() async {
     final uid = await AuthService.instance.getCurrentUserId() ?? '';
     final username = await AuthService.instance.getCurrentUsername() ?? '';
@@ -101,6 +105,13 @@ class UserService {
   Future<void> updateFcmToken(String fcmToken) async {
     final cleanedToken = fcmToken.trim();
     if (cleanedToken.isEmpty) return;
+    final endpoint = _fcmTokenEndpoint;
+    if (endpoint == null) {
+      debugPrint(
+        '[UserService] FCM token sync skipped: endpoint not configured',
+      );
+      return;
+    }
 
     final authToken = await AuthService.instance.getToken();
     final userId = await AuthService.instance.getCurrentUserId();
@@ -115,39 +126,12 @@ class UserService {
     }
 
     final body = await _fcmTokenBody(cleanedToken, userId: userId);
-    await _sendFirstSuccessful(
-      action: 'register FCM token',
-      requests: [
-        () => ApiService.postJson(
-          '/notifications/fcm-token',
-          body: body,
-          token: authToken,
-        ),
-        () => ApiService.postJson(
-          '/notification/fcm-token',
-          body: body,
-          token: authToken,
-        ),
-        () => ApiService.postJson(
-          '/users/fcm-token',
-          body: body,
-          token: authToken,
-        ),
-        () => ApiService.postJson(
-          '/auth/fcm-token',
-          body: body,
-          token: authToken,
-        ),
-        () => ApiService.postMultipart(
-          '/notifications/fcm-token',
-          body.map((key, value) => MapEntry(key, value?.toString() ?? '')),
-          token: authToken,
-        ),
-      ],
-    );
+    await ApiService.postJson(endpoint, body: body, token: authToken);
   }
 
   Future<void> removeFcmToken({String? fcmToken}) async {
+    final endpoint = _fcmTokenEndpoint;
+    if (endpoint == null) return;
     final authToken = await AuthService.instance.getToken();
     final userId = await AuthService.instance.getCurrentUserId();
     if (authToken == null ||
@@ -158,36 +142,7 @@ class UserService {
     }
 
     final body = await _fcmTokenBody(fcmToken?.trim() ?? '', userId: userId);
-    await _sendFirstSuccessful(
-      action: 'remove FCM token',
-      requests: [
-        () => ApiService.deleteJson(
-          '/notifications/fcm-token',
-          body: body,
-          token: authToken,
-        ),
-        () => ApiService.deleteJson(
-          '/notification/fcm-token',
-          body: body,
-          token: authToken,
-        ),
-        () => ApiService.deleteJson(
-          '/users/fcm-token',
-          body: body,
-          token: authToken,
-        ),
-        () => ApiService.postJson(
-          '/notifications/fcm-token/remove',
-          body: body,
-          token: authToken,
-        ),
-        () => ApiService.postJson(
-          '/auth/fcm-token/remove',
-          body: body,
-          token: authToken,
-        ),
-      ],
-    );
+    await ApiService.deleteJson(endpoint, body: body, token: authToken);
   }
 
   Future<Map<String, dynamic>> _fcmTokenBody(
@@ -239,24 +194,6 @@ class UserService {
     } catch (_) {
       return {'deviceId': defaultTargetPlatform.name};
     }
-  }
-
-  Future<void> _sendFirstSuccessful({
-    required String action,
-    required List<Future<dynamic> Function()> requests,
-  }) async {
-    Object? lastError;
-    for (final request in requests) {
-      try {
-        await request();
-        debugPrint('[UserService] $action succeeded');
-        return;
-      } catch (e) {
-        lastError = e;
-        if (e is ApiException && e.statusCode >= 500) rethrow;
-      }
-    }
-    debugPrint('[UserService] $action failed: $lastError');
   }
 
   Future<Map<String, dynamic>> getPrivacySettings() async => {

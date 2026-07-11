@@ -16,9 +16,7 @@ class ChatLocalDb {
   static final ChatLocalDb instance = ChatLocalDb._();
 
   static const _userIdKey = 'user_id';
-  final FlutterSecureStorage _storage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   Database? _db;
   String? _ownerId;

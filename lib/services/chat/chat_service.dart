@@ -91,6 +91,7 @@ class ChatService {
   final Map<String, DateTime> _lastReadAtByConversation = {};
   final Map<String, Future<void>> _profileRefreshInFlight = {};
   final Map<String, Future<List<ChatMessage>>> _suggestedPreviewInFlight = {};
+  Future<void> _suggestedPreviewQueue = Future.value();
   bool _suppressRestoredRoomUnread = false;
 
   bool get isConnected => _isConnected;
@@ -455,10 +456,9 @@ class ChatService {
         unawaited(ContactService().syncLocalContactsToBackend(userId));
       }
 
-      await restoreAllRoomHistoryFromServer();
-      await MatrixChatService.instance.ensureSyncedAndAutoJoinInvites(
-        forceSync: true,
-      );
+      // Local history is already hydrated before connection and /sync supplies
+      // the latest room events. Older history is fetched on demand when a room
+      // is opened; restoring every room here caused startup rate-limit bursts.
     } catch (e) {
       // ✅ Log the error but DO NOT lift suppression here.
       // Suppression is always lifted in the finally block below,
@@ -1071,13 +1071,30 @@ class ChatService {
     if (id.isEmpty) return const [];
     final existing = _suggestedPreviewInFlight[id];
     if (existing != null) return existing;
-    final request = _fetchPublicGroupPreview(id, limit: limit);
+    final request = _enqueueSuggestedPreview(id, limit: limit);
     _suggestedPreviewInFlight[id] = request;
     try {
       return await request;
     } finally {
       _suggestedPreviewInFlight.remove(id);
     }
+  }
+
+  Future<List<ChatMessage>> _enqueueSuggestedPreview(
+    String roomId, {
+    int? limit,
+  }) {
+    final completer = Completer<List<ChatMessage>>();
+    _suggestedPreviewQueue = _suggestedPreviewQueue.then((_) async {
+      try {
+        completer.complete(
+          await _fetchPublicGroupPreview(roomId, limit: limit),
+        );
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
   }
 
   Future<List<ChatMessage>> _fetchPublicGroupPreview(

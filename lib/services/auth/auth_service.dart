@@ -278,18 +278,10 @@ class AuthService {
     );
   }
 
-  Future<void> _updateMatrixDisplayName(mx.Client client, String name) async {
-    try {
-      final userId = client.userID;
-      if (userId == null || userId.isEmpty) return;
-      await client
-          .setProfileField(userId, 'displayname', {'displayname': name})
-          .timeout(const Duration(seconds: 3));
-      apkLog('Matrix.auth', 'display name updated user_id="$userId"');
-    } catch (e) {
-      debugPrint('[AuthService] Matrix display-name update failed: $e');
-      apkLog('Matrix.auth', 'display name skipped error="$e"');
-    }
+  Future<void> _updateMatrixDisplayName(mx.Client _, String __) async {
+    // Individual Wrytte profiles are backend-authoritative. Writing the same
+    // name to Matrix during login is redundant and can race token restoration.
+    apkLog('Matrix.auth', 'display name sync skipped; backend authoritative');
   }
 
   Future<void> logoutFromMatrix() => MatrixAuthService.instance.logout();
