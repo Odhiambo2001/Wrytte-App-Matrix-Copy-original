@@ -289,6 +289,43 @@ class ChatLocalDb {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<bool> isSuggestedPreviewComplete(String roomId) async {
+    final database = await db;
+    final rows = await database.query(
+      'suggested_preview_sync',
+      columns: const ['status', 'isComplete'],
+      where: 'roomId = ?',
+      whereArgs: [roomId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    return rows.first['status'] == 'complete' &&
+        (rows.first['isComplete'] as int? ?? 0) == 1;
+  }
+
+  Future<bool> isSuggestedPreviewFresh(
+    String roomId, {
+    Duration maxAge = const Duration(minutes: 10),
+  }) async {
+    final database = await db;
+    final rows = await database.query(
+      'suggested_preview_sync',
+      columns: const ['status', 'isComplete', 'lastFetchedAt'],
+      where: 'roomId = ?',
+      whereArgs: [roomId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final row = rows.first;
+    if (row['status'] != 'complete' || (row['isComplete'] as int? ?? 0) != 1) {
+      return false;
+    }
+    final fetchedAt = row['lastFetchedAt'] as int? ?? 0;
+    return fetchedAt > 0 &&
+        DateTime.now().millisecondsSinceEpoch - fetchedAt <
+            maxAge.inMilliseconds;
+  }
+
   Future<void> saveSuggestedPreviewMembers(
     String roomId,
     List<Map<String, dynamic>> members,

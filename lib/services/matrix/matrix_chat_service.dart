@@ -75,6 +75,9 @@ class MatrixChatService {
   List<MatrixPublicGroup>? _cachedPublicGroups;
   DateTime? _cachedPublicGroupsAt;
   static const Duration _publicGroupsCacheTtl = Duration(seconds: 10);
+  static const Set<String> _excludedSuggestedRoomIds = {
+    '!k2yplerdozzhsqwa:matrix.wrytte.com',
+  };
 
   // Room IDs the app knows to be groups (created or restored via ChatService).
   // This is an authoritative signal that distinguishes a 2-member group from a
@@ -444,6 +447,12 @@ class MatrixChatService {
               // advertising them after every user has left or forgotten the
               // room, but they must never be suggestions in Wrytte.
               .where((group) => group.memberCount > 0)
+              .where(
+                (group) =>
+                    !_excludedSuggestedRoomIds.contains(
+                      group.roomId.trim().toLowerCase(),
+                    ),
+              )
               .where((group) => !isPublicGroupDismissed(group))
               .toList();
       if (limit == null) {

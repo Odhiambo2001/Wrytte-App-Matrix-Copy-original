@@ -256,16 +256,47 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // when authoritative room state permits previewing. Attempt every public
     // suggestion and let the room history endpoint enforce access.
     final previewable = groups.toList(growable: false);
-    const concurrency = 3;
-    for (var start = 0; start < previewable.length; start += concurrency) {
-      final end =
-          start + concurrency < previewable.length
-              ? start + concurrency
-              : previewable.length;
-      await Future.wait(
-        previewable.sublist(start, end).map((group) async {
-          await _chat.fetchPublicGroupPreview(roomId: group.roomId);
-        }),
+    // A room can require many history pages. Warming rooms sequentially keeps
+    // those requests below the homeserver rate limit and serializes removals.
+    for (final group in previewable) {
+      final fresh = await ChatLocalDb.instance.isSuggestedPreviewFresh(
+        group.roomId,
+      );
+      if (!fresh) {
+        await _chat.fetchPublicGroupPreview(roomId: group.roomId);
+      } else {
+        apkLog(
+          'SuggestedPreview',
+          'warm skipped fresh room_id="${group.roomId}"',
+        );
+      }
+      final complete = await ChatLocalDb.instance.isSuggestedPreviewComplete(
+        group.roomId,
+      );
+      if (!complete) continue;
+      final members = await _chat.loadSuggestedPreviewMembers(group.roomId);
+      final joinedCount =
+          members
+              .where(
+                (member) =>
+                    member['membership']?.toString().toLowerCase() == 'join',
+              )
+              .length;
+      if (joinedCount > 0) continue;
+
+      await MatrixChatService.instance.dismissPublicGroup(
+        roomId: group.roomId,
+        canonicalAlias: group.canonicalAlias,
+      );
+      if (!mounted) return;
+      setState(() {
+        _suggestedGroups = _suggestedGroups
+            .where((candidate) => candidate.roomId != group.roomId)
+            .toList(growable: false);
+      });
+      apkLog(
+        'SuggestedPreview',
+        'removed zero-member suggestion room_id="${group.roomId}"',
       );
     }
   }
