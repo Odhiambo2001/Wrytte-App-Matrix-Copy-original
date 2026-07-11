@@ -399,12 +399,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
   StreamSubscription<List<ChatMessage>>? _messagesSub;
   StreamSubscription<mx.SyncUpdate>? _roomProfileSyncSub;
+  StreamSubscription<String>? _groupContactsChangedSub;
 
   final List<ChatMessage> _messages = [];
   final List<ChatMessage> _initialStreamBuffer = [];
   final Map<String, String> _optimisticIdByContent = {};
   final Map<String, String> _groupMemberNames = {};
   final Map<String, String> _groupMemberAvatars = {};
+  final Set<String> _groupSenderProfilesInFlight = {};
   List<mx.User> _groupMembers = const [];
 
   String? _resolvedConversationId;
@@ -442,6 +444,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _chat.activateConversationRead(widget.conversationId);
     _stableHeaderAvatarUrl = _initialStableHeaderAvatarUrl();
     _subscribeToRoomProfileUpdates();
+    _subscribeToGroupContactUpdates();
     apkLog(
       'ChatScreen',
       '── initState ──  '
@@ -479,6 +482,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _chat.deactivateConversationRead(widget.conversationId);
     _roomProfileSyncSub?.cancel();
+    _groupContactsChangedSub?.cancel();
     final resolvedConversationId = _resolvedConversationId;
     if (resolvedConversationId != null &&
         resolvedConversationId != widget.conversationId) {
@@ -509,6 +513,21 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
       setState(() => _stableHeaderAvatarUrl = latestAvatar);
+    });
+  }
+
+  void _subscribeToGroupContactUpdates() {
+    if (!_isGroupChat) return;
+    _groupContactsChangedSub = ContactService.contactsChanged.listen((owner) {
+      if (!mounted ||
+          owner.trim().toLowerCase() !=
+              widget.currentUserId.trim().toLowerCase()) {
+        return;
+      }
+      _groupMemberNames.clear();
+      _groupMemberAvatars.clear();
+      _resolveGroupMessageSenders(_messages);
+      if (mounted) setState(() {});
     });
   }
 
@@ -1709,6 +1728,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _removeDuplicateOutgoingEchoes();
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    _resolveGroupMessageSenders(incoming);
   }
 
   void _replaceMessagesFromSharedCache(List<ChatMessage> incoming) {
@@ -1724,6 +1744,31 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     _removeDuplicateOutgoingEchoes();
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    _resolveGroupMessageSenders(incoming);
+  }
+
+  void _resolveGroupMessageSenders(Iterable<ChatMessage> messages) {
+    if (!_isGroupChat) return;
+    final senders = <String, ChatMessage>{};
+    for (final message in messages) {
+      final senderId = message.senderId.trim();
+      if (senderId.isEmpty || senderId.startsWith('!') || _isMine(message)) {
+        continue;
+      }
+      senders.putIfAbsent(senderId, () => message);
+      final eventName = _cleanDisplayName(message.senderName);
+      if (eventName.isNotEmpty && !_groupMemberNames.containsKey(senderId)) {
+        _groupMemberNames[senderId] = eventName;
+      }
+    }
+    for (final entry in senders.entries) {
+      unawaited(
+        _loadGroupMemberProfileName(
+          entry.key,
+          phoneHint: entry.value.senderPhone,
+        ),
+      );
+    }
   }
 
   bool _isLocalOutgoingEcho(ChatMessage message) =>
@@ -3355,34 +3400,92 @@ class _ChatScreenState extends State<ChatScreen> {
       final fallback = _cleanDisplayName(member.calcDisplayname());
       if (fallback.isNotEmpty) return fallback;
     }
-    return 'Member';
+    final localpart = _matrixLocalpart(matrixId);
+    return localpart.isNotEmpty ? localpart : 'Unknown sender';
   }
 
-  Future<void> _loadGroupMemberProfileName(String matrixId) async {
+  Future<void> _loadGroupMemberProfileName(
+    String matrixId, {
+    String? phoneHint,
+  }) async {
+    final senderId = matrixId.trim();
+    if (senderId.isEmpty ||
+        senderId.startsWith('!') ||
+        !_groupSenderProfilesInFlight.add(senderId)) {
+      return;
+    }
     try {
-      final localpart = _matrixLocalpart(matrixId);
+      final localpart = _matrixLocalpart(senderId);
       if (localpart.isEmpty) return;
       final current = await AuthService.instance.getCurrentUserId();
       final isMe = _matrixLocalpart(current ?? '') == localpart;
-      final profile =
-          isMe
-              ? await UserProfileService.instance.getCurrentUserProfile(
-                forceRefresh: false,
-              )
-              : await UserProfileService.instance.getProfileByUid(
-                localpart,
-                forceRefresh: false,
+      if (isMe) return;
+
+      final ownerUserId = current?.trim() ?? '';
+      final savedContact =
+          ownerUserId.isEmpty
+              ? null
+              : await _findSavedContact(
+                ownerUserId,
+                senderId,
+                phone: phoneHint,
               );
+      if (savedContact != null) {
+        final name = _cleanDisplayName(savedContact.formattedName);
+        final avatar = savedContact.avatarUrl?.trim() ?? '';
+        if (!mounted) return;
+        setState(() {
+          if (name.isNotEmpty) _groupMemberNames[senderId] = name;
+          if (avatar.isNotEmpty) _groupMemberAvatars[senderId] = avatar;
+        });
+        return;
+      }
+
+      final localProfile1 =
+          ownerUserId.isEmpty
+              ? null
+              : await ContactIdentityCache.instance.findByMatrixId(
+                ownerUserId: ownerUserId,
+                matrixUserId: senderId,
+              );
+      if (localProfile1 != null) {
+        final name = _cleanDisplayName(localProfile1.profileName);
+        final avatar = localProfile1.avatarUrl?.trim() ?? '';
+        if (!mounted) return;
+        setState(() {
+          if (name.isNotEmpty) _groupMemberNames[senderId] = name;
+          if (avatar.isNotEmpty) _groupMemberAvatars[senderId] = avatar;
+        });
+        return;
+      }
+
+      final profile = await UserProfileService.instance.getProfileByUid(
+        localpart,
+        phone: phoneHint,
+        forceRefresh: false,
+      );
       final name = _cleanDisplayName(profile?.displayName);
       final avatar = profile?.profileImage.trim() ?? '';
+      if (profile != null && ownerUserId.isNotEmpty) {
+        await ContactIdentityCache.instance.upsert(
+          ownerUserId: ownerUserId,
+          matrixUserId: senderId,
+          phone: profile.phone,
+          profileName: name,
+          avatarUrl: avatar,
+          bio: profile.bio,
+        );
+      }
       if (!mounted) return;
       if (name.isEmpty && avatar.isEmpty) return;
       setState(() {
-        if (name.isNotEmpty) _groupMemberNames[matrixId] = name;
-        if (avatar.isNotEmpty) _groupMemberAvatars[matrixId] = avatar;
+        if (name.isNotEmpty) _groupMemberNames[senderId] = name;
+        if (avatar.isNotEmpty) _groupMemberAvatars[senderId] = avatar;
       });
     } catch (_) {
       // Matrix display names are kept as fallback.
+    } finally {
+      _groupSenderProfilesInFlight.remove(senderId);
     }
   }
 
