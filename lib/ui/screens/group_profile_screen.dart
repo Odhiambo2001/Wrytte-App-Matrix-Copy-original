@@ -11,9 +11,11 @@ import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
+import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
+import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
 import 'package:wrytte/ui/widgets/full_screen_video_viewer.dart';
 import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
@@ -50,18 +52,32 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   final Map<String, String> _memberPhones = {};
   final Map<String, String> _savedContactNamesByUserId = {};
   final Map<String, String> _savedContactNamesByPhone = {};
+  final Map<String, String> _savedContactAvatarsByUserId = {};
+  final Map<String, String> _savedContactAvatarsByPhone = {};
   List<mx.User> _members = const [];
   List<String> _cachedMemberIds = const [];
   String? _localAvatarOverride;
   late bool _joined;
   bool _joiningOrLeaving = false;
+  StreamSubscription<String>? _contactsChangedSub;
+  StreamSubscription<mx.SyncUpdate>? _matrixSyncSub;
+  Timer? _matrixRefreshDebounce;
 
   @override
   void initState() {
     super.initState();
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     _joined = widget.initiallyJoined || room?.membership == mx.Membership.join;
+    _subscribeToProfileUpdates();
     unawaited(_initialiseMemberProfiles());
+  }
+
+  @override
+  void dispose() {
+    _contactsChangedSub?.cancel();
+    _matrixSyncSub?.cancel();
+    _matrixRefreshDebounce?.cancel();
+    super.dispose();
   }
 
   @override
@@ -387,12 +403,16 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 member.calcDisplayname(),
               );
               if (name == null) return const SizedBox.shrink();
-              final avatar =
-                  _memberAvatars[member.id] ?? member.avatarUrl?.toString();
+              final avatar = _displayMemberAvatar(
+                member.id,
+                member.avatarUrl?.toString(),
+              );
               return ListTile(
+                key: ValueKey('member:${widget.roomId}:${member.id}'),
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
+                onTap: () => _openMemberProfile(member.id, name),
               );
             },
           ),
@@ -401,11 +421,13 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
             builder: (_) {
               final name = _displayMemberName(memberId, memberId);
               if (name == null) return const SizedBox.shrink();
-              final avatar = _memberAvatars[memberId];
+              final avatar = _displayMemberAvatar(memberId, null);
               return ListTile(
+                key: ValueKey('member:${widget.roomId}:$memberId'),
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
+                onTap: () => _openMemberProfile(memberId, name),
               );
             },
           ),
@@ -719,6 +741,44 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     _loadMemberProfiles();
   }
 
+  void _subscribeToProfileUpdates() {
+    _contactsChangedSub = ContactService.contactsChanged.listen((
+      ownerId,
+    ) async {
+      final currentUserId = await AuthService.instance.getCurrentUserId();
+      if (!mounted ||
+          currentUserId == null ||
+          ownerId.trim().toLowerCase() != currentUserId.trim().toLowerCase()) {
+        return;
+      }
+      await _loadOwnerSavedContactNames();
+      if (mounted) _loadMemberProfiles();
+    });
+    _matrixSyncSub = MatrixChatService.instance.syncStream.listen((_) {
+      _matrixRefreshDebounce?.cancel();
+      _matrixRefreshDebounce = Timer(const Duration(milliseconds: 250), () {
+        if (!mounted) return;
+        final room = MatrixChatService.instance.getRoomById(widget.roomId);
+        _joined = room?.membership == mx.Membership.join || _joined;
+        _loadMemberProfiles();
+        setState(() {}); // Re-read room name/avatar state using this roomId.
+      });
+    });
+  }
+
+  void _openMemberProfile(String userId, String savedNameHint) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder:
+            (_) => ProfileScreen(
+              uid: userId,
+              conversationId: widget.roomId,
+              savedNameHint: savedNameHint,
+            ),
+      ),
+    );
+  }
+
   Future<void> _loadSuggestedPreviewMemberProfiles() async {
     if (_joined) return;
     try {
@@ -921,16 +981,24 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
       final byUserId = <String, String>{};
       final byPhone = <String, String>{};
+      final avatarsByUserId = <String, String>{};
+      final avatarsByPhone = <String, String>{};
       for (final contact in contacts) {
         final savedName = _cleanMemberName(contact.formattedName);
         if (savedName.isEmpty) continue;
 
         for (final key in _contactUserKeys(contact.wrytteUserId)) {
           byUserId[key] = savedName;
+          final avatar = contact.avatarUrl?.trim() ?? '';
+          if (avatar.isNotEmpty) avatarsByUserId[key] = avatar;
         }
         for (final phone in contact.phones) {
           final normalized = _normalizePhone(phone);
-          if (normalized.isNotEmpty) byPhone[normalized] = savedName;
+          if (normalized.isNotEmpty) {
+            byPhone[normalized] = savedName;
+            final avatar = contact.avatarUrl?.trim() ?? '';
+            if (avatar.isNotEmpty) avatarsByPhone[normalized] = avatar;
+          }
         }
       }
 
@@ -941,6 +1009,12 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         _savedContactNamesByPhone
           ..clear()
           ..addAll(byPhone);
+        _savedContactAvatarsByUserId
+          ..clear()
+          ..addAll(avatarsByUserId);
+        _savedContactAvatarsByPhone
+          ..clear()
+          ..addAll(avatarsByPhone);
 
         for (final member in _members) {
           final savedName = _savedContactNameFor(member.id);
@@ -981,6 +1055,22 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
       if (name.isNotEmpty) return name;
     }
     return null;
+  }
+
+  String? _displayMemberAvatar(String matrixId, String? matrixFallback) {
+    for (final key in _contactUserKeys(matrixId)) {
+      final avatar = _savedContactAvatarsByUserId[key]?.trim() ?? '';
+      if (avatar.isNotEmpty) return avatar;
+    }
+    final phone = _normalizePhone(_memberPhones[matrixId] ?? '');
+    if (phone.isNotEmpty) {
+      final avatar = _savedContactAvatarsByPhone[phone]?.trim() ?? '';
+      if (avatar.isNotEmpty) return avatar;
+    }
+    final backendAvatar = _memberAvatars[matrixId]?.trim() ?? '';
+    if (backendAvatar.isNotEmpty) return backendAvatar;
+    final roomMemberAvatar = matrixFallback?.trim() ?? '';
+    return roomMemberAvatar.isEmpty ? null : roomMemberAvatar;
   }
 
   Iterable<String> _contactUserKeys(String? value) sync* {
@@ -1044,7 +1134,9 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   String? _safeGroupRoomAvatarUrl(mx.Room? room) {
     final raw = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
-    final avatar = raw is String ? raw.trim() : '';
+    final stateAvatar = raw is String ? raw.trim() : '';
+    final avatar =
+        stateAvatar.isNotEmpty ? stateAvatar : widget.avatarUrl?.trim() ?? '';
     if (avatar.isEmpty || _matchesGroupParticipantAvatar(room, avatar)) {
       return null;
     }

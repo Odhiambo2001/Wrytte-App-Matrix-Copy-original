@@ -164,8 +164,10 @@ class ContactIdentityCache {
   }
 
   String _identityKey(String matrixUserId) {
-    final localpart = _matrixLocalpart(matrixUserId);
-    return localpart.toLowerCase();
+    // Matrix IDs are globally scoped by their homeserver. Collapsing this to
+    // the localpart allows @alice:one.test to reuse @alice:two.test's profile.
+    // Keep the complete MXID in the owner-scoped cache namespace.
+    return _toMatrixUserId(matrixUserId).toLowerCase();
   }
 
   String _toMatrixUserId(String value) {
