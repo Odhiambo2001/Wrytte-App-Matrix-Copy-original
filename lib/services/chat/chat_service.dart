@@ -2068,7 +2068,7 @@ class ChatService {
       otherUserAvatar: avatarUrl,
       conversationKind: ConversationKind.group,
     );
-    await markGroupCreated(id);
+    await markGroupJoined(id);
     await clearGroupJoinCutoff(id);
     final existing = _conversationsMap[id];
     _conversationsMap[id] =
@@ -3162,6 +3162,19 @@ class ChatService {
       await _saveCreatedGroupRoomIds();
       MatrixChatService.instance.registerCreatedGroupRoom(id); // add
     }
+  }
+
+  /// Marks a group as joined but not created by this account.
+  ///
+  /// Older builds incorrectly registered joined suggestions as created rooms;
+  /// removing the ID here also repairs that persisted classification.
+  Future<void> markGroupJoined(String roomId) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return;
+    if (_createdGroupRoomIds.remove(id)) {
+      await _saveCreatedGroupRoomIds();
+    }
+    MatrixChatService.instance.unregisterCreatedGroupRoom(id);
   }
 
   bool isCreatedGroupRoom(String roomId) =>

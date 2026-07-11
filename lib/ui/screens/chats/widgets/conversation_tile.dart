@@ -4,6 +4,7 @@ import 'package:wrytte/components/user_avatar.dart';
 class ConversationTile extends StatelessWidget {
   final String name;
   final String lastMessage;
+  final String? senderName;
   final String time;
   final String? avatarUrl;
   final String? localAvatarPath;
@@ -25,6 +26,7 @@ class ConversationTile extends StatelessWidget {
     super.key,
     required this.name,
     required this.lastMessage,
+    this.senderName,
     required this.time,
     this.avatarUrl,
     this.localAvatarPath,
@@ -129,6 +131,19 @@ class ConversationTile extends StatelessWidget {
 
                     const SizedBox(height: 4),
 
+                    if (senderName?.trim().isNotEmpty == true) ...[
+                      Text(
+                        senderName!.trim(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                    ],
+
                     Row(
                       children: [
                         Expanded(
@@ -138,7 +153,7 @@ class ConversationTile extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 14,
-                              color: Colors.grey[400],
+                              color: Colors.grey[500],
                             ),
                           ),
                         ),
