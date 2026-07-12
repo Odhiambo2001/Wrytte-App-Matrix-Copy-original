@@ -198,8 +198,7 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
 
     if (contact.wrytteUserId != null &&
         contact.wrytteUserId!.isNotEmpty &&
-        _conversationKey(receiverId) != _conversationKey(currentUserId) &&
-        !(conversationId.startsWith('!') && initialMessages.isNotEmpty)) {
+        _conversationKey(receiverId) != _conversationKey(currentUserId)) {
       try {
         final chat = ChatService();
         await chat.connect();
@@ -209,20 +208,23 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
                 ? existingRoomId
                 : await chat.getMatrixConversationId(receiverId);
         if (roomId != null && roomId.isNotEmpty) {
-          await ChatLocalDb.instance.migrateConversationId(
-            oldConversationId: conversationId,
-            roomConversation: ChatConversation(
-              id: roomId,
-              participants: [currentUserId, receiverId],
-              otherUserId: receiverId,
-              lastMessage: '',
-              lastMessageSenderId: '',
-              lastMessageTime: DateTime.now(),
-              unreadCount: 0,
-              otherUserName: _sanitize(contact.formattedName),
-              otherUserAvatar: contact.avatarUrl,
-            ),
-          );
+          if (!conversationId.startsWith('!')) {
+            await ChatLocalDb.instance.migrateConversationId(
+              oldConversationId: conversationId,
+              roomConversation: ChatConversation(
+                id: roomId,
+                participants: [currentUserId, receiverId],
+                otherUserId: receiverId,
+                lastMessage: '',
+                lastMessageSenderId: '',
+                lastMessageTime: DateTime.now(),
+                unreadCount: 0,
+                otherUserName: _sanitize(contact.formattedName),
+                otherUserAvatar: contact.avatarUrl,
+                conversationKind: ConversationKind.direct,
+              ),
+            );
+          }
           conversationId = roomId;
           await chat.fetchMessageHistory(conversationID: roomId);
           initialMessages = await chat.loadCachedMessages(roomId);

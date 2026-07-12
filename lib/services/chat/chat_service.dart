@@ -2017,6 +2017,12 @@ class ChatService {
     }
   }
 
+  bool isVerifiedDirectConversation(String roomId, String otherUserId) =>
+      MatrixChatService.instance.isVerifiedDirectRoomFor(
+        roomId,
+        _toMatrixUserId(otherUserId),
+      );
+
   Future<void> disconnect() async {
     if (!_isConnected) return;
     await reset();

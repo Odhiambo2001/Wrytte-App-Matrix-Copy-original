@@ -465,7 +465,7 @@ class _ChatScreenState extends State<ChatScreen> {
         initialGroupRoom?.membership == mx.Membership.join;
 
     _logger.addListener(_onNewLog);
-    if (widget.initialMessages.isNotEmpty) {
+    if (widget.initialMessages.isNotEmpty && _suppliedRoomMatchesScreenKind) {
       _mergeMessages(widget.initialMessages);
       _loadingInitial = false;
     }
@@ -653,7 +653,14 @@ class _ChatScreenState extends State<ChatScreen> {
           'passedConvId="${widget.conversationId}"',
     );
 
-    if (widget.conversationId.startsWith('!')) {
+    final suppliedRoomIsAllowed =
+        widget.conversationId.startsWith('!') &&
+        (widget.conversationKind != ConversationKind.direct ||
+            _chat.isVerifiedDirectConversation(
+              widget.conversationId,
+              normalisedReceiverId,
+            ));
+    if (suppliedRoomIsAllowed) {
       _resolvedConversationId = widget.conversationId;
       _chat.activateConversationRead(widget.conversationId);
       apkLog(
@@ -698,7 +705,15 @@ class _ChatScreenState extends State<ChatScreen> {
       return null;
     }
 
-    if (widget.conversationId.startsWith('!')) {
+    final normalisedReceiverId = _normaliseId(widget.receiverId);
+    final suppliedRoomIsAllowed =
+        widget.conversationId.startsWith('!') &&
+        (widget.conversationKind != ConversationKind.direct ||
+            _chat.isVerifiedDirectConversation(
+              widget.conversationId,
+              normalisedReceiverId,
+            ));
+    if (suppliedRoomIsAllowed) {
       _resolvedConversationId = widget.conversationId;
       _chat.activateConversationRead(widget.conversationId);
       return widget.conversationId;
@@ -714,7 +729,6 @@ class _ChatScreenState extends State<ChatScreen> {
       return null;
     }
 
-    final normalisedReceiverId = _normaliseId(widget.receiverId);
     final matrixConversationId = await _chat.getMatrixConversationId(
       normalisedReceiverId,
     );
@@ -735,7 +749,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadInitial() async {
     _matrixAvailable = false;
     _hasMoreOlder = false;
-    await _hydrateAndSubscribe(widget.conversationId);
+    if (_suppliedRoomMatchesScreenKind) {
+      await _hydrateAndSubscribe(widget.conversationId);
+    }
 
     apkLog('ChatScreen._loadInitial', 'calling chat.connect()…');
 
@@ -765,9 +781,16 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     if (realConvId != widget.conversationId) {
-      await _migrateLocalConversationToRoom(realConvId, const []);
-      if (!mounted) return;
-      setState(() => _normaliseMessagesToConversation(realConvId));
+      if (widget.conversationId.startsWith('!')) {
+        // A different Matrix room can never be migrated into this one. In
+        // particular, never move group history into a newly resolved DM.
+        if (!mounted) return;
+        setState(() => _messages.clear());
+      } else {
+        await _migrateLocalConversationToRoom(realConvId, const []);
+        if (!mounted) return;
+        setState(() => _normaliseMessagesToConversation(realConvId));
+      }
     }
 
     if (realConvId.startsWith('!') && !_isReadOnlySuggestedGroup) {
@@ -799,6 +822,15 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     await _hydrateAndSubscribe(realConvId, publishHydrated: false);
+  }
+
+  bool get _suppliedRoomMatchesScreenKind {
+    if (!widget.conversationId.startsWith('!')) return true;
+    if (widget.conversationKind != ConversationKind.direct) return true;
+    return _chat.isVerifiedDirectConversation(
+      widget.conversationId,
+      _normaliseId(widget.receiverId),
+    );
   }
 
   Future<void> _hydrateAndSubscribe(

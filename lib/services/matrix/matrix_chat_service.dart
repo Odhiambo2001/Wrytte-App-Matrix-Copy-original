@@ -190,6 +190,25 @@ class MatrixChatService {
     return null;
   }
 
+  bool isVerifiedDirectRoomFor(String roomId, String matrixUserId) {
+    final room = getRoomById(roomId.trim());
+    final peer = matrixUserId.trim();
+    if (room == null || peer.isEmpty) return false;
+    if (room.membership != Membership.join &&
+        room.membership != Membership.invite) {
+      return false;
+    }
+    if (room.directChatMatrixID != peer) return false;
+    if (isCreatedGroupRoom(room.id) ||
+        room.joinRules == JoinRules.public ||
+        room.canonicalAlias.trim().isNotEmpty ||
+        room.getState('com.wrytte.group.info') != null ||
+        groupMemberCount(room) > 2) {
+      return false;
+    }
+    return true;
+  }
+
   int roomProfileVersion(Room? room) {
     if (room == null) return 0;
     final content = room.getState('com.wrytte.group.info')?.content ?? const {};
@@ -1253,11 +1272,7 @@ class MatrixChatService {
 
   Room? _directRoomFor(String matrixUserId, {bool includeInvite = false}) {
     for (final room in MatrixClientService.instance.client.rooms) {
-      if (room.directChatMatrixID != matrixUserId) continue;
-      // A known group (including a 2-member group) is never a direct room.
-      if (isCreatedGroupRoom(room.id)) continue;
-      // 3+ members can't be a real 1:1 — skip it.
-      if (groupMemberCount(room) > 2) continue;
+      if (!isVerifiedDirectRoomFor(room.id, matrixUserId)) continue;
       if (room.membership == Membership.join) return room;
       if (includeInvite && room.membership == Membership.invite) return room;
     }
