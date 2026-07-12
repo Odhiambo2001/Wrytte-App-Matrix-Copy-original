@@ -72,6 +72,7 @@ class ChatService {
   bool _isConnected = false;
   Future<void>? _connectFuture;
   Future<void>? _historyRestoreFuture;
+  Future<void>? _directHistoryRestoreFuture;
   StreamSubscription? _timelineSub;
   StreamSubscription? _syncSub;
   bool _handlingSync = false;
@@ -457,8 +458,10 @@ class ChatService {
       }
 
       // Local history is already hydrated before connection and /sync supplies
-      // the latest room events. Older history is fetched on demand when a room
-      // is opened; restoring every room here caused startup rate-limit bursts.
+      // Restore verified DMs sequentially in the background. This discovers
+      // conversations whose latest /sync event is state-only and retrieves
+      // every older message batch without mixing group rooms into Chats.
+      unawaited(_ensureAllDirectRoomHistoryRestored());
     } catch (e) {
       // ✅ Log the error but DO NOT lift suppression here.
       // Suppression is always lifted in the finally block below,
@@ -493,6 +496,29 @@ class ChatService {
     });
   }
 
+  Future<void> _restoreAllDirectRoomHistoryFromServer() async {
+    final rooms =
+        await MatrixChatService.instance.discoverAndRepairDirectRooms();
+    for (final room in rooms) {
+      await _restoreRoomHistoryFromServer(room);
+      _refreshConversationsFromRooms(force: true);
+      // Keep pagination and read-marker traffic below homeserver burst limits.
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+    }
+  }
+
+  Future<void> _ensureAllDirectRoomHistoryRestored() {
+    final pending = _directHistoryRestoreFuture;
+    if (pending != null) return pending;
+    final future = _restoreAllDirectRoomHistoryFromServer();
+    _directHistoryRestoreFuture = future;
+    return future.whenComplete(() {
+      if (identical(_directHistoryRestoreFuture, future)) {
+        _directHistoryRestoreFuture = null;
+      }
+    });
+  }
+
   Future<void> _restoreAllRoomHistoryFromServer() async {
     await _withMatrixTokenRetry('restoreAllRoomHistoryFromServer', () async {
       final client = MatrixClientService.instance.client;
@@ -519,6 +545,7 @@ class ChatService {
           historyCount: _matrixHistoryPageSize,
           filter: mx.StateFilter(lazyLoadMembers: true),
         );
+        await Future<void>.delayed(const Duration(milliseconds: 150));
         final afterCount = timeline.events.length;
         apkLog(
           'Matrix.history',
@@ -2032,6 +2059,7 @@ class ChatService {
     _isConnected = false;
     _connectFuture = null;
     _historyRestoreFuture = null;
+    _directHistoryRestoreFuture = null;
     _roomsRefreshTimer?.cancel();
     _roomsRefreshTimer = null;
     _lastRoomsRefreshAt = null;

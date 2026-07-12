@@ -209,6 +209,44 @@ class MatrixChatService {
     return true;
   }
 
+  Future<List<Room>> discoverAndRepairDirectRooms() async {
+    final client = await connect();
+    final me = client.userID;
+    if (me == null || me.isEmpty) return const [];
+    final directRooms = <Room>[];
+    for (final room in List<Room>.from(client.rooms)) {
+      if (room.membership != Membership.join) continue;
+      var peer = room.directChatMatrixID?.trim() ?? '';
+      if (peer.isNotEmpty && isVerifiedDirectRoomFor(room.id, peer)) {
+        directRooms.add(room);
+        continue;
+      }
+      if (!_looksLikeUnmarkedDirectRoom(room)) continue;
+      final peers =
+          room
+              .getParticipants()
+              .map((member) => member.id.trim())
+              .where((id) => id.isNotEmpty && id != me)
+              .toSet();
+      if (peers.length != 1) continue;
+      peer = peers.single;
+      try {
+        await room.addToDirectChat(peer);
+        directRooms.add(room);
+        apkLog(
+          'Matrix.direct',
+          'repaired m.direct room_id="${room.id}" peer="$peer"',
+        );
+      } catch (error) {
+        apkLog(
+          'Matrix.direct',
+          'm.direct repair failed room_id="${room.id}" peer="$peer" error="$error"',
+        );
+      }
+    }
+    return directRooms;
+  }
+
   int roomProfileVersion(Room? room) {
     if (room == null) return 0;
     final content = room.getState('com.wrytte.group.info')?.content ?? const {};
@@ -1049,6 +1087,7 @@ class MatrixChatService {
     if (alias.isNotEmpty) return false;
     // A known group is never an unmarked direct room, even with 2 members.
     if (isCreatedGroupRoom(room.id)) return false;
+    if (room.getState('com.wrytte.group.info') != null) return false;
     final participantCount =
         room
             .getParticipants([Membership.join, Membership.invite])
