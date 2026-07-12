@@ -416,6 +416,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loadingOlder = false;
   bool _loadingInitial = true;
   bool _hasMoreOlder = true;
+  bool _groupProfilesReady = false;
 
   bool _isSending = false;
   bool _matrixAvailable = false;
@@ -464,6 +465,7 @@ class _ChatScreenState extends State<ChatScreen> {
         !widget.readOnlyUntilJoin ||
         initialGroupRoom?.membership == mx.Membership.join;
 
+    _seedGroupProfile2FromMemory();
     _logger.addListener(_onNewLog);
     if (widget.initialMessages.isNotEmpty && _suppliedRoomMatchesScreenKind) {
       _mergeMessages(widget.initialMessages);
@@ -528,9 +530,18 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       _groupMemberNames.clear();
       _groupMemberAvatars.clear();
+      _seedGroupProfile2FromMemory();
       _resolveGroupMessageSenders(_messages);
+      _groupProfilesReady = false;
       if (mounted) setState(() {});
+      unawaited(_refreshGroupContactProfiles());
     });
+  }
+
+  Future<void> _refreshGroupContactProfiles() async {
+    await _primeGroupMemberProfiles(_activeConversationId);
+    if (!mounted) return;
+    setState(() => _groupProfilesReady = true);
   }
 
   void _onInputFocusChanged() {
@@ -776,10 +787,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final realConvId = await _resolveConversationId();
     _chat.activateConversationRead(realConvId);
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
-    if (_isKnownGroupConversationId(realConvId) && !_isReadOnlySuggestedGroup) {
-      unawaited(_loadGroupMemberProfiles(realConvId));
-    }
-
     if (realConvId != widget.conversationId) {
       if (widget.conversationId.startsWith('!')) {
         // A different Matrix room can never be migrated into this one. In
@@ -804,6 +811,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
     await _loadReceiverProfile(publish: false);
 
+    if (_isKnownGroupConversationId(realConvId) || _isGroupChat) {
+      await _primeGroupMemberProfiles(realConvId);
+    }
+
     await _chat.markConversationAsRead(realConvId);
     await NotificationService.instance.clearConversationNotifications(
       realConvId,
@@ -818,6 +829,7 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _mergeMessages(_initialStreamBuffer);
       _initialStreamBuffer.clear();
+      _groupProfilesReady = true;
       _loadingInitial = false;
     });
 
@@ -1792,11 +1804,17 @@ class _ChatScreenState extends State<ChatScreen> {
         continue;
       }
       senders.putIfAbsent(senderId, () => message);
+      final localpart = _matrixLocalpart(senderId);
+      final savedName = _cleanDisplayName(_groupMemberNames[localpart]);
+      final savedAvatar = _groupMemberAvatars[localpart]?.trim() ?? '';
+      if (savedName.isNotEmpty) _groupMemberNames[senderId] = savedName;
+      if (savedAvatar.isNotEmpty) _groupMemberAvatars[senderId] = savedAvatar;
       final eventName = _cleanDisplayName(message.senderName);
       if (eventName.isNotEmpty && !_groupMemberNames.containsKey(senderId)) {
         _groupMemberNames[senderId] = eventName;
       }
     }
+    if (_loadingInitial || !_groupProfilesReady) return;
     for (final entry in senders.entries) {
       unawaited(
         _loadGroupMemberProfileName(
@@ -1804,6 +1822,21 @@ class _ChatScreenState extends State<ChatScreen> {
           phoneHint: entry.value.senderPhone,
         ),
       );
+    }
+  }
+
+  void _seedGroupProfile2FromMemory() {
+    if (!_isGroupChat) return;
+    final contacts = ContactService.matrixContactsSnapshot(
+      widget.currentUserId,
+    );
+    for (final contact in contacts) {
+      final localpart = _matrixLocalpart(contact.wrytteUserId ?? '');
+      final name = _cleanDisplayName(contact.formattedName);
+      final avatar = contact.avatarUrl?.trim() ?? '';
+      if (localpart.isEmpty || name.isEmpty) continue;
+      _groupMemberNames[localpart] = name;
+      if (avatar.isNotEmpty) _groupMemberAvatars[localpart] = avatar;
     }
   }
 
@@ -3415,17 +3448,39 @@ class _ChatScreenState extends State<ChatScreen> {
     final room = MatrixChatService.instance.getRoomById(roomId);
     final members = room?.getParticipants(_groupMemberships) ?? const [];
     _setGroupMembers(members);
+    final resolutions = <Future<void>>[];
     for (final member in members) {
       final fallback = _cleanDisplayName(member.calcDisplayname());
       if (fallback.isNotEmpty && !_groupMemberNames.containsKey(member.id)) {
         _groupMemberNames[member.id] = fallback;
       }
-      unawaited(_loadGroupMemberProfileName(member.id));
+      resolutions.add(_loadGroupMemberProfileName(member.id));
     }
+    await Future.wait(resolutions);
     if (room != null) {
       unawaited(_requestFullGroupMemberList(room));
     }
     if (mounted) setState(() {});
+  }
+
+  Future<void> _primeGroupMemberProfiles(String roomId) async {
+    await _loadGroupMemberProfiles(roomId);
+    final senders = <String, ChatMessage>{};
+    for (final message in _messages.followedBy(_initialStreamBuffer)) {
+      final senderId = message.senderId.trim();
+      if (senderId.isEmpty || senderId.startsWith('!') || _isMine(message)) {
+        continue;
+      }
+      senders.putIfAbsent(senderId, () => message);
+    }
+    await Future.wait(
+      senders.entries.map(
+        (entry) => _loadGroupMemberProfileName(
+          entry.key,
+          phoneHint: entry.value.senderPhone,
+        ),
+      ),
+    );
   }
 
   Future<void> _requestFullGroupMemberList(mx.Room room) async {

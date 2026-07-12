@@ -82,6 +82,18 @@ class ContactService {
     return contacts;
   }
 
+  /// Returns only the already-loaded Profile 2 contacts for [ownerUserId].
+  /// This never starts I/O and is safe to use during a widget's first frame.
+  static List<Contact> matrixContactsSnapshot(String ownerUserId) {
+    final owner = ownerUserId.trim().toLowerCase();
+    if (owner.isEmpty ||
+        _matrixContactsCacheOwner?.trim().toLowerCase() != owner ||
+        _matrixContactsCache == null) {
+      return const [];
+    }
+    return List<Contact>.unmodifiable(_matrixContactsCache!);
+  }
+
   static void invalidateMatrixContactsCache() {
     _matrixContactsCache = null;
     _matrixContactsCacheOwner = null;
