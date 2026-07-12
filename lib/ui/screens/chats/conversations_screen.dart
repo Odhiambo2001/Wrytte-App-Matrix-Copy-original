@@ -115,7 +115,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _seedSavedContacts(widget.initialSavedContacts);
-    _seedCachedConversations();
+    // Do not synchronously paint cached DM rows here. Even when initial saved
+    // contacts are present, backend contact rows can lack the UID-to-phone
+    // mapping used by older cached conversations. _initialize first loads the
+    // persisted identity cache and Profile 2 contacts, then publishes rows.
     _scrollCtrl.addListener(_onScroll);
     Future.microtask(_initialize);
   }
@@ -158,15 +161,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         _cacheContactName(phone, name, c.avatarUrl);
       }
     }
-  }
-
-  void _seedCachedConversations() {
-    final cached = _enrichSavedContactNames(
-      _realConversationRows(_chat.cachedConversationsSnapshot),
-    );
-    if (cached.isEmpty) return;
-    _conversations = cached;
-    _notifyUnread(_conversations);
   }
 
   Future<void> _initialize() async {
