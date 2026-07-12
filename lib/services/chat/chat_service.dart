@@ -540,6 +540,7 @@ class ChatService {
 
       while (timeline.canRequestHistory) {
         final beforeCount = timeline.events.length;
+        final beforeToken = room.prev_batch;
         page += 1;
         await timeline.requestHistory(
           historyCount: _matrixHistoryPageSize,
@@ -547,6 +548,7 @@ class ChatService {
         );
         await Future<void>.delayed(const Duration(milliseconds: 150));
         final afterCount = timeline.events.length;
+        final afterToken = room.prev_batch;
         apkLog(
           'Matrix.history',
           'page room_id="${room.id}" page=$page before=$beforeCount '
@@ -555,9 +557,21 @@ class ChatService {
         );
 
         if (afterCount <= beforeCount) {
+          if (timeline.canRequestHistory &&
+              afterToken != null &&
+              afterToken.isNotEmpty &&
+              afterToken != beforeToken) {
+            apkLog(
+              'Matrix.history',
+              'continue room_id="${room.id}" page=$page '
+                  'reason="empty page advanced pagination token"',
+            );
+            continue;
+          }
           apkLog(
             'Matrix.history',
-            'stop room_id="${room.id}" page=$page reason="no older timeline events returned"',
+            'stop room_id="${room.id}" page=$page '
+                'reason="no events and pagination token did not advance"',
           );
           break;
         }
