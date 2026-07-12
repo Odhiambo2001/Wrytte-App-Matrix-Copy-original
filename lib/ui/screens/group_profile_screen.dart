@@ -1293,7 +1293,16 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   String? _safeGroupRoomAvatarUrl(mx.Room? room) {
     final raw = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
-    final avatar = raw is String ? raw.trim() : '';
+    final stateAvatar = raw is String ? raw.trim() : '';
+    // Before joining, Matrix does not expose this room through the synced
+    // Room list. Use only the public-directory avatar passed for this exact
+    // room; joined rooms remain strict m.room.avatar-only.
+    final avatar =
+        stateAvatar.isNotEmpty
+            ? stateAvatar
+            : !_joined
+            ? widget.avatarUrl?.trim() ?? ''
+            : '';
     if (avatar.isEmpty || _matchesGroupParticipantAvatar(room, avatar)) {
       return null;
     }

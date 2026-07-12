@@ -3252,7 +3252,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String? _safeGroupRoomAvatarUrl(mx.Room? room) {
     final raw = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
-    final avatar = raw is String ? raw.trim() : '';
+    final stateAvatar = raw is String ? raw.trim() : '';
+    // Unjoined suggested rooms are not present in the client's synced room
+    // list. Their public-directory avatar is still room-owned and arrives
+    // already scoped to widget.conversationId by the discovery result.
+    final avatar =
+        stateAvatar.isNotEmpty
+            ? stateAvatar
+            : _isReadOnlySuggestedGroup
+            ? widget.avatarUrl?.trim() ?? ''
+            : '';
     if (avatar.isEmpty || _matchesGroupParticipantAvatar(room, avatar)) {
       return null;
     }
