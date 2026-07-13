@@ -12,6 +12,11 @@ class AvatarPreloadService {
   static final Map<String, DateTime> _failedAt = {};
   static const Duration _failureCooldown = Duration(minutes: 5);
 
+  static void clearMemoryCache() {
+    _inFlight.clear();
+    _failedAt.clear();
+  }
+
   static Future<void> warm(String? rawUrl) async {
     final url = _resolveAvatarUrl(rawUrl);
     if (url.isEmpty) return;

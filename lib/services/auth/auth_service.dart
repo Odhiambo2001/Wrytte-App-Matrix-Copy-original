@@ -9,6 +9,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart' as mx;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
@@ -22,6 +23,8 @@ import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/notification_service.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
+import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class StoredAuthProfile {
@@ -909,9 +912,12 @@ class AuthService {
     _matrixBootstrapGeneration++;
     _pendingTokenRefresh = null;
     //ADD THIS — clear contact cache before any user switch
-    ContactService.invalidateMatrixContactsCache();
+    ContactService.clearAllCachesForLogout();
     ContactService()
         .invalidateCache(); // clears _phoneUserMapCache and _cacheTime
+    UserProfileService.instance.clearCache();
+    UserAvatar.clearMemoryCache();
+    AvatarPreloadService.clearMemoryCache();
     apkLog('Auth.logout', 'contact service memory caches cleared');
     try {
       await NotificationService.instance.stop().timeout(

@@ -18,6 +18,8 @@ class UserAvatar extends StatefulWidget {
   final String? cacheIdentity;
   final bool isDeleted;
 
+  static void clearMemoryCache() => _UserAvatarState.clearMemoryCache();
+
   const UserAvatar({
     super.key,
     this.size = 40.0,
@@ -52,6 +54,13 @@ class _UserAvatarState extends State<UserAvatar> {
   // "file missing" check (e.g. mid-write) doesn't permanently blacklist a
   // path that becomes valid moments later.
   static final Set<String> _knownGoodLocalPaths = {};
+
+  /// Clears account-scoped avatar state during logout. Image providers can
+  /// otherwise retain references after Flutter's global image cache is wiped.
+  static void clearMemoryCache() {
+    _resolvedImageCache.clear();
+    _knownGoodLocalPaths.clear();
+  }
 
   String? _backendToken;
   String? _lastGoodImageUrl;

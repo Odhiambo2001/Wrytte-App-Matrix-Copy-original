@@ -118,12 +118,23 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _seedSavedContacts(widget.initialSavedContacts);
+    _seedHydratedConversationSnapshot();
     // Do not synchronously paint cached DM rows here. Even when initial saved
     // contacts are present, backend contact rows can lack the UID-to-phone
     // mapping used by older cached conversations. _initialize first loads the
     // persisted identity cache and Profile 2 contacts, then publishes rows.
     _scrollCtrl.addListener(_onScroll);
     Future.microtask(_initialize);
+  }
+
+  void _seedHydratedConversationSnapshot() {
+    final requestedOwner = widget.currentUserId.trim().toLowerCase();
+    final hydratedOwner = _chat.currentUserId?.trim().toLowerCase() ?? '';
+    if (requestedOwner.isEmpty || hydratedOwner != requestedOwner) return;
+    final snapshot = _chat.cachedConversationsSnapshot;
+    if (snapshot.isNotEmpty) {
+      _conversations = List<ChatConversation>.from(snapshot);
+    }
   }
 
   @override
@@ -184,10 +195,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     await _loadLocalConversations();
     if (mounted) setState(() => _initialCacheWarmup = false);
 
-    // Pre-warm phonebook identity matches, then repaint any rows that were
-    // initially loaded from raw Matrix room data.
-    ContactService.preloadContacts(_currentUserId, ContactService());
-    unawaited(_loadPhonebookIdentitiesAndRefresh());
+    // Phonebook matching is not required for the first paint. Deferring it
+    // avoids competing with initial layout and Matrix restoration.
+    unawaited(_runDeferredStartupEnrichment());
 
     // Subscribe to Matrix conversation stream
     _convSub = _chat.conversationsStream.listen(_queueConversationBatch);
@@ -403,8 +413,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     try {
       final local = await ChatLocalDb.instance.loadConversations();
       if (!mounted) return;
+      final initialRows = _mergeConversationLists(
+        local,
+        _chat.cachedConversationsSnapshot,
+      );
       final withContactRows = _enrichSavedContactNames(
-        _realConversationRows(local),
+        _realConversationRows(initialRows),
       );
       if (withContactRows.isEmpty && _initialCacheWarmup) {
         return;
@@ -431,6 +445,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     } catch (e) {
       debugPrint('[ConversationsScreen] initial identity cache skipped: $e');
     }
+  }
+
+  Future<void> _runDeferredStartupEnrichment() async {
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+    await _loadPhonebookIdentitiesAndRefresh();
   }
 
   void _prewarmVisibleMessages(List<ChatConversation> conversations) {
@@ -523,8 +544,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   Future<void> _restoreContactsAfterMatrixReadyInternal() async {
     try {
-      ContactService.invalidateMatrixContactsCache();
-      final contacts = await ContactService().getMatrixContacts(_currentUserId);
+      final contacts = await ContactService().getMatrixContactsCached(
+        _currentUserId,
+      );
       if (contacts.isEmpty || !mounted) return;
       _savedContacts = _sortContacts(contacts);
       await _rebuildContactNameCaches(_savedContacts);
@@ -1550,8 +1572,21 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final localpart = _matrixLocalpart(value);
     if (localpart != null && localpart.isNotEmpty) yield localpart;
 
-    final digits = value.replaceAll(RegExp(r'[^\d]'), '');
-    if (digits.length >= 6) yield digits;
+    // Only an actual phone-shaped value may create a numeric lookup key.
+    // Matrix user IDs are opaque: stripping letters from a UID used to create
+    // digit fragments that could collide with another contact's phone.
+    if (_looksLikePhone(value) && !_looksLikeMatrixId(value)) {
+      final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+      if (digits.length >= 7) yield digits;
+    }
+  }
+
+  String _directAvatarCacheIdentity(ChatConversation conversation) {
+    final uid = _profileUidForConversation(conversation)?.trim() ?? '';
+    final owner = _currentUserId.trim().toLowerCase();
+    final peer =
+        uid.isNotEmpty ? uid.toLowerCase() : conversation.id.toLowerCase();
+    return 'account:$owner|user:$peer';
   }
 
   String? _matrixLocalpart(String? value) {
@@ -1853,7 +1888,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                 avatarUrl: avatar,
                 room: MatrixChatService.instance.getRoomById(conv.id),
               )
-              : null,
+              : _directAvatarCacheIdentity(conv),
       localAvatarPath: localAvatarPath,
       unreadCount: conv.unreadCount,
       isDeleted: isDeleted,

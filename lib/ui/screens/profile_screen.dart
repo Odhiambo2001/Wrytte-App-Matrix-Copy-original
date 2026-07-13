@@ -688,6 +688,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                               size: 100,
                               imageUrl: _profileAvatarUrl(),
                               localImagePath: _profile?.localProfileImagePath,
+                              cacheIdentity:
+                                  'user:${(widget.uid ?? _profile?.uid ?? '').trim().toLowerCase()}',
                               name: displayName,
                             ),
 

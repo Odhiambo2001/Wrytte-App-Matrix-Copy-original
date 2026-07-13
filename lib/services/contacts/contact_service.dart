@@ -34,10 +34,12 @@ class ContactService {
   static Future<List<Contact>>? _matrixContactsFetchInFlight;
   static String? _matrixContactsFetchOwner;
   static final Set<String> _profileRefreshOwners = <String>{};
+  static int _cacheGeneration = 0;
 
   static void preloadContacts(String ownerUserId, ContactService service) {
+    final generation = _cacheGeneration;
     service.getMatrixContacts(ownerUserId).then((contacts) {
-      if (contacts.isEmpty) return;
+      if (contacts.isEmpty || generation != _cacheGeneration) return;
       _matrixContactsCache = contacts;
       _matrixContactsCacheOwner = ownerUserId;
     });
@@ -97,8 +99,17 @@ class ContactService {
   static void invalidateMatrixContactsCache() {
     _matrixContactsCache = null;
     _matrixContactsCacheOwner = null;
+    // Keep an active fetch registered. Clearing it here lets another caller
+    // start a duplicate UserContacts/getall request for the same account.
+  }
+
+  static void clearAllCachesForLogout() {
+    _cacheGeneration += 1;
+    _matrixContactsCache = null;
+    _matrixContactsCacheOwner = null;
     _matrixContactsFetchInFlight = null;
     _matrixContactsFetchOwner = null;
+    _profileRefreshOwners.clear();
   }
 
   static void notifyContactsChanged(String ownerUserId) {
@@ -170,7 +181,9 @@ class ContactService {
 
     final deviceContacts = await fc.FlutterContacts.getContacts(
       withProperties: true,
-      withPhoto: true,
+      // This pass only matches phone numbers. Loading every device-contact
+      // photo blocks the platform thread and causes visible startup jank.
+      withPhoto: false,
     );
 
     final List<Contact> contacts = [];
@@ -264,7 +277,7 @@ class ContactService {
       return _matrixContactsFetchInFlight!;
     }
 
-    final fetch = _getMatrixContactsFresh(owner);
+    final fetch = _getMatrixContactsFresh(owner, _cacheGeneration);
     _matrixContactsFetchInFlight = fetch;
     _matrixContactsFetchOwner = owner;
     try {
@@ -277,7 +290,10 @@ class ContactService {
     }
   }
 
-  Future<List<Contact>> _getMatrixContactsFresh(String owner) async {
+  Future<List<Contact>> _getMatrixContactsFresh(
+    String owner,
+    int generation,
+  ) async {
     final localContacts = await ContactLocalDb.loadSavedContacts(
       ownerUserId: owner,
     );
@@ -318,6 +334,7 @@ class ContactService {
       final backendContacts = await ContactBackendService.instance.loadContacts(
         ownerUserId: owner,
       );
+      if (generation != _cacheGeneration) return const [];
       final peerBackendContacts =
           backendContacts
               .where((contact) => !_isSelfContact(contact.wrytteUserId, owner))

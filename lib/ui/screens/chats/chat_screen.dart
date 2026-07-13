@@ -265,6 +265,7 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
           children: [
             UserAvatar(
               imageUrl: target.avatarUrl,
+              cacheIdentity: 'user:${target.receiverId.trim().toLowerCase()}',
               name: target.title,
               size: 54,
             ),
@@ -2978,6 +2979,9 @@ class _ChatScreenState extends State<ChatScreen> {
           UserAvatar(
             size: 36,
             imageUrl: _groupMemberAvatars[msg.senderId],
+            cacheIdentity:
+                'account:${widget.currentUserId.trim().toLowerCase()}'
+                '|user:${msg.senderId.trim().toLowerCase()}',
             name: senderName,
           ),
           const SizedBox(width: 6),
@@ -3141,7 +3145,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                                         widget
                                                             .initialRoomProfileVersion,
                                                   )
-                                              : null,
+                                              : 'account:${widget.currentUserId.trim().toLowerCase()}'
+                                                  '|user:${widget.receiverId.trim().toLowerCase()}',
                                       localImagePath: localAvatarPath,
                                       name: displayName,
                                       isDeleted: _isDeletedConversation,
