@@ -95,12 +95,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   final Map<String, ContactIdentity> _identityCache = {};
   final Map<String, String> _groupLastSenderNames = {};
   final Set<String> _groupLastSenderInFlight = {};
+  Set<String> _dismissedDeletedGroupRoomIds = const <String>{};
   List<Contact> _savedContacts = const [];
   bool _initialCacheWarmup = true;
   int _conversationPaintVersion = 0;
   int _conversationRefreshVersion = 0;
   List<ChatConversation>? _pendingConversationBatch;
   bool _conversationBatchInFlight = false;
+  Future<void>? _contactRestoreFuture;
   bool _loadingSuggestedGroups = false;
   final Set<String> _openingSuggestedGroupIds = {};
   DateTime? _lastSuggestedGroupsLoadAt;
@@ -172,11 +174,15 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     if (_currentUserId.isEmpty) return;
 
+    // Load the account-scoped deleted-room dismissal list before reading
+    // SQLite. ChatService.connect() loads the same list later, but waiting for
+    // that would allow a dismissed shell to flash during the first local paint.
+    _dismissedDeletedGroupRoomIds = await _chat
+        .dismissedDeletedGroupRoomIdsForOwner(_currentUserId);
     await _loadIdentityCacheFast();
     await _loadSavedContacts();
     await _loadLocalConversations();
     if (mounted) setState(() => _initialCacheWarmup = false);
-    unawaited(_refreshContactSourceInBackground());
 
     // Pre-warm phonebook identity matches, then repaint any rows that were
     // initially loaded from raw Matrix room data.
@@ -195,7 +201,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     _chatConnectionSub = _chat.connectionStream.listen((connected) {
       if (connected) {
-        unawaited(_chat.fetchConversations());
         unawaited(_restoreContactsAfterMatrixReady());
         unawaited(_loadSuggestedGroups());
       }
@@ -204,7 +209,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // Connect ChatService (idempotent) after local conversations are visible.
     try {
       await _chat.connect();
-      unawaited(_chat.fetchConversations());
       unawaited(_restoreContactsAfterMatrixReady());
       unawaited(_loadSuggestedGroups());
     } catch (e) {
@@ -504,6 +508,20 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Future<void> _restoreContactsAfterMatrixReady() async {
+    final pending = _contactRestoreFuture;
+    if (pending != null) return pending;
+    final future = _restoreContactsAfterMatrixReadyInternal();
+    _contactRestoreFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_contactRestoreFuture, future)) {
+        _contactRestoreFuture = null;
+      }
+    }
+  }
+
+  Future<void> _restoreContactsAfterMatrixReadyInternal() async {
     try {
       ContactService.invalidateMatrixContactsCache();
       final contacts = await ContactService().getMatrixContacts(_currentUserId);
@@ -820,6 +838,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     return conversations
         .where(
           (conversation) =>
+              !_dismissedDeletedGroupRoomIds.contains(conversation.id) &&
               !(conversation.id.startsWith('si_') &&
                   conversation.lastMessage.trim().isEmpty),
         )
@@ -1120,6 +1139,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   String _conversationTitle(ChatConversation conv) {
     if (_isGroupConversation(conv)) {
       final room = MatrixChatService.instance.getRoomById(conv.id);
+      final deletedName =
+          room
+              ?.getState(ChatService.groupDeletedStateType)
+              ?.content[ChatService.groupDeletedNameKey]
+              ?.toString()
+              .trim() ??
+          '';
+      if (deletedName.isNotEmpty) return deletedName;
       final roomName = _cleanGroupName(room?.name, room: room);
       if (roomName.isNotEmpty) return roomName;
       final alias = _cleanGroupName(_displayGroupAlias(room), room: room);
@@ -1162,15 +1189,17 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   bool _isGroupConversation(ChatConversation conv) {
-    if (conv.hasExplicitKind) {
-      return conv.isGroupKind || conv.isChannelKind;
-    }
-    if (_chat.isCreatedGroupRoom(conv.id)) return true;
+    // Deleted-room identity is authoritative. It must be evaluated before an
+    // explicit cached kind because older rows may have been mis-stamped as DM.
     if (conv.lastMessageType == ChatService.groupDeletedMessageType) {
       return true;
     }
     if (ChatService.isGroupDeletedPreview(conv.lastMessage)) return true;
     if (conv.deletedAt != null && conv.id.startsWith('!')) return true;
+    if (conv.hasExplicitKind) {
+      return conv.isGroupKind || conv.isChannelKind;
+    }
+    if (_chat.isCreatedGroupRoom(conv.id)) return true;
 
     final explicitlyStoredGroup =
         (conv.lastMessageType == 'group' ||
@@ -1970,6 +1999,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           ),
     );
     if (confirmed != true) return;
+    // Update the screen guard immediately so a concurrent contact or Matrix
+    // repaint cannot republish the row while persistence is completing.
+    _dismissedDeletedGroupRoomIds = <String>{
+      ..._dismissedDeletedGroupRoomIds,
+      conversation.id,
+    };
     await _chat.dismissDeletedGroupLocally(conversation.id);
     if (!mounted) return;
     await _loadLocalConversations();

@@ -77,6 +77,7 @@ class ChatService {
   Future<void>? _connectFuture;
   Future<void>? _historyRestoreFuture;
   Future<void>? _directHistoryRestoreFuture;
+  Future<void>? _fetchConversationsFuture;
   StreamSubscription? _timelineSub;
   StreamSubscription? _syncSub;
   StreamSubscription? _toDeviceSub;
@@ -98,9 +99,12 @@ class ChatService {
   final Map<String, DateTime> _lastReadAtByConversation = {};
   final Map<String, Future<void>> _profileRefreshInFlight = {};
   final Map<String, Future<List<ChatMessage>>> _suggestedPreviewInFlight = {};
+  final Map<String, Future<List<ChatMessage>>> _roomHistoryInFlight = {};
   final Map<String, Future<void>> _markReadInFlight = {};
   final Map<String, String> _lastReadReceiptEventByConversation = {};
   Future<void> _suggestedPreviewQueue = Future.value();
+  Future<void> _matrixPaginationQueue = Future.value();
+  DateTime? _lastMatrixPaginationRequestAt;
   bool _suppressRestoredRoomUnread = false;
 
   bool get isConnected => _isConnected;
@@ -159,7 +163,7 @@ class ChatService {
         'restore start user_id="$_currentUserId" expected="$expectedMatrixUserId"',
       );
       var client = await MatrixAuthService.instance.restore().timeout(
-        const Duration(seconds: 5),
+        const Duration(seconds: 30),
       );
       apkLog(
         'ChatService.connect',
@@ -519,7 +523,7 @@ class ChatService {
       // Restore verified DMs sequentially in the background. This discovers
       // conversations whose latest /sync event is state-only and retrieves
       // every older message batch without mixing group rooms into Chats.
-      unawaited(_ensureAllDirectRoomHistoryRestored());
+      unawaited(_restoreDirectHistoryAfterStartupSettles());
     } catch (e) {
       // ✅ Log the error but DO NOT lift suppression here.
       // Suppression is always lifted in the finally block below,
@@ -541,6 +545,14 @@ class ChatService {
     }
   }
 
+  Future<void> _restoreDirectHistoryAfterStartupSettles() async {
+    // Let the SDK finish /sync and any internal last-event gap repair before
+    // starting potentially deep pagination across every DM room.
+    await Future<void>.delayed(const Duration(seconds: 4));
+    if (!_isConnected) return;
+    await _ensureAllDirectRoomHistoryRestored();
+  }
+
   Future<void> restoreAllRoomHistoryFromServer() {
     final pending = _historyRestoreFuture;
     if (pending != null) return pending;
@@ -560,7 +572,7 @@ class ChatService {
     for (final room in rooms) {
       await _restoreRoomHistoryFromServer(room);
       // Keep pagination and read-marker traffic below homeserver burst limits.
-      await Future<void>.delayed(const Duration(milliseconds: 350));
+      await Future<void>.delayed(const Duration(milliseconds: 900));
     }
     // Refresh once after the batch instead of rebuilding after every room.
     _refreshConversationsFromRooms(force: true);
@@ -592,6 +604,22 @@ class ChatService {
   }
 
   Future<List<ChatMessage>> _restoreRoomHistoryFromServer(mx.Room room) async {
+    final pending = _roomHistoryInFlight[room.id];
+    if (pending != null) return pending;
+    final future = _restoreRoomHistoryFromServerInternal(room);
+    _roomHistoryInFlight[room.id] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_roomHistoryInFlight[room.id], future)) {
+        _roomHistoryInFlight.remove(room.id);
+      }
+    }
+  }
+
+  Future<List<ChatMessage>> _restoreRoomHistoryFromServerInternal(
+    mx.Room room,
+  ) async {
     mx.Timeline? timeline;
     try {
       timeline = await room.getTimeline(limit: null);
@@ -602,11 +630,12 @@ class ChatService {
         final beforeCount = timeline.events.length;
         final beforeToken = room.prev_batch;
         page += 1;
-        await timeline.requestHistory(
-          historyCount: _matrixHistoryPageSize,
-          filter: mx.StateFilter(lazyLoadMembers: true),
+        await _enqueueMatrixPaginationRequest(
+          () => timeline!.requestHistory(
+            historyCount: _matrixHistoryPageSize,
+            filter: mx.StateFilter(lazyLoadMembers: true),
+          ),
         );
-        await Future<void>.delayed(const Duration(milliseconds: 150));
         final afterCount = timeline.events.length;
         final afterToken = room.prev_batch;
         apkLog(
@@ -798,6 +827,49 @@ class ChatService {
       await _refreshCurrentMatrixSession();
       return operation();
     }
+  }
+
+  bool _isMatrixRateLimitError(Object error) =>
+      error.toString().contains('M_LIMIT_EXCEEDED');
+
+  Future<T> _enqueueMatrixPaginationRequest<T>(Future<T> Function() operation) {
+    final completer = Completer<T>();
+    _matrixPaginationQueue = _matrixPaginationQueue.then((_) async {
+      try {
+        const minimumGap = Duration(milliseconds: 750);
+        final last = _lastMatrixPaginationRequestAt;
+        if (last != null) {
+          final remaining = minimumGap - DateTime.now().difference(last);
+          if (remaining > Duration.zero) {
+            await Future<void>.delayed(remaining);
+          }
+        }
+
+        for (var attempt = 0; ; attempt++) {
+          try {
+            _lastMatrixPaginationRequestAt = DateTime.now();
+            completer.complete(await operation());
+            break;
+          } catch (error, stackTrace) {
+            if (!_isMatrixRateLimitError(error) || attempt >= 3) {
+              completer.completeError(error, stackTrace);
+              break;
+            }
+            final delay = Duration(seconds: 2 << attempt);
+            apkLog(
+              'Matrix.rateLimit',
+              'pagination retry=${attempt + 1} delay_ms=${delay.inMilliseconds}',
+            );
+            await Future<void>.delayed(delay);
+          }
+        }
+      } catch (error, stackTrace) {
+        if (!completer.isCompleted) {
+          completer.completeError(error, stackTrace);
+        }
+      }
+    });
+    return completer.future;
   }
 
   Future<void> _handleLiveSyncUpdate(mx.SyncUpdate update) async {
@@ -1193,6 +1265,20 @@ class ChatService {
   }
 
   Future<void> fetchConversations({int offset = 0, int count = 100}) async {
+    final pending = _fetchConversationsFuture;
+    if (pending != null) return pending;
+    final future = _fetchConversations();
+    _fetchConversationsFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_fetchConversationsFuture, future)) {
+        _fetchConversationsFuture = null;
+      }
+    }
+  }
+
+  Future<void> _fetchConversations() async {
     try {
       await _withMatrixTokenRetry('fetchConversations', () async {
         await _waitForConnection();
@@ -1258,11 +1344,13 @@ class ChatService {
         while (limit == null || messages.length < limit) {
           final remaining = limit == null ? 80 : limit - messages.length;
           final pageLimit = remaining > 80 ? 80 : remaining;
-          final response = await client.getRoomEvents(
-            id,
-            mx.Direction.b,
-            from: from,
-            limit: pageLimit,
+          final response = await _enqueueMatrixPaginationRequest(
+            () => client.getRoomEvents(
+              id,
+              mx.Direction.b,
+              from: from,
+              limit: pageLimit,
+            ),
           );
           pageCount++;
           for (final event in response.chunk) {
@@ -1613,6 +1701,11 @@ class ChatService {
       'hydrated local conversations=${conversations.length}',
     );
     for (final conversation in conversations) {
+      if (_dismissedDeletedGroupRoomIds.contains(conversation.id) &&
+          _isDeletedGroupConversationRow(conversation)) {
+        unawaited(ChatLocalDb.instance.deleteConversation(conversation.id));
+        continue;
+      }
       final restoredRead = conversation.copyWith(unreadCount: 0);
       _readConversationIds.add(restoredRead.id);
       _lastReadAtByConversation[restoredRead.id] = restoredRead.lastMessageTime;
@@ -1647,10 +1740,19 @@ class ChatService {
     final upgraded = <ChatConversation>[];
     for (final entry in _conversationsMap.entries.toList()) {
       final conv = entry.value;
-      if (conv.hasExplicitKind) continue;
+      final room = _roomById(conv.id);
+      final tombstoned =
+          room
+              ?.getState(groupDeletedStateType)
+              ?.content[groupDeletedEventKey] ==
+          true;
+      final deletedGroup = tombstoned || _isDeletedGroupConversationRow(conv);
+      if (conv.hasExplicitKind &&
+          !(deletedGroup && !conv.isGroupKind && !conv.isChannelKind)) {
+        continue;
+      }
 
       String kind = ConversationKind.unknown;
-      final room = _roomById(conv.id);
       final storedAsGroup =
           (conv.lastMessageType == 'group' ||
               conv.lastMessageType == groupDeletedMessageType) &&
@@ -1660,7 +1762,7 @@ class ChatService {
       final liveGroup =
           room != null && MatrixChatService.instance.isMatrixGroupRoom(room);
 
-      if (storedAsGroup || inRegistry || liveGroup) {
+      if (deletedGroup || storedAsGroup || inRegistry || liveGroup) {
         kind = ConversationKind.group;
       } else if (room != null && room.isDirectChat) {
         kind = ConversationKind.direct;
@@ -1689,7 +1791,14 @@ class ChatService {
       _conversationsMap[entry.key] = stamped;
       upgraded.add(stamped);
       if (kind == ConversationKind.group) {
-        unawaited(markGroupCreated(conv.id));
+        final ownedByCurrentUser =
+            inRegistry ||
+            (room != null && MatrixChatService.instance.isGroupOwner(room));
+        if (ownedByCurrentUser) {
+          unawaited(markGroupCreated(conv.id));
+        } else {
+          unawaited(markGroupJoined(conv.id));
+        }
       }
     }
     if (upgraded.isEmpty) return;
@@ -2544,6 +2653,15 @@ class ChatService {
   }
 
   String _groupDisplayName(mx.Room room, ChatConversation? existing) {
+    final deletedName =
+        room
+            .getState(groupDeletedStateType)
+            ?.content[groupDeletedNameKey]
+            ?.toString()
+            .trim() ??
+        '';
+    final cleanDeletedName = _cleanHumanName(deletedName);
+    if (cleanDeletedName.isNotEmpty) return cleanDeletedName;
     for (final candidate in [
       room.name,
       _displayAlias(room.canonicalAlias),
@@ -3452,6 +3570,24 @@ class ChatService {
   String _dismissedDeletedGroupRoomIdsKey(String ownerUserId) =>
       'wrytte.dismissed_deleted_group_room_ids.$ownerUserId';
 
+  /// Reads deleted-group shells dismissed by [ownerUserId] without requiring
+  /// Matrix startup to finish first.
+  ///
+  /// The conversations screen uses this before its first SQLite paint so a
+  /// tombstoned room cannot briefly reappear while [connect] is still loading
+  /// the same account-scoped preference into memory.
+  Future<Set<String>> dismissedDeletedGroupRoomIdsForOwner(
+    String ownerUserId,
+  ) async {
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return const <String>{};
+    final prefs = await SharedPreferences.getInstance();
+    final ids =
+        prefs.getStringList(_dismissedDeletedGroupRoomIdsKey(owner)) ??
+        const <String>[];
+    return ids.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
+  }
+
   Future<void> _loadGroupJoinCutoffs() async {
     final owner = _currentUserId;
     if (owner == null || owner.isEmpty) return;
@@ -3507,13 +3643,10 @@ class ChatService {
   Future<void> _loadDismissedDeletedGroupRoomIds() async {
     final owner = _currentUserId;
     if (owner == null || owner.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    final ids =
-        prefs.getStringList(_dismissedDeletedGroupRoomIdsKey(owner)) ??
-        const <String>[];
+    final ids = await dismissedDeletedGroupRoomIdsForOwner(owner);
     _dismissedDeletedGroupRoomIds
       ..clear()
-      ..addAll(ids.map((id) => id.trim()).where((id) => id.isNotEmpty));
+      ..addAll(ids);
   }
 
   Future<void> _saveDismissedDeletedGroupRoomIds() async {
@@ -3565,6 +3698,10 @@ class ChatService {
   // or its live Matrix room classifies as a group. Contact/member enrichment
   // must never touch these — group name/avatar come only from room state.
   bool _isGroupConversationRow(ChatConversation conversation) {
+    // A room tombstone is stronger than stale cached kind metadata. Older
+    // builds could persist a deleted group as `direct` after matching one of
+    // its members; that value must never win here.
+    if (_isDeletedGroupConversationRow(conversation)) return true;
     if (conversation.hasExplicitKind) {
       return conversation.isGroupKind || conversation.isChannelKind;
     }
@@ -3579,6 +3716,13 @@ class ChatService {
     return false;
   }
 
+  bool _isDeletedGroupConversationRow(ChatConversation conversation) {
+    if (!conversation.id.startsWith('!')) return false;
+    return conversation.lastMessageType == groupDeletedMessageType ||
+        isGroupDeletedPreview(conversation.lastMessage) ||
+        conversation.deletedAt != null;
+  }
+
   /// Like [_isGroupConversationRow], but works even when the conversation
   /// isn't currently loaded in [_conversationsMap] — e.g. a joined (not
   /// created) group that was left, deleted, or simply hasn't been refreshed
@@ -3590,6 +3734,7 @@ class ChatService {
     String conversationId,
     ChatConversation? loaded,
   ) async {
+    if (loaded != null && _isDeletedGroupConversationRow(loaded)) return true;
     if (loaded != null && loaded.hasExplicitKind) {
       return loaded.isGroupKind || loaded.isChannelKind;
     }
@@ -3607,6 +3752,9 @@ class ChatService {
       final persisted = await ChatLocalDb.instance.loadConversation(
         conversationId,
       );
+      if (persisted != null && _isDeletedGroupConversationRow(persisted)) {
+        return true;
+      }
       if (persisted != null && persisted.hasExplicitKind) {
         return persisted.isGroupKind || persisted.isChannelKind;
       }
