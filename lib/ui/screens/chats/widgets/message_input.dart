@@ -58,6 +58,7 @@ class _MessageInputFieldState extends State<MessageInputField> {
   // ── flutter_sound recorder ─────────────────────────────────────────────────
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   bool _recorderReady = false;
+  bool _disposed = false;
 
   // ── Recording state ────────────────────────────────────────────────────────
   bool _isRecording = false;
@@ -76,16 +77,32 @@ class _MessageInputFieldState extends State<MessageInputField> {
 
   @override
   void dispose() {
+    _disposed = true;
     _timer?.cancel();
-    _recorder.closeRecorder();
+    unawaited(_disposeRecorder());
     super.dispose();
+  }
+
+  Future<void> _disposeRecorder() async {
+    try {
+      if (_isRecording) await _recorder.stopRecorder();
+      if (_recorderReady || _recorder.isStopped) {
+        await _recorder.closeRecorder();
+      }
+    } catch (_) {
+      // The platform may already have released the audio session.
+    }
   }
 
   // ── Init recorder (requests mic permission) ────────────────────────────────
   Future<void> _openRecorder() async {
     final status = await Permission.microphone.request();
-    if (status != PermissionStatus.granted) return;
+    if (_disposed || status != PermissionStatus.granted) return;
     await _recorder.openRecorder();
+    if (_disposed) {
+      await _recorder.closeRecorder();
+      return;
+    }
     setState(() => _recorderReady = true);
   }
 
@@ -222,93 +239,97 @@ class _MessageInputFieldState extends State<MessageInputField> {
 
                   // ── Text field (hidden while recording) ─────────────────
                   Expanded(
-                    child: _isRecording
-                        ? _buildRecordingIndicator()
-                        : ClipRRect(
-                            borderRadius: BorderRadius.circular(20),
-                            child: BackdropFilter(
-                              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                              child: Container(
-                                constraints: BoxConstraints(
-                                  minHeight: widget.inputPillHeight,
-                                  maxHeight: 120,
+                    child:
+                        _isRecording
+                            ? _buildRecordingIndicator()
+                            : ClipRRect(
+                              borderRadius: BorderRadius.circular(20),
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(
+                                  sigmaX: 24,
+                                  sigmaY: 24,
                                 ),
-                                decoration: BoxDecoration(
-                                  color: const Color(
-                                    0xFF23262C,
-                                  ).withOpacity(0.30),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: const Color(0xFF23262C),
-                                    width: 1.0,
+                                child: Container(
+                                  constraints: BoxConstraints(
+                                    minHeight: widget.inputPillHeight,
+                                    maxHeight: 120,
                                   ),
-                                ),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    const SizedBox(width: 14),
-                                    Expanded(
-                                      child: TextField(
-                                        controller: widget.controller,
-                                        focusNode: widget.focusNode,
-                                        maxLines: null,
-                                        minLines: 1,
-                                        keyboardType: TextInputType.multiline,
-                                        textInputAction:
-                                            TextInputAction.newline,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 15,
-                                          height: 1.4,
-                                        ),
-                                        decoration: InputDecoration(
-                                          hintText: 'Message',
-                                          hintStyle: TextStyle(
-                                            color: Colors.white.withOpacity(
-                                              0.3,
-                                            ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(
+                                      0xFF23262C,
+                                    ).withOpacity(0.30),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: const Color(0xFF23262C),
+                                      width: 1.0,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      const SizedBox(width: 14),
+                                      Expanded(
+                                        child: TextField(
+                                          controller: widget.controller,
+                                          focusNode: widget.focusNode,
+                                          maxLines: null,
+                                          minLines: 1,
+                                          keyboardType: TextInputType.multiline,
+                                          textInputAction:
+                                              TextInputAction.newline,
+                                          style: const TextStyle(
+                                            color: Colors.white,
                                             fontSize: 15,
+                                            height: 1.4,
                                           ),
-                                          border: InputBorder.none,
-                                          contentPadding:
-                                              const EdgeInsets.symmetric(
-                                                vertical: 10,
+                                          decoration: InputDecoration(
+                                            hintText: 'Message',
+                                            hintStyle: TextStyle(
+                                              color: Colors.white.withOpacity(
+                                                0.3,
                                               ),
-                                          isDense: true,
+                                              fontSize: 15,
+                                            ),
+                                            border: InputBorder.none,
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                                  vertical: 10,
+                                                ),
+                                            isDense: true,
+                                          ),
                                         ),
                                       ),
-                                    ),
 
-                                    // ── Express / emoji SVG ─────────────
-                                    Padding(
-                                      padding: const EdgeInsets.only(
-                                        right: 4,
-                                        bottom: 4,
-                                      ),
-                                      child: GestureDetector(
-                                        onTap: () {},
-                                        child: SizedBox(
-                                          width: 32,
-                                          height: 32,
-                                          child: Center(
-                                            child: SvgPicture.asset(
-                                              'assets/svg/gif_icon.svg',
-                                              width: 23,
-                                              height: 23,
-                                              colorFilter: ColorFilter.mode(
-                                                Colors.white.withOpacity(0.4),
-                                                BlendMode.srcIn,
+                                      // ── Express / emoji SVG ─────────────
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          right: 4,
+                                          bottom: 4,
+                                        ),
+                                        child: GestureDetector(
+                                          onTap: () {},
+                                          child: SizedBox(
+                                            width: 32,
+                                            height: 32,
+                                            child: Center(
+                                              child: SvgPicture.asset(
+                                                'assets/svg/gif_icon.svg',
+                                                width: 23,
+                                                height: 23,
+                                                colorFilter: ColorFilter.mode(
+                                                  Colors.white.withOpacity(0.4),
+                                                  BlendMode.srcIn,
+                                                ),
                                               ),
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
                   ),
                   const SizedBox(width: 8),
 
@@ -334,63 +355,65 @@ class _MessageInputFieldState extends State<MessageInputField> {
                   // ── Send / mic button ───────────────────────────────────
                   hasText
                       ? GestureDetector(
-                          onTap: widget.onSend,
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 180),
-                            width: widget.inputPillHeight,
-                            height: widget.inputPillHeight,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF4DA3FF),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: widget.isSending
-                                ? const Padding(
+                        onTap: widget.onSend,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          width: widget.inputPillHeight,
+                          height: widget.inputPillHeight,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF4DA3FF),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child:
+                              widget.isSending
+                                  ? const Padding(
                                     padding: EdgeInsets.all(10),
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
                                       color: Colors.white,
                                     ),
                                   )
-                                : const Icon(
+                                  : const Icon(
                                     Icons.send_rounded,
                                     color: Colors.white,
                                     size: 18,
                                   ),
-                          ),
-                        )
+                        ),
+                      )
                       // ── Mic pill — hold to record, release to send ──────
                       : GestureDetector(
-                          onTap: () {
-                            if (_isRecording) return;
-                            setState(() => _cameraMode = !_cameraMode);
-                          },
-                          onLongPressStart: (_) => _cameraMode
-                              ? _recordVideoMessage()
-                              : _startRecording(),
-                          onLongPressMoveUpdate: _cameraMode
-                              ? null
-                              : _handleRecordMove,
-                          onLongPressEnd: (_) =>
-                              _cameraMode ? null : _stopRecordingAndSend(),
-                          onLongPressCancel: _cameraMode
-                              ? null
-                              : _cancelRecording,
-                          child: _glassPill(
-                            width: widget.inputPillHeight,
-                            height: widget.inputPillHeight,
-                            child: Icon(
-                              _isRecording
-                                  ? Icons.mic
-                                  : _cameraMode
-                                  ? Icons.videocam_outlined
-                                  : Icons.mic_outlined,
-                              color: _isRecording
-                                  ? Colors.redAccent
-                                  : Colors.white.withOpacity(0.7),
-                              size: 25,
-                            ),
+                        onTap: () {
+                          if (_isRecording) return;
+                          setState(() => _cameraMode = !_cameraMode);
+                        },
+                        onLongPressStart:
+                            (_) =>
+                                _cameraMode
+                                    ? _recordVideoMessage()
+                                    : _startRecording(),
+                        onLongPressMoveUpdate:
+                            _cameraMode ? null : _handleRecordMove,
+                        onLongPressEnd:
+                            (_) => _cameraMode ? null : _stopRecordingAndSend(),
+                        onLongPressCancel:
+                            _cameraMode ? null : _cancelRecording,
+                        child: _glassPill(
+                          width: widget.inputPillHeight,
+                          height: widget.inputPillHeight,
+                          child: Icon(
+                            _isRecording
+                                ? Icons.mic
+                                : _cameraMode
+                                ? Icons.videocam_outlined
+                                : Icons.mic_outlined,
+                            color:
+                                _isRecording
+                                    ? Colors.redAccent
+                                    : Colors.white.withOpacity(0.7),
+                            size: 25,
                           ),
                         ),
+                      ),
                 ],
               ),
             ),
@@ -407,30 +430,31 @@ class _MessageInputFieldState extends State<MessageInputField> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            _attachmentTile(
-              icon: Icons.photo_camera_outlined,
-              label: 'Camera',
-              onTap: widget.onCameraAttachment,
+      builder:
+          (context) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                _attachmentTile(
+                  icon: Icons.photo_camera_outlined,
+                  label: 'Camera',
+                  onTap: widget.onCameraAttachment,
+                ),
+                _attachmentTile(
+                  icon: Icons.photo_library_outlined,
+                  label: 'Gallery',
+                  onTap: widget.onGalleryAttachment,
+                ),
+                _attachmentTile(
+                  icon: Icons.insert_drive_file_outlined,
+                  label: 'Files',
+                  onTap: widget.onFileAttachment,
+                ),
+                const SizedBox(height: 8),
+              ],
             ),
-            _attachmentTile(
-              icon: Icons.photo_library_outlined,
-              label: 'Gallery',
-              onTap: widget.onGalleryAttachment,
-            ),
-            _attachmentTile(
-              icon: Icons.insert_drive_file_outlined,
-              label: 'Files',
-              onTap: widget.onFileAttachment,
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+          ),
     );
   }
 
@@ -483,9 +507,10 @@ class _MessageInputFieldState extends State<MessageInputField> {
                     ? 'Release to cancel'
                     : '<  Slide to cancel',
                 style: TextStyle(
-                  color: _cancelRecordingOnRelease
-                      ? Colors.redAccent
-                      : Colors.white.withOpacity(0.4),
+                  color:
+                      _cancelRecordingOnRelease
+                          ? Colors.redAccent
+                          : Colors.white.withOpacity(0.4),
                   fontSize: 13,
                 ),
               ),

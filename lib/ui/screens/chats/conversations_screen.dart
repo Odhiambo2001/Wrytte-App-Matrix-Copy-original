@@ -104,6 +104,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   bool _loadingSuggestedGroups = false;
   final Set<String> _openingSuggestedGroupIds = {};
   DateTime? _lastSuggestedGroupsLoadAt;
+  String? _lastGroupsDiagnostic;
   static const Duration _suggestedGroupsRefreshInterval = Duration(seconds: 8);
 
   // ===========================================================================
@@ -2153,12 +2154,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             )
             .toList();
 
-    apkLog(
-      'Groups.tab',
-      'all=${allGroups.length} own=${ownGroups.length} joined=${joinedGroups.length} '
-          'created_ids=${createdIds.length} suggested=${suggested.length} '
-          'promoted=${promotedOwnGroups.length} local_names="${localGroupNames.join(',')}"',
-    );
+    final diagnostic =
+        'all=${allGroups.length} own=${ownGroups.length} joined=${joinedGroups.length} '
+        'created_ids=${createdIds.length} suggested=${suggested.length} '
+        'promoted=${promotedOwnGroups.length} local_names="${localGroupNames.join(',')}"';
+    if (_lastGroupsDiagnostic != diagnostic) {
+      _lastGroupsDiagnostic = diagnostic;
+      apkLog('Groups.tab', diagnostic);
+    }
 
     if (allGroups.isEmpty && suggested.isEmpty && _initialCacheWarmup) {
       return _buildConversationTab(

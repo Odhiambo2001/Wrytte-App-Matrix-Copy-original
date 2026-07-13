@@ -521,6 +521,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               if (resolvedName == null) return const SizedBox.shrink();
               final isOwner = _isCurrentUserCreatedGroupOwner(member.id);
               final isCurrentJoiner = _isCurrentJoinedGroupMember(member.id);
+              final isAdmin = _isGroupAdmin(member.id);
               final name = isOwner || isCurrentJoiner ? 'You' : resolvedName;
               final avatar = _displayMemberAvatar(
                 member.id,
@@ -531,7 +532,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
-                trailing: isOwner ? const _AdminBadge() : null,
+                trailing: isAdmin ? const _AdminBadge() : null,
                 onTap:
                     isOwner || isCurrentJoiner
                         ? null
@@ -546,6 +547,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               if (resolvedName == null) return const SizedBox.shrink();
               final isOwner = _isCurrentUserCreatedGroupOwner(memberId);
               final isCurrentJoiner = _isCurrentJoinedGroupMember(memberId);
+              final isAdmin = _isGroupAdmin(memberId);
               final name = isOwner || isCurrentJoiner ? 'You' : resolvedName;
               final avatar = _displayMemberAvatar(memberId, null);
               return ListTile(
@@ -553,7 +555,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
-                trailing: isOwner ? const _AdminBadge() : null,
+                trailing: isAdmin ? const _AdminBadge() : null,
                 onTap:
                     isOwner || isCurrentJoiner
                         ? null
@@ -934,6 +936,16 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     final currentUserId = room?.client.userID?.trim() ?? '';
     return currentUserId.isNotEmpty && userId.trim() == currentUserId;
+  }
+
+  bool _isGroupAdmin(String userId) {
+    final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    if (room == null) return false;
+    final memberId = userId.trim();
+    if (memberId.isEmpty) return false;
+    return room.creatorUserIds.contains(memberId) ||
+        room.getPowerLevelByUserId(memberId).level >=
+            mx.PowerLevel.defaultAdminLevel;
   }
 
   Future<void> _loadSuggestedPreviewMemberProfiles() async {

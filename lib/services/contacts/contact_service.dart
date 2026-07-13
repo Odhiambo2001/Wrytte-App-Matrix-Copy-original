@@ -282,22 +282,34 @@ class ContactService {
       ownerUserId: owner,
     );
     var contacts = _sortSavedContacts(
-      ContactAvatarSanitizer.sanitizeAll(localContacts),
+      ContactAvatarSanitizer.sanitizeAll(
+        localContacts
+            .where((contact) => !_isSelfContact(contact.wrytteUserId, owner))
+            .toList(),
+      ),
     );
+    if (contacts.length != localContacts.length) {
+      await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
+      ContactService.notifyContactsChanged(owner);
+    }
 
     if (contacts.isEmpty) {
       final recoveredContacts = await ContactLocalDb.loadRecoverableContacts(
         ownerUserId: owner,
       );
-      if (recoveredContacts.isNotEmpty) {
+      final peerRecoveredContacts =
+          recoveredContacts
+              .where((contact) => !_isSelfContact(contact.wrytteUserId, owner))
+              .toList();
+      if (peerRecoveredContacts.isNotEmpty) {
         contacts = _mergeSavedContacts(
           contacts,
-          ContactAvatarSanitizer.sanitizeAll(recoveredContacts),
+          ContactAvatarSanitizer.sanitizeAll(peerRecoveredContacts),
         );
         await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
         apkLog(
           'Contact.recover',
-          'recovered ${recoveredContacts.length} contacts into owner="$owner"',
+          'recovered ${peerRecoveredContacts.length} contacts into owner="$owner"',
         );
       }
     }
@@ -306,14 +318,18 @@ class ContactService {
       final backendContacts = await ContactBackendService.instance.loadContacts(
         ownerUserId: owner,
       );
-      if (backendContacts.isNotEmpty) {
+      final peerBackendContacts =
+          backendContacts
+              .where((contact) => !_isSelfContact(contact.wrytteUserId, owner))
+              .toList();
+      if (peerBackendContacts.isNotEmpty) {
         contacts = _mergeSavedContacts(
           contacts,
-          ContactAvatarSanitizer.sanitizeAll(backendContacts),
+          ContactAvatarSanitizer.sanitizeAll(peerBackendContacts),
         );
         await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
         ContactService.notifyContactsChanged(owner);
-        unawaited(_refreshBackendContactProfiles(owner, backendContacts));
+        unawaited(_refreshBackendContactProfiles(owner, peerBackendContacts));
       }
       _matrixContactsCache = ContactAvatarSanitizer.sanitizeAll(contacts);
       _matrixContactsCacheOwner = owner;
@@ -350,7 +366,11 @@ class ContactService {
         ownerUserId: owner,
       );
       final mergedContacts = _mergeSavedContacts(
-        ContactAvatarSanitizer.sanitizeAll(currentContacts),
+        ContactAvatarSanitizer.sanitizeAll(
+          currentContacts
+              .where((contact) => !_isSelfContact(contact.wrytteUserId, owner))
+              .toList(),
+        ),
         ContactAvatarSanitizer.sanitizeAll(refreshedContacts),
       );
       await ContactLocalDb.saveContacts(mergedContacts, ownerUserId: owner);
@@ -446,6 +466,7 @@ class ContactService {
   // ──────────────────────────────────────────────────────────────────────
   Future<List<Contact>> getWrytteContactsOptimized() async {
     final deviceContacts = await getDeviceContacts();
+    final ownerUserId = await AuthService.instance.getCurrentUserId();
 
     final allPhones =
         deviceContacts
@@ -510,7 +531,7 @@ class ContactService {
               userId == UserSearchService.registeredWithoutMatrixId
                   ? null
                   : userId;
-          final ownerUserId = await AuthService.instance.getCurrentUserId();
+          if (_isSelfContact(matrixUserId, ownerUserId)) continue;
           if (ownerUserId != null &&
               ownerUserId.isNotEmpty &&
               matrixUserId != null &&
@@ -683,7 +704,17 @@ class ContactService {
     final owner = ownerUserId.trim();
     if (owner.isEmpty) return;
 
-    final contacts = await ContactLocalDb.loadSavedContacts(ownerUserId: owner);
+    final storedContacts = await ContactLocalDb.loadSavedContacts(
+      ownerUserId: owner,
+    );
+    final contacts =
+        storedContacts
+            .where((contact) => !_isSelfContact(contact.wrytteUserId, owner))
+            .toList();
+    if (contacts.length != storedContacts.length) {
+      await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
+      ContactService.notifyContactsChanged(owner);
+    }
     if (contacts.isEmpty) {
       apkLog(
         'Contact.sync',
