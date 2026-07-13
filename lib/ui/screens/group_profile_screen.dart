@@ -512,11 +512,13 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         for (final member in members)
           Builder(
             builder: (_) {
-              final name = _displayMemberName(
+              final resolvedName = _displayMemberName(
                 member.id,
                 member.calcDisplayname(),
               );
-              if (name == null) return const SizedBox.shrink();
+              if (resolvedName == null) return const SizedBox.shrink();
+              final isOwner = _isCurrentUserCreatedGroupOwner(member.id);
+              final name = isOwner ? 'You' : resolvedName;
               final avatar = _displayMemberAvatar(
                 member.id,
                 member.avatarUrl?.toString(),
@@ -526,22 +528,28 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
-                onTap: () => _openMemberProfile(member.id, name),
+                trailing: isOwner ? const _AdminBadge() : null,
+                onTap:
+                    isOwner ? null : () => _openMemberProfile(member.id, name),
               );
             },
           ),
         for (final memberId in cachedMembers)
           Builder(
             builder: (_) {
-              final name = _displayMemberName(memberId, memberId);
-              if (name == null) return const SizedBox.shrink();
+              final resolvedName = _displayMemberName(memberId, memberId);
+              if (resolvedName == null) return const SizedBox.shrink();
+              final isOwner = _isCurrentUserCreatedGroupOwner(memberId);
+              final name = isOwner ? 'You' : resolvedName;
               final avatar = _displayMemberAvatar(memberId, null);
               return ListTile(
                 key: ValueKey('member:${widget.roomId}:$memberId'),
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
-                onTap: () => _openMemberProfile(memberId, name),
+                trailing: isOwner ? const _AdminBadge() : null,
+                onTap:
+                    isOwner ? null : () => _openMemberProfile(memberId, name),
               );
             },
           ),
@@ -897,6 +905,14 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
             ),
       ),
     );
+  }
+
+  bool _isCurrentUserCreatedGroupOwner(String userId) {
+    final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    final currentUserId = room?.client.userID?.trim() ?? '';
+    if (currentUserId.isEmpty || userId.trim() != currentUserId) return false;
+    return ChatService().isCreatedGroupRoom(widget.roomId) ||
+        MatrixChatService.instance.isCreatedGroupRoom(widget.roomId);
   }
 
   Future<void> _loadSuggestedPreviewMemberProfiles() async {
@@ -1334,6 +1350,29 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
       return 'mxc://${uri.host}${uri.path}';
     }
     return trimmed;
+  }
+}
+
+class _AdminBadge extends StatelessWidget {
+  const _AdminBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF65D889).withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Text(
+        'admin',
+        style: TextStyle(
+          color: Color(0xFF65D889),
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
   }
 }
 
