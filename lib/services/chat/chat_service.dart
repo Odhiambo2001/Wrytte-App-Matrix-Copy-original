@@ -624,7 +624,7 @@ class ChatService {
     try {
       timeline = await room.getTimeline(limit: null);
       var page = 0;
-      var consecutiveEmptyPages = 0;
+      var emptyAdvancingPages = 0;
 
       while (timeline.canRequestHistory) {
         final beforeCount = timeline.events.length;
@@ -650,12 +650,12 @@ class ChatService {
               afterToken != null &&
               afterToken.isNotEmpty &&
               afterToken != beforeToken) {
-            consecutiveEmptyPages += 1;
-            if (consecutiveEmptyPages >= 2) {
+            emptyAdvancingPages += 1;
+            if (emptyAdvancingPages >= 2) {
               apkLog(
                 'Matrix.history',
                 'stop room_id="${room.id}" page=$page '
-                    'reason="repeated empty pages"',
+                    'reason="empty page budget reached"',
               );
               break;
             }
@@ -673,7 +673,6 @@ class ChatService {
           );
           break;
         }
-        consecutiveEmptyPages = 0;
       }
 
       final localById = {
@@ -708,10 +707,11 @@ class ChatService {
       }
 
       for (final message in messages) {
-        _cacheMessage(message, countUnread: false);
+        _cacheMessage(message, countUnread: false, publish: false);
       }
       await ChatLocalDb.instance.saveMessages(messages);
       _emitRoomMessages(room.id);
+      _emitConversations();
       _refreshMessageStatusesForRoom(room);
       apkLog(
         'Matrix.history',
@@ -1473,6 +1473,12 @@ class ChatService {
 
   Set<String> _suggestedRoomAdminIds(Map<String, mx.MatrixEvent> state) {
     final admins = <String>{};
+    final explicitOwner =
+        state['com.wrytte.group.info']?.content['owner_user_id']
+            ?.toString()
+            .trim() ??
+        '';
+    if (explicitOwner.isNotEmpty) admins.add(explicitOwner);
     final creator =
         state[mx.EventTypes.RoomCreate]?.content['creator']
             ?.toString()
@@ -1534,6 +1540,70 @@ class ChatService {
   Future<List<Map<String, dynamic>>> loadSuggestedPreviewMembers(
     String roomId,
   ) => ChatLocalDb.instance.loadSuggestedPreviewMembers(roomId);
+
+  /// Refresh current public-room state without replaying message history.
+  /// Suggested profiles need the creator/power-level events before joining,
+  /// and older preview rows may only contain membership events.
+  Future<List<Map<String, dynamic>>> refreshSuggestedPreviewRoomState(
+    String roomId,
+  ) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return const [];
+    try {
+      return await _withMatrixTokenRetry(
+        'refreshSuggestedPreviewRoomState',
+        () async {
+          await _waitForConnection();
+          final client = MatrixClientService.instance.client;
+          final events = await _enqueueMatrixPaginationRequest(
+            () => client.getRoomState(id),
+          );
+          final members = <String, mx.MatrixEvent>{};
+          final profileState = <String, mx.MatrixEvent>{};
+          for (final event in events) {
+            _collectSuggestedPreviewMember(event, members);
+            _collectSuggestedRoomProfileState(event, profileState);
+          }
+          final adminIds = _suggestedRoomAdminIds(profileState);
+          final rows =
+              members.values
+                  .map(
+                    (event) => _suggestedPreviewMemberRow(
+                      event,
+                      isAdmin: adminIds.contains(event.stateKey?.trim()),
+                    ),
+                  )
+                  .toList();
+          if (rows.isNotEmpty) {
+            await ChatLocalDb.instance.saveSuggestedPreviewMembers(id, rows);
+          }
+          if (profileState.isNotEmpty) {
+            await ChatLocalDb.instance.saveSuggestedRoomProfile(
+              id,
+              _suggestedRoomProfileRow(profileState),
+            );
+          }
+          apkLog(
+            'SuggestedPreview',
+            'state refreshed room_id="$id" events=${events.length} '
+                'members=${rows.where((row) => row['membership'] == 'join').length} '
+                'admins=${adminIds.length}',
+          );
+          return ChatLocalDb.instance.loadSuggestedPreviewMembers(id);
+        },
+      );
+    } catch (error) {
+      apkLog(
+        'SuggestedPreview',
+        'state refresh unavailable room_id="$id" error="$error"',
+      );
+      // Some homeservers restrict /state to joined users even when history is
+      // world-readable. In that case, replay the public history once so the
+      // original create/power-level events can repair the legacy cache.
+      await fetchPublicGroupPreview(roomId: id);
+      return loadSuggestedPreviewMembers(id);
+    }
+  }
 
   ChatMessage? _publicGroupPreviewMessage(
     mx.MatrixEvent event, {
@@ -3322,7 +3392,11 @@ class ChatService {
     return trimmed;
   }
 
-  void _cacheMessage(ChatMessage message, {bool countUnread = true}) {
+  void _cacheMessage(
+    ChatMessage message, {
+    bool countUnread = true,
+    bool publish = true,
+  }) {
     if (!_isDisplayableMessage(message)) return;
     if (_isHiddenForMe(message)) return;
     _prefetchPersistentAttachment(message);
@@ -3424,8 +3498,10 @@ class ChatService {
         otherUserAvatar: room == null ? null : _groupRoomAvatarUrl(room),
       );
       unawaited(_persistCachedMessage(message, _conversationsMap[convId]!));
-      _emitRoomMessages(convId);
-      _emitConversations();
+      if (publish) {
+        _emitRoomMessages(convId);
+        _emitConversations();
+      }
       return;
     }
     _conversationsMap[convId] =
@@ -3463,8 +3539,10 @@ class ChatService {
                       : existing.otherUserName,
             );
     unawaited(_persistCachedMessage(message, _conversationsMap[convId]!));
-    _emitRoomMessages(convId);
-    _emitConversations();
+    if (publish) {
+      _emitRoomMessages(convId);
+      _emitConversations();
+    }
   }
 
   void _prefetchPersistentAttachment(ChatMessage message) {

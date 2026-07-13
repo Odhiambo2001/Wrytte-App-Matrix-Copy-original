@@ -403,6 +403,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final CallService _call = CallService.instance;
 
   StreamSubscription<List<ChatMessage>>? _messagesSub;
+  String? _messagesSubscriptionConversationId;
+  String? _lastRoomStreamFingerprint;
   StreamSubscription<mx.SyncUpdate>? _roomProfileSyncSub;
   StreamSubscription<String>? _groupContactsChangedSub;
 
@@ -868,9 +870,17 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
 
+    if (_messagesSub != null && _messagesSubscriptionConversationId == convId) {
+      return;
+    }
     await _messagesSub?.cancel();
+    _messagesSubscriptionConversationId = convId;
+    _lastRoomStreamFingerprint = null;
     _messagesSub = _chat.messagesStreamFor(convId).listen((messages) {
       if (!mounted) return;
+      final fingerprint = _messageSnapshotFingerprint(messages);
+      if (_lastRoomStreamFingerprint == fingerprint) return;
+      _lastRoomStreamFingerprint = fingerprint;
       apkLog('ChatScreen.roomStream', 'room="$convId" msgs=${messages.length}');
       if (messages.isEmpty &&
           _messages.isNotEmpty &&
@@ -892,6 +902,17 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     });
+  }
+
+  String _messageSnapshotFingerprint(List<ChatMessage> messages) {
+    return messages
+        .map(
+          (message) =>
+              '${message.id}:${message.status.name}:${message.isEdited}:'
+              '${message.isDeletedForMe}:${message.isDeletedForEveryone}:'
+              '${message.content.hashCode}:${message.attachmentUrl?.hashCode}',
+        )
+        .join('|');
   }
 
   Future<void> _migrateLocalConversationToRoom(

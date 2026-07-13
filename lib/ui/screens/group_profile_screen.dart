@@ -1015,9 +1015,17 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   Future<void> _loadSuggestedPreviewMemberProfiles() async {
     if (_joined) return;
     try {
-      final members = await ChatService().loadSuggestedPreviewMembers(
+      var members = await ChatService().loadSuggestedPreviewMembers(
         widget.roomId,
       );
+      final hasAdmin = members.any(
+        (member) => member['isAdmin'] == true || member['isAdmin'] == 1,
+      );
+      if (members.isNotEmpty && !hasAdmin) {
+        members = await ChatService().refreshSuggestedPreviewRoomState(
+          widget.roomId,
+        );
+      }
       final memberIds = <String>[];
       final adminIds = <String>{};
       for (final member in members) {
