@@ -209,7 +209,9 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   child: Row(
                     children: [
-                      _joined
+                      !_joined
+                          ? _joinLeaveAction(height: actionHeight)
+                          : _isUserCreatedGroup
                           ? _voiceChatAction(height: actionHeight)
                           : _joinLeaveAction(height: actionHeight),
                       const SizedBox(width: 12),
@@ -374,8 +376,8 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   }
 
   Widget _joinLeaveAction({double height = 74}) {
-    const label = 'Join';
-    const icon = Icons.login_rounded;
+    final label = _joined ? 'Leave' : 'Join';
+    final icon = _joined ? Icons.logout_rounded : Icons.login_rounded;
     return Expanded(
       child: GestureDetector(
         onTap: _joiningOrLeaving ? null : _toggleMembership,
@@ -518,7 +520,8 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               );
               if (resolvedName == null) return const SizedBox.shrink();
               final isOwner = _isCurrentUserCreatedGroupOwner(member.id);
-              final name = isOwner ? 'You' : resolvedName;
+              final isCurrentJoiner = _isCurrentJoinedGroupMember(member.id);
+              final name = isOwner || isCurrentJoiner ? 'You' : resolvedName;
               final avatar = _displayMemberAvatar(
                 member.id,
                 member.avatarUrl?.toString(),
@@ -530,7 +533,9 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 title: Text(name, style: const TextStyle(color: Colors.white)),
                 trailing: isOwner ? const _AdminBadge() : null,
                 onTap:
-                    isOwner ? null : () => _openMemberProfile(member.id, name),
+                    isOwner || isCurrentJoiner
+                        ? null
+                        : () => _openMemberProfile(member.id, name),
               );
             },
           ),
@@ -540,7 +545,8 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               final resolvedName = _displayMemberName(memberId, memberId);
               if (resolvedName == null) return const SizedBox.shrink();
               final isOwner = _isCurrentUserCreatedGroupOwner(memberId);
-              final name = isOwner ? 'You' : resolvedName;
+              final isCurrentJoiner = _isCurrentJoinedGroupMember(memberId);
+              final name = isOwner || isCurrentJoiner ? 'You' : resolvedName;
               final avatar = _displayMemberAvatar(memberId, null);
               return ListTile(
                 key: ValueKey('member:${widget.roomId}:$memberId'),
@@ -549,7 +555,9 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 title: Text(name, style: const TextStyle(color: Colors.white)),
                 trailing: isOwner ? const _AdminBadge() : null,
                 onTap:
-                    isOwner ? null : () => _openMemberProfile(memberId, name),
+                    isOwner || isCurrentJoiner
+                        ? null
+                        : () => _openMemberProfile(memberId, name),
               );
             },
           ),
@@ -911,8 +919,18 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     final currentUserId = room?.client.userID?.trim() ?? '';
     if (currentUserId.isEmpty || userId.trim() != currentUserId) return false;
-    return ChatService().isCreatedGroupRoom(widget.roomId) ||
-        MatrixChatService.instance.isCreatedGroupRoom(widget.roomId);
+    return _isUserCreatedGroup;
+  }
+
+  bool get _isUserCreatedGroup =>
+      ChatService().isCreatedGroupRoom(widget.roomId) ||
+      MatrixChatService.instance.isCreatedGroupRoom(widget.roomId);
+
+  bool _isCurrentJoinedGroupMember(String userId) {
+    if (!_joined || _isUserCreatedGroup) return false;
+    final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    final currentUserId = room?.client.userID?.trim() ?? '';
+    return currentUserId.isNotEmpty && userId.trim() == currentUserId;
   }
 
   Future<void> _loadSuggestedPreviewMemberProfiles() async {
