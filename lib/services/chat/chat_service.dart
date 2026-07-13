@@ -98,6 +98,8 @@ class ChatService {
   final Map<String, DateTime> _lastReadAtByConversation = {};
   final Map<String, Future<void>> _profileRefreshInFlight = {};
   final Map<String, Future<List<ChatMessage>>> _suggestedPreviewInFlight = {};
+  final Map<String, Future<void>> _markReadInFlight = {};
+  final Map<String, String> _lastReadReceiptEventByConversation = {};
   Future<void> _suggestedPreviewQueue = Future.value();
   bool _suppressRestoredRoomUnread = false;
 
@@ -557,10 +559,11 @@ class ChatService {
         await MatrixChatService.instance.discoverAndRepairDirectRooms();
     for (final room in rooms) {
       await _restoreRoomHistoryFromServer(room);
-      _refreshConversationsFromRooms(force: true);
       // Keep pagination and read-marker traffic below homeserver burst limits.
       await Future<void>.delayed(const Duration(milliseconds: 350));
     }
+    // Refresh once after the batch instead of rebuilding after every room.
+    _refreshConversationsFromRooms(force: true);
   }
 
   Future<void> _ensureAllDirectRoomHistoryRestored() {
@@ -593,6 +596,7 @@ class ChatService {
     try {
       timeline = await room.getTimeline(limit: null);
       var page = 0;
+      var consecutiveEmptyPages = 0;
 
       while (timeline.canRequestHistory) {
         final beforeCount = timeline.events.length;
@@ -617,6 +621,15 @@ class ChatService {
               afterToken != null &&
               afterToken.isNotEmpty &&
               afterToken != beforeToken) {
+            consecutiveEmptyPages += 1;
+            if (consecutiveEmptyPages >= 2) {
+              apkLog(
+                'Matrix.history',
+                'stop room_id="${room.id}" page=$page '
+                    'reason="repeated empty pages"',
+              );
+              break;
+            }
             apkLog(
               'Matrix.history',
               'continue room_id="${room.id}" page=$page '
@@ -631,6 +644,7 @@ class ChatService {
           );
           break;
         }
+        consecutiveEmptyPages = 0;
       }
 
       final localById = {
@@ -1452,17 +1466,51 @@ class ChatService {
   }
 
   Future<void> markConversationAsRead(String conversationId) async {
+    final id = conversationId.trim();
+    if (id.isEmpty) return;
+    final eventId = _latestKnownMessageId(id);
+    final pending = _markReadInFlight[id];
+    if (pending != null) {
+      await pending;
+      await _markConversationReadLocally(id);
+      return;
+    }
+    if (eventId != null && _lastReadReceiptEventByConversation[id] == eventId) {
+      await _markConversationReadLocally(id);
+      return;
+    }
+
+    // Reserve the latest event before sending. Identical timeline snapshots
+    // can then never produce a burst of duplicate Matrix read receipts.
+    if (eventId != null) {
+      _lastReadReceiptEventByConversation[id] = eventId;
+    }
+    final future = _sendReadReceipt(id, eventId);
+    _markReadInFlight[id] = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_markReadInFlight[id], future)) {
+        _markReadInFlight.remove(id);
+      }
+    }
+    await _markConversationReadLocally(id);
+  }
+
+  Future<void> _sendReadReceipt(String conversationId, String? eventId) async {
     try {
       await _withMatrixTokenRetry('markConversationAsRead', () async {
         await MatrixChatService.instance.markRead(
           conversationId,
-          eventId: _latestKnownMessageId(conversationId),
+          eventId: eventId,
         );
       });
     } catch (e) {
       debugPrint('[ChatService] markConversationAsRead error: $e');
     }
+  }
 
+  Future<void> _markConversationReadLocally(String conversationId) async {
     final current = _conversationsMap[conversationId];
     if (current != null) {
       final readAt = _latestKnownMessageTime(conversationId);
@@ -2138,6 +2186,8 @@ class ChatService {
     _currentUserName = null;
     _conversationsMap.clear();
     _messagesCache.clear();
+    _markReadInFlight.clear();
+    _lastReadReceiptEventByConversation.clear();
     _dismissedDeletedGroupRoomIds.clear();
     _readConversationIds.clear();
     _activeReadConversationIds.clear();
@@ -2690,10 +2740,7 @@ class ChatService {
     // updates arrive while we're iterating.
     final rooms = List<mx.Room>.from(MatrixClientService.instance.client.rooms);
 
-    apkLog(
-      'ChatService.rooms',
-      'refresh user_id="..." rooms=${rooms.length} ...',
-    );
+    final previousFingerprint = _conversationsFingerprint(_conversationsMap);
 
     for (final room in rooms) {
       // was: for (final room in client.rooms)
@@ -2787,6 +2834,10 @@ class ChatService {
       ..clear()
       ..addAll(merged);
     final scrubbed = _scrubDirectAvatarsMatchingGroupsInMemory();
+    final nextFingerprint = _conversationsFingerprint(_conversationsMap);
+    if (previousFingerprint == nextFingerprint && scrubbed.isEmpty) {
+      return;
+    }
     apkLog(
       'ChatService.rooms',
       'merged conversations total=${_conversationsMap.length} matrix=$refreshedFromMatrix cached=$restoredFromCache',
@@ -2803,6 +2854,34 @@ class ChatService {
       ),
     );
     _emitConversations();
+  }
+
+  String _conversationsFingerprint(
+    Map<String, ChatConversation> conversations,
+  ) {
+    final ids = conversations.keys.toList()..sort();
+    final buffer = StringBuffer();
+    for (final id in ids) {
+      final conversation = conversations[id]!;
+      final participants = conversation.participants.toList()..sort();
+      buffer
+        ..write(id)
+        ..write('|${conversation.conversationKind}')
+        ..write('|${conversation.otherUserId}')
+        ..write('|${conversation.otherUserName ?? ''}')
+        ..write('|${conversation.otherUserAvatar ?? ''}')
+        ..write('|${conversation.lastMessage}')
+        ..write('|${conversation.lastMessageSenderId}')
+        ..write('|${conversation.lastMessageTime.millisecondsSinceEpoch}')
+        ..write('|${conversation.lastMessageType}')
+        ..write('|${conversation.unreadCount}')
+        ..write('|${conversation.isArchived}')
+        ..write('|${conversation.isMuted}')
+        ..write('|${conversation.isPinned}')
+        ..write('|${conversation.deletedAt?.millisecondsSinceEpoch ?? ''}')
+        ..write('|${participants.join(',')};');
+    }
+    return buffer.toString();
   }
 
   ChatConversation? _conversationWithVisiblePreview(
