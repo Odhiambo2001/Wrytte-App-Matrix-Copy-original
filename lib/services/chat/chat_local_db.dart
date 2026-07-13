@@ -64,7 +64,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 11,
+      version: 12,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -230,6 +230,22 @@ class ChatLocalDb {
             WHERE id IN (SELECT roomId FROM suggested_preview_sync)
           ''');
         }
+        if (oldVersion < 12) {
+          await _addColumnIfMissing(
+            db,
+            'suggested_preview_members',
+            'isAdmin',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+          // Existing preview rows predate power-level ownership metadata.
+          // Mark them stale so the next preview warm-up retrieves the room's
+          // creator/power-level state instead of presenting every user as a
+          // regular member until they join.
+          await db.execute('''
+            UPDATE suggested_preview_sync
+            SET isComplete = 0, status = 'stale', lastFetchedAt = 0
+          ''');
+        }
       },
     );
   }
@@ -280,6 +296,7 @@ class ChatLocalDb {
         membership      TEXT NOT NULL,
         displayName     TEXT,
         avatarUrl       TEXT,
+        isAdmin         INTEGER NOT NULL DEFAULT 0,
         eventTimestamp  INTEGER NOT NULL,
         PRIMARY KEY (roomId, userId)
       )
@@ -429,6 +446,7 @@ class ChatLocalDb {
                     ? null
                     : _sanitize(row['displayName'] as String),
             'avatarUrl': row['avatarUrl'],
+            'isAdmin': (row['isAdmin'] as int? ?? 0) == 1,
             'eventTimestamp': row['eventTimestamp'],
           },
         )

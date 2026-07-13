@@ -1382,8 +1382,16 @@ class ChatService {
         }
 
         messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        final adminIds = _suggestedRoomAdminIds(latestProfileState);
         final memberRows =
-            latestMembers.values.map(_suggestedPreviewMemberRow).toList();
+            latestMembers.values
+                .map(
+                  (event) => _suggestedPreviewMemberRow(
+                    event,
+                    isAdmin: adminIds.contains(event.stateKey?.trim()),
+                  ),
+                )
+                .toList();
         await ChatLocalDb.instance.saveSuggestedPreviewMembers(id, memberRows);
         await ChatLocalDb.instance.saveSuggestedRoomProfile(
           id,
@@ -1449,6 +1457,8 @@ class ChatService {
       mx.EventTypes.RoomName,
       mx.EventTypes.RoomTopic,
       mx.EventTypes.RoomCanonicalAlias,
+      mx.EventTypes.RoomCreate,
+      mx.EventTypes.RoomPowerLevels,
       'com.wrytte.group.info',
     };
     if (!supported.contains(event.type) || (event.stateKey ?? '').isNotEmpty) {
@@ -1459,6 +1469,28 @@ class ChatService {
         event.originServerTs.isAfter(existing.originServerTs)) {
       latest[event.type] = event;
     }
+  }
+
+  Set<String> _suggestedRoomAdminIds(Map<String, mx.MatrixEvent> state) {
+    final admins = <String>{};
+    final creator =
+        state[mx.EventTypes.RoomCreate]?.content['creator']
+            ?.toString()
+            .trim() ??
+        '';
+    if (creator.isNotEmpty) admins.add(creator);
+
+    final users = state[mx.EventTypes.RoomPowerLevels]?.content['users'];
+    if (users is Map) {
+      for (final entry in users.entries) {
+        final userId = entry.key.toString().trim();
+        final level = num.tryParse(entry.value.toString())?.toInt() ?? 0;
+        if (userId.isNotEmpty && level >= mx.PowerLevel.defaultAdminLevel) {
+          admins.add(userId);
+        }
+      }
+    }
+    return admins;
   }
 
   Map<String, dynamic> _suggestedRoomProfileRow(
@@ -1485,12 +1517,16 @@ class ChatService {
   Future<Map<String, dynamic>?> loadSuggestedRoomProfile(String roomId) =>
       ChatLocalDb.instance.loadSuggestedRoomProfile(roomId);
 
-  Map<String, dynamic> _suggestedPreviewMemberRow(mx.MatrixEvent event) {
+  Map<String, dynamic> _suggestedPreviewMemberRow(
+    mx.MatrixEvent event, {
+    required bool isAdmin,
+  }) {
     return {
       'userId': event.stateKey,
       'membership': event.content['membership']?.toString() ?? 'leave',
       'displayName': event.content['displayname']?.toString(),
       'avatarUrl': event.content['avatar_url']?.toString(),
+      'isAdmin': isAdmin ? 1 : 0,
       'eventTimestamp': event.originServerTs.millisecondsSinceEpoch,
     };
   }

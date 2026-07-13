@@ -60,6 +60,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   final Map<String, String> _savedContactNamesByPhone = {};
   final Map<String, String> _savedContactAvatarsByUserId = {};
   final Map<String, String> _savedContactAvatarsByPhone = {};
+  final Set<String> _suggestedAdminIds = {};
   List<mx.User> _members = const [];
   List<String> _cachedMemberIds = const [];
   String? _localAvatarOverride;
@@ -517,10 +518,12 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     if (ChatService().isConversationDeleted(roomId)) {
       return _emptyTab('No members');
     }
-    final members = _members;
+    final members = [..._members]
+      ..sort((left, right) => _compareMemberOrder(left.id, right.id));
     final matrixMemberIds = members.map((member) => member.id).toSet();
     final cachedMembers =
-        _cachedMemberIds.where((id) => !matrixMemberIds.contains(id)).toList();
+        _cachedMemberIds.where((id) => !matrixMemberIds.contains(id)).toList()
+          ..sort(_compareMemberOrder);
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       children: [
@@ -985,6 +988,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   }
 
   bool _isGroupAdmin(String userId) {
+    if (_suggestedAdminIds.contains(userId.trim())) return true;
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     if (room == null) return false;
     final memberId = userId.trim();
@@ -994,6 +998,20 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
             mx.PowerLevel.defaultAdminLevel;
   }
 
+  int _compareMemberOrder(String left, String right) {
+    int rank(String userId) {
+      if (_isGroupAdmin(userId)) return 0;
+      if (_isCurrentJoinedGroupMember(userId)) return 1;
+      return 2;
+    }
+
+    final rankComparison = rank(left).compareTo(rank(right));
+    if (rankComparison != 0) return rankComparison;
+    final leftName = _displayMemberName(left, left) ?? left;
+    final rightName = _displayMemberName(right, right) ?? right;
+    return leftName.toLowerCase().compareTo(rightName.toLowerCase());
+  }
+
   Future<void> _loadSuggestedPreviewMemberProfiles() async {
     if (_joined) return;
     try {
@@ -1001,15 +1019,22 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         widget.roomId,
       );
       final memberIds = <String>[];
+      final adminIds = <String>{};
       for (final member in members) {
         final userId = member['userId']?.toString().trim() ?? '';
         if (userId.isEmpty) continue;
         memberIds.add(userId);
+        if (member['isAdmin'] == true || member['isAdmin'] == 1) {
+          adminIds.add(userId);
+        }
         final displayName = member['displayName']?.toString().trim() ?? '';
         final avatarUrl = member['avatarUrl']?.toString().trim() ?? '';
         if (displayName.isNotEmpty) _memberNames[userId] = displayName;
         if (avatarUrl.isNotEmpty) _memberAvatars[userId] = avatarUrl;
       }
+      _suggestedAdminIds
+        ..clear()
+        ..addAll(adminIds);
       _setCachedMembers(memberIds);
       for (final userId in memberIds) {
         unawaited(
