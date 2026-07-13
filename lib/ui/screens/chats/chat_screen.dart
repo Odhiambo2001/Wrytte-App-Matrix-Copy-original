@@ -47,6 +47,7 @@ class ChatScreen extends StatefulWidget {
   final bool readOnlyUntilJoin;
   final int? initialMemberCount;
   final String? groupAlias;
+  final String? groupDescription;
   final String conversationKind;
   final int? initialRoomProfileVersion;
 
@@ -61,6 +62,7 @@ class ChatScreen extends StatefulWidget {
     this.readOnlyUntilJoin = false,
     this.initialMemberCount,
     this.groupAlias,
+    this.groupDescription,
     this.conversationKind = ConversationKind.unknown,
     this.initialRoomProfileVersion,
   });
@@ -869,7 +871,11 @@ class _ChatScreenState extends State<ChatScreen> {
     _messagesSub = _chat.messagesStreamFor(convId).listen((messages) {
       if (!mounted) return;
       apkLog('ChatScreen.roomStream', 'room="$convId" msgs=${messages.length}');
-      if (messages.isEmpty && _messages.isNotEmpty) return;
+      if (messages.isEmpty &&
+          _messages.isNotEmpty &&
+          !_chat.isConversationDeleted(convId)) {
+        return;
+      }
       if (_loadingInitial) {
         _initialStreamBuffer
           ..clear()
@@ -2478,7 +2484,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             _buildJoinGroupBottomBar()
                           else if (_isDeletedConversation)
                             _buildDeletedGroupBottomBar()
-                          else
+                          else if (!_isDeletedConversation)
                             MessageInputField(
                               controller: _controller,
                               focusNode: _focusNode,
@@ -2700,6 +2706,9 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── MESSAGE LIST ──────────────────────────────────────────────────────────
 
   Widget _buildMessageList() {
+    if (_isDeletedConversation) {
+      return const SizedBox.expand();
+    }
     return Column(
       children: [
         Expanded(
@@ -2837,39 +2846,51 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildDeletedGroupBottomBar() {
+    final groupName =
+        _resolvedHeaderName.trim().isNotEmpty
+            ? _resolvedHeaderName.trim()
+            : widget.title.trim().isNotEmpty
+            ? widget.title.trim()
+            : 'This';
+    final groupLabel =
+        groupName.toLowerCase().endsWith('group')
+            ? groupName
+            : '$groupName group';
     return SafeArea(
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 10, 24, 14),
         child: Container(
           width: double.infinity,
-          constraints: const BoxConstraints(minHeight: 48),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          constraints: const BoxConstraints(minHeight: 62),
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: const Color(0xFF15181D),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: const Color(0xFF23262C), width: 1),
+            color: const Color(0xFF17191E),
+            borderRadius: BorderRadius.circular(27),
+            border: Border.all(color: const Color(0xFF2A2D34)),
           ),
-          child: const Row(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+          child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.lock_outline_rounded,
-                size: 18,
-                color: Color(0xFF8B949E),
+              const Icon(
+                Icons.lock_outline,
+                color: Color(0xFF9A9CA3),
+                size: 20,
               ),
-              SizedBox(width: 8),
+              const SizedBox(width: 10),
               Flexible(
                 child: Text(
-                  'This group has been deleted',
-                  maxLines: 1,
+                  '$groupLabel\nhas been deleted',
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Color(0xFF8B949E),
-                    fontSize: 14,
+                  style: const TextStyle(
+                    color: Color(0xFF9A9CA3),
+                    fontSize: 16,
                     fontWeight: FontWeight.w600,
+                    height: 1.25,
                   ),
                 ),
               ),
@@ -3037,6 +3058,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         behavior: HitTestBehavior.opaque,
                         onTap: () async {
                           if (isGroupChat) {
+                            if (_isDeletedConversation) return;
                             final closedGroup = await Navigator.push<bool>(
                               context,
                               MaterialPageRoute(
@@ -3048,6 +3070,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                       groupName: displayName,
                                       avatarUrl: avatarUrl,
                                       alias: widget.groupAlias,
+                                      initialDescription:
+                                          widget.groupDescription,
                                       initialMemberCount:
                                           widget.initialMemberCount,
                                       initiallyJoined:

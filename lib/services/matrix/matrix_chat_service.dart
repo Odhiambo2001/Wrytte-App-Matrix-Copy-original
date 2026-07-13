@@ -452,6 +452,7 @@ class MatrixChatService {
     final newFull = _fullRoomAlias(newAliasLocalpart);
     if (oldFull == newFull) return;
 
+    var createdNewAlias = false;
     if (newFull.isNotEmpty) {
       try {
         final resolved = await client.getRoomIdByAlias(newFull);
@@ -463,15 +464,27 @@ class MatrixChatService {
         final available = text.contains('404') || text.contains('M_NOT_FOUND');
         if (!available) rethrow;
         await client.setRoomAlias(newFull, roomId);
+        createdNewAlias = true;
       }
     }
 
-    await client.setRoomStateWithKey(
-      roomId,
-      EventTypes.RoomCanonicalAlias,
-      '',
-      newFull.isEmpty ? <String, dynamic>{} : {'alias': newFull},
-    );
+    try {
+      await client.setRoomStateWithKey(
+        roomId,
+        EventTypes.RoomCanonicalAlias,
+        '',
+        newFull.isEmpty ? <String, dynamic>{} : {'alias': newFull},
+      );
+    } catch (_) {
+      if (createdNewAlias) {
+        try {
+          await client.deleteRoomAlias(newFull);
+        } catch (_) {
+          // Preserve the original canonical alias error.
+        }
+      }
+      rethrow;
+    }
 
     if (oldFull.isNotEmpty) {
       try {

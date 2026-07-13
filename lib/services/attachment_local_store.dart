@@ -60,6 +60,23 @@ class AttachmentLocalStore {
     });
   }
 
+  Future<void> deleteLocalCopy({
+    required String source,
+    required String fileName,
+  }) async {
+    final cleanSource = source.trim();
+    if (cleanSource.isEmpty) return;
+    try {
+      final target = await _targetFile(cleanSource, fileName);
+      final marker = File('${target.path}.complete');
+      if (await target.exists()) await target.delete();
+      if (await marker.exists()) await marker.delete();
+    } catch (_) {
+      // Local database cleanup must still complete if a cached file was
+      // already removed by Android or another cleanup pass.
+    }
+  }
+
   Future<AttachmentLocalCopy> _ensure({
     required String source,
     required String fileName,

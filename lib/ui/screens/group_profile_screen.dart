@@ -32,6 +32,7 @@ class GroupProfileScreen extends StatefulWidget {
   final String groupName;
   final String? avatarUrl;
   final String? alias;
+  final String? initialDescription;
   final int? initialMemberCount;
   final bool initiallyJoined;
 
@@ -41,6 +42,7 @@ class GroupProfileScreen extends StatefulWidget {
     required this.groupName,
     this.avatarUrl,
     this.alias,
+    this.initialDescription,
     this.initialMemberCount,
     this.initiallyJoined = true,
   });
@@ -63,6 +65,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   String? _localAvatarOverride;
   late bool _joined;
   bool _joiningOrLeaving = false;
+  bool _descriptionExpanded = false;
   StreamSubscription<String>? _contactsChangedSub;
   StreamSubscription<mx.SyncUpdate>? _matrixSyncSub;
   Timer? _matrixRefreshDebounce;
@@ -94,10 +97,17 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     final top = MediaQuery.of(context).padding.top;
 
     return Scaffold(
+      // The edit screen can still be dismissing its keyboard while this route
+      // becomes visible again. Never let that transient viewInset shrink the
+      // fixed profile header and produce a one-frame RenderFlex overflow.
+      resizeToAvoidBottomInset: false,
       backgroundColor: const Color(0xFF08090B),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxHeight < 560;
+          // Keep enough of the member list visible on ordinary phone screens.
+          // The profile header should only use its largest spacing on tablets
+          // and exceptionally tall displays.
+          final compact = constraints.maxHeight < 900;
           final avatarSize = compact ? 84.0 : 112.0;
           final titleSize = compact ? 23.0 : 28.0;
           final actionHeight = compact ? 62.0 : 74.0;
@@ -171,22 +181,6 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                     ),
                   ),
                 ],
-                if (_roomDescription(room).isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: Text(
-                      _roomDescription(room),
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white60,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ),
-                ],
                 if (_roomProfileLink(room).isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
@@ -228,6 +222,13 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                   ),
                 ),
                 SizedBox(height: compact ? 14 : 26),
+                if (_roomDescription(room).isNotEmpty) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: _descriptionCard(_roomDescription(room)),
+                  ),
+                  SizedBox(height: compact ? 14 : 20),
+                ],
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   child: Container(
@@ -300,7 +301,45 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     return 'Group';
   }
 
-  String _roomDescription(mx.Room? room) => room?.topic.trim() ?? '';
+  String _roomDescription(mx.Room? room) {
+    final matrixTopic = room?.topic.trim() ?? '';
+    if (matrixTopic.isNotEmpty) return matrixTopic;
+    return widget.initialDescription?.trim() ?? '';
+  }
+
+  Widget _descriptionCard(String description) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 15, 18, 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15181D),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF242830)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Description',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          _DescriptionPreview(
+            description: description,
+            maxLines: 3,
+            expanded: _descriptionExpanded,
+            onToggle: () {
+              setState(() => _descriptionExpanded = !_descriptionExpanded);
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
   String _roomProfileLink(mx.Room? room) =>
       room?.getState(_groupInfoStateType)?.content['link']?.toString().trim() ??
@@ -536,7 +575,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 onTap:
                     isOwner || isCurrentJoiner
                         ? null
-                        : () => _openMemberProfile(member.id, name),
+                        : () => unawaited(_openMemberProfile(member.id, name)),
               );
             },
           ),
@@ -559,7 +598,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 onTap:
                     isOwner || isCurrentJoiner
                         ? null
-                        : () => _openMemberProfile(memberId, name),
+                        : () => unawaited(_openMemberProfile(memberId, name)),
               );
             },
           ),
@@ -904,13 +943,20 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     });
   }
 
-  void _openMemberProfile(String userId, String savedNameHint) {
-    Navigator.of(context).push(
+  Future<void> _openMemberProfile(String userId, String savedNameHint) async {
+    // Member profile tabs may only use this member's verified DM room. The
+    // group's roomId belongs to the group and must never scope personal media,
+    // files, or links.
+    final directConversationId = await ChatService().findMatrixConversationId(
+      userId,
+    );
+    if (!mounted) return;
+    await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder:
             (_) => ProfileScreen(
               uid: userId,
-              conversationId: widget.roomId,
+              conversationId: directConversationId,
               savedNameHint: savedNameHint,
             ),
       ),
@@ -1412,6 +1458,95 @@ class _AdminBadge extends StatelessWidget {
   }
 }
 
+class _DescriptionPreview extends StatelessWidget {
+  final String description;
+  final int maxLines;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  const _DescriptionPreview({
+    required this.description,
+    required this.maxLines,
+    required this.expanded,
+    required this.onToggle,
+  });
+
+  static const _style = TextStyle(
+    color: Colors.white,
+    fontSize: 16,
+    height: 1.35,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: description, style: _style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: maxLines,
+        )..layout(
+          maxWidth:
+              constraints.maxWidth > 48
+                  ? constraints.maxWidth - 48
+                  : constraints.maxWidth,
+        );
+        final overflowed = painter.didExceedMaxLines;
+        if (!overflowed) {
+          return Text(description, style: _style);
+        }
+
+        return SizedBox(
+          height: 66,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child:
+                    expanded
+                        ? SingleChildScrollView(
+                          primary: false,
+                          padding: const EdgeInsets.only(right: 48, bottom: 24),
+                          child: Text(description, style: _style),
+                        )
+                        : Padding(
+                          padding: const EdgeInsets.only(right: 48),
+                          child: Text(
+                            description,
+                            maxLines: maxLines,
+                            overflow: TextOverflow.ellipsis,
+                            style: _style,
+                          ),
+                        ),
+              ),
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onToggle,
+                  child: Container(
+                    color: const Color(0xFF15181D),
+                    padding: const EdgeInsets.only(left: 7, top: 2, bottom: 2),
+                    child: Text(
+                      expanded ? 'Less' : 'More',
+                      style: const TextStyle(
+                        color: Color(0xFF4DA3FF),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _GroupEditResult {
   final String? localAvatarPath;
   final bool closedProfile;
@@ -1581,16 +1716,22 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
   final ImagePicker _picker = ImagePicker();
 
   File? _pickedImageFile;
+  Timer? _aliasDebounce;
   bool _saving = false;
   bool _leaving = false;
   bool _deleting = false;
+  bool _checkingAlias = false;
+  bool _aliasAvailable = true;
+  String _aliasError = '';
+  int _aliasCheckGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     _nameController.text = widget.initialName;
-    _aliasController.text = widget.initialAlias;
+    _aliasController.text = _aliasBody(widget.initialAlias);
+    _aliasController.addListener(_onAliasChanged);
     _descriptionController.text = room?.topic ?? '';
     _linkController.text =
         room?.getState(_groupInfoStateType)?.content['link']?.toString() ?? '';
@@ -1598,11 +1739,72 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
 
   @override
   void dispose() {
+    _aliasDebounce?.cancel();
     _nameController.dispose();
     _aliasController.dispose();
     _descriptionController.dispose();
     _linkController.dispose();
     super.dispose();
+  }
+
+  String _aliasBody(String value) {
+    final localpart = _cleanAlias(value).toLowerCase();
+    return localpart.startsWith('gr.@') ? localpart.substring(4) : localpart;
+  }
+
+  String _cleanAliasBody(String value) =>
+      value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  String get _candidateAlias => 'gr.@${_cleanAliasBody(_aliasController.text)}';
+
+  void _onAliasChanged() {
+    final body = _cleanAliasBody(_aliasController.text);
+    if (_aliasController.text != body) {
+      _aliasController.value = TextEditingValue(
+        text: body,
+        selection: TextSelection.collapsed(offset: body.length),
+      );
+      return;
+    }
+
+    _aliasDebounce?.cancel();
+    final currentAlias = _cleanAlias(widget.initialAlias).toLowerCase();
+    final candidate = 'gr.@$body';
+    if (body.isEmpty) {
+      setState(() {
+        _checkingAlias = false;
+        _aliasAvailable = false;
+        _aliasError = 'Enter a group alias name';
+      });
+      return;
+    }
+    if (candidate == currentAlias) {
+      setState(() {
+        _checkingAlias = false;
+        _aliasAvailable = true;
+        _aliasError = '';
+      });
+      return;
+    }
+
+    final generation = ++_aliasCheckGeneration;
+    setState(() {
+      _checkingAlias = true;
+      _aliasAvailable = false;
+      _aliasError = '';
+    });
+    _aliasDebounce = Timer(const Duration(milliseconds: 450), () async {
+      final available = await MatrixChatService.instance.isRoomAliasAvailable(
+        candidate,
+      );
+      if (!mounted || generation != _aliasCheckGeneration) return;
+      setState(() {
+        _checkingAlias = false;
+        _aliasAvailable = available;
+        _aliasError =
+            available ? '' : 'This alias is already in use. Try another one';
+      });
+    });
   }
 
   Future<void> _pickImage() async {
@@ -1630,7 +1832,17 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       _showSnack('Group name is required.', isError: true);
       return;
     }
+    final alias = _candidateAlias;
+    final currentAlias = _cleanAlias(room.canonicalAlias).toLowerCase();
+    if (_checkingAlias || !_aliasAvailable || _aliasBody(alias).isEmpty) {
+      _showSnack(
+        _aliasError.isEmpty ? 'Choose an available group alias.' : _aliasError,
+        isError: true,
+      );
+      return;
+    }
 
+    FocusManager.instance.primaryFocus?.unfocus();
     setState(() => _saving = true);
     try {
       String? localAvatarPath;
@@ -1657,8 +1869,6 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         nameChanged = true;
       }
 
-      final alias = _cleanAlias(_aliasController.text);
-      final currentAlias = _cleanAlias(room.canonicalAlias);
       if (alias != currentAlias) {
         await MatrixChatService.instance.replaceGroupAlias(
           roomId: room.id,
@@ -1854,7 +2064,8 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         // Best-effort network cleanup — allowed to fail on M_LIMIT_EXCEEDED
         // without reverting the dismissal above.
         try {
-          await _announceGroupDeleted(room, deletedAt);
+          await _notifyMembersGroupDeleted(room, deletedAt, title);
+          await _announceGroupDeleted(room, deletedAt, title);
           await _removeMembersAndClose(room);
         } catch (e) {
           apkLog(
@@ -1876,6 +2087,10 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
           deletedAt: deletedAt,
         );
       }
+      // Owners never retain a deleted-room shell. Remove the conversation,
+      // every cached message/media item, and the created-group registration
+      // before navigating back to the Groups home page.
+      await ChatService().removeConversationLocally(widget.roomId);
       if (!mounted) return;
       Navigator.pop(context, const _GroupEditResult(closedProfile: true));
     } catch (e) {
@@ -1919,23 +2134,25 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       );
     }
 
-    final currentUserId = room.client.userID?.trim() ?? '';
-    final members =
-        room.getParticipants([
-          mx.Membership.join,
-          mx.Membership.invite,
-        ]).toList();
+    // Joined members and outstanding invitees deliberately remain associated
+    // with the tombstoned room. Matrix room state is durable across logout and
+    // new devices, unlike to-device events. A pending invite can therefore be
+    // accepted later and will synchronize only the read-only deleted shell.
+    // Removing either membership here would make the tombstone undiscoverable
+    // to an offline user.
 
-    for (final member in members) {
-      final userId = member.id.trim();
-      if (userId.isEmpty || userId == currentUserId) continue;
+    final canonicalAlias = room.canonicalAlias.trim();
+    if (canonicalAlias.isNotEmpty) {
       try {
-        await room.kick(userId);
+        await room.client.deleteRoomAlias(canonicalAlias);
       } catch (e) {
-        apkLog(
-          'GroupProfile.delete',
-          'member removal failed room_id="${room.id}" user_id="$userId" error="$e"',
-        );
+        final text = e.toString().toUpperCase();
+        if (!text.contains('404') && !text.contains('M_NOT_FOUND')) {
+          apkLog(
+            'GroupProfile.delete',
+            'alias release failed room_id="${room.id}" alias="$canonicalAlias" error="$e"',
+          );
+        }
       }
     }
 
@@ -1945,20 +2162,88 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     await room.forget();
   }
 
-  Future<void> _announceGroupDeleted(mx.Room room, DateTime deletedAt) async {
+  Future<void> _announceGroupDeleted(
+    mx.Room room,
+    DateTime deletedAt,
+    String groupName,
+  ) async {
     final deletedBy = room.client.userID?.trim() ?? '';
     final timestamp = deletedAt.toIso8601String();
     apkLog(
       'GroupProfile.delete',
       'announcing deleted room_id="${room.id}" deleted_at="$timestamp" deleted_by="$deletedBy"',
     );
+    final groupLabel =
+        groupName.toLowerCase().endsWith('group')
+            ? groupName
+            : '$groupName group';
+    // This state event is the durable deletion source of truth. It remains
+    // available to joined members after the creator leaves and on future
+    // devices/sessions.
+    await room.client
+        .setRoomStateWithKey(room.id, ChatService.groupDeletedStateType, '', {
+          ChatService.groupDeletedEventKey: true,
+          ChatService.groupDeletedAtKey: timestamp,
+          ChatService.groupDeletedNameKey: groupName,
+          if (deletedBy.isNotEmpty) ChatService.groupDeletedByKey: deletedBy,
+        });
     await room.sendEvent({
       'msgtype': mx.MessageTypes.Notice,
-      'body': 'This group has been deleted at $timestamp',
+      'body': '$groupLabel has been deleted',
       ChatService.groupDeletedEventKey: true,
       ChatService.groupDeletedAtKey: timestamp,
+      ChatService.groupDeletedNameKey: groupName,
       if (deletedBy.isNotEmpty) ChatService.groupDeletedByKey: deletedBy,
     }, displayPendingEvent: false);
+  }
+
+  Future<void> _notifyMembersGroupDeleted(
+    mx.Room room,
+    DateTime deletedAt,
+    String groupName,
+  ) async {
+    final currentUserId = room.client.userID?.trim() ?? '';
+    final members =
+        room
+            .getParticipants([mx.Membership.join, mx.Membership.invite])
+            .map((member) => member.id.trim())
+            .where((userId) => userId.isNotEmpty)
+            .toSet();
+    final recipients =
+        members.where((userId) => userId != currentUserId).toSet();
+    if (recipients.isEmpty) return;
+    final avatarValue =
+        room
+            .getState(mx.EventTypes.RoomAvatar)
+            ?.content['url']
+            ?.toString()
+            .trim() ??
+        '';
+    try {
+      await room.client.sendToDevicesOfUserIds(
+        recipients,
+        ChatService.groupDeletedToDeviceType,
+        {
+          'room_id': room.id,
+          ChatService.groupDeletedNameKey: groupName,
+          ChatService.groupDeletedAtKey: deletedAt.toIso8601String(),
+          ChatService.groupDeletedByKey: currentUserId,
+          if (avatarValue.isNotEmpty) 'avatar_url': avatarValue,
+          'participants': members.toList(),
+        },
+      );
+      apkLog(
+        'GroupProfile.delete',
+        'to-device queued room_id="${room.id}" recipients=${recipients.length}',
+      );
+    } catch (error) {
+      // Matrix SDK queues failed to-device sends for retry. Continue closing
+      // the room so deletion cannot be blocked by a temporarily offline server.
+      apkLog(
+        'GroupProfile.delete',
+        'to-device queue deferred room_id="${room.id}" recipients=${recipients.length} error="$error"',
+      );
+    }
   }
 
   void _showSnack(String message, {bool isError = false}) {
@@ -2188,7 +2473,28 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
                 fontWeight: FontWeight.w800,
               ),
               const SizedBox(height: 14),
-              _inputPill('Alias', _aliasController, textColor: accent),
+              _inputPill(
+                'Alias',
+                _aliasController,
+                textColor: accent,
+                prefixText: 'gr.@',
+              ),
+              if (_checkingAlias || _aliasError.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _checkingAlias ? 'Checking availability…' : _aliasError,
+                    style: TextStyle(
+                      color:
+                          _checkingAlias
+                              ? const Color(0xFF9A9CA3)
+                              : const Color(0xFFE85D75),
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 14),
               _inputPill('Description', _descriptionController, maxLines: 1),
               const SizedBox(height: 14),

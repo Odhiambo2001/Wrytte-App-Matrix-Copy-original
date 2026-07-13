@@ -841,7 +841,25 @@ class ChatLocalDb {
     final id = conversationId.trim();
     if (id.isEmpty) return;
     final database = await db;
-    await database.delete('conversations', where: 'id = ?', whereArgs: [id]);
+    await database.transaction((txn) async {
+      await txn.delete(
+        'messages',
+        where: 'conversationId = ?',
+        whereArgs: [id],
+      );
+      await txn.delete('conversations', where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  Future<void> deleteConversationMessages(String conversationId) async {
+    final id = conversationId.trim();
+    if (id.isEmpty) return;
+    final database = await db;
+    await database.delete(
+      'messages',
+      where: 'conversationId = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> migrateConversationId({

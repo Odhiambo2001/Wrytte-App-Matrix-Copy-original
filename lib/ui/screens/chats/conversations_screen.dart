@@ -1799,13 +1799,21 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final avatar = _avatarForConversation(conv);
     final localAvatarPath = _localAvatarPathForConversation(conv);
     final selected = _selectedIds.contains(conv.id);
+    final isDeleted =
+        conv.deletedAt != null ||
+        conv.lastMessageType == ChatService.groupDeletedMessageType ||
+        ChatService.isGroupDeletedPreview(conv.lastMessage);
+    // A deleted-group shell is intentionally title-only. Sender and preview
+    // text belong to the purged conversation and must never be shown.
     final senderName =
-        _isGroupConversation(conv) ? _groupLastSenderName(conv) : null;
+        !isDeleted && _isGroupConversation(conv)
+            ? _groupLastSenderName(conv)
+            : null;
 
     return ConversationTile(
       name: name,
       senderName: senderName,
-      lastMessage: _conversationPreview(conv.lastMessage),
+      lastMessage: isDeleted ? '' : _conversationPreview(conv.lastMessage),
       time: _formatTime(conv.lastMessageTime),
       avatarUrl: avatar,
       avatarCacheIdentity:
@@ -1819,14 +1827,15 @@ class _ConversationsScreenState extends State<ConversationsScreen>
               : null,
       localAvatarPath: localAvatarPath,
       unreadCount: conv.unreadCount,
-      isDeleted:
-          conv.deletedAt != null ||
-          conv.lastMessageType == ChatService.groupDeletedMessageType ||
-          ChatService.isGroupDeletedPreview(conv.lastMessage),
+      isDeleted: isDeleted,
       isSelectionMode: _isSelectionMode,
       isSelected: selected,
       onSelectionToggle: () => _toggleSelection(conv.id),
-      onLongPress: () {
+      onLongPress: () async {
+        if (isDeleted) {
+          await _removeDeletedGroupShell(conv, name);
+          return;
+        }
         showGeneralDialog(
           context: context,
           barrierDismissible: true,
@@ -1923,6 +1932,47 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         }
       },
     );
+  }
+
+  Future<void> _removeDeletedGroupShell(
+    ChatConversation conversation,
+    String groupName,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: const Color(0xFF23262C),
+            title: const Text(
+              'Delete Group',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: Text(
+              'Delete $groupName completely from this device?',
+              style: const TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text(
+                  'Delete',
+                  style: TextStyle(color: Color(0xFFE85D75)),
+                ),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true) return;
+    await _chat.dismissDeletedGroupLocally(conversation.id);
+    if (!mounted) return;
+    await _loadLocalConversations();
   }
 
   String _groupLastSenderName(ChatConversation conversation) {
@@ -2468,6 +2518,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                 initialMessages: previewMessages,
                 initialMemberCount: group.memberCount,
                 groupAlias: group.canonicalAlias,
+                groupDescription: group.topic,
                 conversationKind: ConversationKind.group,
                 initialRoomProfileVersion: group.profileVersionFingerprint,
               ),

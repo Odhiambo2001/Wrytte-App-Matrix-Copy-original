@@ -33,11 +33,15 @@ class ChatService {
   static const String groupDeletedMessageType = 'group_deleted';
   static const String groupDeletedEventKey = 'wrytte.group_deleted';
   static const String groupDeletedAtKey = 'wrytte.deleted_at';
+  static const String groupDeletedNameKey = 'wrytte.group_name';
   static const String groupDeletedByKey = 'wrytte.deleted_by';
+  static const String groupDeletedToDeviceType = 'com.wrytte.group.deleted';
+  static const String groupDeletedStateType = 'com.wrytte.group.deleted';
 
   static bool isGroupDeletedPreview(String? value) {
     final text = value?.trim().toLowerCase() ?? '';
-    return text.startsWith('this group has been deleted');
+    return text.startsWith('this group has been deleted') ||
+        text.endsWith('group has been deleted');
   }
 
   final _messageController = StreamController<ChatMessage>.broadcast();
@@ -75,6 +79,7 @@ class ChatService {
   Future<void>? _directHistoryRestoreFuture;
   StreamSubscription? _timelineSub;
   StreamSubscription? _syncSub;
+  StreamSubscription? _toDeviceSub;
   bool _handlingSync = false;
   Timer? _roomsRefreshTimer;
   DateTime? _lastRoomsRefreshAt;
@@ -87,6 +92,7 @@ class ChatService {
   final Map<String, Set<String>> _hiddenEventIdsByRoom = {};
   final Map<String, DateTime> _groupJoinCutoffsByRoom = {};
   final Set<String> _createdGroupRoomIds = {};
+  final Set<String> _dismissedDeletedGroupRoomIds = {};
   final Set<String> _readConversationIds = {};
   final Set<String> _activeReadConversationIds = {};
   final Map<String, DateTime> _lastReadAtByConversation = {};
@@ -142,6 +148,7 @@ class ChatService {
       await ChatLocalDb.instance.bindOwner(_currentUserId);
       await _loadGroupJoinCutoffs();
       await _loadCreatedGroupRoomIds();
+      await _loadDismissedDeletedGroupRoomIds();
       _suppressRestoredRoomUnread = true;
 
       final expectedMatrixUserId = _expectedMatrixUserId(_currentUserId!);
@@ -191,7 +198,7 @@ class ChatService {
           unawaited(
             markGroupDeletedLocally(
               roomId: event.room.id,
-              name: event.room.getLocalizedDisplayname(),
+              name: _groupDeletedNameFromEvent(event),
               avatarUrl: _groupRoomAvatarUrl(event.room),
               participants:
                   event.room
@@ -241,6 +248,18 @@ class ChatService {
 
         _messageController.add(message);
       });
+      _toDeviceSub ??= client.onToDeviceEvent.stream.listen(
+        _handleGroupDeletedToDeviceEvent,
+      );
+      final pendingGroupDeletionEvents =
+          MatrixClientService.instance.takePendingGroupDeletionEvents();
+      for (final event in pendingGroupDeletionEvents) {
+        _handleGroupDeletedToDeviceEvent(event);
+      }
+      final cachedToDeviceEvent = client.onToDeviceEvent.value;
+      if (cachedToDeviceEvent != null) {
+        _handleGroupDeletedToDeviceEvent(cachedToDeviceEvent);
+      }
       _syncSub ??= client.onSync.stream.listen((update) {
         unawaited(_handleLiveSyncUpdate(update));
       });
@@ -280,12 +299,49 @@ class ChatService {
         raw.contains('READONLY DATABASE');
   }
 
+  void _handleGroupDeletedToDeviceEvent(mx.ToDeviceEvent event) {
+    if (event.type != groupDeletedToDeviceType) return;
+    final roomId = event.content['room_id']?.toString().trim() ?? '';
+    final groupName =
+        event.content[groupDeletedNameKey]?.toString().trim() ?? '';
+    if (roomId.isEmpty || groupName.isEmpty) return;
+    final participantValues = event.content['participants'];
+    final participants =
+        participantValues is List
+            ? participantValues
+                .map((value) => value.toString().trim())
+                .where((value) => value.isNotEmpty)
+                .toList()
+            : const <String>[];
+    final deletedAt = DateTime.tryParse(
+      event.content[groupDeletedAtKey]?.toString() ?? '',
+    );
+    apkLog(
+      'ChatService.groupDeleted',
+      'to-device received room_id="$roomId" name="$groupName" sender="${event.senderId}"',
+    );
+    unawaited(
+      markGroupDeletedLocally(
+        roomId: roomId,
+        name: groupName,
+        avatarUrl: event.content['avatar_url']?.toString(),
+        participants: participants,
+        deletedAt: deletedAt,
+        deletedBy:
+            event.content[groupDeletedByKey]?.toString().trim() ??
+            event.senderId,
+      ),
+    );
+  }
+
   Future<void> _recoverMatrixLocalStore() async {
     _isConnected = false;
     await _timelineSub?.cancel();
     await _syncSub?.cancel();
+    await _toDeviceSub?.cancel();
     _timelineSub = null;
     _syncSub = null;
+    _toDeviceSub = null;
 
     // Try SDK delete first
     try {
@@ -659,7 +715,7 @@ class ChatService {
         unawaited(
           markGroupDeletedLocally(
             roomId: event.room.id,
-            name: event.room.getLocalizedDisplayname(),
+            name: _groupDeletedNameFromEvent(event),
             avatarUrl: _groupRoomAvatarUrl(event.room),
             participants:
                 event.room
@@ -2082,6 +2138,7 @@ class ChatService {
     _currentUserName = null;
     _conversationsMap.clear();
     _messagesCache.clear();
+    _dismissedDeletedGroupRoomIds.clear();
     _readConversationIds.clear();
     _activeReadConversationIds.clear();
     _lastReadAtByConversation.clear();
@@ -2092,8 +2149,10 @@ class ChatService {
     }
     await _timelineSub?.cancel();
     await _syncSub?.cancel();
+    await _toDeviceSub?.cancel();
     _timelineSub = null;
     _syncSub = null;
+    _toDeviceSub = null;
     _connectionController.add(false);
   }
 
@@ -2217,7 +2276,7 @@ class ChatService {
     return _conversationsMap[id]!;
   }
 
-  Future<ChatConversation> markGroupDeletedLocally({
+  Future<ChatConversation?> markGroupDeletedLocally({
     required String roomId,
     required String name,
     String? avatarUrl,
@@ -2229,6 +2288,14 @@ class ChatService {
     if (id.isEmpty) {
       throw ArgumentError('Group room id is required.');
     }
+    if (_dismissedDeletedGroupRoomIds.contains(id)) {
+      await _purgeLocalConversationContent(id);
+      _conversationsMap.remove(id);
+      await ChatLocalDb.instance.deleteConversation(id);
+      _emitConversations();
+      return null;
+    }
+    await _purgeLocalConversationContent(id);
     final now = deletedAt ?? DateTime.now();
     final existing = _conversationsMap[id];
     final currentUser = MatrixClientService.instance.client.userID;
@@ -2272,6 +2339,7 @@ class ChatService {
     );
     _conversationsMap[id] = conversation;
     await ChatLocalDb.instance.saveConversations([conversation]);
+    _emitRoomMessages(id);
     _emitConversations();
     return conversation;
   }
@@ -2290,6 +2358,7 @@ class ChatService {
     final cleanRoomName = _cleanHumanName(room.name);
     if (isGroupRoom) {
       final last = room.lastEvent;
+      final deletedState = room.getState(groupDeletedStateType);
       final lastMessage =
           last == null ? null : ChatMessage.fromMatrixEvent(last);
       final visibleLastMessage =
@@ -2301,7 +2370,10 @@ class ChatService {
               : null;
       final groupName = _groupDisplayName(room, existing);
       final deletedAt =
-          last != null && _isGroupDeletedMatrixEvent(last)
+          deletedState?.content[groupDeletedEventKey] == true
+              ? _groupDeletedAtFromContent(deletedState!.content) ??
+                  DateTime.now()
+              : last != null && _isGroupDeletedMatrixEvent(last)
               ? _groupDeletedAtFromEvent(last) ?? last.originServerTs
               : existing?.deletedAt;
       return ChatConversation(
@@ -2314,7 +2386,7 @@ class ChatService {
               .where((id) => id != client.userID),
         ],
         otherUserId: room.id,
-        lastMessage: visibleLastMessage?.content ?? '',
+        lastMessage: deletedAt == null ? visibleLastMessage?.content ?? '' : '',
         lastMessageSenderId:
             visibleLastMessage?.senderId ?? existing?.lastMessageSenderId ?? '',
         lastMessageTime:
@@ -2329,7 +2401,18 @@ class ChatService {
                 : ConversationKind.group,
         deletedAt: deletedAt,
         deletedBy:
-            last != null && _isGroupDeletedMatrixEvent(last)
+            deletedState?.content[groupDeletedEventKey] == true
+                ? [
+                  if (_groupDeletedByFromContent(
+                    deletedState!.content,
+                    deletedState.senderId,
+                  ).trim().isNotEmpty)
+                    _groupDeletedByFromContent(
+                      deletedState.content,
+                      deletedState.senderId,
+                    ),
+                ]
+                : last != null && _isGroupDeletedMatrixEvent(last)
                 ? [
                   if (_groupDeletedByFromEvent(last).trim().isNotEmpty)
                     _groupDeletedByFromEvent(last),
@@ -2384,6 +2467,13 @@ class ChatService {
   }
 
   bool _isGroupRoom(mx.Room room, ChatConversation? existing) {
+    // The room tombstone is authoritative and must be checked before cached
+    // kind or Matrix DM heuristics. A deleted group can temporarily have only
+    // one visible participant, which otherwise makes it look like a 1:1 room.
+    if (room.getState(groupDeletedStateType)?.content[groupDeletedEventKey] ==
+        true) {
+      return true;
+    }
     if (existing != null && existing.hasExplicitKind) {
       return existing.isGroupKind || existing.isChannelKind;
     }
@@ -2616,6 +2706,38 @@ class ChatService {
     var refreshedFromMatrix = 0;
     for (final room in rooms) {
       final existing = _conversationWithVisiblePreview(merged[room.id]);
+      final deletedState = room.getState(groupDeletedStateType);
+      if (deletedState?.content[groupDeletedEventKey] == true &&
+          _dismissedDeletedGroupRoomIds.contains(room.id)) {
+        merged.remove(room.id);
+        _conversationsMap.remove(room.id);
+        _messagesCache.remove(room.id);
+        unawaited(ChatLocalDb.instance.deleteConversation(room.id));
+        continue;
+      }
+      if (deletedState?.content[groupDeletedEventKey] == true) {
+        // Clear memory immediately so the UI can never briefly render the old
+        // timeline while the SQLite purge completes.
+        _messagesCache[room.id] = <ChatMessage>[];
+        final deletedName =
+            deletedState!.content[groupDeletedNameKey]?.toString().trim() ?? '';
+        unawaited(
+          markGroupDeletedLocally(
+            roomId: room.id,
+            name: deletedName,
+            avatarUrl: _groupRoomAvatarUrl(room),
+            participants:
+                room.getParticipants().map((member) => member.id).toList(),
+            deletedAt:
+                _groupDeletedAtFromContent(deletedState.content) ??
+                DateTime.now(),
+            deletedBy: _groupDeletedByFromContent(
+              deletedState.content,
+              deletedState.senderId,
+            ),
+          ),
+        );
+      }
       final lastMessage =
           room.lastEvent == null
               ? null
@@ -2721,6 +2843,17 @@ class ChatService {
     ChatConversation cached,
     ChatConversation incoming,
   ) {
+    // A persistent room tombstone is authoritative over every cached preview.
+    // Never allow an old message to turn a deleted group back into a live one.
+    if (incoming.deletedAt != null) {
+      return incoming.copyWith(
+        unreadCount: 0,
+        lastMessage: '',
+        lastMessageSenderId: '',
+        lastMessageType: groupDeletedMessageType,
+        conversationKind: ConversationKind.group,
+      );
+    }
     if (cached.lastMessageType == groupDeletedMessageType ||
         cached.deletedAt != null) {
       return cached.copyWith(
@@ -3237,6 +3370,9 @@ class ChatService {
   String _createdGroupRoomIdsKey(String ownerUserId) =>
       'wrytte.created_group_room_ids.$ownerUserId';
 
+  String _dismissedDeletedGroupRoomIdsKey(String ownerUserId) =>
+      'wrytte.dismissed_deleted_group_room_ids.$ownerUserId';
+
   Future<void> _loadGroupJoinCutoffs() async {
     final owner = _currentUserId;
     if (owner == null || owner.isEmpty) return;
@@ -3286,6 +3422,28 @@ class ChatService {
     await prefs.setStringList(
       _createdGroupRoomIdsKey(owner),
       _createdGroupRoomIds.toList(growable: false),
+    );
+  }
+
+  Future<void> _loadDismissedDeletedGroupRoomIds() async {
+    final owner = _currentUserId;
+    if (owner == null || owner.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final ids =
+        prefs.getStringList(_dismissedDeletedGroupRoomIdsKey(owner)) ??
+        const <String>[];
+    _dismissedDeletedGroupRoomIds
+      ..clear()
+      ..addAll(ids.map((id) => id.trim()).where((id) => id.isNotEmpty));
+  }
+
+  Future<void> _saveDismissedDeletedGroupRoomIds() async {
+    final owner = _currentUserId;
+    if (owner == null || owner.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _dismissedDeletedGroupRoomIdsKey(owner),
+      _dismissedDeletedGroupRoomIds.toList(growable: false),
     );
   }
 
@@ -3388,17 +3546,32 @@ class ChatService {
   }
 
   DateTime? _groupDeletedAtFromEvent(mx.Event event) {
-    final raw = event.content[groupDeletedAtKey]?.toString().trim() ?? '';
+    return _groupDeletedAtFromContent(event.content);
+  }
+
+  DateTime? _groupDeletedAtFromContent(Map<String, dynamic> content) {
+    final raw = content[groupDeletedAtKey]?.toString().trim() ?? '';
     if (raw.isEmpty) return null;
     return DateTime.tryParse(raw);
   }
 
   String _groupDeletedByFromEvent(mx.Event event) =>
-      event.content[groupDeletedByKey]?.toString().trim() ?? event.senderId;
+      _groupDeletedByFromContent(event.content, event.senderId);
+
+  String _groupDeletedByFromContent(
+    Map<String, dynamic> content,
+    String fallbackSender,
+  ) => content[groupDeletedByKey]?.toString().trim() ?? fallbackSender;
+
+  String _groupDeletedNameFromEvent(mx.Event event) {
+    final name = event.content[groupDeletedNameKey]?.toString().trim() ?? '';
+    return name.isNotEmpty ? name : event.room.getLocalizedDisplayname();
+  }
 
   Future<void> removeConversationLocally(String conversationId) async {
     final id = conversationId.trim();
     if (id.isEmpty) return;
+    await _purgeLocalConversationContent(id);
     _conversationsMap.remove(id);
     _messagesCache.remove(id);
     _groupJoinCutoffsByRoom.remove(id);
@@ -3412,6 +3585,38 @@ class ChatService {
     await ChatLocalDb.instance.deleteConversation(id);
     await _saveGroupJoinCutoffs();
     _emitConversations();
+  }
+
+  /// Permanently hides a deleted-group shell for the current account.
+  ///
+  /// Matrix keeps the room tombstone in synced state, so deleting only the
+  /// SQLite row is insufficient: the next room refresh would recreate it.
+  Future<void> dismissDeletedGroupLocally(String conversationId) async {
+    final id = conversationId.trim();
+    if (id.isEmpty) return;
+    _dismissedDeletedGroupRoomIds.add(id);
+    await _saveDismissedDeletedGroupRoomIds();
+    await removeConversationLocally(id);
+  }
+
+  Future<void> _purgeLocalConversationContent(String conversationId) async {
+    final persisted = await ChatLocalDb.instance.loadMessages(conversationId);
+    final cached = _messagesCache[conversationId] ?? const <ChatMessage>[];
+    final messages =
+        <String, ChatMessage>{
+          for (final message in persisted) message.id: message,
+          for (final message in cached) message.id: message,
+        }.values;
+    for (final message in messages) {
+      final source = message.attachmentUrl?.trim() ?? '';
+      if (source.isEmpty) continue;
+      await AttachmentLocalStore.instance.deleteLocalCopy(
+        source: source,
+        fileName: message.content,
+      );
+    }
+    _messagesCache[conversationId] = <ChatMessage>[];
+    await ChatLocalDb.instance.deleteConversationMessages(conversationId);
   }
 
   Future<void> markGroupJoinedFrom(String roomId, DateTime joinedFrom) async {

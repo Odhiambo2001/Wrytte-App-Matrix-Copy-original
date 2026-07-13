@@ -14,6 +14,11 @@ class MatrixClientService {
   Future<Client>? _initializing;
   String? _storeNamespace;
   String? _initializingStoreNamespace;
+  StreamSubscription<ToDeviceEvent>? _toDeviceCaptureSub;
+  final List<ToDeviceEvent> _pendingGroupDeletionEvents = [];
+  final Set<String> _capturedGroupDeletionKeys = {};
+
+  static const String _groupDeletedToDeviceType = 'com.wrytte.group.deleted';
 
   Client get client {
     final value = _client;
@@ -27,6 +32,39 @@ class MatrixClientService {
   bool get isLoggedIn => _client?.isLogged() ?? false;
   String? get userId => _client?.userID;
   String? get accessToken => _client?.accessToken;
+
+  /// Returns deletion notifications captured before [ChatService] finishes
+  /// binding its account-scoped local database.
+  ///
+  /// Matrix to-device events are delivered once. In particular, an offline
+  /// member can receive this event in the first sync after being removed from
+  /// a room, before the chat layer has attached its own listener. Capturing it
+  /// with the client prevents that one-shot notification from being lost.
+  List<ToDeviceEvent> takePendingGroupDeletionEvents() {
+    final events = List<ToDeviceEvent>.of(_pendingGroupDeletionEvents);
+    _pendingGroupDeletionEvents.clear();
+    return events;
+  }
+
+  void _captureGroupDeletionEvent(ToDeviceEvent event) {
+    if (event.type != _groupDeletedToDeviceType) return;
+    final roomId = event.content['room_id']?.toString().trim() ?? '';
+    if (roomId.isEmpty) return;
+    final deletedAt =
+        event.content['wrytte.deleted_at']?.toString().trim() ?? '';
+    final key = '$roomId|$deletedAt';
+    if (!_capturedGroupDeletionKeys.add(key)) return;
+    _pendingGroupDeletionEvents.add(event);
+  }
+
+  void _startEarlyToDeviceCapture(Client client) {
+    _toDeviceCaptureSub?.cancel();
+    _toDeviceCaptureSub = client.onToDeviceEvent.stream.listen(
+      _captureGroupDeletionEvent,
+    );
+    final cached = client.onToDeviceEvent.value;
+    if (cached != null) _captureGroupDeletionEvent(cached);
+  }
 
   Future<Client> ensureInitialized({String? storeNamespace}) async {
     final namespace = _normalizeStoreNamespace(storeNamespace);
@@ -134,6 +172,7 @@ class MatrixClientService {
     );
 
     await client.init(waitForFirstSync: false);
+    _startEarlyToDeviceCapture(client);
     _client = client;
     _storeNamespace = storeNamespace;
     _initializing = null;
@@ -187,6 +226,10 @@ class MatrixClientService {
 
   Future<void> disposeCurrentClient() async {
     final matrix = _client;
+    await _toDeviceCaptureSub?.cancel();
+    _toDeviceCaptureSub = null;
+    _pendingGroupDeletionEvents.clear();
+    _capturedGroupDeletionKeys.clear();
     _client = null;
     _initializing = null;
     _storeNamespace = null;

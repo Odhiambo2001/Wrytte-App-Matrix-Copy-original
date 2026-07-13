@@ -290,6 +290,17 @@ class _ProfileScreenState extends State<ProfileScreen>
   Future<void> _loadConversationMessages() async {
     final conversationId = widget.conversationId?.trim() ?? '';
     if (conversationId.isEmpty) return;
+    final profileUid = _validProfileUid(widget.uid);
+    if (profileUid != null &&
+        !ChatService().isVerifiedDirectConversation(
+          conversationId,
+          profileUid,
+        )) {
+      // An individual's tabs are strictly DM-scoped. Reject a group room even
+      // if a caller accidentally supplies one in the future.
+      if (mounted) setState(() => _conversationMessages = const []);
+      return;
+    }
     final cached = ChatService().cachedMessagesFor(conversationId);
     if (mounted && cached.isNotEmpty) {
       setState(() => _conversationMessages = cached);
