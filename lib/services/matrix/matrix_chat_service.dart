@@ -1099,6 +1099,92 @@ class MatrixChatService {
     );
   }
 
+  bool isGroupAdmin(Room room, String userId) {
+    final id = userId.trim();
+    if (id.isEmpty || !isMatrixGroupRoom(room)) return false;
+    if (room.creatorUserIds.contains(id)) return true;
+    final powerContent =
+        room.getState(EventTypes.RoomPowerLevels)?.content ?? const {};
+    final redactLevel = powerContent['redact'] as int? ?? 50;
+    final kickLevel = powerContent['kick'] as int? ?? 50;
+    final adminLevel = redactLevel < kickLevel ? redactLevel : kickLevel;
+    return room.getPowerLevelByUserId(id).level >= adminLevel;
+  }
+
+  Future<void> reportGroupMember({
+    required String roomId,
+    required String eventId,
+    required String reportedUserId,
+    required String reason,
+  }) async {
+    final room = getRoomById(roomId);
+    if (room == null || !isMatrixGroupRoom(room)) {
+      throw StateError('Member reports are only available in group rooms');
+    }
+    final reporterId = room.client.userID?.trim() ?? '';
+    final targetId = reportedUserId.trim();
+    final cleanReason = reason.trim();
+    if (reporterId.isEmpty || targetId.isEmpty || cleanReason.isEmpty) {
+      throw StateError('The report information is incomplete');
+    }
+    if (reporterId == targetId) {
+      throw StateError('You cannot report yourself');
+    }
+    if (isGroupAdmin(room, reporterId)) {
+      throw StateError('This report action is for group members');
+    }
+
+    final event = await room.getEventById(eventId);
+    if (event == null || event.senderId != targetId) {
+      throw StateError('The reported message could not be verified');
+    }
+    final joinedMembers = room.getParticipants([Membership.join]);
+    if (!joinedMembers.any((member) => member.id == targetId)) {
+      throw StateError('The reported user is no longer a group member');
+    }
+
+    try {
+      await room.client.reportEvent(
+        room.id,
+        eventId,
+        reason: cleanReason,
+        score: -50,
+      );
+    } catch (error) {
+      // Group-admin delivery is the product requirement. Keep it working on
+      // homeservers which have not enabled the standard moderation endpoint.
+      apkLog(
+        'Matrix.groups',
+        'homeserver event report failed room_id="${room.id}" event_id="$eventId" error="$error"',
+      );
+    }
+
+    final adminIds =
+        joinedMembers
+            .map((member) => member.id)
+            .where((id) => id != reporterId && isGroupAdmin(room, id))
+            .toSet();
+    if (adminIds.isEmpty) {
+      throw StateError('No group admin is available to receive this report');
+    }
+    final groupName = room.name.trim().isEmpty ? 'Group' : room.name.trim();
+    for (final adminId in adminIds) {
+      final adminRoom = await getOrCreateDirectRoom(adminId);
+      await adminRoom.sendEvent({
+        'msgtype': 'com.wrytte.group_report',
+        'body': 'Group report in $groupName: $cleanReason',
+        'wrytte.group_report': true,
+        'group_room_id': room.id,
+        'group_name': groupName,
+        'reported_user_id': targetId,
+        'reporter_user_id': reporterId,
+        'reported_event_id': eventId,
+        'reason': cleanReason,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      });
+    }
+  }
+
   bool isGroupOwner(Room room) {
     final userId = MatrixClientService.instance.client.userID;
     if (userId == null || userId.isEmpty) return false;

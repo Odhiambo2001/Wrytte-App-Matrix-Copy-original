@@ -2011,6 +2011,14 @@ class _ChatScreenState extends State<ChatScreen> {
         room != null &&
         MatrixChatService.instance.isMatrixGroupRoom(room) &&
         MatrixChatService.instance.isGroupOwner(room);
+    final isOrdinaryGroupMember =
+        _isGroupChat &&
+        room != null &&
+        MatrixChatService.instance.isMatrixGroupRoom(room) &&
+        !MatrixChatService.instance.isGroupAdmin(
+          room,
+          room.client.userID ?? '',
+        );
     final canDeleteForEveryone = isMine || (isOwnedGroup && room.canRedact);
     final attachmentType = message.attachmentType?.trim();
     final hasAttachment = attachmentType != null && attachmentType.isNotEmpty;
@@ -2094,7 +2102,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     _promptEditMessage(message);
                   },
                 ),
-              if (!isOwnedGroup)
+              if (!_isGroupChat)
                 _messageActionTile(
                   icon: Icons.delete_outline,
                   label: 'Delete for me',
@@ -2139,6 +2147,21 @@ class _ChatScreenState extends State<ChatScreen> {
                     }
                   },
                 ),
+              if (isOrdinaryGroupMember &&
+                  !isMine &&
+                  !message.isDeleted &&
+                  message.status != MessageStatus.sending &&
+                  message.status != MessageStatus.failed &&
+                  !message.id.startsWith('opt_'))
+                _messageActionTile(
+                  icon: Icons.report_gmailerrorred_outlined,
+                  label: 'Report member',
+                  destructive: true,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _promptReportMember(message);
+                  },
+                ),
               if (message.status == MessageStatus.sending)
                 _messageActionTile(
                   icon: Icons.close,
@@ -2174,6 +2197,61 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (message.id.startsWith('opt_')) return false;
     return message.content.trim().isNotEmpty;
+  }
+
+  Future<void> _promptReportMember(ChatMessage message) async {
+    var draftReason = '';
+    final reason = await showDialog<String>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Report member'),
+            content: TextField(
+              autofocus: true,
+              maxLength: 500,
+              maxLines: 4,
+              onChanged: (value) => draftReason = value,
+              decoration: const InputDecoration(
+                labelText: 'Reason',
+                hintText: 'Describe why you are reporting this member',
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () {
+                  final value = draftReason.trim();
+                  if (value.isNotEmpty) Navigator.pop(context, value);
+                },
+                child: const Text('Report'),
+              ),
+            ],
+          ),
+    );
+    if (reason == null || !mounted) return;
+    try {
+      await MatrixChatService.instance.reportGroupMember(
+        roomId: message.conversationId,
+        eventId: message.id,
+        reportedUserId: message.senderId,
+        reason: reason,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Report sent to the group admin')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not send report: $error'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   String _saveAttachmentLabel(String? type) {
@@ -2333,16 +2411,25 @@ class _ChatScreenState extends State<ChatScreen> {
               ownerUserId: ownerUserId,
             );
     final byKey = <String, _ForwardTarget>{};
+    final canonicalKeyByAlias = <String, String>{};
     var order = 0;
 
     void addTarget(_ForwardTarget target) {
       if (target.receiverId.trim().isEmpty) return;
       if (_isOwnMatrixId(target.receiverId)) return;
-      final key = _forwardTargetKey(target.receiverId, target.phone);
-      if (key.isEmpty) return;
+      final aliases = _forwardTargetAliases(target.receiverId, target.phone);
+      if (aliases.isEmpty) return;
+      String? matchedKey;
+      for (final alias in aliases) {
+        matchedKey ??= canonicalKeyByAlias[alias];
+      }
+      final key = matchedKey ?? aliases.first;
       final existing = byKey[key];
       if (existing == null) {
         byKey[key] = target.copyWith(sortOrder: order++);
+        for (final alias in aliases) {
+          canonicalKeyByAlias[alias] = key;
+        }
         return;
       }
       if (existing.conversationId == null && target.conversationId != null) {
@@ -2376,6 +2463,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   : existing.avatarUrl,
           sortOrder: existing.sortOrder,
         );
+      }
+      for (final alias in aliases) {
+        canonicalKeyByAlias[alias] = key;
       }
     }
 
@@ -2466,20 +2556,21 @@ class _ChatScreenState extends State<ChatScreen> {
     return targets;
   }
 
-  String _forwardTargetKey(String receiverId, String? phone) {
+  List<String> _forwardTargetAliases(String receiverId, String? phone) {
+    final aliases = <String>[];
     var normalizedPhone = _firstPhoneFrom([phone, receiverId]);
     if (normalizedPhone.isEmpty) {
       normalizedPhone = _phoneFromMatrixLocalpart(receiverId);
     }
     final phoneKey = _forwardPhoneKey(normalizedPhone);
-    if (phoneKey.isNotEmpty) return 'ph:$phoneKey';
+    if (phoneKey.isNotEmpty) aliases.add('ph:$phoneKey');
     final localpart = _matrixLocalpart(receiverId).trim().toLowerCase();
     if (localpart.isNotEmpty &&
         !localpart.startsWith('!') &&
         !localpart.contains(' ')) {
-      return 'mx:$localpart';
+      aliases.add('mx:$localpart');
     }
-    return '';
+    return aliases;
   }
 
   String _phoneFromMatrixLocalpart(String value) {

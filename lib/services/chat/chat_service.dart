@@ -2037,6 +2037,10 @@ class ChatService {
   }
 
   Future<void> deleteMessageForMe(ChatMessage message) async {
+    final room = _roomById(message.conversationId);
+    if (room != null && MatrixChatService.instance.isMatrixGroupRoom(room)) {
+      throw StateError('Delete for me is not available in group chats');
+    }
     final roomId = message.conversationId.trim();
     final eventId = message.id.trim();
     if (roomId.isNotEmpty && eventId.isNotEmpty) {
