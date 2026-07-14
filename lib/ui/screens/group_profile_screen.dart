@@ -839,8 +839,8 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
       ),
     );
     if (!mounted || result == null) return;
-    if (result.closedProfile) {
-      Navigator.pop(context, true);
+    if (result.pendingAction != null) {
+      Navigator.pop(context, result.pendingAction);
       return;
     }
     setState(() {
@@ -871,23 +871,25 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     setState(() => _joiningOrLeaving = true);
     try {
       if (_joined) {
-        final shouldLeave = await _showGroupUndoWindow(
+        final roomId = widget.roomId;
+        final alias =
+            MatrixChatService.instance.getRoomById(roomId)?.canonicalAlias ??
+            widget.alias;
+        if (!mounted) return;
+        Navigator.pop(
           context,
-          title: 'Leaving Group',
-          message: 'Leaving this group in',
-          logTag: 'GroupProfile.leave',
-          onShownLog: 'undo window shown',
-          onUndoLog: 'undo tapped',
-          onExpiredLog: 'countdown expired; leaving Matrix room',
+          GroupExitRequest.leave(
+            roomId: roomId,
+            commit: () async {
+              await MatrixChatService.instance.dismissPublicGroup(
+                roomId: roomId,
+                canonicalAlias: alias,
+              );
+              await MatrixChatService.instance.leaveGroup(roomId);
+              await ChatService().removeConversationLocally(roomId);
+            },
+          ),
         );
-        if (!mounted) return;
-        if (!shouldLeave) {
-          setState(() => _joiningOrLeaving = false);
-          return;
-        }
-        await _leaveJoinedGroup();
-        if (!mounted) return;
-        Navigator.pop(context, true);
       } else {
         await MatrixChatService.instance.joinGroup(
           widget.alias?.trim().isNotEmpty == true
@@ -964,17 +966,6 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               ),
         ) ??
         false;
-  }
-
-  Future<void> _leaveJoinedGroup() async {
-    final room = MatrixChatService.instance.getRoomById(widget.roomId);
-    final alias = room?.canonicalAlias ?? widget.alias;
-    await MatrixChatService.instance.dismissPublicGroup(
-      roomId: widget.roomId,
-      canonicalAlias: alias,
-    );
-    await MatrixChatService.instance.leaveGroup(widget.roomId);
-    await ChatService().removeConversationLocally(widget.roomId);
   }
 
   int get _memberCount {
@@ -1674,144 +1665,41 @@ class _DescriptionPreview extends StatelessWidget {
 
 class _GroupEditResult {
   final String? localAvatarPath;
-  final bool closedProfile;
+  final GroupExitRequest? pendingAction;
 
-  const _GroupEditResult({this.localAvatarPath, this.closedProfile = false});
+  const _GroupEditResult({this.localAvatarPath, this.pendingAction});
 }
 
-Future<bool> _showGroupUndoWindow(
-  BuildContext context, {
-  required String title,
-  required String message,
-  String? logTag,
-  String? onShownLog,
-  String? onUndoLog,
-  String? onExpiredLog,
-}) async {
-  if (logTag != null && onShownLog != null) {
-    apkLog(logTag, onShownLog);
-  }
-  return await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder:
-            (_) => _GroupUndoDialog(
-              title: title,
-              message: message,
-              logTag: logTag,
-              onUndoLog: onUndoLog,
-              onExpiredLog: onExpiredLog,
-            ),
-      ) ??
-      false;
-}
+enum GroupExitType { leave, delete }
 
-class _GroupUndoDialog extends StatefulWidget {
-  final String title;
-  final String message;
-  final String? logTag;
-  final String? onUndoLog;
-  final String? onExpiredLog;
+class GroupExitRequest {
+  final String roomId;
+  final GroupExitType type;
+  final Future<void> Function() commit;
 
-  const _GroupUndoDialog({
-    required this.title,
-    required this.message,
-    this.logTag,
-    this.onUndoLog,
-    this.onExpiredLog,
+  const GroupExitRequest._({
+    required this.roomId,
+    required this.type,
+    required this.commit,
   });
 
-  @override
-  State<_GroupUndoDialog> createState() => _GroupUndoDialogState();
-}
+  factory GroupExitRequest.leave({
+    required String roomId,
+    required Future<void> Function() commit,
+  }) => GroupExitRequest._(
+    roomId: roomId,
+    type: GroupExitType.leave,
+    commit: commit,
+  );
 
-class _GroupUndoDialogState extends State<_GroupUndoDialog> {
-  static const int _undoSeconds = 3;
-  Timer? _timer;
-  int _remainingSeconds = _undoSeconds;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) return;
-      if (_remainingSeconds <= 1) {
-        timer.cancel();
-        _writeLog(widget.onExpiredLog);
-        Navigator.of(context).pop(true);
-        return;
-      }
-      setState(() => _remainingSeconds -= 1);
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  void _writeLog(String? message) {
-    final tag = widget.logTag;
-    if (tag == null || message == null) return;
-    apkLog(tag, message);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      child: Dialog(
-        backgroundColor: const Color(0xFF111318),
-        insetPadding: const EdgeInsets.symmetric(horizontal: 42),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                widget.title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '${widget.message} $_remainingSeconds...',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 16,
-                  height: 1.3,
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () {
-                    _writeLog(widget.onUndoLog);
-                    Navigator.of(context).pop(false);
-                  },
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF23262C),
-                    foregroundColor: const Color(0xFF4DA3FF),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                  ),
-                  child: const Text('Undo'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  factory GroupExitRequest.delete({
+    required String roomId,
+    required Future<void> Function() commit,
+  }) => GroupExitRequest._(
+    roomId: roomId,
+    type: GroupExitType.delete,
+    commit: commit,
+  );
 }
 
 class _EditGroupScreen extends StatefulWidget {
@@ -2064,35 +1952,26 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
   Future<void> _leaveGroup() async {
     if (_leaving || _deleting) return;
     setState(() => _leaving = true);
-    try {
-      final shouldLeave = await _showGroupUndoWindow(
-        context,
-        title: 'Leaving Group',
-        message: 'Leaving this group in',
-        logTag: 'GroupProfile.leave',
-        onShownLog: 'undo window shown',
-        onUndoLog: 'undo tapped',
-        onExpiredLog: 'countdown expired; leaving Matrix room',
-      );
-      if (!mounted) return;
-      if (!shouldLeave) {
-        setState(() => _leaving = false);
-        return;
-      }
-      final room = MatrixChatService.instance.getRoomById(widget.roomId);
-      await MatrixChatService.instance.leaveGroup(widget.roomId);
-      await MatrixChatService.instance.dismissPublicGroup(
-        roomId: widget.roomId,
-        canonicalAlias: room?.canonicalAlias,
-      );
-      await ChatService().removeConversationLocally(widget.roomId);
-      if (!mounted) return;
-      Navigator.pop(context, const _GroupEditResult(closedProfile: true));
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _leaving = false);
-      _showSnack('Failed to leave group: $e', isError: true);
-    }
+    final roomId = widget.roomId;
+    final alias =
+        MatrixChatService.instance.getRoomById(roomId)?.canonicalAlias ??
+        widget.initialAlias;
+    Navigator.pop(
+      context,
+      _GroupEditResult(
+        pendingAction: GroupExitRequest.leave(
+          roomId: roomId,
+          commit: () async {
+            await MatrixChatService.instance.leaveGroup(roomId);
+            await MatrixChatService.instance.dismissPublicGroup(
+              roomId: roomId,
+              canonicalAlias: alias,
+            );
+            await ChatService().removeConversationLocally(roomId);
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _deleteGroup() async {
@@ -2141,43 +2020,56 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     if (!mounted) return;
 
     setState(() => _deleting = true);
-    try {
-      final shouldDelete = await _showGroupUndoWindow(
-        context,
-        title: 'Deleting Group',
-        message: 'Deleting this group in',
-        logTag: 'GroupProfile.delete',
-        onShownLog: 'undo window shown',
-        onUndoLog: 'undo tapped',
-        onExpiredLog: 'countdown expired; announcing deletion',
-      );
-      if (!shouldDelete) {
-        if (!mounted) return;
-        setState(() => _deleting = false);
-        return;
-      }
+    final roomId = widget.roomId;
+    final initialAlias = widget.initialAlias;
+    final initialAvatarUrl = widget.initialAvatarUrl;
+    final title =
+        _nameController.text.trim().isNotEmpty
+            ? _nameController.text.trim()
+            : widget.initialName;
+    final room = MatrixChatService.instance.getRoomById(roomId);
+    Navigator.pop(
+      context,
+      _GroupEditResult(
+        pendingAction: GroupExitRequest.delete(
+          roomId: roomId,
+          commit:
+              () => _commitDeleteGroup(
+                roomId: roomId,
+                room: room,
+                title: title,
+                initialAlias: initialAlias,
+                initialAvatarUrl: initialAvatarUrl,
+              ),
+        ),
+      ),
+    );
+  }
 
-      final room = MatrixChatService.instance.getRoomById(widget.roomId);
+  Future<void> _commitDeleteGroup({
+    required String roomId,
+    required mx.Room? room,
+    required String title,
+    required String initialAlias,
+    required String? initialAvatarUrl,
+  }) async {
+    try {
       if (room != null) {
         final deletedAt = DateTime.now().toUtc();
-        final title =
-            _nameController.text.trim().isNotEmpty
-                ? _nameController.text.trim()
-                : widget.initialName;
 
         // Dismiss FIRST — cheap local write, must persist even if the
         // network steps below rate-limit. Otherwise the group returns to
         // Suggested via the public directory.
         await MatrixChatService.instance.markPublicGroupDeleted(
-          roomId: widget.roomId,
+          roomId: roomId,
           canonicalAlias:
               room.canonicalAlias.isNotEmpty
                   ? room.canonicalAlias
-                  : widget.initialAlias,
+                  : initialAlias,
           deletedAt: deletedAt,
         );
         await ChatService().markGroupDeletedLocally(
-          roomId: widget.roomId,
+          roomId: roomId,
           name: title,
           avatarUrl: null,
           participants:
@@ -2195,33 +2087,33 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         } catch (e) {
           apkLog(
             'GroupProfile.delete',
-            'network cleanup failed (dismissal already persisted) room_id="${widget.roomId}" error="$e"',
+            'network cleanup failed (dismissal already persisted) room_id="$roomId" error="$e"',
           );
         }
       } else {
         final deletedAt = DateTime.now().toUtc();
         await ChatService().markGroupDeletedLocally(
-          roomId: widget.roomId,
-          name: widget.initialName,
-          avatarUrl: widget.initialAvatarUrl,
+          roomId: roomId,
+          name: title,
+          avatarUrl: initialAvatarUrl,
           deletedAt: deletedAt,
         );
         await MatrixChatService.instance.markPublicGroupDeleted(
-          roomId: widget.roomId,
-          canonicalAlias: widget.initialAlias,
+          roomId: roomId,
+          canonicalAlias: initialAlias,
           deletedAt: deletedAt,
         );
       }
       // Owners never retain a deleted-room shell. Remove the conversation,
       // every cached message/media item, and the created-group registration
       // before navigating back to the Groups home page.
-      await ChatService().removeConversationLocally(widget.roomId);
-      if (!mounted) return;
-      Navigator.pop(context, const _GroupEditResult(closedProfile: true));
+      await ChatService().removeConversationLocally(roomId);
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _deleting = false);
-      _showSnack('Failed to delete group: $e', isError: true);
+      apkLog(
+        'GroupProfile.delete',
+        'deferred delete failed room_id="$roomId" error="$e"',
+      );
+      rethrow;
     }
   }
 

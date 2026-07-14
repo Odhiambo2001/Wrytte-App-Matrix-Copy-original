@@ -3167,6 +3167,58 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _showGroupOptions() async {
+    final mediaQuery = MediaQuery.of(context);
+    await showMenu<void>(
+      context: context,
+      color: const Color(0xFF23262C),
+      surfaceTintColor: Colors.transparent,
+      elevation: 10,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      constraints: const BoxConstraints(minWidth: 220, maxWidth: 240),
+      position: RelativeRect.fromLTRB(
+        mediaQuery.size.width - 252,
+        mediaQuery.viewPadding.top + kToolbarHeight + 4,
+        12,
+        0,
+      ),
+      items: const [
+        PopupMenuItem<void>(
+          enabled: false,
+          height: 58,
+          child: Row(
+            children: [
+              Icon(Icons.link_rounded, color: Colors.white54, size: 24),
+              SizedBox(width: 16),
+              Text(
+                'Share link',
+                style: TextStyle(color: Colors.white54, fontSize: 17),
+              ),
+            ],
+          ),
+        ),
+        PopupMenuItem<void>(
+          enabled: false,
+          height: 58,
+          child: Row(
+            children: [
+              Icon(
+                Icons.report_gmailerrorred_outlined,
+                color: Colors.white54,
+                size: 24,
+              ),
+              SizedBox(width: 16),
+              Text(
+                'Report group',
+                style: TextStyle(color: Colors.white54, fontSize: 17),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   // ─── APP BAR ───────────────────────────────────────────────────────────────
 
   Widget _buildAppBar(double statusBarH) {
@@ -3218,7 +3270,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         onTap: () async {
                           if (isGroupChat) {
                             if (_isDeletedConversation) return;
-                            final closedGroup = await Navigator.push<bool>(
+                            final groupResult = await Navigator.push<Object?>(
                               context,
                               MaterialPageRoute(
                                 builder:
@@ -3238,8 +3290,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                     ),
                               ),
                             );
-                            if (closedGroup == true && mounted) {
-                              Navigator.pop(context, true);
+                            if (groupResult is GroupExitRequest && mounted) {
+                              Navigator.pop(context, groupResult);
                             }
                             return;
                           }
@@ -3373,7 +3425,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           color: Colors.white,
                           size: 20,
                         ),
-                        onTap: () {},
+                        onTap: _showGroupOptions,
                       )
                     else ...[
                       _glassPill(

@@ -24,6 +24,7 @@ import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
+import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/conversation_tile.dart';
 import 'package:wrytte/ui/screens/chats/widgets/mini_chat_window.dart';
 import 'package:wrytte/ui/screens/chats/widgets/top_bar.dart';
@@ -1948,7 +1949,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         final isGroup = _isGroupConversation(conv);
         final chatReceiverId = isGroup ? conv.id : conv.otherUserId;
 
-        final closedGroup = await Navigator.push<bool>(
+        final groupResult = await Navigator.push<Object?>(
           context,
           PageRouteBuilder(
             transitionDuration: const Duration(milliseconds: 300),
@@ -1988,11 +1989,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         );
         if (!mounted) return;
         await _loadLocalConversations();
-        if (closedGroup == true || isGroup) {
-          await _loadSuggestedGroups(force: true);
+        if (groupResult is GroupExitRequest) {
+          await _handleGroupExit(groupResult);
+          return;
         }
-        if (closedGroup == true) {
-          _showGroupsHomepage();
+        if (isGroup) {
+          await _loadSuggestedGroups(force: true);
         }
       },
     );
@@ -2572,7 +2574,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         );
       }
       if (!mounted) return;
-      final closedGroup = await Navigator.push<bool>(
+      final groupResult = await Navigator.push<Object?>(
         context,
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 300),
@@ -2611,8 +2613,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       if (!mounted) return;
       await _loadLocalConversations();
       unawaited(_loadSuggestedGroups(force: true));
-      if (closedGroup == true) {
-        _showGroupsHomepage();
+      if (groupResult is GroupExitRequest) {
+        await _handleGroupExit(groupResult);
       }
     } finally {
       if (mounted) {
@@ -2623,6 +2625,100 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   void _showGroupsHomepage() {
     _tabController.animateTo(2);
+  }
+
+  Future<void> _handleGroupExit(GroupExitRequest request) async {
+    _showGroupsHomepage();
+    if (mounted) {
+      setState(() {
+        _conversations =
+            _conversations
+                .where((conversation) => conversation.id != request.roomId)
+                .toList();
+        _suggestedGroups =
+            _suggestedGroups
+                .where((group) => group.roomId != request.roomId)
+                .toList();
+      });
+    }
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+
+    var undone = false;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    final controller = messenger.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 5),
+        behavior: SnackBarBehavior.floating,
+        dismissDirection: DismissDirection.none,
+        margin: EdgeInsets.fromLTRB(
+          12,
+          0,
+          12,
+          MediaQuery.paddingOf(context).bottom + 92,
+        ),
+        padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+        backgroundColor: const Color(0xFF1D1D21),
+        elevation: 12,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        content: Row(
+          children: [
+            const _GroupUndoCountdown(duration: Duration(seconds: 5)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                request.type == GroupExitType.delete
+                    ? 'You deleted the group.'
+                    : 'You left the group.',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: const Color(0xFF64B5F6),
+          onPressed: () => undone = true,
+        ),
+      ),
+    );
+
+    await controller.closed;
+    if (!mounted) return;
+    if (undone) {
+      apkLog('Groups.undo', 'undo tapped room_id="${request.roomId}"');
+      await _loadLocalConversations();
+      await _loadSuggestedGroups(force: true);
+      return;
+    }
+
+    try {
+      apkLog(
+        'Groups.undo',
+        'countdown expired; committing ${request.type.name} room_id="${request.roomId}"',
+      );
+      await request.commit();
+      if (!mounted) return;
+      await _loadLocalConversations();
+      await _loadSuggestedGroups(force: true);
+    } catch (error) {
+      if (!mounted) return;
+      await _loadLocalConversations();
+      await _loadSuggestedGroups(force: true);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Could not update group: $error'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   Future<void> _joinSuggestedGroup(MatrixPublicGroup group) async {
@@ -2800,6 +2896,65 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           ),
         ],
       ),
+    );
+  }
+}
+
+class _GroupUndoCountdown extends StatefulWidget {
+  final Duration duration;
+
+  const _GroupUndoCountdown({required this.duration});
+
+  @override
+  State<_GroupUndoCountdown> createState() => _GroupUndoCountdownState();
+}
+
+class _GroupUndoCountdownState extends State<_GroupUndoCountdown>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: widget.duration)
+      ..reverse(from: 1);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final seconds =
+            (widget.duration.inMilliseconds * _controller.value / 1000).ceil();
+        return SizedBox(
+          width: 34,
+          height: 34,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              CircularProgressIndicator(
+                value: _controller.value,
+                strokeWidth: 2,
+                backgroundColor: Colors.white24,
+                valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+              Center(
+                child: Text(
+                  '$seconds',
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
