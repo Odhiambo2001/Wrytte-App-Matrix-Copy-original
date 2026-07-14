@@ -2035,15 +2035,16 @@ class _ChatScreenState extends State<ChatScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 8),
-              _messageActionTile(
-                icon: Icons.reply,
-                label: 'Reply',
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(() => _replyingTo = message);
-                  _focusNode.requestFocus();
-                },
-              ),
+              if (!_isReadOnlySuggestedGroup)
+                _messageActionTile(
+                  icon: Icons.reply,
+                  label: 'Reply',
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() => _replyingTo = message);
+                    _focusNode.requestFocus();
+                  },
+                ),
               _messageActionTile(
                 icon: Icons.shortcut_rounded,
                 label: 'Forward',
@@ -2052,7 +2053,23 @@ class _ChatScreenState extends State<ChatScreen> {
                   _promptForward(message);
                 },
               ),
-              if (!hasAttachment && link != null) ...[
+              if (_isReadOnlySuggestedGroup)
+                _messageActionTile(
+                  icon: Icons.copy_outlined,
+                  label: link != null ? 'Copy link' : 'Copy',
+                  onTap: () {
+                    Navigator.pop(context);
+                    Clipboard.setData(
+                      ClipboardData(text: link ?? message.content),
+                    );
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(link != null ? 'Link copied' : 'Copied'),
+                      ),
+                    );
+                  },
+                )
+              else if (!hasAttachment && link != null) ...[
                 _messageActionTile(
                   icon: Icons.copy_outlined,
                   label: 'Copy link',
@@ -2084,7 +2101,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ).showSnackBar(const SnackBar(content: Text('Copied')));
                   },
                 ),
-              if (hasAttachment)
+              if (hasAttachment && !_isReadOnlySuggestedGroup)
                 _messageActionTile(
                   icon: Icons.save_alt_outlined,
                   label: _saveAttachmentLabel(attachmentType),
@@ -2093,7 +2110,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     _saveAttachmentToDevice(message);
                   },
                 ),
-              if (_canEditMessage(message))
+              if (!_isReadOnlySuggestedGroup && _canEditMessage(message))
                 _messageActionTile(
                   icon: Icons.edit_outlined,
                   label: 'Edit',
@@ -2115,7 +2132,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     });
                   },
                 ),
-              if (canDeleteForEveryone &&
+              if (!_isReadOnlySuggestedGroup &&
+                  canDeleteForEveryone &&
                   message.status != MessageStatus.sending &&
                   message.status != MessageStatus.failed &&
                   !message.id.startsWith('opt_'))
@@ -2147,7 +2165,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     }
                   },
                 ),
-              if (isOrdinaryGroupMember &&
+              if ((_isReadOnlySuggestedGroup || isOrdinaryGroupMember) &&
                   !isMine &&
                   !message.isDeleted &&
                   message.status != MessageStatus.sending &&
@@ -2155,14 +2173,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   !message.id.startsWith('opt_'))
                 _messageActionTile(
                   icon: Icons.report_gmailerrorred_outlined,
-                  label: 'Report member',
+                  label: _isReadOnlySuggestedGroup ? 'Report' : 'Report member',
                   destructive: true,
                   onTap: () {
                     Navigator.pop(context);
                     _promptReportMember(message);
                   },
                 ),
-              if (message.status == MessageStatus.sending)
+              if (!_isReadOnlySuggestedGroup &&
+                  message.status == MessageStatus.sending)
                 _messageActionTile(
                   icon: Icons.close,
                   label: 'Cancel',
@@ -2205,7 +2224,7 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder:
           (context) => AlertDialog(
-            title: const Text('Report member'),
+            title: Text(_isReadOnlySuggestedGroup ? 'Report' : 'Report member'),
             content: TextField(
               autofocus: true,
               maxLength: 500,
@@ -2233,12 +2252,20 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     if (reason == null || !mounted) return;
     try {
-      await MatrixChatService.instance.reportGroupMember(
-        roomId: message.conversationId,
-        eventId: message.id,
-        reportedUserId: message.senderId,
-        reason: reason,
-      );
+      if (_isReadOnlySuggestedGroup) {
+        await MatrixChatService.instance.reportSuggestedGroupEvent(
+          roomId: message.conversationId,
+          eventId: message.id,
+          reason: reason,
+        );
+      } else {
+        await MatrixChatService.instance.reportGroupMember(
+          roomId: message.conversationId,
+          eventId: message.id,
+          reportedUserId: message.senderId,
+          reason: reason,
+        );
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,

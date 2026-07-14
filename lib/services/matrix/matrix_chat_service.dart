@@ -1192,6 +1192,31 @@ class MatrixChatService {
     }
   }
 
+  Future<void> reportSuggestedGroupEvent({
+    required String roomId,
+    required String eventId,
+    required String reason,
+  }) async {
+    final cleanRoomId = roomId.trim();
+    final cleanEventId = eventId.trim();
+    final cleanReason = reason.trim();
+    if (!cleanRoomId.startsWith('!') ||
+        cleanEventId.isEmpty ||
+        cleanReason.isEmpty) {
+      throw StateError('The report information is incomplete');
+    }
+    final client = await connect();
+    if (!client.isLogged()) {
+      throw StateError('Matrix user is not logged in');
+    }
+    await client.reportEvent(
+      cleanRoomId,
+      cleanEventId,
+      reason: cleanReason,
+      score: -50,
+    );
+  }
+
   bool isGroupOwner(Room room) {
     final userId = MatrixClientService.instance.client.userID;
     if (userId == null || userId.isEmpty) return false;
