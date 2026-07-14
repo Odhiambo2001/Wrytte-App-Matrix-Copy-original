@@ -31,6 +31,7 @@ class MessageBubble extends StatelessWidget {
   final String content;
   final String time;
   final bool isMine;
+  final String? senderName;
   final bool showTail;
   final MessageStatus? status;
 
@@ -59,6 +60,7 @@ class MessageBubble extends StatelessWidget {
     required this.content,
     required this.time,
     required this.isMine,
+    this.senderName,
     this.showTail = true,
     this.status,
     // voice note params
@@ -97,46 +99,65 @@ class MessageBubble extends StatelessWidget {
           bottomRight: Radius.circular(isMine ? (showTail ? 2 : 18) : 18),
         ),
       ),
-      // ── Switch between voice player and text content ─────────────
-      child:
-          isVoiceNote
-              ? _VoiceNotePlayer(
-                audioUrl: audioUrl ?? '',
-                totalSeconds: voiceDuration ?? 0,
-                isMine: isMine,
-                timeWidget: timeWidget,
-              )
-              : attachmentType == 'image'
-              ? _ImageMessageBubble(
-                imageUrl: attachmentUrl ?? '',
-                timeWidget: timeWidget,
-                isForwarded: isForwarded,
-              )
-              : attachmentType == 'file'
-              ? WrytteFileCard(
-                fileName: content.trim().isEmpty ? 'File' : content,
-                source: attachmentUrl ?? '',
-                trailing: timeWidget,
-                isForwarded: isForwarded,
-              )
-              : isVideoNote
-              ? _VideoMessageBubble(
-                videoUrl: attachmentUrl ?? '',
-                totalSeconds: voiceDuration ?? 0,
-                timeWidget: timeWidget,
-                isForwarded: isForwarded,
-              )
-              : _BubbleContent(
-                content: content,
-                timeWidget: timeWidget,
-                isForwarded: isForwarded,
-                isStarred: isStarred,
-                isDeleted: isDeleted,
-                isEdited: isEdited,
-                replyPreview: replyPreview,
-                replySender: replySender,
-                isMine: isMine,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (!isMine && senderName?.trim().isNotEmpty == true)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                senderName!.trim(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFFFFC861),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
+            ),
+          if (isVoiceNote)
+            _VoiceNotePlayer(
+              audioUrl: audioUrl ?? '',
+              totalSeconds: voiceDuration ?? 0,
+              isMine: isMine,
+              timeWidget: timeWidget,
+            )
+          else if (attachmentType == 'image')
+            _ImageMessageBubble(
+              imageUrl: attachmentUrl ?? '',
+              timeWidget: timeWidget,
+              isForwarded: isForwarded,
+            )
+          else if (attachmentType == 'file')
+            WrytteFileCard(
+              fileName: content.trim().isEmpty ? 'File' : content,
+              source: attachmentUrl ?? '',
+              trailing: timeWidget,
+              isForwarded: isForwarded,
+            )
+          else if (isVideoNote)
+            _VideoMessageBubble(
+              videoUrl: attachmentUrl ?? '',
+              totalSeconds: voiceDuration ?? 0,
+              timeWidget: timeWidget,
+              isForwarded: isForwarded,
+            )
+          else
+            _BubbleContent(
+              content: content,
+              timeWidget: timeWidget,
+              isForwarded: isForwarded,
+              isStarred: isStarred,
+              isDeleted: isDeleted,
+              isEdited: isEdited,
+              replyPreview: replyPreview,
+              replySender: replySender,
+              isMine: isMine,
+            ),
+        ],
+      ),
     );
 
     final maxBubbleWidth = maxWidth ?? MediaQuery.sizeOf(context).width * 0.78;

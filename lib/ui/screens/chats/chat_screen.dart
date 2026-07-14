@@ -3082,10 +3082,13 @@ class _ChatScreenState extends State<ChatScreen> {
     required bool showTail,
     required String? effectiveAttachmentType,
   }) {
+    final senderName =
+        _isGroupChat && !isMine ? _groupSenderName(msg.senderId) : null;
     final bubble = MessageBubble(
       content: msg.content,
       time: _formatTime(msg.timestamp),
       isMine: isMine,
+      senderName: senderName,
       showTail: showTail,
       status: isMine ? msg.status : null,
       isVoiceNote: msg.isVoiceNote,
@@ -3109,44 +3112,57 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (!_isGroupChat || isMine) return bubble;
 
-    final senderName = _groupSenderName(msg.senderId);
     return Padding(
       padding: const EdgeInsets.only(left: 10, right: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          UserAvatar(
-            size: 36,
-            imageUrl: _groupMemberAvatars[msg.senderId],
-            cacheIdentity:
-                'account:${widget.currentUserId.trim().toLowerCase()}'
-                '|user:${msg.senderId.trim().toLowerCase()}',
-            name: senderName,
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(left: 10, bottom: 1),
-                  child: Text(
-                    senderName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFFFFC861),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap:
+                () => _openGroupMemberProfile(
+                  msg.senderId,
+                  senderName ?? msg.senderId,
                 ),
-                bubble,
-              ],
+            child: Padding(
+              padding: const EdgeInsets.all(2),
+              child: UserAvatar(
+                size: 36,
+                imageUrl: _groupMemberAvatars[msg.senderId],
+                cacheIdentity:
+                    'account:${widget.currentUserId.trim().toLowerCase()}'
+                    '|user:${msg.senderId.trim().toLowerCase()}',
+                name: senderName ?? msg.senderId,
+              ),
             ),
           ),
+          const SizedBox(width: 6),
+          Expanded(child: bubble),
         ],
+      ),
+    );
+  }
+
+  Future<void> _openGroupMemberProfile(
+    String matrixUserId,
+    String savedNameHint,
+  ) async {
+    final userId = matrixUserId.trim();
+    if (userId.isEmpty || _isOwnMatrixId(userId)) return;
+
+    final directConversationId = await ChatService().findMatrixConversationId(
+      userId,
+    );
+    if (!mounted) return;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder:
+            (_) => ProfileScreen(
+              uid: userId,
+              conversationId: directConversationId,
+              savedNameHint: savedNameHint,
+            ),
       ),
     );
   }
