@@ -1143,6 +1143,7 @@ class MatrixChatService {
       throw StateError('The reported user is no longer a group member');
     }
 
+    var homeserverReportSubmitted = false;
     try {
       await room.client.reportEvent(
         room.id,
@@ -1150,6 +1151,7 @@ class MatrixChatService {
         reason: cleanReason,
         score: -50,
       );
+      homeserverReportSubmitted = true;
     } catch (error) {
       // Group-admin delivery is the product requirement. Keep it working on
       // homeservers which have not enabled the standard moderation endpoint.
@@ -1162,10 +1164,15 @@ class MatrixChatService {
     final adminIds =
         joinedMembers
             .map((member) => member.id)
-            .where((id) => id != reporterId && isGroupAdmin(room, id))
+            .where(
+              (id) =>
+                  id != reporterId && id != targetId && isGroupAdmin(room, id),
+            )
             .toSet();
-    if (adminIds.isEmpty) {
-      throw StateError('No group admin is available to receive this report');
+    if (adminIds.isEmpty && !homeserverReportSubmitted) {
+      throw StateError(
+        'No independent moderator is available to receive this report',
+      );
     }
     final groupName = room.name.trim().isEmpty ? 'Group' : room.name.trim();
     for (final adminId in adminIds) {
