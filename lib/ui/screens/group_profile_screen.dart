@@ -569,12 +569,17 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 member.id,
                 member.avatarUrl?.toString(),
               );
+              final canRemove = _canRemoveMember(member.id);
               return ListTile(
                 key: ValueKey('member:${widget.roomId}:${member.id}'),
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
-                trailing: isAdmin ? const _AdminBadge() : null,
+                trailing: _memberTrailing(
+                  isAdmin: isAdmin,
+                  canRemove: canRemove,
+                  onRemove: () => _confirmRemoveMember(member.id, name),
+                ),
                 onTap:
                     isOwner || isCurrentJoiner
                         ? null
@@ -592,12 +597,17 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               final isAdmin = _isGroupAdmin(memberId);
               final name = isOwner || isCurrentJoiner ? 'You' : resolvedName;
               final avatar = _displayMemberAvatar(memberId, null);
+              final canRemove = _canRemoveMember(memberId);
               return ListTile(
                 key: ValueKey('member:${widget.roomId}:$memberId'),
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
-                trailing: isAdmin ? const _AdminBadge() : null,
+                trailing: _memberTrailing(
+                  isAdmin: isAdmin,
+                  canRemove: canRemove,
+                  onRemove: () => _confirmRemoveMember(memberId, name),
+                ),
                 onTap:
                     isOwner || isCurrentJoiner
                         ? null
@@ -607,6 +617,88 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
           ),
       ],
     );
+  }
+
+  Widget? _memberTrailing({
+    required bool isAdmin,
+    required bool canRemove,
+    required VoidCallback onRemove,
+  }) {
+    if (!isAdmin && !canRemove) return null;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (isAdmin) const _AdminBadge(),
+        if (canRemove)
+          IconButton(
+            tooltip: 'Remove member',
+            icon: const Icon(
+              Icons.person_remove_outlined,
+              color: Color(0xFFFF6B6B),
+            ),
+            onPressed: onRemove,
+          ),
+      ],
+    );
+  }
+
+  bool _canRemoveMember(String userId) {
+    final room = MatrixChatService.instance.getRoomById(widget.roomId);
+    if (room == null ||
+        !MatrixChatService.instance.isMatrixGroupRoom(room) ||
+        !MatrixChatService.instance.isGroupOwner(room) ||
+        !room.canKick) {
+      return false;
+    }
+    final currentUserId = room.client.userID?.trim() ?? '';
+    final targetUserId = userId.trim();
+    if (currentUserId.isEmpty || targetUserId == currentUserId) return false;
+    return room.getPowerLevelByUserId(targetUserId) < room.ownPowerLevel;
+  }
+
+  Future<void> _confirmRemoveMember(String userId, String name) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Remove member?'),
+            content: Text('Remove $name from this group?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Remove'),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await MatrixChatService.instance.removeGroupMember(
+        roomId: widget.roomId,
+        userId: userId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _members = _members.where((member) => member.id != userId).toList();
+        _cachedMemberIds =
+            _cachedMemberIds.where((memberId) => memberId != userId).toList();
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$name removed')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not remove member: $error'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   Widget _emptyTab(String label) {

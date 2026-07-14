@@ -2005,6 +2005,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _showMessageActions(ChatMessage message) async {
     final isMine = _isMine(message);
+    final room = MatrixChatService.instance.getRoomById(message.conversationId);
+    final isOwnedGroup =
+        _isGroupChat &&
+        room != null &&
+        MatrixChatService.instance.isMatrixGroupRoom(room) &&
+        MatrixChatService.instance.isGroupOwner(room);
+    final canDeleteForEveryone = isMine || (isOwnedGroup && room.canRedact);
     final attachmentType = message.attachmentType?.trim();
     final hasAttachment = attachmentType != null && attachmentType.isNotEmpty;
     final link = _firstLinkIn(message.content);
@@ -2087,19 +2094,20 @@ class _ChatScreenState extends State<ChatScreen> {
                     _promptEditMessage(message);
                   },
                 ),
-              _messageActionTile(
-                icon: Icons.delete_outline,
-                label: 'Delete for me',
-                onTap: () async {
-                  Navigator.pop(context);
-                  await _chat.deleteMessageForMe(message);
-                  if (!mounted) return;
-                  setState(() {
-                    _messages.removeWhere((m) => m.id == message.id);
-                  });
-                },
-              ),
-              if (isMine &&
+              if (!isOwnedGroup)
+                _messageActionTile(
+                  icon: Icons.delete_outline,
+                  label: 'Delete for me',
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _chat.deleteMessageForMe(message);
+                    if (!mounted) return;
+                    setState(() {
+                      _messages.removeWhere((m) => m.id == message.id);
+                    });
+                  },
+                ),
+              if (canDeleteForEveryone &&
                   message.status != MessageStatus.sending &&
                   message.status != MessageStatus.failed &&
                   !message.id.startsWith('opt_'))
@@ -2307,6 +2315,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<List<_ForwardTarget>> _buildForwardTargets() async {
+    final sourceRoom = MatrixChatService.instance.getRoomById(
+      _activeConversationId,
+    );
+    final restrictOwnerGroupTargets =
+        _isGroupChat &&
+        sourceRoom != null &&
+        MatrixChatService.instance.isMatrixGroupRoom(sourceRoom) &&
+        MatrixChatService.instance.isGroupOwner(sourceRoom);
     final ownerUserId =
         (await AuthService.instance.getCurrentUserId())?.trim() ??
         widget.currentUserId.trim();
@@ -2393,8 +2409,19 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     for (final conversation in _chat.cachedConversationsSnapshot) {
+      if (conversation.isGroupKind || conversation.isChannelKind) continue;
       final receiverId = conversation.otherUserId.trim();
       if (receiverId.isEmpty || receiverId.startsWith('!')) continue;
+      if (restrictOwnerGroupTargets) {
+        final history = await _chat.loadCachedMessages(conversation.id);
+        final hasIncomingMessage = history.any(
+          (message) =>
+              !message.isDeleted &&
+              message.senderId.trim().isNotEmpty &&
+              !_isOwnMatrixId(message.senderId),
+        );
+        if (!hasIncomingMessage) continue;
+      }
       final identity = identities[_matrixLocalpart(receiverId).toLowerCase()];
       var phone = _firstPhoneFrom([
         identity?.phone ?? '',

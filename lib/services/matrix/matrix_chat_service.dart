@@ -1069,6 +1069,36 @@ class MatrixChatService {
     await room.leave();
   }
 
+  Future<void> removeGroupMember({
+    required String roomId,
+    required String userId,
+    String? reason,
+  }) async {
+    final room = getRoomById(roomId);
+    if (room == null || !isMatrixGroupRoom(room)) {
+      throw StateError('Member removal is only available in group rooms');
+    }
+    final currentUserId = room.client.userID?.trim() ?? '';
+    final targetUserId = userId.trim();
+    if (currentUserId.isEmpty || targetUserId.isEmpty) {
+      throw StateError('Invalid Matrix user');
+    }
+    if (!isGroupOwner(room) || !room.canKick) {
+      throw StateError('Only the group owner can remove members');
+    }
+    if (targetUserId == currentUserId) {
+      throw StateError('The group owner cannot remove themselves');
+    }
+    if (room.getPowerLevelByUserId(targetUserId) >= room.ownPowerLevel) {
+      throw StateError('You cannot remove a member with equal or higher power');
+    }
+    await room.client.kick(
+      room.id,
+      targetUserId,
+      reason: reason ?? 'Removed by group owner',
+    );
+  }
+
   bool isGroupOwner(Room room) {
     final userId = MatrixClientService.instance.client.userID;
     if (userId == null || userId.isEmpty) return false;

@@ -2105,6 +2105,15 @@ class ChatService {
       if (room == null) {
         throw StateError('Unknown Matrix room: ${message.conversationId}');
       }
+      final currentUser = room.client.userID ?? _currentUserId ?? '';
+      final isOwnMessage = _isOwnMessage(message, currentUser);
+      if (MatrixChatService.instance.isMatrixGroupRoom(room) &&
+          !isOwnMessage &&
+          (!MatrixChatService.instance.isGroupOwner(room) || !room.canRedact)) {
+        throw StateError(
+          'Only the group owner can delete another member\'s message',
+        );
+      }
       await room.redactEvent(message.id, reason: 'Deleted by sender');
     });
     final updated = message.copyWith(
@@ -2138,6 +2147,11 @@ class ChatService {
     if (room == null) {
       throw StateError('Existing forward room is not loaded: $existingRoomId');
     }
+    await _validateOwnedGroupForwardTarget(
+      original: original,
+      targetRoom: room,
+      receiverId: receiverId,
+    );
     final inferredAttachmentType = _forwardedAttachmentType(original);
     if (inferredAttachmentType != null) {
       return _forwardAttachmentMessage(
@@ -2162,6 +2176,50 @@ class ChatService {
       isForwarded: true,
     );
     return sendMessage(message);
+  }
+
+  Future<void> _validateOwnedGroupForwardTarget({
+    required ChatMessage original,
+    required mx.Room targetRoom,
+    required String receiverId,
+  }) async {
+    final sourceRoom = _roomById(original.conversationId);
+    if (sourceRoom == null ||
+        !MatrixChatService.instance.isMatrixGroupRoom(sourceRoom) ||
+        !MatrixChatService.instance.isGroupOwner(sourceRoom)) {
+      return;
+    }
+    if (MatrixChatService.instance.isMatrixGroupRoom(targetRoom)) {
+      throw StateError('Group messages can only be forwarded to people');
+    }
+
+    final ownerUserId =
+        (await AuthService.instance.getCurrentUserId())?.trim() ?? '';
+    final peerId = _toMatrixUserId(receiverId);
+    final savedContact =
+        ownerUserId.isEmpty
+            ? null
+            : await _savedContactForPeer(
+              ownerUserId: ownerUserId,
+              peerId: peerId,
+              phone: _normalizePhone(receiverId),
+            );
+    if (savedContact != null) return;
+
+    final currentUser =
+        MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
+    final history = await ChatLocalDb.instance.loadMessages(targetRoom.id);
+    final hasIncomingMessage = history.any(
+      (message) =>
+          !message.isDeleted &&
+          !_isOwnMessage(message, currentUser) &&
+          _matrixLocalpart(message.senderId) == _matrixLocalpart(peerId),
+    );
+    if (!hasIncomingMessage) {
+      throw StateError(
+        'You can only forward to saved contacts or people who messaged you',
+      );
+    }
   }
 
   Future<ChatMessage> _forwardAttachmentMessage({
