@@ -3106,7 +3106,7 @@ class _ChatScreenState extends State<ChatScreen> {
       animateOnMount: true,
       maxWidth:
           _isGroupChat && !isMine
-              ? MediaQuery.sizeOf(context).width - 92
+              ? MediaQuery.sizeOf(context).width - 94
               : null,
     );
 
