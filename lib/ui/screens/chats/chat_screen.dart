@@ -2011,14 +2011,6 @@ class _ChatScreenState extends State<ChatScreen> {
         room != null &&
         MatrixChatService.instance.isMatrixGroupRoom(room) &&
         MatrixChatService.instance.isGroupOwner(room);
-    final isOrdinaryGroupMember =
-        _isGroupChat &&
-        room != null &&
-        MatrixChatService.instance.isMatrixGroupRoom(room) &&
-        !MatrixChatService.instance.isGroupAdmin(
-          room,
-          room.client.userID ?? '',
-        );
     final canDeleteForEveryone = isMine || (isOwnedGroup && room.canRedact);
     final attachmentType = message.attachmentType?.trim();
     final hasAttachment = attachmentType != null && attachmentType.isNotEmpty;
@@ -2165,7 +2157,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     }
                   },
                 ),
-              if ((_isReadOnlySuggestedGroup || isOrdinaryGroupMember) &&
+              if (_isReadOnlySuggestedGroup &&
                   !isMine &&
                   !message.isDeleted &&
                   message.status != MessageStatus.sending &&
@@ -2173,12 +2165,22 @@ class _ChatScreenState extends State<ChatScreen> {
                   !message.id.startsWith('opt_'))
                 _messageActionTile(
                   icon: Icons.report_gmailerrorred_outlined,
-                  label: _isReadOnlySuggestedGroup ? 'Report' : 'Report member',
+                  label: 'Report',
                   destructive: true,
-                  onTap: () {
-                    Navigator.pop(context);
-                    _promptReportMember(message);
-                  },
+                  onTap: null,
+                ),
+              if (!_isReadOnlySuggestedGroup &&
+                  _isGroupChat &&
+                  !isMine &&
+                  !message.isDeleted &&
+                  message.status != MessageStatus.sending &&
+                  message.status != MessageStatus.failed &&
+                  !message.id.startsWith('opt_'))
+                _messageActionTile(
+                  icon: Icons.report_gmailerrorred_outlined,
+                  label: 'Report member',
+                  destructive: true,
+                  onTap: null,
                 ),
               if (!_isReadOnlySuggestedGroup &&
                   message.status == MessageStatus.sending)
@@ -2216,85 +2218,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (message.id.startsWith('opt_')) return false;
     return message.content.trim().isNotEmpty;
-  }
-
-  Future<void> _promptReportMember(ChatMessage message) async {
-    var draftReason = '';
-    final reason = await showDialog<String>(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Text(_isReadOnlySuggestedGroup ? 'Report' : 'Report member'),
-            content: TextField(
-              autofocus: true,
-              maxLength: 500,
-              maxLines: 4,
-              onChanged: (value) => draftReason = value,
-              decoration: const InputDecoration(
-                labelText: 'Reason',
-                hintText: 'Describe why you are reporting this member',
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () {
-                  final value = draftReason.trim();
-                  if (value.isNotEmpty) Navigator.pop(context, value);
-                },
-                child: const Text('Report'),
-              ),
-            ],
-          ),
-    );
-    if (reason == null || !mounted) return;
-    try {
-      if (_isReadOnlySuggestedGroup) {
-        var members = await _chat.loadSuggestedPreviewMembers(
-          message.conversationId,
-        );
-        if (!members.any((member) => member['isAdmin'] == true)) {
-          members = await _chat.refreshSuggestedPreviewRoomState(
-            message.conversationId,
-          );
-        }
-        final adminIds = members
-            .where((member) => member['isAdmin'] == true)
-            .map((member) => member['userId']?.toString() ?? '')
-            .where((id) => id.trim().isNotEmpty);
-        await MatrixChatService.instance.reportSuggestedGroupEvent(
-          roomId: message.conversationId,
-          eventId: message.id,
-          reason: reason,
-          reportedUserId: message.senderId,
-          groupName: widget.title,
-          messagePreview: message.content,
-          adminUserIds: adminIds,
-        );
-      } else {
-        await MatrixChatService.instance.reportGroupMember(
-          roomId: message.conversationId,
-          eventId: message.id,
-          reportedUserId: message.senderId,
-          reason: reason,
-        );
-      }
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Report submitted')));
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not send report: $error'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-    }
   }
 
   String _saveAttachmentLabel(String? type) {
@@ -2369,10 +2292,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _messageActionTile({
     required IconData icon,
     required String label,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
     bool destructive = false,
   }) {
-    final color = destructive ? const Color(0xFFFF6B6B) : Colors.white;
+    final color =
+        onTap == null
+            ? Colors.white38
+            : destructive
+            ? const Color(0xFFFF6B6B)
+            : Colors.white;
     return ListTile(
       leading: Icon(icon, color: color),
       title: Text(label, style: TextStyle(color: color)),
