@@ -2011,6 +2011,10 @@ class _ChatScreenState extends State<ChatScreen> {
         room != null &&
         MatrixChatService.instance.isMatrixGroupRoom(room) &&
         MatrixChatService.instance.isGroupAdmin(room, room.client.userID ?? '');
+    final isGroupOwner =
+        _isGroupChat &&
+        room != null &&
+        room.creatorUserIds.contains(room.client.userID?.trim() ?? '');
     final isMessageSenderAdmin =
         _isGroupChat &&
         room != null &&
@@ -2098,6 +2102,21 @@ class _ChatScreenState extends State<ChatScreen> {
                     ).showSnackBar(const SnackBar(content: Text('Copied')));
                   },
                 ),
+              if (!_isReadOnlySuggestedGroup &&
+                  _isGroupChat &&
+                  isAdminInGroup &&
+                  !isMine &&
+                  !isMessageSenderAdmin &&
+                  !message.isDeleted)
+                _messageActionTile(
+                  icon: Icons.person_remove_outlined,
+                  label: 'Remove from group',
+                  destructive: true,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _removeMessageSenderFromGroup(message);
+                  },
+                ),
               if (hasAttachment && !_isReadOnlySuggestedGroup)
                 _messageActionTile(
                   icon: Icons.save_alt_outlined,
@@ -2180,8 +2199,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               if (!_isReadOnlySuggestedGroup &&
                   _isGroupChat &&
-                  !isAdminInGroup &&
-                  !isMessageSenderAdmin &&
+                  !isGroupOwner &&
                   !isMine &&
                   !message.isDeleted &&
                   message.status != MessageStatus.sending &&
@@ -2189,9 +2207,12 @@ class _ChatScreenState extends State<ChatScreen> {
                   !message.id.startsWith('opt_'))
                 _messageActionTile(
                   icon: Icons.report_gmailerrorred_outlined,
-                  label: 'Report member',
+                  label: 'Report',
                   destructive: true,
-                  onTap: null,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _reportGroupMessage(message);
+                  },
                 ),
               if (!_isReadOnlySuggestedGroup &&
                   message.status == MessageStatus.sending)
@@ -2213,6 +2234,120 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       },
     );
+  }
+
+  Future<void> _reportGroupMessage(ChatMessage message) async {
+    final reasonController = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: const Color(0xFF23262C),
+            title: const Text(
+              'Report message',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: TextField(
+              controller: reasonController,
+              autofocus: true,
+              maxLines: 3,
+              maxLength: 500,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                hintText: 'Why are you reporting this message?',
+                hintStyle: TextStyle(color: Colors.white54),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () {
+                  final value = reasonController.text.trim();
+                  if (value.isNotEmpty) Navigator.pop(dialogContext, value);
+                },
+                child: const Text('Report'),
+              ),
+            ],
+          ),
+    );
+    reasonController.dispose();
+    if (reason == null || reason.trim().isEmpty || !mounted) return;
+
+    try {
+      await MatrixChatService.instance.reportGroupMember(
+        roomId: message.conversationId,
+        eventId: message.id,
+        reportedUserId: message.senderId,
+        reason: reason,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Message reported')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not report message: $error'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Future<void> _removeMessageSenderFromGroup(ChatMessage message) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: const Color(0xFF23262C),
+            title: const Text(
+              'Remove member',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: const Text(
+              'Remove this member from the group?',
+              style: TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text(
+                  'Remove',
+                  style: TextStyle(color: Colors.redAccent),
+                ),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await MatrixChatService.instance.removeGroupMember(
+        roomId: message.conversationId,
+        userId: message.senderId,
+        reason: 'Removed by group admin',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Member removed from the group')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not remove member: $error'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   bool _canEditMessage(ChatMessage message) {

@@ -1138,8 +1138,8 @@ class MatrixChatService {
     if (reporterId == targetId) {
       throw StateError('You cannot report yourself');
     }
-    if (isGroupAdmin(room, reporterId)) {
-      throw StateError('This report action is for group members');
+    if (room.creatorUserIds.contains(reporterId)) {
+      throw StateError('The group owner cannot report group messages');
     }
 
     final event = await room.getEventById(eventId);
