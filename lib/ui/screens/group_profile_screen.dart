@@ -896,12 +896,12 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
           GroupExitRequest.leave(
             roomId: roomId,
             commit: () async {
+              await ChatService().dismissDeletedGroupLocally(roomId);
               await MatrixChatService.instance.dismissPublicGroup(
                 roomId: roomId,
                 canonicalAlias: alias,
               );
               await MatrixChatService.instance.leaveGroup(roomId);
-              await ChatService().removeConversationLocally(roomId);
             },
           ),
         );
@@ -2031,12 +2031,15 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         pendingAction: GroupExitRequest.leave(
           roomId: roomId,
           commit: () async {
-            await MatrixChatService.instance.leaveGroup(roomId);
+            // Save the account-scoped room-id guards before the network
+            // calls. This keeps an old cached row or in-flight /sync from
+            // restoring the group while leave/forget completes.
+            await ChatService().dismissDeletedGroupLocally(roomId);
             await MatrixChatService.instance.dismissPublicGroup(
               roomId: roomId,
               canonicalAlias: alias,
             );
-            await ChatService().removeConversationLocally(roomId);
+            await MatrixChatService.instance.leaveGroup(roomId);
           },
         ),
       ),
@@ -2126,9 +2129,10 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       if (room != null) {
         final deletedAt = DateTime.now().toUtc();
 
-        // Dismiss FIRST — cheap local write, must persist even if the
-        // network steps below rate-limit. Otherwise the group returns to
-        // Suggested via the public directory.
+        // Persist both account-scoped tombstones before any remote work. A
+        // timeout, rate limit, app restart, or stale /sync must never be able
+        // to recreate this room in SQLite or any group list.
+        await ChatService().dismissDeletedGroupLocally(roomId);
         await MatrixChatService.instance.markPublicGroupDeleted(
           roomId: roomId,
           canonicalAlias:
@@ -2175,22 +2179,13 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         }
       } else {
         final deletedAt = DateTime.now().toUtc();
-        await ChatService().markGroupDeletedLocally(
-          roomId: roomId,
-          name: title,
-          avatarUrl: initialAvatarUrl,
-          deletedAt: deletedAt,
-        );
+        await ChatService().dismissDeletedGroupLocally(roomId);
         await MatrixChatService.instance.markPublicGroupDeleted(
           roomId: roomId,
           canonicalAlias: initialAlias,
           deletedAt: deletedAt,
         );
       }
-      // Owners never retain a deleted-room shell. Persist the local dismissal
-      // as well as purging its messages/media; ordinary removal alone allows
-      // the durable Matrix tombstone to recreate the row on the next sync.
-      await ChatService().dismissDeletedGroupLocally(roomId);
     } catch (e) {
       apkLog(
         'GroupProfile.delete',

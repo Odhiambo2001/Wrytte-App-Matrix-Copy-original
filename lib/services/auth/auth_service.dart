@@ -998,8 +998,28 @@ class AuthService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final prefCount = prefs.getKeys().length;
+      // These values contain only account-scoped room IDs, not credentials or
+      // cached content. Keep them across logout so a room the user permanently
+      // deleted cannot be recreated by the next Matrix sync on this device.
+      final permanentGroupDeletionPrefs = <String, List<String>>{};
+      for (final key in prefs.getKeys()) {
+        if (key.startsWith('wrytte.dismissed_deleted_group_room_ids.') ||
+            key.startsWith('wrytte.dismissed_public_groups.')) {
+          final values = prefs.getStringList(key);
+          if (values != null) {
+            permanentGroupDeletionPrefs[key] = List<String>.from(values);
+          }
+        }
+      }
       await prefs.clear();
-      apkLog('Auth.logout', 'SharedPreferences cleared keys=$prefCount');
+      for (final entry in permanentGroupDeletionPrefs.entries) {
+        await prefs.setStringList(entry.key, entry.value);
+      }
+      apkLog(
+        'Auth.logout',
+        'SharedPreferences cleared keys=$prefCount '
+            'preserved_group_tombstones=${permanentGroupDeletionPrefs.length}',
+      );
     } catch (e) {
       apkLog('Auth.logout', 'SharedPreferences clear FAILED: $e');
       debugPrint('[AuthService] shared preferences purge failed: $e');

@@ -256,10 +256,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     try {
       final discovered = await MatrixChatService.instance.fetchPublicGroups();
       final groups = await Future.wait(
-        discovered.map((group) async {
-          final profile = await _chat.loadSuggestedRoomProfile(group.roomId);
-          return profile == null ? group : group.copyWithProfile(profile);
-        }),
+        discovered
+            .where(
+              (group) => !_dismissedDeletedGroupRoomIds.contains(group.roomId),
+            )
+            .map((group) async {
+              final profile = await _chat.loadSuggestedRoomProfile(
+                group.roomId,
+              );
+              return profile == null ? group : group.copyWithProfile(profile);
+            }),
       );
       if (!mounted) return;
       setState(() => _suggestedGroups = groups);
@@ -2056,8 +2062,24 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       conversation.id,
     };
     await _chat.dismissDeletedGroupLocally(conversation.id);
+    final room = MatrixChatService.instance.getRoomById(conversation.id);
+    final alias = room?.canonicalAlias;
+    // Deleted shells bypass the normal five-second exit request, so they must
+    // perform the permanent Matrix-account cleanup here as well. Persist the
+    // server-backed tombstone before leave/forget so a later login cannot
+    // restore the room from a fresh sync.
+    await MatrixChatService.instance.markPublicGroupDeleted(
+      roomId: conversation.id,
+      canonicalAlias: alias,
+    );
+    await MatrixChatService.instance.leaveGroup(conversation.id);
+    apkLog(
+      'Groups.deleteShell',
+      'permanently removed room_id="${conversation.id}" alias="$alias"',
+    );
     if (!mounted) return;
     await _loadLocalConversations();
+    await _loadSuggestedGroups(force: true);
   }
 
   String _groupLastSenderName(ChatConversation conversation) {

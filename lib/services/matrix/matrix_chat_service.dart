@@ -1066,7 +1066,15 @@ class MatrixChatService {
   Future<void> leaveGroup(String roomId) async {
     final room = getRoomById(roomId);
     if (room == null) return;
-    await room.leave();
+    if (room.membership == Membership.join ||
+        room.membership == Membership.invite) {
+      await room.leave();
+    }
+    await room.forget();
+    apkLog(
+      'Matrix.groups',
+      'left and forgot room_id="$roomId" user="${room.client.userID}"',
+    );
   }
 
   Future<void> removeGroupMember({

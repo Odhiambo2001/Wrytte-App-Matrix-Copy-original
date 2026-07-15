@@ -754,13 +754,6 @@ class ChatService {
       }
       final message = ChatMessage.fromMatrixEvent(event);
       if (message == null) continue;
-      if (message.isDeletedForEveryone) {
-        _messagesCache[event.room.id]?.removeWhere(
-          (cached) => cached.id == message.id,
-        );
-        unawaited(ChatLocalDb.instance.deleteMessagePermanently(message.id));
-        continue;
-      }
       if (_isGroupDeletedMatrixEvent(event)) {
         unawaited(
           markGroupDeletedLocally(
@@ -787,8 +780,25 @@ class ChatService {
           local == null
               ? (isHidden ? message.copyWith(isDeletedForMe: true) : message)
               : message.copyWith(
+                content:
+                    local.isDeletedForEveryone
+                        ? (local.content.toLowerCase().startsWith(
+                              'this message was deleted',
+                            )
+                            ? local.content
+                            : (_isOwnMessage(
+                                  message,
+                                  MatrixClientService.instance.client.userID ??
+                                      _currentUserId ??
+                                      '',
+                                )
+                                ? 'This message was deleted'
+                                : 'This message was deleted by admin'))
+                        : message.content,
                 isStarred: local.isStarred,
                 isDeletedForMe: local.isDeletedForMe || isHidden,
+                isDeletedForEveryone:
+                    message.isDeletedForEveryone || local.isDeletedForEveryone,
                 isEdited: local.isEdited,
               );
     }
@@ -1862,9 +1872,13 @@ class ChatService {
       'hydrated local conversations=${conversations.length}',
     );
     for (final conversation in conversations) {
-      if (_dismissedDeletedGroupRoomIds.contains(conversation.id) &&
-          _isDeletedGroupConversationRow(conversation)) {
-        unawaited(ChatLocalDb.instance.deleteConversation(conversation.id));
+      // A permanent room-id tombstone always wins over stale SQLite
+      // metadata. Older rows are not guaranteed to contain the deleted-group
+      // message/state, so conditioning this on their shape lets them return
+      // after logout/login.
+      if (_dismissedDeletedGroupRoomIds.contains(conversation.id)) {
+        await _purgeLocalConversationContent(conversation.id);
+        await ChatLocalDb.instance.deleteConversation(conversation.id);
         continue;
       }
       final restoredRead = conversation.copyWith(unreadCount: 0);
@@ -2174,18 +2188,49 @@ class ChatService {
           'Only a group admin can delete another member\'s message',
         );
       }
+      apkLog(
+        'ChatService.redaction',
+        'delete requested room_id="${message.conversationId}" '
+            'event_id="${message.id}" sender_id="${message.senderId}" '
+            'by_admin=${!isOwnMessage}',
+      );
       await room.redactEvent(
         message.id,
         reason: isOwnMessage ? 'Deleted by sender' : 'Deleted by admin',
       );
     });
-    _messagesCache[message.conversationId]?.removeWhere(
-      (cached) => cached.id == message.id,
+    final currentUser =
+        MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
+    final deletedContent =
+        _isOwnMessage(message, currentUser)
+            ? 'This message was deleted'
+            : 'This message was deleted by admin';
+    final updated = message.copyWith(
+      content: deletedContent,
+      isDeletedForEveryone: true,
     );
-    await ChatLocalDb.instance.deleteMessagePermanently(message.id);
-    await _repairConversationPreviewFromVisibleMessages(message.conversationId);
-    _emitRoomMessages(message.conversationId);
+    final cached = _messagesCache[message.conversationId];
+    final cachedIndex =
+        cached?.indexWhere((item) => item.id == message.id) ?? -1;
+    final alreadyApplied =
+        cachedIndex != -1 &&
+        cached![cachedIndex].isDeletedForEveryone &&
+        cached[cachedIndex].content == deletedContent;
+    if (!alreadyApplied) {
+      _replaceCachedMessage(updated);
+      _messageController.add(updated);
+    }
+    await ChatLocalDb.instance.markMessageDeletedForEveryone(
+      message.id,
+      content: deletedContent,
+    );
     _emitConversations();
+    apkLog(
+      'ChatService.redaction',
+      'delete completed room_id="${message.conversationId}" '
+          'event_id="${message.id}" text="$deletedContent" '
+          'already_applied=$alreadyApplied',
+    );
   }
 
   Future<void> cancelLocalMessage(ChatMessage message) async {
@@ -3097,16 +3142,17 @@ class ChatService {
     var restoredFromCache = 0;
     var refreshedFromMatrix = 0;
     for (final room in rooms) {
-      final existing = _conversationWithVisiblePreview(merged[room.id]);
-      final deletedState = room.getState(groupDeletedStateType);
-      if (deletedState?.content[groupDeletedEventKey] == true &&
-          _dismissedDeletedGroupRoomIds.contains(room.id)) {
+      // Leave/forget can remain visible in an in-flight or stale /sync. Never
+      // recreate a room which this account has permanently dismissed.
+      if (_dismissedDeletedGroupRoomIds.contains(room.id)) {
         merged.remove(room.id);
         _conversationsMap.remove(room.id);
         _messagesCache.remove(room.id);
-        unawaited(ChatLocalDb.instance.deleteConversation(room.id));
+        unawaited(removeConversationLocally(room.id));
         continue;
       }
+      final existing = _conversationWithVisiblePreview(merged[room.id]);
+      final deletedState = room.getState(groupDeletedStateType);
       if (deletedState?.content[groupDeletedEventKey] == true) {
         // Clear memory immediately so the UI can never briefly render the old
         // timeline while the SQLite purge completes.
@@ -4176,10 +4222,34 @@ class ChatService {
     final index = messages?.indexWhere((m) => m.id == targetEventId) ?? -1;
 
     if (messages != null && index != -1) {
-      messages.removeAt(index);
+      final current = messages[index];
+      final reason = event.content['reason']?.toString().trim() ?? '';
+      final deletedContent =
+          reason == 'Deleted by admin' ||
+                  (event.senderId.trim().isNotEmpty &&
+                      event.senderId.trim() != current.senderId.trim())
+              ? 'This message was deleted by admin'
+              : 'This message was deleted';
+      if (current.isDeletedForEveryone && current.content == deletedContent) {
+        apkLog(
+          'ChatService.redaction',
+          'duplicate redaction ignored room_id="$roomId" event_id="$targetEventId"',
+        );
+        return true;
+      }
+      final updated = current.copyWith(
+        content: deletedContent,
+        isDeletedForEveryone: true,
+      );
+      messages[index] = updated;
+      _messageController.add(updated);
       _emitRoomMessages(roomId);
-      unawaited(ChatLocalDb.instance.deleteMessagePermanently(targetEventId));
-      unawaited(_repairConversationPreviewFromVisibleMessages(roomId));
+      unawaited(
+        ChatLocalDb.instance.markMessageDeletedForEveryone(
+          targetEventId,
+          content: deletedContent,
+        ),
+      );
       _emitConversations();
       apkLog(
         'ChatService.redaction',
@@ -4188,12 +4258,20 @@ class ChatService {
       return true;
     }
 
-    unawaited(ChatLocalDb.instance.deleteMessagePermanently(targetEventId));
-    _emitRoomMessages(roomId);
-    _emitConversations();
+    final deletedContent =
+        event.content['reason']?.toString().trim() == 'Deleted by admin'
+            ? 'This message was deleted by admin'
+            : 'This message was deleted';
+    unawaited(
+      ChatLocalDb.instance.markMessageDeletedForEveryone(
+        targetEventId,
+        content: deletedContent,
+      ),
+    );
     apkLog(
       'ChatService.redaction',
-      'live redaction stored room_id="$roomId" event_id="$targetEventId"',
+      'live redaction stored room_id="$roomId" event_id="$targetEventId" '
+          'text="$deletedContent"',
     );
     return true;
   }

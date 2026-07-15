@@ -2011,6 +2011,11 @@ class _ChatScreenState extends State<ChatScreen> {
         room != null &&
         MatrixChatService.instance.isMatrixGroupRoom(room) &&
         MatrixChatService.instance.isGroupAdmin(room, room.client.userID ?? '');
+    final isMessageSenderAdmin =
+        _isGroupChat &&
+        room != null &&
+        MatrixChatService.instance.isMatrixGroupRoom(room) &&
+        MatrixChatService.instance.isGroupAdmin(room, message.senderId);
     final canDeleteForEveryone = isMine || (isAdminInGroup && room.canRedact);
     final attachmentType = message.attachmentType?.trim();
     final hasAttachment = attachmentType != null && attachmentType.isNotEmpty;
@@ -2126,6 +2131,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               if (!_isReadOnlySuggestedGroup &&
                   canDeleteForEveryone &&
+                  !message.isDeleted &&
                   message.status != MessageStatus.sending &&
                   message.status != MessageStatus.failed &&
                   !message.id.startsWith('opt_'))
@@ -2139,7 +2145,15 @@ class _ChatScreenState extends State<ChatScreen> {
                       await _chat.deleteMessageForEveryone(message);
                       if (!mounted) return;
                       setState(() {
-                        _messages.removeWhere((item) => item.id == message.id);
+                        _upsertMessage(
+                          message.copyWith(
+                            content:
+                                isMine
+                                    ? 'This message was deleted'
+                                    : 'This message was deleted by admin',
+                            isDeletedForEveryone: true,
+                          ),
+                        );
                       });
                     } catch (e) {
                       if (!mounted) return;
@@ -2166,6 +2180,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               if (!_isReadOnlySuggestedGroup &&
                   _isGroupChat &&
+                  !isAdminInGroup &&
+                  !isMessageSenderAdmin &&
                   !isMine &&
                   !message.isDeleted &&
                   message.status != MessageStatus.sending &&
@@ -2815,6 +2831,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isDeletedConversation) {
       return const SizedBox.expand();
     }
+    if (_isGroupChat && !_groupProfilesReady) {
+      return const SizedBox.expand();
+    }
     return Column(
       children: [
         Expanded(
@@ -2867,13 +2886,13 @@ class _ChatScreenState extends State<ChatScreen> {
                         msg,
                       );
                       return Column(
+                        key: ValueKey(msg.id),
                         children: [
                           if (showDate)
                             _buildDateDivider(
                               _formatDateDivider(msg.timestamp),
                             ),
                           GestureDetector(
-                            key: ValueKey(msg.id),
                             behavior: HitTestBehavior.opaque,
                             onLongPress: () => _showMessageActions(msg),
                             child: _buildGroupAwareMessageBubble(
@@ -3050,8 +3069,17 @@ class _ChatScreenState extends State<ChatScreen> {
   }) {
     final senderName =
         _isGroupChat && !isMine ? _groupSenderName(msg.senderId) : null;
+    final displayedContent =
+        msg.isDeletedForEveryone &&
+                !msg.content.toLowerCase().startsWith(
+                  'this message was deleted',
+                )
+            ? (isMine
+                ? 'This message was deleted'
+                : 'This message was deleted by admin')
+            : msg.content;
     final bubble = MessageBubble(
-      content: msg.content,
+      content: displayedContent,
       time: _formatTime(msg.timestamp),
       isMine: isMine,
       senderName: senderName,
@@ -3732,8 +3760,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final fallback = _cleanDisplayName(member.calcDisplayname());
       if (fallback.isNotEmpty) return fallback;
     }
-    final localpart = _matrixLocalpart(matrixId);
-    return localpart.isNotEmpty ? localpart : 'Unknown sender';
+    return 'Group member';
   }
 
   Future<void> _loadGroupMemberProfileName(
