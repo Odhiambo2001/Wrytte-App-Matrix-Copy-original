@@ -1758,7 +1758,8 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     super.initState();
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     _nameController.text = widget.initialName;
-    _aliasController.text = _aliasBody(widget.initialAlias);
+    _aliasController.text = 'gr.@${_aliasBody(widget.initialAlias)}';
+    _aliasAvailable = _aliasBody(widget.initialAlias).isNotEmpty;
     _aliasController.addListener(_onAliasChanged);
     _descriptionController.text = room?.topic ?? '';
     _linkController.text =
@@ -1783,14 +1784,19 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
   String _cleanAliasBody(String value) =>
       value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
 
-  String get _candidateAlias => 'gr.@${_cleanAliasBody(_aliasController.text)}';
+  bool get _aliasHasBody => _aliasBody(_aliasController.text).isNotEmpty;
+  bool get _canSaveAlias => _aliasHasBody && _aliasAvailable && !_checkingAlias;
+
+  String get _candidateAlias =>
+      'gr.@${_cleanAliasBody(_aliasBody(_aliasController.text))}';
 
   void _onAliasChanged() {
-    final body = _cleanAliasBody(_aliasController.text);
-    if (_aliasController.text != body) {
+    final body = _cleanAliasBody(_aliasBody(_aliasController.text));
+    final normalized = 'gr.@$body';
+    if (_aliasController.text != normalized) {
       _aliasController.value = TextEditingValue(
-        text: body,
-        selection: TextSelection.collapsed(offset: body.length),
+        text: normalized,
+        selection: TextSelection.collapsed(offset: normalized.length),
       );
       return;
     }
@@ -1802,7 +1808,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       setState(() {
         _checkingAlias = false;
         _aliasAvailable = false;
-        _aliasError = 'Enter a group alias name';
+        _aliasError = '';
       });
       return;
     }
@@ -1830,9 +1836,57 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         _checkingAlias = false;
         _aliasAvailable = available;
         _aliasError =
-            available ? '' : 'This alias is already in use. Try another one';
+            available ? '' : 'The username is not available. Try another one';
       });
     });
+  }
+
+  Widget _aliasField() {
+    Widget? suffix;
+    if (_checkingAlias) {
+      suffix = const SizedBox(
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    } else if (_aliasHasBody && _aliasAvailable) {
+      suffix = const Icon(Icons.check, color: Colors.greenAccent, size: 24);
+    } else if (_aliasHasBody) {
+      suffix = GestureDetector(
+        onTap: () => _aliasController.text = 'gr.@',
+        child: const Icon(Icons.close, color: Colors.white54, size: 22),
+      );
+    }
+
+    return Container(
+      height: 54,
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF23262C),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _aliasController,
+              keyboardType: TextInputType.visiblePassword,
+              autocorrect: false,
+              enableSuggestions: false,
+              style: const TextStyle(color: accent, fontSize: 16),
+              cursorColor: accent,
+              decoration: const InputDecoration(
+                hintText: 'Alias',
+                hintStyle: TextStyle(color: Color(0xFF9A9CA3)),
+                border: InputBorder.none,
+                isCollapsed: true,
+              ),
+            ),
+          ),
+          if (suffix != null) suffix,
+        ],
+      ),
+    );
   }
 
   Future<void> _pickImage() async {
@@ -2490,7 +2544,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
               ),
             ),
             TextButton(
-              onPressed: _saving ? null : _save,
+              onPressed: _saving || !_canSaveAlias ? null : _save,
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 minimumSize: Size.zero,
@@ -2506,9 +2560,12 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
                           color: Colors.white,
                         ),
                       )
-                      : const Text(
+                      : Text(
                         'Save',
-                        style: TextStyle(color: Colors.white, fontSize: 17),
+                        style: TextStyle(
+                          color: _canSaveAlias ? Colors.white : Colors.white38,
+                          fontSize: 17,
+                        ),
                       ),
             ),
           ],
@@ -2537,23 +2594,15 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
                 fontWeight: FontWeight.w800,
               ),
               const SizedBox(height: 14),
-              _inputPill(
-                'Alias',
-                _aliasController,
-                textColor: accent,
-                prefixText: 'gr.@',
-              ),
-              if (_checkingAlias || _aliasError.isNotEmpty) ...[
+              _aliasField(),
+              if (_aliasError.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    _checkingAlias ? 'Checking availability…' : _aliasError,
-                    style: TextStyle(
-                      color:
-                          _checkingAlias
-                              ? const Color(0xFF9A9CA3)
-                              : const Color(0xFFE85D75),
+                    _aliasError,
+                    style: const TextStyle(
+                      color: Color(0xFFE85D75),
                       fontSize: 12,
                     ),
                   ),
