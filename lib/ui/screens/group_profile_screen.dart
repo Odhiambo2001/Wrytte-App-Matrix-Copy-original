@@ -1750,6 +1750,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
   bool _deleting = false;
   bool _checkingAlias = false;
   bool _aliasAvailable = true;
+  bool _showAliasValidation = false;
   String _aliasError = '';
   int _aliasCheckGeneration = 0;
 
@@ -1808,6 +1809,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       setState(() {
         _checkingAlias = false;
         _aliasAvailable = false;
+        _showAliasValidation = false;
         _aliasError = '';
       });
       return;
@@ -1816,6 +1818,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       setState(() {
         _checkingAlias = false;
         _aliasAvailable = true;
+        _showAliasValidation = false;
         _aliasError = '';
       });
       return;
@@ -1825,6 +1828,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     setState(() {
       _checkingAlias = true;
       _aliasAvailable = false;
+      _showAliasValidation = true;
       _aliasError = '';
     });
     _aliasDebounce = Timer(const Duration(milliseconds: 450), () async {
@@ -1849,9 +1853,9 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
         height: 18,
         child: CircularProgressIndicator(strokeWidth: 2),
       );
-    } else if (_aliasHasBody && _aliasAvailable) {
+    } else if (_showAliasValidation && _aliasHasBody && _aliasAvailable) {
       suffix = const Icon(Icons.check, color: Colors.greenAccent, size: 24);
-    } else if (_aliasHasBody) {
+    } else if (_showAliasValidation && _aliasHasBody) {
       suffix = GestureDetector(
         onTap: () => _aliasController.text = 'gr.@',
         child: const Icon(Icons.close, color: Colors.white54, size: 22),
@@ -1925,7 +1929,10 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
     }
 
     FocusManager.instance.primaryFocus?.unfocus();
-    setState(() => _saving = true);
+    setState(() {
+      _saving = true;
+      _showAliasValidation = false;
+    });
     try {
       String? localAvatarPath;
       var profileChanged = false;

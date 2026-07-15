@@ -3008,6 +3008,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       final isMine = _isMine(msg);
                       final previousChronological =
                           msgIndex > 0 ? _messages[msgIndex - 1] : null;
+                      final nextChronological =
+                          msgIndex + 1 < _messages.length
+                              ? _messages[msgIndex + 1]
+                              : null;
                       final showDate =
                           previousChronological == null ||
                           !_isSameDay(
@@ -3017,6 +3021,16 @@ class _ChatScreenState extends State<ChatScreen> {
                       final showTail =
                           previousChronological == null ||
                           _isMine(previousChronological) != isMine;
+                      final showGroupAvatar =
+                          !_isGroupChat ||
+                          isMine ||
+                          nextChronological == null ||
+                          !_isSameDay(
+                            nextChronological.timestamp,
+                            msg.timestamp,
+                          ) ||
+                          nextChronological.senderId.trim().toLowerCase() !=
+                              msg.senderId.trim().toLowerCase();
                       final effectiveAttachmentType = _effectiveAttachmentType(
                         msg,
                       );
@@ -3034,6 +3048,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               msg: msg,
                               isMine: isMine,
                               showTail: showTail,
+                              showGroupAvatar: showGroupAvatar,
                               effectiveAttachmentType: effectiveAttachmentType,
                             ),
                           ),
@@ -3200,6 +3215,7 @@ class _ChatScreenState extends State<ChatScreen> {
     required ChatMessage msg,
     required bool isMine,
     required bool showTail,
+    required bool showGroupAvatar,
     required String? effectiveAttachmentType,
   }) {
     final senderName =
@@ -3246,25 +3262,28 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap:
-                () => _openGroupMemberProfile(
-                  msg.senderId,
-                  senderName ?? msg.senderId,
+          if (showGroupAvatar)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap:
+                  () => _openGroupMemberProfile(
+                    msg.senderId,
+                    senderName ?? msg.senderId,
+                  ),
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: UserAvatar(
+                  size: 36,
+                  imageUrl: _groupMemberAvatars[msg.senderId],
+                  cacheIdentity:
+                      'account:${widget.currentUserId.trim().toLowerCase()}'
+                      '|user:${msg.senderId.trim().toLowerCase()}',
+                  name: senderName ?? msg.senderId,
                 ),
-            child: Padding(
-              padding: const EdgeInsets.all(2),
-              child: UserAvatar(
-                size: 36,
-                imageUrl: _groupMemberAvatars[msg.senderId],
-                cacheIdentity:
-                    'account:${widget.currentUserId.trim().toLowerCase()}'
-                    '|user:${msg.senderId.trim().toLowerCase()}',
-                name: senderName ?? msg.senderId,
               ),
-            ),
-          ),
+            )
+          else
+            const SizedBox(width: 40),
           const SizedBox(width: 6),
           Expanded(child: bubble),
         ],
