@@ -1879,18 +1879,20 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         conv.deletedAt != null ||
         conv.lastMessageType == ChatService.groupDeletedMessageType ||
         ChatService.isGroupDeletedPreview(conv.lastMessage);
+    final hasMessage = !isDeleted && conv.lastMessage.trim().isNotEmpty;
     // A deleted-group shell is intentionally title-only. Sender and preview
     // text belong to the purged conversation and must never be shown.
     final senderName =
-        !isDeleted && _isGroupConversation(conv)
+        hasMessage && _isGroupConversation(conv)
             ? _groupLastSenderName(conv)
             : null;
 
     return ConversationTile(
       name: name,
+      hasMessage: hasMessage,
       senderName: senderName,
       lastMessage: isDeleted ? '' : _conversationPreview(conv.lastMessage),
-      time: _formatTime(conv.lastMessageTime),
+      time: hasMessage ? _formatTime(conv.lastMessageTime) : '',
       avatarUrl: avatar,
       avatarCacheIdentity:
           _isGroupConversation(conv)

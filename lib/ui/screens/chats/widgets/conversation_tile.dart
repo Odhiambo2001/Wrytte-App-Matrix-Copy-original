@@ -3,6 +3,7 @@ import 'package:wrytte/components/user_avatar.dart';
 
 class ConversationTile extends StatelessWidget {
   final String name;
+  final bool hasMessage;
   final String lastMessage;
   final String? senderName;
   final String time;
@@ -25,6 +26,7 @@ class ConversationTile extends StatelessWidget {
   const ConversationTile({
     super.key,
     required this.name,
+    required this.hasMessage,
     required this.lastMessage,
     this.senderName,
     required this.time,
@@ -101,99 +103,137 @@ class ConversationTile extends StatelessWidget {
 
               // ── Name + message ─────────────────────────────────────────
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          time,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isSelected ? _blue : Colors.grey[400],
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 4),
-
-                    if (senderName?.trim().isNotEmpty == true) ...[
-                      Text(
-                        senderName!.trim(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                    ],
-
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            lastMessage,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey[500],
-                            ),
-                          ),
-                        ),
-                        if (unreadCount > 0 && !isSelectionMode)
-                          Container(
-                            margin: const EdgeInsets.only(left: 6),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _blue,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
+                child:
+                    hasMessage
+                        ? _ConversationDetails(
+                          name: name,
+                          senderName: senderName,
+                          lastMessage: lastMessage,
+                          time: time,
+                          unreadCount: unreadCount,
+                          isSelectionMode: isSelectionMode,
+                          isSelected: isSelected,
+                        )
+                        : SizedBox(
+                          height: 60,
+                          child: Align(
+                            alignment: Alignment.centerLeft,
                             child: Text(
-                              unreadCount > 99 ? '99+' : unreadCount.toString(),
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
                                 fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Colors.white,
                               ),
                             ),
                           ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 14),
-
-                    Divider(
-                      color: Colors.grey.withOpacity(0.3),
-                      thickness: 0.5,
-                      height: 0,
-                    ),
-                  ],
-                ),
+                        ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ConversationDetails extends StatelessWidget {
+  final String name;
+  final String? senderName;
+  final String lastMessage;
+  final String time;
+  final int unreadCount;
+  final bool isSelectionMode;
+  final bool isSelected;
+
+  const _ConversationDetails({
+    required this.name,
+    required this.senderName,
+    required this.lastMessage,
+    required this.time,
+    required this.unreadCount,
+    required this.isSelectionMode,
+    required this.isSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            Text(
+              time,
+              style: TextStyle(
+                fontSize: 12,
+                color: isSelected ? ConversationTile._blue : Colors.grey[400],
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 4),
+
+        if (senderName?.trim().isNotEmpty == true) ...[
+          Text(
+            senderName!.trim(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 14, color: Colors.white),
+          ),
+          const SizedBox(height: 2),
+        ],
+
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                lastMessage,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+              ),
+            ),
+            if (unreadCount > 0 && !isSelectionMode)
+              Container(
+                margin: const EdgeInsets.only(left: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: ConversationTile._blue,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  unreadCount > 99 ? '99+' : unreadCount.toString(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+          ],
+        ),
+
+        const SizedBox(height: 14),
+
+        Divider(color: Colors.grey.withOpacity(0.3), thickness: 0.5, height: 0),
+      ],
     );
   }
 }
