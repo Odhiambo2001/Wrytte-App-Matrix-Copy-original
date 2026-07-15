@@ -864,14 +864,18 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   List<ChatConversation> _realConversationRows(
     List<ChatConversation> conversations,
   ) {
-    return conversations
-        .where(
-          (conversation) =>
-              !_dismissedDeletedGroupRoomIds.contains(conversation.id) &&
-              !(conversation.id.startsWith('si_') &&
-                  conversation.lastMessage.trim().isEmpty),
-        )
-        .toList();
+    return conversations.where((conversation) {
+      if (_dismissedDeletedGroupRoomIds.contains(conversation.id)) {
+        return false;
+      }
+      // Saving or merely opening a contact must not create a visible chat
+      // row. Direct chats appear after their first sent/received message.
+      if (!_isGroupConversation(conversation) &&
+          conversation.lastMessage.trim().isEmpty) {
+        return false;
+      }
+      return true;
+    }).toList();
   }
 
   ChatConversation _preferRicherConversation(

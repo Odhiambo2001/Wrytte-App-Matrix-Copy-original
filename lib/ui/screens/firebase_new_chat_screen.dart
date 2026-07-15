@@ -202,11 +202,10 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
       try {
         final chat = ChatService();
         await chat.connect();
-        final existingRoomId = await chat.findMatrixConversationId(receiverId);
-        final roomId =
-            existingRoomId != null && existingRoomId.isNotEmpty
-                ? existingRoomId
-                : await chat.getMatrixConversationId(receiverId);
+        // Opening a saved contact must not create an empty Matrix room. If no
+        // room exists yet, ChatScreen will create it when the first message is
+        // sent.
+        final roomId = await chat.findMatrixConversationId(receiverId);
         if (roomId != null && roomId.isNotEmpty) {
           if (!conversationId.startsWith('!')) {
             await ChatLocalDb.instance.migrateConversationId(

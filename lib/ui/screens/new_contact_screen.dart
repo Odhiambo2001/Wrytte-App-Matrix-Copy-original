@@ -6,7 +6,6 @@ import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/contact_user_profiles.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
-import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
@@ -512,35 +511,12 @@ class _NewContactPageState extends State<NewContactPage> {
       ]..sort();
       final localConversationId = 'si_${ids[0]}_${ids[1]}';
 
-      // ── 3. AWAIT room creation + invite BEFORE navigating ───────
-      String conversationId = localConversationId;
-
-      if (receiverId.isNotEmpty) {
-        apkLog(
-          'NewContact.save',
-          'awaiting Matrix room creation receiver="$receiverId"',
-        );
-
-        final roomId = await _resolveMatrixRoomAfterSave(
-          selfId: selfId,
-          receiverId: receiverId,
-          initialConversationId: localConversationId,
-          contactName: contactName,
-          avatarUrl: profileOneAvatar,
-        );
-
-        if (roomId != null && roomId.isNotEmpty) {
-          conversationId = roomId;
-          apkLog('NewContact.save', 'room confirmed room_id="$conversationId"');
-        } else {
-          apkLog('NewContact.save', 'room creation failed; using local id');
-        }
-      }
-
-      // ── 5. Navigate AFTER room is confirmed ─────────────────────
+      // Keep this chat local until the user actually sends a message.
+      // ChatScreen creates or reuses the Matrix room in its send path.
+      final conversationId = localConversationId;
       apkLog(
         'NewContact.save',
-        'navigating with confirmed conversation_id="$conversationId" receiver="$receiverId"',
+        'navigating with lazy conversation_id="$conversationId" receiver="$receiverId"',
       );
 
       if (!mounted) return;
@@ -681,95 +657,6 @@ class _NewContactPageState extends State<NewContactPage> {
       apkLog('NewContact.save', 'backend contact save FAILED error="$e"');
       rethrow;
     }
-  }
-
-  Future<String?> _resolveMatrixRoomAfterSave({
-    required String selfId,
-    required String receiverId,
-    required String initialConversationId,
-    required String contactName,
-    String? avatarUrl,
-  }) async {
-    apkLog(
-      'NewContact.room',
-      'background start self="$selfId" receiver="$receiverId" initial="$initialConversationId"',
-    );
-
-    final chat = ChatService();
-    String? roomId;
-
-    final localRoomId = await ChatLocalDb.instance.findDirectConversationId(
-      selfUserId: selfId,
-      otherUserId: receiverId,
-    );
-    if (localRoomId != null && localRoomId.isNotEmpty) {
-      apkLog(
-        'NewContact.room',
-        'FE local DB room found room_id="$localRoomId" receiver="$receiverId"',
-      );
-      if (localRoomId.startsWith('!')) {
-        roomId = localRoomId;
-      }
-    } else {
-      apkLog(
-        'NewContact.room',
-        'FE local DB room missing receiver="$receiverId"',
-      );
-    }
-
-    if (roomId == null || roomId.isEmpty) {
-      try {
-        await chat.connect();
-        final serverRoomId = await chat.findMatrixConversationId(receiverId);
-        if (serverRoomId != null && serverRoomId.isNotEmpty) {
-          apkLog(
-            'NewContact.room',
-            'server/Matrix room found room_id="$serverRoomId" receiver="$receiverId"',
-          );
-          roomId = serverRoomId;
-        } else {
-          apkLog(
-            'NewContact.room',
-            'server/Matrix room missing; creating room receiver="$receiverId"',
-          );
-          roomId = await chat.getMatrixConversationId(receiverId);
-        }
-      } catch (e) {
-        apkLog(
-          'NewContact.room',
-          'background room resolve failed receiver="$receiverId" error="$e"',
-        );
-        return null;
-      }
-    }
-
-    if (roomId == null || roomId.isEmpty) {
-      apkLog(
-        'NewContact.room',
-        'background room resolve ended without room receiver="$receiverId"',
-      );
-      return null;
-    }
-
-    await ChatLocalDb.instance.migrateConversationId(
-      oldConversationId: initialConversationId,
-      roomConversation: ChatConversation(
-        id: roomId,
-        participants: [selfId, receiverId],
-        otherUserId: receiverId,
-        lastMessage: '',
-        lastMessageSenderId: '',
-        lastMessageTime: DateTime.now(),
-        unreadCount: 0,
-        otherUserName: contactName,
-        otherUserAvatar: avatarUrl,
-      ),
-    );
-    apkLog(
-      'NewContact.room',
-      'room cached room_id="$roomId" receiver="$receiverId" old_id="$initialConversationId"',
-    );
-    return roomId;
   }
 
   String _friendlyError(String raw) {
