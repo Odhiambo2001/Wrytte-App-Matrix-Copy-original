@@ -503,6 +503,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 ),
                 type: CallType.voice,
                 isCaller: true,
+                startsConnected: true,
               ),
         ),
       );

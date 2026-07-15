@@ -13,6 +13,7 @@ class CallScreen extends StatefulWidget {
   final String? remoteUserAvatar;
   final CallType type;
   final bool isCaller;
+  final bool startsConnected;
 
   const CallScreen({
     super.key,
@@ -20,6 +21,7 @@ class CallScreen extends StatefulWidget {
     required this.remoteUserName,
     required this.type,
     required this.isCaller,
+    this.startsConnected = false,
     this.remoteUserAvatar,
   });
 
@@ -54,6 +56,8 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
+    _isConnected = widget.startsConnected;
+    if (widget.startsConnected) _startTimer();
     _initRenderersAndStreams();
     _listenToCallStatus();
     _listenToRemoteStream();
@@ -63,7 +67,7 @@ class _CallScreenState extends State<CallScreen> {
     }
 
     // Caller plays ringing tone while waiting for answer
-    if (widget.isCaller) {
+    if (widget.isCaller && !widget.startsConnected) {
       _startRinging();
     }
   }

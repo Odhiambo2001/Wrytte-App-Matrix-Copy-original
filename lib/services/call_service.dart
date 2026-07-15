@@ -51,9 +51,13 @@ class CallService {
   late final _WrytteWebRtcDelegate _delegate;
 
   mx.CallSession? _activeSession;
+  mx.GroupCallSession? _activeGroupSession;
   webrtc.MediaStream? _localStream;
   webrtc.MediaStream? _remoteStream;
   StreamSubscription? _incomingCallSub;
+  StreamSubscription? _groupStreamAddSub;
+  StreamSubscription? _groupStreamRemovedSub;
+  StreamSubscription? _groupEventSub;
   final Set<String> _attachedCallIds = {};
 
   final _incomingCallController = StreamController<CallData>.broadcast();
@@ -137,14 +141,180 @@ class CallService {
     if (room == null || room.membership != mx.Membership.join) {
       throw StateError('The Matrix group room is not joined or available.');
     }
-    final session = await MatrixCallService.instance.invite(
-      delegate: _delegate,
-      roomId: roomId,
-      video: false,
+    final voip = await MatrixCallService.instance.ensureStarted(_delegate);
+    final existing = voip.getGroupCallById(roomId, roomId);
+    final session =
+        existing ??
+        await voip.fetchOrCreateGroupCall(
+          roomId,
+          room,
+          mx.MeshBackend(),
+          'm.call',
+          'm.room',
+          preShareKey: false,
+        );
+    await _attachGroupSession(session);
+    if (session.state != mx.GroupCallState.entered) {
+      await _enterGroupVoiceSession(session);
+    }
+    _publishGroupStreams(session);
+    _callStatusController.add(CallStatus.accepted);
+    return session.groupCallId;
+  }
+
+  Future<void> _attachGroupSession(mx.GroupCallSession session) async {
+    if (identical(_activeGroupSession, session)) return;
+    await _groupStreamAddSub?.cancel();
+    await _groupStreamRemovedSub?.cancel();
+    await _groupEventSub?.cancel();
+    _activeGroupSession = session;
+    _groupLog('session selected', session);
+    final backend = session.backend;
+    if (backend is mx.MeshBackend) {
+      _groupStreamAddSub = backend.onStreamAdd.stream.listen(_publishStream);
+      _groupStreamRemovedSub = backend.onStreamRemoved.stream.listen((wrapped) {
+        if (wrapped.stream == _remoteStream) {
+          _remoteStream = null;
+        }
+      });
+    }
+    _groupEventSub = session.matrixRTCEventStream.stream.listen((event) {
+      if (event is mx.ParticipantsJoinEvent) {
+        for (final participant in event.participants) {
+          _groupLog(
+            'participant joined',
+            session,
+            details: 'participant="${participant.id}"',
+          );
+        }
+      } else if (event is mx.ParticipantsLeftEvent) {
+        for (final participant in event.participants) {
+          _groupLog(
+            'participant left',
+            session,
+            details: 'participant="${participant.id}"',
+          );
+        }
+      } else if (event is mx.GroupCallStateChanged) {
+        _groupLog(
+          'state changed',
+          session,
+          details: 'state="${event.state.name}"',
+        );
+      } else if (event is mx.GroupCallStateError) {
+        _groupLog(
+          'state error',
+          session,
+          details: 'message="${event.msg}" error="${event.err}"',
+        );
+      }
+    });
+  }
+
+  Future<mx.WrappedMediaStream> _createGroupVoiceStream(
+    mx.GroupCallSession session,
+  ) async {
+    final stream = await webrtc.navigator.mediaDevices.getUserMedia({
+      'audio': true,
+      'video': false,
+    });
+    return mx.WrappedMediaStream(
+      stream: stream,
+      participant: session.localParticipant!,
+      room: session.room,
+      client: session.client,
+      purpose: mx.SDPStreamMetadataPurpose.Usermedia,
+      audioMuted: stream.getAudioTracks().isEmpty,
+      videoMuted: true,
+      isGroupCall: true,
+      voip: session.voip,
     );
-    _attachSession(session);
-    _callStatusController.add(CallStatus.ringing);
-    return session.callId;
+  }
+
+  Future<void> _enterGroupVoiceSession(mx.GroupCallSession session) async {
+    mx.WrappedMediaStream? voiceStream;
+    if (session.state == mx.GroupCallState.localCallFeedUninitialized) {
+      voiceStream = await _createGroupVoiceStream(session);
+      _groupLog(
+        'local audio stream created',
+        session,
+        details: 'stream_id="${voiceStream.stream?.id}"',
+      );
+    }
+    await session.enter(stream: voiceStream);
+    String? membershipEventId;
+    final userId = session.client.userID;
+    final deviceId = session.client.deviceID;
+    if (userId != null && deviceId != null) {
+      for (final membership in session.room.getCallMembershipsForUser(
+        userId,
+        deviceId,
+        session.voip,
+      )) {
+        if (membership.callId == session.groupCallId &&
+            membership.roomId == session.room.id) {
+          membershipEventId = membership.eventId;
+          break;
+        }
+      }
+    }
+    _groupLog(
+      'membership event sent',
+      session,
+      details: 'event_id="${membershipEventId ?? 'pending sync'}"',
+    );
+    _groupLog('session entered', session);
+  }
+
+  void _groupLog(
+    String action,
+    mx.GroupCallSession session, {
+    String details = '',
+  }) {
+    debugPrint(
+      '[CallService.group] $action call_id="${session.groupCallId}" '
+      'room_id="${session.room.id}"${details.isEmpty ? '' : ' $details'}',
+    );
+  }
+
+  void _publishGroupStreams(mx.GroupCallSession session) {
+    final backend = session.backend;
+    if (backend is mx.MeshBackend) {
+      final local = backend.localUserMediaStream;
+      if (local != null) _publishStream(local);
+      for (final remote in backend.userMediaStreams) {
+        if (!remote.isLocal()) _publishStream(remote);
+      }
+    }
+  }
+
+  Future<void> joinGroupVoiceCall({
+    required mx.GroupCallSession session,
+  }) async {
+    await _requestMediaPermissions(CallType.voice);
+    await _attachGroupSession(session);
+    if (session.state != mx.GroupCallState.entered) {
+      await _enterGroupVoiceSession(session);
+    }
+    _publishGroupStreams(session);
+    _callStatusController.add(CallStatus.accepted);
+  }
+
+  Future<void> leaveGroupVoiceCall() async {
+    final session = _activeGroupSession;
+    if (session != null && session.state == mx.GroupCallState.entered) {
+      _groupLog('session leaving', session);
+      await session.leave();
+      _groupLog('session left', session);
+    }
+    await _groupStreamAddSub?.cancel();
+    await _groupStreamRemovedSub?.cancel();
+    await _groupEventSub?.cancel();
+    _groupStreamAddSub = null;
+    _groupStreamRemovedSub = null;
+    _groupEventSub = null;
+    _activeGroupSession = null;
+    await _cleanup();
   }
 
   Future<void> acceptCall(CallData call) async {
@@ -192,6 +362,10 @@ class CallService {
   }
 
   Future<void> endCall() async {
+    if (_activeGroupSession != null) {
+      await leaveGroupVoiceCall();
+      return;
+    }
     final session = _activeSession;
     if (session != null) {
       await MatrixCallService.instance.hangup(session);
@@ -201,6 +375,16 @@ class CallService {
   }
 
   void setMicrophoneMuted(bool muted) {
+    final group = _activeGroupSession;
+    if (group != null) {
+      unawaited(
+        group.backend.setDeviceMuted(
+          group,
+          muted,
+          mx.MediaInputKind.audioinput,
+        ),
+      );
+    }
     final session = _activeSession;
     if (session != null) unawaited(session.setMicrophoneMuted(muted));
     _localStream?.getAudioTracks().forEach((track) => track.enabled = !muted);
@@ -240,12 +424,29 @@ class CallService {
     final stream = wrapped.stream;
     if (stream == null) return;
     if (wrapped.isLocal()) {
+      final group = _activeGroupSession;
+      if (group != null) {
+        _groupLog(
+          'local audio stream published',
+          group,
+          details: 'stream_id="${stream.id}"',
+        );
+      }
       _localStream = stream;
       if (_activeSession?.type == mx.CallType.kVideo) {
         _localStream!.getVideoTracks().forEach((track) => track.enabled = true);
       }
       _localStreamController.add(_localStream!);
     } else {
+      final group = _activeGroupSession;
+      if (group != null) {
+        _groupLog(
+          'remote audio stream received',
+          group,
+          details:
+              'participant="${wrapped.participant.id}" stream_id="${stream.id}"',
+        );
+      }
       _remoteStream = stream;
       _remoteStreamController.add(_remoteStream!);
       _callStatusController.add(CallStatus.accepted);
@@ -356,7 +557,13 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
   Future<void> handleNewGroupCall(mx.GroupCallSession groupCall) async {}
 
   @override
-  Future<void> handleGroupCallEnded(mx.GroupCallSession groupCall) async {}
+  Future<void> handleGroupCallEnded(mx.GroupCallSession groupCall) async {
+    if (identical(_service._activeGroupSession, groupCall)) {
+      _service._activeGroupSession = null;
+      _service._callStatusController.add(CallStatus.ended);
+      await _service._cleanup();
+    }
+  }
 
   @override
   bool get isWeb => kIsWeb;
