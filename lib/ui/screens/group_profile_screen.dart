@@ -2078,16 +2078,30 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
           deletedBy: room.client.userID,
         );
 
-        // Best-effort network cleanup — allowed to fail on M_LIMIT_EXCEEDED
-        // without reverting the dismissal above.
+        // Each remote step is independent. A failed member notification must
+        // never prevent directory removal, member removal, leave, or forget.
         try {
           await _notifyMembersGroupDeleted(room, deletedAt, title);
+        } catch (e) {
+          apkLog(
+            'GroupProfile.delete',
+            'member notification failed room_id="$roomId" error="$e"',
+          );
+        }
+        try {
           await _announceGroupDeleted(room, deletedAt, title);
+        } catch (e) {
+          apkLog(
+            'GroupProfile.delete',
+            'deletion announcement failed room_id="$roomId" error="$e"',
+          );
+        }
+        try {
           await _removeMembersAndClose(room);
         } catch (e) {
           apkLog(
             'GroupProfile.delete',
-            'network cleanup failed (dismissal already persisted) room_id="$roomId" error="$e"',
+            'room close failed (dismissal already persisted) room_id="$roomId" error="$e"',
           );
         }
       } else {
@@ -2104,10 +2118,10 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
           deletedAt: deletedAt,
         );
       }
-      // Owners never retain a deleted-room shell. Remove the conversation,
-      // every cached message/media item, and the created-group registration
-      // before navigating back to the Groups home page.
-      await ChatService().removeConversationLocally(roomId);
+      // Owners never retain a deleted-room shell. Persist the local dismissal
+      // as well as purging its messages/media; ordinary removal alone allows
+      // the durable Matrix tombstone to recreate the row on the next sync.
+      await ChatService().dismissDeletedGroupLocally(roomId);
     } catch (e) {
       apkLog(
         'GroupProfile.delete',
@@ -2151,12 +2165,30 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       );
     }
 
-    // Joined members and outstanding invitees deliberately remain associated
-    // with the tombstoned room. Matrix room state is durable across logout and
-    // new devices, unlike to-device events. A pending invite can therefore be
-    // accepted later and will synchronize only the read-only deleted shell.
-    // Removing either membership here would make the tombstone undiscoverable
-    // to an offline user.
+    // Remove every other joined/invited user so the deleted group is no longer
+    // present as an active room for any member. The deletion notice/direct
+    // notification is sent before this cleanup.
+    final currentUserId = room.client.userID?.trim() ?? '';
+    final participants =
+        room
+            .getParticipants([mx.Membership.join, mx.Membership.invite])
+            .map((member) => member.id.trim())
+            .where((userId) => userId.isNotEmpty && userId != currentUserId)
+            .toSet();
+    for (final userId in participants) {
+      try {
+        await room.client.kick(
+          room.id,
+          userId,
+          reason: 'Group deleted by owner',
+        );
+      } catch (e) {
+        apkLog(
+          'GroupProfile.delete',
+          'member removal failed room_id="${room.id}" user_id="$userId" error="$e"',
+        );
+      }
+    }
 
     final canonicalAlias = room.canonicalAlias.trim();
     if (canonicalAlias.isNotEmpty) {
