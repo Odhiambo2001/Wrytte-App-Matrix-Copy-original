@@ -2161,19 +2161,32 @@ class ChatService {
       final isOwnMessage = _isOwnMessage(message, currentUser);
       if (MatrixChatService.instance.isMatrixGroupRoom(room) &&
           !isOwnMessage &&
-          (!MatrixChatService.instance.isGroupOwner(room) || !room.canRedact)) {
+          (!MatrixChatService.instance.isGroupAdmin(room, currentUser) ||
+              !room.canRedact)) {
         throw StateError(
-          'Only the group owner can delete another member\'s message',
+          'Only a group admin can delete another member\'s message',
         );
       }
-      await room.redactEvent(message.id, reason: 'Deleted by sender');
+      await room.redactEvent(
+        message.id,
+        reason: isOwnMessage ? 'Deleted by sender' : 'Deleted by admin',
+      );
     });
+    final currentUser =
+        MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
+    final deletedContent =
+        _isOwnMessage(message, currentUser)
+            ? 'This message was deleted'
+            : 'This message was deleted by admin';
     final updated = message.copyWith(
-      content: 'This message was deleted',
+      content: deletedContent,
       isDeletedForEveryone: true,
     );
     _replaceCachedMessage(updated);
-    await ChatLocalDb.instance.markMessageDeletedForEveryone(message.id);
+    await ChatLocalDb.instance.markMessageDeletedForEveryone(
+      message.id,
+      content: deletedContent,
+    );
     _messageController.add(updated);
   }
 
@@ -4166,14 +4179,24 @@ class ChatService {
 
     if (messages != null && index != -1) {
       final current = messages[index];
+      final deletedContent =
+          event.senderId.trim().isNotEmpty &&
+                  event.senderId.trim() != current.senderId.trim()
+              ? 'This message was deleted by admin'
+              : 'This message was deleted';
       final updated = current.copyWith(
-        content: 'This message was deleted',
+        content: deletedContent,
         isDeletedForEveryone: true,
       );
       messages[index] = updated;
       _messageController.add(updated);
       _emitRoomMessages(roomId);
-      unawaited(ChatLocalDb.instance.markMessageDeletedForEveryone(updated.id));
+      unawaited(
+        ChatLocalDb.instance.markMessageDeletedForEveryone(
+          updated.id,
+          content: deletedContent,
+        ),
+      );
       _emitConversations();
       apkLog(
         'ChatService.redaction',

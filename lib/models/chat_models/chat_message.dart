@@ -144,7 +144,7 @@ class ChatMessage {
       receiverId: event.room.directChatMatrixID ?? '',
       content:
           event.redacted
-              ? 'This message was deleted'
+              ? _redactedMessageText(event)
               : _stripReplyFallback(_matrixEventBody(event)),
       timestamp: event.originServerTs,
       status: _statusFromMatrix(event.status),
@@ -283,6 +283,17 @@ class ChatMessage {
         "content: $content, status: $status, attachmentType: $attachmentType, "
         "voiceDuration: $voiceDuration)";
   }
+}
+
+String _redactedMessageText(mx.Event event) {
+  final redactedBy = event.redactedBecause?.senderId.trim() ?? '';
+  final originalSender = event.senderId.trim();
+  if (redactedBy.isNotEmpty &&
+      originalSender.isNotEmpty &&
+      redactedBy != originalSender) {
+    return 'This message was deleted by admin';
+  }
+  return 'This message was deleted';
 }
 
 String _stripReplyFallback(String body) {

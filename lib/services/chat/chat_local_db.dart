@@ -656,11 +656,14 @@ class ChatLocalDb {
     );
   }
 
-  Future<void> markMessageDeletedForEveryone(String messageId) async {
+  Future<void> markMessageDeletedForEveryone(
+    String messageId, {
+    String content = 'This message was deleted',
+  }) async {
     final database = await db;
     await database.update(
       'messages',
-      {'isDeletedForEveryone': 1, 'content': 'This message was deleted'},
+      {'isDeletedForEveryone': 1, 'content': content},
       where: 'id = ?',
       whereArgs: [messageId],
     );

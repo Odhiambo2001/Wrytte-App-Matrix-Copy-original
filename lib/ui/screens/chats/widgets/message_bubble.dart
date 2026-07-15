@@ -949,7 +949,9 @@ class _BubbleContent extends StatelessWidget {
               _LinkedMessageText(
                 text:
                     isDeleted
-                        ? 'This message was deleted'
+                        ? (content.trim().isEmpty
+                            ? 'This message was deleted'
+                            : content.trim())
                         : linkDisplayText(content),
                 isDeleted: isDeleted,
                 isStarred: isStarred,

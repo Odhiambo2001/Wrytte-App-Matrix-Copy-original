@@ -2006,12 +2006,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _showMessageActions(ChatMessage message) async {
     final isMine = _isMine(message);
     final room = MatrixChatService.instance.getRoomById(message.conversationId);
-    final isOwnedGroup =
+    final isAdminInGroup =
         _isGroupChat &&
         room != null &&
         MatrixChatService.instance.isMatrixGroupRoom(room) &&
-        MatrixChatService.instance.isGroupOwner(room);
-    final canDeleteForEveryone = isMine || (isOwnedGroup && room.canRedact);
+        MatrixChatService.instance.isGroupAdmin(room, room.client.userID ?? '');
+    final canDeleteForEveryone = isMine || (isAdminInGroup && room.canRedact);
     final attachmentType = message.attachmentType?.trim();
     final hasAttachment = attachmentType != null && attachmentType.isNotEmpty;
     final link = _firstLinkIn(message.content);
@@ -2141,7 +2141,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       setState(
                         () => _upsertMessage(
                           message.copyWith(
-                            content: '',
+                            content:
+                                isMine
+                                    ? 'This message was deleted'
+                                    : 'This message was deleted by admin',
                             isDeletedForEveryone: true,
                           ),
                         ),
