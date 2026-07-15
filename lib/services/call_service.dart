@@ -214,21 +214,44 @@ class CallService {
   Future<mx.WrappedMediaStream> _createGroupVoiceStream(
     mx.GroupCallSession session,
   ) async {
+    final userId = session.client.userID?.trim() ?? '';
+    final deviceId = session.client.deviceID?.trim() ?? '';
+    if (userId.isEmpty) {
+      throw StateError('Matrix user is not logged in for group voice chat.');
+    }
+    if (deviceId.isEmpty) {
+      throw StateError(
+        'Matrix device is not initialized for group voice chat. Please sign in again.',
+      );
+    }
     final stream = await webrtc.navigator.mediaDevices.getUserMedia({
       'audio': true,
       'video': false,
     });
-    return mx.WrappedMediaStream(
-      stream: stream,
-      participant: session.localParticipant!,
-      room: session.room,
-      client: session.client,
-      purpose: mx.SDPStreamMetadataPurpose.Usermedia,
-      audioMuted: stream.getAudioTracks().isEmpty,
-      videoMuted: true,
-      isGroupCall: true,
-      voip: session.voip,
-    );
+    try {
+      final participant = mx.CallParticipant(
+        session.voip,
+        userId: userId,
+        deviceId: deviceId,
+      );
+      return mx.WrappedMediaStream(
+        stream: stream,
+        participant: participant,
+        room: session.room,
+        client: session.client,
+        purpose: mx.SDPStreamMetadataPurpose.Usermedia,
+        audioMuted: stream.getAudioTracks().isEmpty,
+        videoMuted: true,
+        isGroupCall: true,
+        voip: session.voip,
+      );
+    } catch (_) {
+      for (final track in stream.getTracks()) {
+        track.stop();
+      }
+      await stream.dispose();
+      rethrow;
+    }
   }
 
   Future<void> _enterGroupVoiceSession(mx.GroupCallSession session) async {
@@ -241,7 +264,19 @@ class CallService {
         details: 'stream_id="${voiceStream.stream?.id}"',
       );
     }
-    await session.enter(stream: voiceStream);
+    try {
+      await session.enter(stream: voiceStream);
+    } catch (error) {
+      final stream = voiceStream?.stream;
+      if (stream != null) {
+        for (final track in stream.getTracks()) {
+          track.stop();
+        }
+        await stream.dispose();
+      }
+      _groupLog('session enter failed', session, details: 'error="$error"');
+      rethrow;
+    }
     String? membershipEventId;
     final userId = session.client.userID;
     final deviceId = session.client.deviceID;

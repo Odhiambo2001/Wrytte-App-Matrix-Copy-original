@@ -507,7 +507,9 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               ),
         ),
       );
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint('[GroupProfile.voiceChat] start failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not start voice chat: $error')),
