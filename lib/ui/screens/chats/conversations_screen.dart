@@ -85,6 +85,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   StreamSubscription<String>? _contactsChangedSub;
   Timer? _conversationBatchTimer;
+  Timer? _groupExitTimer;
+  GroupExitRequest? _pendingGroupExit;
+  DateTime? _groupExitDeadline;
+  int _groupExitSecondsRemaining = 5;
+  final Set<String> _groupExitHiddenRoomIds = {};
 
   late final TabController _tabController;
   final ScrollController _scrollCtrl = ScrollController();
@@ -145,6 +150,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _connectivitySub?.cancel();
     _contactsChangedSub?.cancel();
     _conversationBatchTimer?.cancel();
+    _groupExitTimer?.cancel();
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
     _tabController.dispose();
@@ -1249,6 +1255,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   bool _isDisplayableGroupConversation(ChatConversation conv) {
+    if (_groupExitHiddenRoomIds.contains(conv.id)) return false;
     if (!_isGroupConversation(conv)) return false;
     final title = _cleanHumanName(_conversationTitle(conv));
     final normalized = title.toLowerCase();
@@ -2654,62 +2661,56 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted) return;
+    _startGroupExitCountdown(request);
+  }
 
-    var undone = false;
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    final controller = messenger.showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 5),
-        behavior: SnackBarBehavior.floating,
-        dismissDirection: DismissDirection.none,
-        margin: EdgeInsets.fromLTRB(
-          12,
-          0,
-          12,
-          MediaQuery.paddingOf(context).bottom + 92,
-        ),
-        padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
-        backgroundColor: const Color(0xFF1D1D21),
-        elevation: 12,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-        content: Row(
-          children: [
-            const _GroupUndoCountdown(duration: Duration(seconds: 5)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                request.type == GroupExitType.delete
-                    ? 'You deleted the group.'
-                    : 'You left the group.',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
-        action: SnackBarAction(
-          label: 'Undo',
-          textColor: const Color(0xFF64B5F6),
-          onPressed: () => undone = true,
-        ),
-      ),
-    );
-
-    await controller.closed;
-    if (!mounted) return;
-    if (undone) {
-      apkLog('Groups.undo', 'undo tapped room_id="${request.roomId}"');
-      await _loadLocalConversations();
-      await _loadSuggestedGroups(force: true);
-      return;
+  void _startGroupExitCountdown(GroupExitRequest request) {
+    final previousRequest = _pendingGroupExit;
+    _groupExitTimer?.cancel();
+    if (previousRequest != null && previousRequest.roomId != request.roomId) {
+      unawaited(_commitGroupExit(previousRequest));
     }
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    setState(() {
+      _groupExitHiddenRoomIds.add(request.roomId);
+      _pendingGroupExit = request;
+      _groupExitDeadline = deadline;
+      _groupExitSecondsRemaining = 5;
+    });
+    _groupExitTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (!mounted || !identical(_pendingGroupExit, request)) return;
+      final milliseconds = deadline.difference(DateTime.now()).inMilliseconds;
+      if (milliseconds <= 0) {
+        _groupExitTimer?.cancel();
+        _groupExitTimer = null;
+        setState(() {
+          _pendingGroupExit = null;
+          _groupExitDeadline = null;
+        });
+        unawaited(_commitGroupExit(request));
+        return;
+      }
+      final seconds = (milliseconds / 1000).ceil().clamp(1, 5);
+      setState(() => _groupExitSecondsRemaining = seconds);
+    });
+  }
 
+  Future<void> _undoGroupExit() async {
+    final request = _pendingGroupExit;
+    if (request == null) return;
+    _groupExitTimer?.cancel();
+    _groupExitTimer = null;
+    setState(() {
+      _groupExitHiddenRoomIds.remove(request.roomId);
+      _pendingGroupExit = null;
+      _groupExitDeadline = null;
+    });
+    apkLog('Groups.undo', 'undo tapped room_id="${request.roomId}"');
+    await _loadLocalConversations();
+    await _loadSuggestedGroups(force: true);
+  }
+
+  Future<void> _commitGroupExit(GroupExitRequest request) async {
     try {
       apkLog(
         'Groups.undo',
@@ -2721,9 +2722,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       await _loadSuggestedGroups(force: true);
     } catch (error) {
       if (!mounted) return;
+      setState(() => _groupExitHiddenRoomIds.remove(request.roomId));
       await _loadLocalConversations();
       await _loadSuggestedGroups(force: true);
-      messenger.showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Could not update group: $error'),
           backgroundColor: Colors.redAccent,
@@ -2905,67 +2907,104 @@ class _ConversationsScreenState extends State<ConversationsScreen>
               ],
             ),
           ),
+          if (_pendingGroupExit != null)
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: MediaQuery.paddingOf(context).bottom + 12,
+              child: _GroupExitUndoBanner(
+                request: _pendingGroupExit!,
+                secondsRemaining: _groupExitSecondsRemaining,
+                progress: _groupExitProgress,
+                onUndo: _undoGroupExit,
+              ),
+            ),
         ],
       ),
     );
   }
+
+  double get _groupExitProgress {
+    final deadline = _groupExitDeadline;
+    if (deadline == null) return 0;
+    return (deadline.difference(DateTime.now()).inMilliseconds / 5000).clamp(
+      0.0,
+      1.0,
+    );
+  }
 }
 
-class _GroupUndoCountdown extends StatefulWidget {
-  final Duration duration;
+class _GroupExitUndoBanner extends StatelessWidget {
+  final GroupExitRequest request;
+  final int secondsRemaining;
+  final double progress;
+  final VoidCallback onUndo;
 
-  const _GroupUndoCountdown({required this.duration});
-
-  @override
-  State<_GroupUndoCountdown> createState() => _GroupUndoCountdownState();
-}
-
-class _GroupUndoCountdownState extends State<_GroupUndoCountdown>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(vsync: this, duration: widget.duration)
-      ..reverse(from: 1);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+  const _GroupExitUndoBanner({
+    required this.request,
+    required this.secondsRemaining,
+    required this.progress,
+    required this.onUndo,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) {
-        final seconds =
-            (widget.duration.inMilliseconds * _controller.value / 1000).ceil();
-        return SizedBox(
-          width: 34,
-          height: 34,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              CircularProgressIndicator(
-                value: _controller.value,
-                strokeWidth: 2,
-                backgroundColor: Colors.white24,
-                valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+    return Material(
+      color: const Color(0xFF1D1D21),
+      elevation: 12,
+      borderRadius: BorderRadius.circular(22),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 34,
+              height: 34,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  CircularProgressIndicator(
+                    value: progress,
+                    strokeWidth: 2,
+                    backgroundColor: Colors.white24,
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Colors.white,
+                    ),
+                  ),
+                  Center(
+                    child: Text(
+                      '$secondsRemaining',
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
+                ],
               ),
-              Center(
-                child: Text(
-                  '$seconds',
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                request.type == GroupExitType.delete
+                    ? 'You deleted the group.'
+                    : 'You left the group.',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-            ],
-          ),
-        );
-      },
+            ),
+            TextButton(
+              onPressed: onUndo,
+              child: const Text(
+                'Undo',
+                style: TextStyle(color: Color(0xFF64B5F6)),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
