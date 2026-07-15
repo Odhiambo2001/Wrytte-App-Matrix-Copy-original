@@ -575,15 +575,15 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
-                trailing: _memberTrailing(
-                  isAdmin: isAdmin,
-                  canRemove: canRemove,
-                  onRemove: () => _confirmRemoveMember(member.id, name),
-                ),
+                trailing: _memberTrailing(isAdmin: isAdmin),
                 onTap:
                     isOwner || isCurrentJoiner
                         ? null
                         : () => unawaited(_openMemberProfile(member.id, name)),
+                onLongPress:
+                    canRemove
+                        ? () => _showMemberActions(member.id, name)
+                        : null,
               );
             },
           ),
@@ -603,15 +603,13 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 contentPadding: EdgeInsets.zero,
                 leading: UserAvatar(size: 44, imageUrl: avatar, name: name),
                 title: Text(name, style: const TextStyle(color: Colors.white)),
-                trailing: _memberTrailing(
-                  isAdmin: isAdmin,
-                  canRemove: canRemove,
-                  onRemove: () => _confirmRemoveMember(memberId, name),
-                ),
+                trailing: _memberTrailing(isAdmin: isAdmin),
                 onTap:
                     isOwner || isCurrentJoiner
                         ? null
                         : () => unawaited(_openMemberProfile(memberId, name)),
+                onLongPress:
+                    canRemove ? () => _showMemberActions(memberId, name) : null,
               );
             },
           ),
@@ -619,34 +617,17 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     );
   }
 
-  Widget? _memberTrailing({
-    required bool isAdmin,
-    required bool canRemove,
-    required VoidCallback onRemove,
-  }) {
-    if (!isAdmin && !canRemove) return null;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (isAdmin) const _AdminBadge(),
-        if (canRemove)
-          IconButton(
-            tooltip: 'Remove member',
-            icon: const Icon(
-              Icons.person_remove_outlined,
-              color: Color(0xFFFF6B6B),
-            ),
-            onPressed: onRemove,
-          ),
-      ],
-    );
-  }
+  Widget? _memberTrailing({required bool isAdmin}) =>
+      isAdmin ? const _AdminBadge() : null;
 
   bool _canRemoveMember(String userId) {
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     if (room == null ||
         !MatrixChatService.instance.isMatrixGroupRoom(room) ||
-        !MatrixChatService.instance.isGroupOwner(room) ||
+        !MatrixChatService.instance.isGroupAdmin(
+          room,
+          room.client.userID ?? '',
+        ) ||
         !room.canKick) {
       return false;
     }
@@ -654,6 +635,37 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     final targetUserId = userId.trim();
     if (currentUserId.isEmpty || targetUserId == currentUserId) return false;
     return room.getPowerLevelByUserId(targetUserId) < room.ownPowerLevel;
+  }
+
+  Future<void> _showMemberActions(String userId, String name) async {
+    if (!_canRemoveMember(userId)) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF111318),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder:
+          (sheetContext) => SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: ListTile(
+                leading: const Icon(
+                  Icons.person_remove_outlined,
+                  color: Color(0xFFFF6B6B),
+                ),
+                title: const Text(
+                  'Remove from group',
+                  style: TextStyle(color: Color(0xFFFF6B6B)),
+                ),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _confirmRemoveMember(userId, name);
+                },
+              ),
+            ),
+          ),
+    );
   }
 
   Future<void> _confirmRemoveMember(String userId, String name) async {

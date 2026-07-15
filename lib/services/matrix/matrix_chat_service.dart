@@ -1083,11 +1083,11 @@ class MatrixChatService {
     if (currentUserId.isEmpty || targetUserId.isEmpty) {
       throw StateError('Invalid Matrix user');
     }
-    if (!isGroupOwner(room) || !room.canKick) {
-      throw StateError('Only the group owner can remove members');
+    if (!isGroupAdmin(room, currentUserId) || !room.canKick) {
+      throw StateError('Only a group admin can remove members');
     }
     if (targetUserId == currentUserId) {
-      throw StateError('The group owner cannot remove themselves');
+      throw StateError('A group admin cannot remove themselves');
     }
     if (room.getPowerLevelByUserId(targetUserId) >= room.ownPowerLevel) {
       throw StateError('You cannot remove a member with equal or higher power');
@@ -1095,7 +1095,7 @@ class MatrixChatService {
     await room.client.kick(
       room.id,
       targetUserId,
-      reason: reason ?? 'Removed by group owner',
+      reason: reason ?? 'Removed by group admin',
     );
   }
 
