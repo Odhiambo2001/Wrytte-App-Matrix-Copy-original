@@ -3212,6 +3212,26 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _showGroupOptions() async {
     final mediaQuery = MediaQuery.of(context);
+    final room = MatrixChatService.instance.getRoomById(_activeConversationId);
+    final isOwner =
+        room != null && MatrixChatService.instance.isGroupOwner(room);
+    final items =
+        _isReadOnlySuggestedGroup
+            ? const [
+              (Icons.link_rounded, 'Share link'),
+              (Icons.report_gmailerrorred_outlined, 'Report group'),
+            ]
+            : isOwner
+            ? const [
+              (Icons.edit_outlined, 'Edit'),
+              (Icons.settings_outlined, 'Settings'),
+              (Icons.add_circle_outline_rounded, 'Add Story'),
+            ]
+            : const [
+              (Icons.report_gmailerrorred_outlined, 'Report'),
+              (Icons.search_rounded, 'Search'),
+              (Icons.info_outline_rounded, 'Info'),
+            ];
     await showMenu<void>(
       context: context,
       color: const Color(0xFF23262C),
@@ -3225,40 +3245,28 @@ class _ChatScreenState extends State<ChatScreen> {
         12,
         0,
       ),
-      items: const [
-        PopupMenuItem<void>(
-          enabled: false,
-          height: 58,
-          child: Row(
-            children: [
-              Icon(Icons.link_rounded, color: Colors.white54, size: 24),
-              SizedBox(width: 16),
-              Text(
-                'Share link',
-                style: TextStyle(color: Colors.white54, fontSize: 17),
-              ),
-            ],
-          ),
-        ),
-        PopupMenuItem<void>(
-          enabled: false,
-          height: 58,
-          child: Row(
-            children: [
-              Icon(
-                Icons.report_gmailerrorred_outlined,
-                color: Colors.white54,
-                size: 24,
-              ),
-              SizedBox(width: 16),
-              Text(
-                'Report group',
-                style: TextStyle(color: Colors.white54, fontSize: 17),
-              ),
-            ],
-          ),
-        ),
-      ],
+      items:
+          items
+              .map(
+                (item) => PopupMenuItem<void>(
+                  enabled: false,
+                  height: 58,
+                  child: Row(
+                    children: [
+                      Icon(item.$1, color: Colors.white54, size: 24),
+                      const SizedBox(width: 16),
+                      Text(
+                        item.$2,
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 17,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
     );
   }
 
