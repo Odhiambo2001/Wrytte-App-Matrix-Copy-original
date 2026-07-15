@@ -669,6 +669,11 @@ class ChatLocalDb {
     );
   }
 
+  Future<void> deleteMessagePermanently(String messageId) async {
+    final database = await db;
+    await database.delete('messages', where: 'id = ?', whereArgs: [messageId]);
+  }
+
   Future<List<ChatMessage>> loadStarredMessages() async {
     final database = await db;
     final rows = await database.query(

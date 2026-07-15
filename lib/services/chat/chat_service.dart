@@ -754,6 +754,13 @@ class ChatService {
       }
       final message = ChatMessage.fromMatrixEvent(event);
       if (message == null) continue;
+      if (message.isDeletedForEveryone) {
+        _messagesCache[event.room.id]?.removeWhere(
+          (cached) => cached.id == message.id,
+        );
+        unawaited(ChatLocalDb.instance.deleteMessagePermanently(message.id));
+        continue;
+      }
       if (_isGroupDeletedMatrixEvent(event)) {
         unawaited(
           markGroupDeletedLocally(
@@ -2172,22 +2179,13 @@ class ChatService {
         reason: isOwnMessage ? 'Deleted by sender' : 'Deleted by admin',
       );
     });
-    final currentUser =
-        MatrixClientService.instance.client.userID ?? _currentUserId ?? '';
-    final deletedContent =
-        _isOwnMessage(message, currentUser)
-            ? 'This message was deleted'
-            : 'This message was deleted by admin';
-    final updated = message.copyWith(
-      content: deletedContent,
-      isDeletedForEveryone: true,
+    _messagesCache[message.conversationId]?.removeWhere(
+      (cached) => cached.id == message.id,
     );
-    _replaceCachedMessage(updated);
-    await ChatLocalDb.instance.markMessageDeletedForEveryone(
-      message.id,
-      content: deletedContent,
-    );
-    _messageController.add(updated);
+    await ChatLocalDb.instance.deleteMessagePermanently(message.id);
+    await _repairConversationPreviewFromVisibleMessages(message.conversationId);
+    _emitRoomMessages(message.conversationId);
+    _emitConversations();
   }
 
   Future<void> cancelLocalMessage(ChatMessage message) async {
@@ -4178,25 +4176,10 @@ class ChatService {
     final index = messages?.indexWhere((m) => m.id == targetEventId) ?? -1;
 
     if (messages != null && index != -1) {
-      final current = messages[index];
-      final deletedContent =
-          event.senderId.trim().isNotEmpty &&
-                  event.senderId.trim() != current.senderId.trim()
-              ? 'This message was deleted by admin'
-              : 'This message was deleted';
-      final updated = current.copyWith(
-        content: deletedContent,
-        isDeletedForEveryone: true,
-      );
-      messages[index] = updated;
-      _messageController.add(updated);
+      messages.removeAt(index);
       _emitRoomMessages(roomId);
-      unawaited(
-        ChatLocalDb.instance.markMessageDeletedForEveryone(
-          updated.id,
-          content: deletedContent,
-        ),
-      );
+      unawaited(ChatLocalDb.instance.deleteMessagePermanently(targetEventId));
+      unawaited(_repairConversationPreviewFromVisibleMessages(roomId));
       _emitConversations();
       apkLog(
         'ChatService.redaction',
@@ -4205,9 +4188,7 @@ class ChatService {
       return true;
     }
 
-    unawaited(
-      ChatLocalDb.instance.markMessageDeletedForEveryone(targetEventId),
-    );
+    unawaited(ChatLocalDb.instance.deleteMessagePermanently(targetEventId));
     _emitRoomMessages(roomId);
     _emitConversations();
     apkLog(

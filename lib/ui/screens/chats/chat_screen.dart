@@ -2138,17 +2138,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     try {
                       await _chat.deleteMessageForEveryone(message);
                       if (!mounted) return;
-                      setState(
-                        () => _upsertMessage(
-                          message.copyWith(
-                            content:
-                                isMine
-                                    ? 'This message was deleted'
-                                    : 'This message was deleted by admin',
-                            isDeletedForEveryone: true,
-                          ),
-                        ),
-                      );
+                      setState(() {
+                        _messages.removeWhere((item) => item.id == message.id);
+                      });
                     } catch (e) {
                       if (!mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
