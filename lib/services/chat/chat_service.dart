@@ -1612,7 +1612,8 @@ class ChatService {
   }) {
     if (event.type != mx.EventTypes.Message) return null;
     final content = event.content;
-    final body = content['body']?.toString().trim() ?? '';
+    final rawBody = content['body']?.toString() ?? '';
+    final body = _stripSuggestedReplyFallback(rawBody).trim();
     final url = content['url']?.toString().trim();
     if (body.isEmpty && (url == null || url.isEmpty)) return null;
     final msgType = content['msgtype']?.toString() ?? '';
@@ -1630,10 +1631,57 @@ class ChatService {
       status: MessageStatus.sent,
       attachmentUrl: _matrixMediaDownloadUrl(url, client),
       attachmentType: attachmentType,
+      replyToMessageId: _suggestedReplyEventId(content),
+      replyToSenderId: _suggestedReplySender(rawBody),
+      replyPreview: _suggestedReplyPreview(rawBody),
       senderName: content['wrytte.sender_name']?.toString(),
       senderPhone: content['wrytte.sender_phone']?.toString(),
       isForwarded: content['wrytte.forwarded'] == true,
     );
+  }
+
+  String? _suggestedReplyEventId(Map<String, dynamic> content) {
+    final relatesTo = content['m.relates_to'];
+    if (relatesTo is! Map) return null;
+    final inReplyTo = relatesTo['m.in_reply_to'];
+    if (inReplyTo is! Map) return null;
+    final eventId = inReplyTo['event_id']?.toString().trim() ?? '';
+    return eventId.isEmpty ? null : eventId;
+  }
+
+  String _stripSuggestedReplyFallback(String body) {
+    final split = body.split('\n\n');
+    if (body.startsWith('> ') && split.length > 1) {
+      return split.sublist(1).join('\n\n');
+    }
+    return body;
+  }
+
+  String? _suggestedReplySender(String body) {
+    if (!body.startsWith('> ')) return null;
+    final firstLine = body
+        .split('\n\n')
+        .first
+        .split('\n')
+        .map((line) => line.replaceFirst(RegExp(r'^> ?'), '').trim())
+        .firstWhere((line) => line.isNotEmpty, orElse: () => '');
+    return RegExp(r'^<([^>]+)>').firstMatch(firstLine)?.group(1);
+  }
+
+  String? _suggestedReplyPreview(String body) {
+    if (!body.startsWith('> ')) return null;
+    final lines =
+        body
+            .split('\n\n')
+            .first
+            .split('\n')
+            .map((line) => line.replaceFirst(RegExp(r'^> ?'), '').trim())
+            .where((line) => line.isNotEmpty)
+            .toList();
+    if (lines.isEmpty) return null;
+    final preview = lines.join(' ').replaceFirst(RegExp(r'^<[^>]+>\s*'), '');
+    if (preview.trim().isEmpty) return null;
+    return preview.length > 120 ? '${preview.substring(0, 120)}...' : preview;
   }
 
   String? _attachmentTypeFromMatrixMessageType(String msgType) {

@@ -2559,13 +2559,24 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     if (_openingSuggestedGroupIds.contains(group.roomId)) return;
     setState(() => _openingSuggestedGroupIds.add(group.roomId));
     try {
-      final fresh = await ChatLocalDb.instance.isSuggestedPreviewFresh(
+      var fresh = await ChatLocalDb.instance.isSuggestedPreviewFresh(
         group.roomId,
       );
-      final previewMessages =
+      var previewMessages =
           fresh
               ? await _chat.hydrateConversation(group.roomId)
               : await _chat.fetchPublicGroupPreview(roomId: group.roomId);
+      if (fresh &&
+          previewMessages.any((message) => message.content.startsWith('> '))) {
+        apkLog(
+          'SuggestedPreview',
+          'repairing cached reply fallback room_id="${group.roomId}"',
+        );
+        fresh = false;
+        previewMessages = await _chat.fetchPublicGroupPreview(
+          roomId: group.roomId,
+        );
+      }
       if (fresh) {
         apkLog(
           'SuggestedPreview',
