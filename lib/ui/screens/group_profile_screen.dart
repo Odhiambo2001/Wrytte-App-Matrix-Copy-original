@@ -1873,8 +1873,8 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
               keyboardType: TextInputType.visiblePassword,
               autocorrect: false,
               enableSuggestions: false,
-              style: const TextStyle(color: accent, fontSize: 16),
-              cursorColor: accent,
+              style: const TextStyle(color: Color(0xFF4DA3FF), fontSize: 16),
+              cursorColor: const Color(0xFF4DA3FF),
               decoration: const InputDecoration(
                 hintText: 'Alias',
                 hintStyle: TextStyle(color: Color(0xFF9A9CA3)),
