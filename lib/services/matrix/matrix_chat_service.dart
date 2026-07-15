@@ -1196,25 +1196,88 @@ class MatrixChatService {
     required String roomId,
     required String eventId,
     required String reason,
+    required String reportedUserId,
+    required String groupName,
+    required String messagePreview,
+    required Iterable<String> adminUserIds,
   }) async {
     final cleanRoomId = roomId.trim();
     final cleanEventId = eventId.trim();
     final cleanReason = reason.trim();
+    final cleanReportedUserId = reportedUserId.trim();
     if (!cleanRoomId.startsWith('!') ||
         cleanEventId.isEmpty ||
-        cleanReason.isEmpty) {
+        cleanReason.isEmpty ||
+        cleanReportedUserId.isEmpty) {
       throw StateError('The report information is incomplete');
     }
     final client = await connect();
     if (!client.isLogged()) {
       throw StateError('Matrix user is not logged in');
     }
-    await client.reportEvent(
-      cleanRoomId,
-      cleanEventId,
-      reason: cleanReason,
-      score: -50,
-    );
+    final reporterId = client.userID?.trim() ?? '';
+    if (reporterId.isEmpty) {
+      throw StateError('Matrix user is not logged in');
+    }
+    if (reporterId == cleanReportedUserId) {
+      throw StateError('You cannot report your own content');
+    }
+
+    try {
+      await client.reportEvent(
+        cleanRoomId,
+        cleanEventId,
+        reason: cleanReason,
+        score: -50,
+      );
+      return;
+    } catch (error) {
+      // Matrix homeservers commonly reject /report for users who can preview a
+      // world-readable room but have not joined it. Suggested-group reporting
+      // must not silently join the reporter, so deliver the report to the
+      // room's moderators instead.
+      apkLog(
+        'Matrix.groups',
+        'suggested event homeserver report failed room_id="$cleanRoomId" '
+            'event_id="$cleanEventId" error="$error"; using admin delivery',
+      );
+    }
+
+    final admins =
+        adminUserIds
+            .map((id) => id.trim())
+            .where(
+              (id) =>
+                  id.isNotEmpty &&
+                  id != reporterId &&
+                  id != cleanReportedUserId,
+            )
+            .toSet();
+    if (admins.isEmpty) {
+      throw StateError(
+        'No group administrator is available to receive this report',
+      );
+    }
+
+    final cleanGroupName =
+        groupName.trim().isEmpty ? 'Suggested group' : groupName.trim();
+    final cleanPreview = messagePreview.trim();
+    for (final adminId in admins) {
+      final adminRoom = await getOrCreateDirectRoom(adminId);
+      await adminRoom.sendEvent({
+        'msgtype': 'com.wrytte.suggested_group_report',
+        'body': 'Content report in $cleanGroupName: $cleanReason',
+        'wrytte.suggested_group_report': true,
+        'group_room_id': cleanRoomId,
+        'group_name': cleanGroupName,
+        'reported_user_id': cleanReportedUserId,
+        'reporter_user_id': reporterId,
+        'reported_event_id': cleanEventId,
+        'message_preview': cleanPreview,
+        'reason': cleanReason,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      });
+    }
   }
 
   bool isGroupOwner(Room room) {

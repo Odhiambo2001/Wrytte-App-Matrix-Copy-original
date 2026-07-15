@@ -2253,10 +2253,26 @@ class _ChatScreenState extends State<ChatScreen> {
     if (reason == null || !mounted) return;
     try {
       if (_isReadOnlySuggestedGroup) {
+        var members = await _chat.loadSuggestedPreviewMembers(
+          message.conversationId,
+        );
+        if (!members.any((member) => member['isAdmin'] == true)) {
+          members = await _chat.refreshSuggestedPreviewRoomState(
+            message.conversationId,
+          );
+        }
+        final adminIds = members
+            .where((member) => member['isAdmin'] == true)
+            .map((member) => member['userId']?.toString() ?? '')
+            .where((id) => id.trim().isNotEmpty);
         await MatrixChatService.instance.reportSuggestedGroupEvent(
           roomId: message.conversationId,
           eventId: message.id,
           reason: reason,
+          reportedUserId: message.senderId,
+          groupName: widget.title,
+          messagePreview: message.content,
+          adminUserIds: adminIds,
         );
       } else {
         await MatrixChatService.instance.reportGroupMember(
