@@ -197,6 +197,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // that would allow a dismissed shell to flash during the first local paint.
     _dismissedDeletedGroupRoomIds = await _chat
         .dismissedDeletedGroupRoomIdsForOwner(_currentUserId);
+    _dismissedDeletedGroupRoomIds = <String>{
+      ..._dismissedDeletedGroupRoomIds,
+      ...MatrixChatService.retiredTestGroupRoomIds,
+    };
     await _loadIdentityCacheFast();
     await _loadSavedContacts();
     await _loadLocalConversations();
@@ -226,6 +230,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // Connect ChatService (idempotent) after local conversations are visible.
     try {
       await _chat.connect();
+      await _retireTestGroupsFromAccount();
       unawaited(_restoreContactsAfterMatrixReady());
       unawaited(_loadSuggestedGroups());
     } catch (e) {
@@ -240,6 +245,58 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         unawaited(_loadSuggestedGroups());
       }
     });
+  }
+
+  Future<void> _retireTestGroupsFromAccount() async {
+    final matrix = MatrixChatService.instance;
+    final retired = MatrixChatService.retiredTestGroupRoomIds;
+
+    // Persist the Matrix account-data tombstones in one request so these
+    // disposable rooms remain suppressed across devices and reinstalls.
+    await matrix.markPublicGroupsDeleted(
+      retired.map((roomId) {
+        final room = matrix.getRoomById(roomId);
+        return MatrixPublicGroup(
+          roomId: roomId,
+          name: room?.name ?? 'Retired test group',
+          canonicalAlias:
+              room?.canonicalAlias.trim().isNotEmpty == true
+                  ? room!.canonicalAlias
+                  : null,
+          memberCount: 0,
+          worldReadable: false,
+        );
+      }),
+    );
+
+    for (final roomId in retired) {
+      // Purge the SQLite row, messages and locally stored attachments first;
+      // then remove the room from this Matrix account with leave + forget.
+      await _chat.dismissDeletedGroupLocally(roomId);
+      try {
+        await matrix.leaveGroup(roomId);
+      } catch (error) {
+        apkLog(
+          'Groups.cleanup',
+          'test group leave/forget failed room_id="$roomId" error="$error"',
+        );
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _dismissedDeletedGroupRoomIds = <String>{
+        ..._dismissedDeletedGroupRoomIds,
+        ...retired,
+      };
+      _suggestedGroups = _suggestedGroups
+          .where((group) => !retired.contains(group.roomId))
+          .toList(growable: false);
+    });
+    apkLog(
+      'Groups.cleanup',
+      'retired test groups removed count=${retired.length}',
+    );
   }
 
   Future<void> _loadSuggestedGroups({bool force = false}) async {

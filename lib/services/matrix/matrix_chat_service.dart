@@ -102,27 +102,22 @@ class MatrixChatService {
   final Set<String> _dismissedPublicGroupKeys = {};
   static const String _deletedGroupsAccountDataType =
       'com.wrytte.deleted_groups';
+  static const Set<String> retiredTestGroupRoomIds = {
+    '!CpMghOq0lopMBi8X:matrix.wrytte.com', // Test Group 1
+    '!h76raDOuV5IGAACN:matrix.wrytte.com', // Test Group 2
+    '!Jamy5UUbHiFGHb0B:matrix.wrytte.com', // Test Group 3
+    '!UVu0QYKtFiFVOigk:matrix.wrytte.com', // Test Group 4
+    '!wfDUT1xFCAvbf0tB:matrix.wrytte.com', // Test Group 5
+    '!SxRcjLDzeSPWE5DQ:matrix.wrytte.com', // Test Group 6
+    '!2YbWYj3KQ4XbUIIE:matrix.wrytte.com', // legacy testgr1
+  };
   // These keys were written by the short-lived preview-membership heuristic.
   // A public preview can hide membership state from non-members, so they are
   // not evidence that a room is empty. Remove the contaminated tombstones once.
   static const Set<String> _invalidPreviewTombstoneKeys = {
-    '!uvu0qyktfifvoigk:matrix.wrytte.com',
-    '#gr.@4:matrix.wrytte.com',
-    '!wfdut1xfcavbf0tb:matrix.wrytte.com',
-    '#gr.@5:matrix.wrytte.com',
     '!wppezazplsl6xd8n:matrix.wrytte.com',
     '#gr.@carsandtrucks:matrix.wrytte.com',
-    '!sxrcjldzespwe5dq:matrix.wrytte.com',
-    '#gr.@6:matrix.wrytte.com',
-    '!cpmghoq0lopmbi8x:matrix.wrytte.com',
-    '#gr.@1:matrix.wrytte.com',
     '!zac19tjual2e0jcz:matrix.wrytte.com',
-    '!jamy5uubhighb0b:matrix.wrytte.com',
-    '#gr.@3:matrix.wrytte.com',
-    '!2ybwyj3kq4xbuiie:matrix.wrytte.com',
-    '#gr.@testgr1:matrix.wrytte.com',
-    '!h76radouv5igaacn:matrix.wrytte.com',
-    '#gr.@2:matrix.wrytte.com',
   };
   String? _dismissedPublicGroupsLoadedFor;
   List<MatrixPublicGroup>? _cachedPublicGroups;

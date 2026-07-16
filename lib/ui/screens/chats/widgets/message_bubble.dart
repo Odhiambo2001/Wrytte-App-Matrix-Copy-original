@@ -32,6 +32,7 @@ class MessageBubble extends StatelessWidget {
   final String time;
   final bool isMine;
   final String? senderName;
+  final bool showAdminLabel;
   final bool showTail;
   final MessageStatus? status;
 
@@ -61,6 +62,7 @@ class MessageBubble extends StatelessWidget {
     required this.time,
     required this.isMine,
     this.senderName,
+    this.showAdminLabel = false,
     this.showTail = true,
     this.status,
     // voice note params
@@ -103,18 +105,39 @@ class MessageBubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!isMine && senderName?.trim().isNotEmpty == true)
+          if (!isMine &&
+              (senderName?.trim().isNotEmpty == true || showAdminLabel))
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                senderName!.trim(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFFFFC861),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Row(
+                children: [
+                  if (senderName?.trim().isNotEmpty == true)
+                    Expanded(
+                      child: Text(
+                        senderName!.trim(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFFFFC861),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    )
+                  else
+                    const Spacer(),
+                  if (showAdminLabel) ...[
+                    const SizedBox(width: 10),
+                    const Text(
+                      'Admin',
+                      style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           if (isVoiceNote)

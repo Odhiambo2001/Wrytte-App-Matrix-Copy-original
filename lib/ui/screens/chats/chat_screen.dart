@@ -2082,14 +2082,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     );
                   },
                 ),
-                _messageActionTile(
-                  icon: Icons.open_in_new,
-                  label: 'Open link',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _openLink(link);
-                  },
-                ),
               ] else if (!hasAttachment)
                 _messageActionTile(
                   icon: Icons.copy_outlined,
@@ -2100,6 +2092,24 @@ class _ChatScreenState extends State<ChatScreen> {
                     ScaffoldMessenger.of(
                       context,
                     ).showSnackBar(const SnackBar(content: Text('Copied')));
+                  },
+                ),
+              if (!_isReadOnlySuggestedGroup &&
+                  _isGroupChat &&
+                  isAdminInGroup &&
+                  !message.isDeleted)
+                _messageActionTile(
+                  icon: Icons.push_pin_outlined,
+                  label: 'Pin',
+                  onTap: null,
+                ),
+              if (!_isReadOnlySuggestedGroup && !hasAttachment && link != null)
+                _messageActionTile(
+                  icon: Icons.open_in_new,
+                  label: 'Open link',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _openLink(link);
                   },
                 ),
               if (!_isReadOnlySuggestedGroup &&
@@ -3220,7 +3230,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }) {
     final senderName =
         _isGroupChat && !isMine ? _groupSenderName(msg.senderId) : null;
-    final displayedContent =
+    final room = MatrixChatService.instance.getRoomById(msg.conversationId);
+    final senderIsAdmin =
+        _isGroupChat &&
+        !isMine &&
+        room != null &&
+        MatrixChatService.instance.isGroupAdmin(room, msg.senderId);
+    final rawDisplayedContent =
         msg.isDeletedForEveryone &&
                 !msg.content.toLowerCase().startsWith(
                   'this message was deleted',
@@ -3229,11 +3245,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 ? 'This message was deleted'
                 : 'This message was deleted by admin')
             : msg.content;
+    // Defensively clean legacy SQLite rows written before edited Matrix reply
+    // fallbacks (`* > <@user:server> ...`) were handled by the model parser.
+    // This also prevents the quoted homeserver from becoming a link preview.
+    final displayedContent = _stripMatrixReplyFallbackForDisplay(
+      rawDisplayedContent,
+    );
     final bubble = MessageBubble(
       content: displayedContent,
       time: _formatTime(msg.timestamp),
       isMine: isMine,
       senderName: senderName,
+      showAdminLabel: senderIsAdmin,
       showTail: showTail,
       status: isMine ? msg.status : null,
       isVoiceNote: msg.isVoiceNote,
@@ -3289,6 +3312,15 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+
+  String _stripMatrixReplyFallbackForDisplay(String body) {
+    final candidate = body.startsWith('* > ') ? body.substring(2) : body;
+    final blocks = candidate.split(RegExp(r'\r?\n\r?\n'));
+    if (candidate.startsWith('> ') && blocks.length > 1) {
+      return blocks.sublist(1).join('\n\n').trimLeft();
+    }
+    return body;
   }
 
   Future<void> _openGroupMemberProfile(

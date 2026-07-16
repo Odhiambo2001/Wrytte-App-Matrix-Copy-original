@@ -297,8 +297,12 @@ String _redactedMessageText(mx.Event event) {
 }
 
 String _stripReplyFallback(String body) {
-  final split = body.split('\n\n');
-  if (body.startsWith('> ') && split.length > 1) {
+  // Matrix prefixes the fallback of an edited reply with `* `. Strip that
+  // marker only for fallback detection; it must never expose the quoted MXID
+  // or homeserver in the visible message body.
+  final candidate = body.startsWith('* > ') ? body.substring(2) : body;
+  final split = candidate.split(RegExp(r'\r?\n\r?\n'));
+  if (candidate.startsWith('> ') && split.length > 1) {
     return split.sublist(1).join('\n\n');
   }
   return body;
@@ -314,8 +318,9 @@ String _matrixEventBody(mx.Event event) {
 }
 
 String? _replyPreviewFromFallback(String body) {
-  if (!body.startsWith('> ')) return null;
-  final firstBlock = body.split('\n\n').first;
+  final candidate = body.startsWith('* > ') ? body.substring(2) : body;
+  if (!candidate.startsWith('> ')) return null;
+  final firstBlock = candidate.split(RegExp(r'\r?\n\r?\n')).first;
   final lines =
       firstBlock
           .split('\n')
@@ -329,8 +334,9 @@ String? _replyPreviewFromFallback(String body) {
 }
 
 String? _replySenderFromFallback(String body) {
-  if (!body.startsWith('> ')) return null;
-  final firstBlock = body.split('\n\n').first;
+  final candidate = body.startsWith('* > ') ? body.substring(2) : body;
+  if (!candidate.startsWith('> ')) return null;
+  final firstBlock = candidate.split(RegExp(r'\r?\n\r?\n')).first;
   final firstLine = firstBlock
       .split('\n')
       .map((line) => line.replaceFirst(RegExp(r'^> ?'), '').trim())
