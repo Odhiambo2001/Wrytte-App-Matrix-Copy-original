@@ -9,6 +9,7 @@ import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/user/user_profile_api_service.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 /// Production-grade local-only UserProfileService.
 /// Source of truth is FlutterSecureStorage via AuthService.
@@ -26,6 +27,7 @@ class UserProfileService {
   static const _bioKey = 'user_bio';
   static const _localProfileImagePrefix = 'profile_image_local_path_';
   static const _pendingProfileImagePrefix = 'profile_image_pending_upload_';
+  static const _avatarVersionPrefix = 'profile_avatar_version_';
 
   // In-memory cache — survives the widget lifecycle, cleared on logout
   UserProfile? _cache;
@@ -34,12 +36,21 @@ class UserProfileService {
   final Map<String, Future<UserProfile?>> _publicProfileInFlight = {};
   final Map<String, DateTime> _publicProfileFetchedAt = {};
   final Set<String> _publicProfileMisses = {};
+  Future<UserProfile?>? _loginProfileInFlight;
+  DateTime? _currentProfileBackendFetchedAt;
+  static const _currentProfileFreshness = Duration(minutes: 5);
+  bool _suppressBackendProfileReads = false;
   final StreamController<UserProfile?> _profileController =
       StreamController<UserProfile?>.broadcast();
 
   // ─────────────────────────────────────────────────────────────────────────
   // PUBLIC API
   // ─────────────────────────────────────────────────────────────────────────
+
+  void setFirstSignupMode(bool enabled) {
+    _suppressBackendProfileReads = enabled;
+    if (enabled) _loginProfileInFlight = null;
+  }
 
   /// Returns the current user's profile, using the in-memory cache when
   /// available. Pass [forceRefresh] = true to always re-read from storage.
@@ -51,6 +62,46 @@ class UserProfileService {
       if (uid != null && uid.isNotEmpty && _cache!.uid == uid) return _cache;
     }
     return _readFromStorage(forceRefresh: forceRefresh);
+  }
+
+  /// First-signup bootstrap. No backend profile/avatar read is performed
+  /// because the account has not created an avatar yet.
+  Future<UserProfile?> getCurrentUserProfileLocalOnly() {
+    return _readFromStorage(allowBackendRefresh: false);
+  }
+
+  /// Returning-login bootstrap. The avatar is intentionally not read from
+  /// local storage: logout removes it and the authenticated backend profile is
+  /// the only source allowed to repopulate it for this session.
+  Future<UserProfile?> getCurrentUserProfileForLogin() {
+    _suppressBackendProfileReads = false;
+    final pending = _loginProfileInFlight;
+    if (pending != null) return pending;
+    _cache = null;
+    final future = _readFromStorage(
+      forceRefresh: true,
+      allowBackendRefresh: true,
+      ignoreStoredAvatar: true,
+    );
+    _loginProfileInFlight = future;
+    return future
+        .then((profile) {
+          if (profile != null) {
+            _currentProfileBackendFetchedAt = DateTime.now();
+            apkLog(
+              'Profile.bootstrap',
+              'backend profile ready user_id="${profile.uid}" '
+                  'avatar=${profile.hasProfileImage} '
+                  'avatar_version=${profile.avatarVersion}',
+            );
+          }
+          return profile;
+        })
+        .whenComplete(() {
+          if (identical(_loginProfileInFlight, future)) {
+            _loginProfileInFlight = null;
+          }
+        });
   }
 
   /// Persists an updated display name and invalidates the cache.
@@ -97,11 +148,18 @@ class UserProfileService {
     try {
       final uploadedPath = await UserProfileApiService.instance
           .uploadAvatarImage(File(localPath));
-      final avatarUrl = _resolveAvatarUrl(uploadedPath);
+      final avatarVersion =
+          await UserProfileApiService.instance.incrementAvatarVersion();
+      final avatarUrl = _withAvatarFetchVersion(
+        _resolveAvatarUrl(uploadedPath),
+        uid,
+        avatarVersion,
+      );
       if (avatarUrl.isEmpty) {
         throw Exception('Avatar upload completed without an image URL.');
       }
       await _storage.write(key: _profileImageKey, value: avatarUrl);
+      await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
       _cache = null;
       await _refreshAndNotify(forceRefresh: true);
@@ -184,7 +242,17 @@ class UserProfileService {
   /// Stream that emits the current user's profile immediately from cache,
   /// then re-reads from storage. Use this in widgets that need live updates
   /// (e.g. after the user saves a new name or avatar).
-  Stream<UserProfile?> getCurrentUserProfileStream() async* {
+  Stream<UserProfile?> getCurrentUserProfileStream({
+    bool backendFirst = false,
+    bool refreshFromBackend = true,
+  }) async* {
+    if (backendFirst && !_suppressBackendProfileReads) {
+      final backendProfile = await getCurrentUserProfileForLogin();
+      if (backendProfile != null) yield backendProfile;
+      yield* _profileController.stream;
+      return;
+    }
+
     // Emit cached value instantly so the UI has zero-latency first frame
     final uid = await AuthService.instance.getCurrentUserId();
     if (_cache != null && uid != null && uid.isNotEmpty && _cache!.uid == uid) {
@@ -195,7 +263,11 @@ class UserProfileService {
     // avatar paint in the bottom nav.
     final fresh = await _readFromStorage(allowBackendRefresh: false);
     if (fresh != null) yield fresh;
-    unawaited(_refreshAndNotify(forceRefresh: true));
+    if (refreshFromBackend &&
+        !_suppressBackendProfileReads &&
+        !_currentBackendProfileIsFresh) {
+      unawaited(_refreshAndNotify(forceRefresh: true));
+    }
     yield* _profileController.stream;
   }
 
@@ -276,6 +348,15 @@ class UserProfileService {
     }
     final fetchedAt = DateTime.now();
     var profile = _profileFromBackendFields(uid, remote, fallbackPhone: phone);
+    if (profile.hasProfileImage) {
+      profile = profile.copyWith(
+        profileImage: _withAvatarFetchVersion(
+          profile.profileImage,
+          uid,
+          profile.avatarVersion,
+        ),
+      );
+    }
     profile = _reuseStablePublicAvatar(cacheKey, profile);
     // Public/member avatars remain URL-backed and are cached lazily by
     // CachedNetworkImage when rendered. Eager file downloads here duplicated
@@ -292,6 +373,8 @@ class UserProfileService {
     _publicProfileInFlight.clear();
     _publicProfileFetchedAt.clear();
     _publicProfileMisses.clear();
+    _loginProfileInFlight = null;
+    _currentProfileBackendFetchedAt = null;
     _profileController.add(null);
   }
 
@@ -319,6 +402,7 @@ class UserProfileService {
   Future<UserProfile?> _readFromStorage({
     bool forceRefresh = false,
     bool allowBackendRefresh = true,
+    bool ignoreStoredAvatar = false,
   }) async {
     try {
       final uid = await AuthService.instance.getCurrentUserId();
@@ -329,8 +413,14 @@ class UserProfileService {
       var firstName = await _storage.read(key: _firstNameKey) ?? '';
       var lastName = await _storage.read(key: _lastNameKey) ?? '';
       var bio = await _storage.read(key: _bioKey) ?? '';
-      var profileImage = await _storage.read(key: _profileImageKey) ?? '';
-      var localProfileImagePath = await _readLocalProfileImagePath(uid);
+      var profileImage =
+          ignoreStoredAvatar
+              ? ''
+              : await _storage.read(key: _profileImageKey) ?? '';
+      var localProfileImagePath =
+          ignoreStoredAvatar ? '' : await _readLocalProfileImagePath(uid);
+      var avatarVersion =
+          ignoreStoredAvatar ? 0 : await _readAvatarVersion(uid);
 
       if (forceRefresh) {
         final uploaded = await _syncPendingAvatarUploadForUid(uid);
@@ -341,6 +431,7 @@ class UserProfileService {
       }
 
       if (allowBackendRefresh &&
+          !_suppressBackendProfileReads &&
           (forceRefresh || !_hasRealName(name) || profileImage.isEmpty)) {
         final remote = await _readBackendProfileBestEffort();
         if (remote.isNotEmpty) {
@@ -350,6 +441,14 @@ class UserProfileService {
           profileImage = _resolveAvatarUrl(
             _field(remote, 'AvatarImg') ?? profileImage,
           );
+          avatarVersion = _avatarVersionFromFields(remote);
+          if (profileImage.isNotEmpty) {
+            profileImage = _withAvatarFetchVersion(
+              profileImage,
+              uid,
+              avatarVersion,
+            );
+          }
           final remoteName =
               [
                 firstName,
@@ -365,6 +464,7 @@ class UserProfileService {
           await _storage.write(key: _bioKey, value: bio);
           if (profileImage.isNotEmpty) {
             await _storage.write(key: _profileImageKey, value: profileImage);
+            await _writeAvatarVersion(uid, avatarVersion);
           }
         }
       }
@@ -388,6 +488,7 @@ class UserProfileService {
         phone: phone,
         bio: bio,
         profileImage: profileImage,
+        avatarVersion: avatarVersion,
         localProfileImagePath: localProfileImagePath,
         links:
             linksRaw
@@ -414,6 +515,12 @@ class UserProfileService {
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
     cleaned = _stripInvalidNorthAmericaPrefix(cleaned);
     return cleaned;
+  }
+
+  bool get _currentBackendProfileIsFresh {
+    final fetchedAt = _currentProfileBackendFetchedAt;
+    return fetchedAt != null &&
+        DateTime.now().difference(fetchedAt) < _currentProfileFreshness;
   }
 
   String _stripInvalidNorthAmericaPrefix(String phone) {
@@ -502,6 +609,22 @@ class UserProfileService {
   String _pendingProfileImageKey(String uid) =>
       '$_pendingProfileImagePrefix${_matrixLocalpart(uid)}';
 
+  String _avatarVersionKey(String uid) =>
+      '$_avatarVersionPrefix${_matrixLocalpart(uid)}';
+
+  Future<int> _readAvatarVersion(String uid) async {
+    final raw = await _storage.read(key: _avatarVersionKey(uid)) ?? '';
+    final parsed = int.tryParse(raw) ?? 0;
+    return parsed < 0 ? 0 : parsed;
+  }
+
+  Future<void> _writeAvatarVersion(String uid, int version) {
+    return _storage.write(
+      key: _avatarVersionKey(uid),
+      value: (version < 0 ? 0 : version).toString(),
+    );
+  }
+
   Future<String> _readLocalProfileImagePath(String uid) async {
     final prefs = await SharedPreferences.getInstance();
     final path = prefs.getString(_localProfileImageKey(uid))?.trim() ?? '';
@@ -572,9 +695,16 @@ class UserProfileService {
       _lastPendingAvatarAttemptAt = DateTime.now();
       final uploadedPath = await UserProfileApiService.instance
           .uploadAvatarImage(file);
-      final avatarUrl = _resolveAvatarUrl(uploadedPath);
+      final avatarVersion =
+          await UserProfileApiService.instance.incrementAvatarVersion();
+      final avatarUrl = _withAvatarFetchVersion(
+        _resolveAvatarUrl(uploadedPath),
+        uid,
+        avatarVersion,
+      );
       if (avatarUrl.isEmpty) return false;
       await _storage.write(key: _profileImageKey, value: avatarUrl);
+      await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
       return true;
     } catch (e) {
@@ -621,6 +751,7 @@ class UserProfileService {
       phone: _trustedPhone(backendPhone, fallbackPhone: fallbackPhone),
       bio: _field(fields, 'Bio') ?? _field(fields, 'bio') ?? '',
       profileImage: _resolveAvatarUrl(avatar),
+      avatarVersion: _avatarVersionFromFields(fields),
       links:
           [
                 _field(fields, 'Link'),
@@ -652,7 +783,10 @@ class UserProfileService {
 
     if (_stripAvatarVersion(freshAvatar) == _stripAvatarVersion(cachedAvatar)) {
       return fresh.copyWith(
-        profileImage: cachedAvatar.isNotEmpty ? cachedAvatar : freshAvatar,
+        // The backend currently reuses filenames such as `avatar_img.jpg`.
+        // Keep the fresh fetch version so CachedNetworkImage cannot serve an
+        // older file merely because the base path did not change.
+        profileImage: freshAvatar,
         localProfileImagePath:
             cached.localProfileImagePath.trim().isNotEmpty
                 ? cached.localProfileImagePath
@@ -670,6 +804,33 @@ class UserProfileService {
     return uri
         .replace(queryParameters: params.isEmpty ? null : params)
         .toString();
+  }
+
+  String _withAvatarFetchVersion(String url, String userId, int avatarVersion) {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('mxc://')) return trimmed;
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null || !uri.hasScheme) return trimmed;
+    // A fetch timestamp is not an avatar version. Using it here changed the
+    // URL on every profile read, bypassed the image cache, and made the same
+    // avatar download again when opening the header/profile. Version zero is
+    // deliberately stable for older backend records. A real backend
+    // AvatarVersion still changes the URL immediately after an upload.
+    final version = avatarVersion.toString();
+    final params = Map<String, String>.from(uri.queryParameters)
+      ..['v'] =
+          '${_matrixLocalpart(userId).toLowerCase()}-'
+          '$version';
+    return uri.replace(queryParameters: params).toString();
+  }
+
+  int _avatarVersionFromFields(Map<String, String> fields) {
+    final raw =
+        _field(fields, 'AvatarVersion') ??
+        _field(fields, 'avatar_version') ??
+        '';
+    final parsed = int.tryParse(raw) ?? 0;
+    return parsed < 0 ? 0 : parsed;
   }
 
   UserProfile _fallbackPublicProfile(String uid, {String? phone}) {

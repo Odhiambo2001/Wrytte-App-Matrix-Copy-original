@@ -5,6 +5,7 @@ class UserProfile {
   final String phone;
   final String bio;
   final String profileImage;
+  final int avatarVersion;
   final String localProfileImagePath;
   final List<String> links;
   final DateTime? createdAt;
@@ -17,6 +18,7 @@ class UserProfile {
     required this.phone,
     required this.bio,
     required this.profileImage,
+    this.avatarVersion = 0,
     this.localProfileImagePath = '',
     required this.links,
     this.createdAt,
@@ -31,6 +33,7 @@ class UserProfile {
       phone: data['phone'] as String? ?? '',
       bio: data['bio'] as String? ?? '',
       profileImage: data['profileImage'] as String? ?? '',
+      avatarVersion: int.tryParse(data['avatarVersion']?.toString() ?? '') ?? 0,
       localProfileImagePath: data['localProfileImagePath'] as String? ?? '',
       links: List<String>.from(data['links'] as List? ?? []),
       createdAt: (data['createdAt'] as dynamic)?.toDate() as DateTime?,
@@ -46,6 +49,7 @@ class UserProfile {
       'phone': phone,
       'bio': bio,
       'profileImage': profileImage,
+      'avatarVersion': avatarVersion,
       'localProfileImagePath': localProfileImagePath,
       'links': links,
     };
@@ -74,6 +78,7 @@ class UserProfile {
     String? phone,
     String? bio,
     String? profileImage,
+    int? avatarVersion,
     String? localProfileImagePath,
     List<String>? links,
   }) {
@@ -84,6 +89,7 @@ class UserProfile {
       phone: phone ?? this.phone,
       bio: bio ?? this.bio,
       profileImage: profileImage ?? this.profileImage,
+      avatarVersion: avatarVersion ?? this.avatarVersion,
       localProfileImagePath:
           localProfileImagePath ?? this.localProfileImagePath,
       links: links ?? this.links,

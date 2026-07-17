@@ -460,6 +460,15 @@ class _ChatScreenState extends State<ChatScreen> {
           'receiverId="${widget.receiverId}"  '
           'currentUserId="${widget.currentUserId}"',
     );
+    if (!_isGroupChat) {
+      apkLog(
+        'Identity.display',
+        'surface="conversation_header" phase="initial" '
+            'user_id="${_matrixLocalpart(widget.receiverId)}" '
+            'name="${widget.title}" avatar=${(_stableHeaderAvatarUrl ?? '').trim().isNotEmpty} '
+            'avatar_url="${_stableHeaderAvatarUrl ?? ''}"',
+      );
+    }
     if (_isSelfConversation) {
       _logSelfConversationBlocked('open');
     }
@@ -1059,7 +1068,22 @@ class _ChatScreenState extends State<ChatScreen> {
         profile?.hasProfileImage == true
             ? profile!.profileImage
             : identity?.avatarUrl ?? widget.avatarUrl;
-    unawaited(AvatarPreloadService.warm(nextAvatar));
+    await AvatarPreloadService.warm(
+      nextAvatar,
+      cacheIdentity: 'user:${profileUid.trim().toLowerCase()}',
+    );
+
+    apkLog(
+      'Identity.display',
+      'surface="conversation_header" phase="resolved" '
+          'user_id="${_matrixLocalpart(profileUid)}" saved=${saved != null} '
+          'profile="${saved != null ? 'profile2' : 'profile1'}" '
+          'name_source="${saved != null ? 'saved_contact' : 'phone'}" '
+          'name="${saved?.formattedName ?? _formatPhone(profile?.phone ?? fallbackPhone)}" '
+          'phone="${profile?.phone ?? fallbackPhone}" '
+          'avatar=${(nextAvatar ?? '').trim().isNotEmpty} avatar_url="${nextAvatar ?? ''}" '
+          'bio=${profile?.bio.trim().isNotEmpty == true}',
+    );
 
     if (!mounted) return;
     if (publish) {
@@ -1067,6 +1091,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _receiverProfile = profile;
         _receiverIdentity = identity;
         _receiverIsSavedContact = saved != null;
+        _stableHeaderAvatarUrl = _safePersonHeaderAvatar(nextAvatar);
       });
     } else {
       _receiverProfile = profile;
@@ -3333,6 +3358,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final directConversationId = await ChatService().findMatrixConversationId(
       userId,
     );
+    final initialAvatar = _groupMemberAvatars[userId];
+    await AvatarPreloadService.warm(
+      initialAvatar,
+      cacheIdentity: 'user:${userId.trim().toLowerCase()}',
+    );
     if (!mounted) return;
 
     await Navigator.of(context).push(
@@ -3342,6 +3372,7 @@ class _ChatScreenState extends State<ChatScreen> {
               uid: userId,
               conversationId: directConversationId,
               savedNameHint: savedNameHint,
+              initialAvatarUrl: initialAvatar,
             ),
       ),
     );
@@ -3494,6 +3525,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                         _resolvedConversationId ??
                                         widget.conversationId,
                                     savedNameHint: _resolvedHeaderName,
+                                    initialAvatarUrl: avatarUrl,
                                   ),
                             ),
                           );
@@ -3540,8 +3572,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                                         widget
                                                             .initialRoomProfileVersion,
                                                   )
-                                              : 'account:${widget.currentUserId.trim().toLowerCase()}'
-                                                  '|user:${widget.receiverId.trim().toLowerCase()}',
+                                              : 'user:${(_profilePeerId() ?? widget.receiverId).trim().toLowerCase()}',
                                       localImagePath: localAvatarPath,
                                       name: displayName,
                                       isDeleted: _isDeletedConversation,
@@ -3800,7 +3831,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String? _safePersonHeaderAvatar(String? avatarUrl) {
     final clean = avatarUrl?.trim() ?? '';
-    if (clean.isEmpty || _isKnownGroupAvatar(clean)) return null;
+    // A person and a group may legitimately use the same image. Direct-chat
+    // identity is already established by ConversationKind and receiver ID, so
+    // rejecting a URL merely because it also appears on a room hides valid
+    // contact avatars (for example in the header and profile entry point).
+    if (clean.isEmpty) return null;
     return clean;
   }
 

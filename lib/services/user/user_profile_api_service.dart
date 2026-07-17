@@ -153,10 +153,43 @@ class UserProfileApiService {
 
     final avatar = _avatarFromResponse(response);
     if (avatar.isEmpty) {
-      final profile = await getProfile(fields: const ['AvatarImg']);
+      final profile = await getProfile(
+        fields: const ['AvatarImg', 'AvatarVersion'],
+      );
       return profile['AvatarImg'] ?? profile['avatarImg'] ?? '';
     }
     return avatar;
+  }
+
+  /// Persists the next avatar generation on the authenticated user's backend
+  /// profile. The backend profile store is the source of truth across logout,
+  /// reinstall and other devices.
+  Future<int> incrementAvatarVersion() async {
+    final profile = await getProfile(fields: const ['AvatarVersion']);
+    final current = _avatarVersion(profile);
+    final next = current + 1;
+    await saveProfileFields({'AvatarVersion': next.toString()});
+    final verified = await getProfile(fields: const ['AvatarVersion']);
+    final stored = _avatarVersion(verified);
+    if (stored != next) {
+      debugPrint(
+        '[UserProfileApiService] AvatarVersion persistence not confirmed: '
+        'expected=$next returned=$stored',
+      );
+    }
+    return next;
+  }
+
+  int _avatarVersion(Map<String, String> fields) {
+    for (final entry in fields.entries) {
+      if (entry.key.toLowerCase() != 'avatarversion' &&
+          entry.key.toLowerCase() != 'avatar_version') {
+        continue;
+      }
+      final parsed = int.tryParse(entry.value.trim()) ?? 0;
+      return parsed < 0 ? 0 : parsed;
+    }
+    return 0;
   }
 
   Map<String, String> _stringMap(dynamic response) {

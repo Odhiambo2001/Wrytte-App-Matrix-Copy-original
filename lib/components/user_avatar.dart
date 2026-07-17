@@ -6,6 +6,7 @@ import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class UserAvatar extends StatefulWidget {
   final double size;
@@ -48,6 +49,8 @@ class _UserAvatarState extends State<UserAvatar> {
   // on every widget rebuild while it asynchronously checks its disk cache,
   // even if the bytes are already on disk.
   static final Map<String, ImageProvider> _resolvedImageCache = {};
+  static final Set<String> _loggedPaintKeys = {};
+  static final Set<String> _loggedLoadKeys = {};
 
   // Tracks which raw localImagePath strings have been confirmed to exist on
   // disk, so we don't repeatedly hit File.existsSync() and so a transient
@@ -59,6 +62,8 @@ class _UserAvatarState extends State<UserAvatar> {
   /// otherwise retain references after Flutter's global image cache is wiped.
   static void clearMemoryCache() {
     _resolvedImageCache.clear();
+    _loggedPaintKeys.clear();
+    _loggedLoadKeys.clear();
     _knownGoodLocalPaths.clear();
   }
 
@@ -163,6 +168,7 @@ class _UserAvatarState extends State<UserAvatar> {
       // We've already successfully rendered this exact URL before in this
       // session — paint directly from the resolved provider. No
       // CachedNetworkImage, no placeholder frame, no flicker.
+      _logPaintOnce(imageUrl, source: 'memory_cache');
       avatarWidget = _buildFromImageProvider(cachedProvider);
     } else if (imageUrl.isNotEmpty) {
       avatarWidget = _buildNetworkOrPlaceholder(imageUrl);
@@ -237,6 +243,13 @@ class _UserAvatarState extends State<UserAvatar> {
     final url = _resolveImageUrl(rawUrl);
     if (url.isEmpty) return _buildPlaceholder();
     final providerKey = _providerCacheKey(rawUrl);
+    if (_loggedLoadKeys.add(providerKey)) {
+      apkLog(
+        'Avatar.load',
+        'state="started" identity="${widget.cacheIdentity ?? ''}" '
+            'size=${widget.size} url="$url"',
+      );
+    }
     return ClipOval(
       child: CachedNetworkImage(
         imageUrl: url,
@@ -248,6 +261,7 @@ class _UserAvatarState extends State<UserAvatar> {
           // conversation tiles, profile page, etc.) can skip straight to
           // painting it with zero placeholder frame.
           _resolvedImageCache[providerKey] = imageProvider;
+          _logPaintOnce(rawUrl, source: 'network_or_disk_cache');
           return Image(
             image: imageProvider,
             width: widget.size,
@@ -269,9 +283,25 @@ class _UserAvatarState extends State<UserAvatar> {
         placeholder: (context, url) => _buildPlaceholder(),
         errorWidget: (context, url, error) {
           debugPrint('[UserAvatar] image load failed url="$url" error=$error');
+          apkLog(
+            'Avatar.load',
+            'state="failed" identity="${widget.cacheIdentity ?? ''}" '
+                'size=${widget.size} url="$url" error="$error"',
+          );
           return _buildPlaceholder();
         },
       ),
+    );
+  }
+
+  void _logPaintOnce(String rawUrl, {required String source}) {
+    final key = _providerCacheKey(rawUrl);
+    if (!_loggedPaintKeys.add(key)) return;
+    apkLog(
+      'Avatar.load',
+      'state="painted" source="$source" '
+          'identity="${widget.cacheIdentity ?? ''}" size=${widget.size} '
+          'url="${_resolveImageUrl(rawUrl)}"',
     );
   }
 

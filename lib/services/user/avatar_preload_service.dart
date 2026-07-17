@@ -17,36 +17,41 @@ class AvatarPreloadService {
     _failedAt.clear();
   }
 
-  static Future<void> warm(String? rawUrl) async {
+  static Future<void> warm(String? rawUrl, {String? cacheIdentity}) async {
     final url = _resolveAvatarUrl(rawUrl);
     if (url.isEmpty) return;
+    final identity = cacheIdentity?.trim() ?? '';
+    final providerKey = identity.isEmpty ? url : '$identity|$url';
 
-    final failedAt = _failedAt[url];
+    final failedAt = _failedAt[providerKey];
     if (failedAt != null &&
         DateTime.now().difference(failedAt) < _failureCooldown) {
       return;
     }
-    final pending = _inFlight[url];
+    final pending = _inFlight[providerKey];
     if (pending != null) return pending;
 
-    final request = _warm(url);
-    _inFlight[url] = request;
+    final request = _warm(url, cacheKey: providerKey);
+    _inFlight[providerKey] = request;
     return request.whenComplete(() {
-      if (identical(_inFlight[url], request)) _inFlight.remove(url);
+      if (identical(_inFlight[providerKey], request)) {
+        _inFlight.remove(providerKey);
+      }
     });
   }
 
-  static Future<void> _warm(String url) async {
+  static Future<void> _warm(String url, {required String cacheKey}) async {
     final token = await AuthService.instance.getValidBackendToken();
     final provider = CachedNetworkImageProvider(
       url,
+      cacheKey: cacheKey,
       headers: _authHeaders(url, token),
     );
     try {
       await _warmImage(provider).timeout(const Duration(seconds: 12));
-      _failedAt.remove(url);
+      _failedAt.remove(cacheKey);
     } catch (_) {
-      _failedAt[url] = DateTime.now();
+      _failedAt[cacheKey] = DateTime.now();
     }
   }
 

@@ -12,6 +12,7 @@ class BottomNavBar extends StatefulWidget {
   final int totalUnreadCount;
   final Widget? userAvatar;
   final UserProfile? initialProfile;
+  final bool fetchProfileFromBackend;
 
   const BottomNavBar({
     super.key,
@@ -20,6 +21,7 @@ class BottomNavBar extends StatefulWidget {
     required this.totalUnreadCount,
     this.userAvatar,
     this.initialProfile,
+    this.fetchProfileFromBackend = true,
   });
 
   @override
@@ -35,13 +37,19 @@ class _BottomNavBarState extends State<BottomNavBar> {
     super.initState();
 
     final initial =
-        widget.initialProfile ?? UserProfileService.instance.cachedProfile;
+        widget.initialProfile ??
+        (widget.fetchProfileFromBackend
+            ? null
+            : UserProfileService.instance.cachedProfile);
     _profile = _isDisplayReadyProfile(initial) ? initial : null;
 
     // Subscribe to profile changes; the service validates that cached data
     // belongs to the currently signed-in account before emitting it.
     _profileSub = UserProfileService.instance
-        .getCurrentUserProfileStream()
+        .getCurrentUserProfileStream(
+          backendFirst: widget.fetchProfileFromBackend,
+          refreshFromBackend: widget.fetchProfileFromBackend,
+        )
         .listen((profile) {
           if (mounted && _isDisplayReadyProfile(profile)) {
             setState(() => _profile = profile);
@@ -257,6 +265,11 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                       : null,
                               localImagePath: _profile?.localProfileImagePath,
                               name: _profileNameForAvatar(),
+                              cacheIdentity:
+                                  _profile == null
+                                      ? null
+                                      : 'account:${_profile!.uid.trim().toLowerCase()}'
+                                          '|avatar:v${_profile!.avatarVersion}',
                             ),
                           ),
                           label: _profileTabLabel(),

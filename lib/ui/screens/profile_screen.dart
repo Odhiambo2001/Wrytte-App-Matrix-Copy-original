@@ -26,6 +26,7 @@ import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
 import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'package:wrytte/ui/widgets/wrytte_persistent_image.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
+import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'edit_profile_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -34,12 +35,14 @@ class ProfileScreen extends StatefulWidget {
   final String? uid;
   final String? conversationId;
   final String? savedNameHint;
+  final String? initialAvatarUrl;
 
   const ProfileScreen({
     super.key,
     this.uid,
     this.conversationId,
     this.savedNameHint,
+    this.initialAvatarUrl,
   });
 
   @override
@@ -232,6 +235,21 @@ class _ProfileScreenState extends State<ProfileScreen>
         _seededSavedName = null;
       }
     });
+    final resolvedAvatar = _profileAvatarUrl();
+    await AvatarPreloadService.warm(
+      resolvedAvatar,
+      cacheIdentity: 'user:${(uid ?? '').trim().toLowerCase()}',
+    );
+    apkLog(
+      'Identity.display',
+      'surface="profile" user_id="${_matrixLocalpart(uid ?? '')}" '
+          'saved=${savedContact != null} '
+          'profile="${savedContact != null ? 'profile2' : 'profile1'}" '
+          'name_source="${savedContact != null ? 'saved_contact' : 'public_profile'}" '
+          'name="${_profileDisplayName()}" phone="${_profilePhone()}" '
+          'avatar=${(resolvedAvatar ?? '').trim().isNotEmpty} '
+          'avatar_url="${resolvedAvatar ?? ''}" bio=${_profileBio().isNotEmpty}',
+    );
   }
 
   Future<String?> _resolveProfileUidFromConversation() async {
@@ -477,7 +495,8 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   String? _profileAvatarUrl() {
     if (_profile?.hasProfileImage == true) return _profile!.profileImage;
-    return null;
+    final initial = widget.initialAvatarUrl?.trim() ?? '';
+    return initial.isEmpty ? null : initial;
   }
 
   String _profilePhone() {
@@ -659,6 +678,8 @@ class _ProfileScreenState extends State<ProfileScreen>
     final double topBarHeight = statusBarHeight + kToolbarHeight;
 
     final hasProfile = _profile != null;
+    final hasInitialAvatar =
+        (widget.initialAvatarUrl?.trim().isNotEmpty ?? false);
     final String displayName =
         _profileLoading && !hasProfile ? '' : _profileDisplayName();
     final String phone = _profileLoading && !hasProfile ? '' : _profilePhone();
@@ -682,7 +703,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                         SizedBox(height: topBarHeight + 20),
 
                         // ── Avatar ──────────────────────────────────────────
-                        _profileLoading && !hasProfile
+                        _profileLoading && !hasProfile && !hasInitialAvatar
                             ? _buildAvatarShimmer(100)
                             : UserAvatar(
                               size: 100,

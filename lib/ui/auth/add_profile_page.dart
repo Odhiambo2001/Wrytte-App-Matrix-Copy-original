@@ -27,6 +27,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
   @override
   void initState() {
     super.initState();
+    UserProfileService.instance.setFirstSignupMode(widget.isNewUser);
     _nicknameController.addListener(_onTextChanged);
     _loadUserData();
   }
@@ -105,6 +106,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
                       ? _nicknameController.text.trim()
                       : currentUser?.username,
               initialPhone: currentUser?.phone,
+              isFirstSignup: widget.isNewUser,
             ),
       ),
       (route) => false,

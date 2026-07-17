@@ -111,6 +111,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   Future<void>? _contactRestoreFuture;
   bool _loadingSuggestedGroups = false;
   final Set<String> _openingSuggestedGroupIds = {};
+  final Set<String> _openingConversationIds = {};
   DateTime? _lastSuggestedGroupsLoadAt;
   String? _lastGroupsDiagnostic;
   static const Duration _suggestedGroupsRefreshInterval = Duration(seconds: 8);
@@ -1063,6 +1064,15 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       otherUserName: resolvedName,
       otherUserAvatar: avatar,
     );
+    apkLog(
+      'Identity.display',
+      'surface="chat_list" user_id="${_matrixLocalpart(profileUid) ?? profileUid}" '
+          'saved=${contactName.isNotEmpty} profile="${contactName.isNotEmpty ? 'profile2' : 'profile1'}" '
+          'name_source="${contactName.isNotEmpty ? 'saved_contact' : 'phone'}" '
+          'name="$resolvedName" phone="${profile?.phone ?? phone}" '
+          'avatar=${(avatar ?? '').trim().isNotEmpty} avatar_url="${avatar ?? ''}" '
+          'bio=${profile?.bio.trim().isNotEmpty == true}',
+    );
 
     if (resolvedName.trim().isNotEmpty || (avatar ?? '').trim().isNotEmpty) {
       await ChatLocalDb.instance.updateConversationUserInfo(
@@ -1413,7 +1423,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   String? _safeDirectAvatarUrl(String? avatarUrl) {
     final safe = ContactAvatarSanitizer.sanitizeAvatarUrl(avatarUrl);
-    if (safe == null || _isKnownGroupAvatar(safe)) return null;
+    // A contact and a room may legitimately use the same image URL. The
+    // conversation kind and peer ID establish ownership; URL equality does
+    // not make a valid direct-contact avatar unsafe.
+    if (safe == null) return null;
     return safe;
   }
 
@@ -1658,10 +1671,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   String _directAvatarCacheIdentity(ChatConversation conversation) {
     final uid = _profileUidForConversation(conversation)?.trim() ?? '';
-    final owner = _currentUserId.trim().toLowerCase();
     final peer =
         uid.isNotEmpty ? uid.toLowerCase() : conversation.id.toLowerCase();
-    return 'account:$owner|user:$peer';
+    return 'user:$peer';
   }
 
   String? _matrixLocalpart(String? value) {
@@ -1997,6 +2009,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           _toggleSelection(conv.id);
           return;
         }
+        if (!_openingConversationIds.add(conv.id)) {
+          apkLog(
+            'Conversation.navigation',
+            'duplicate open suppressed conversation_id="${conv.id}"',
+          );
+          return;
+        }
 
         var initialMessages = _chat.cachedMessagesFor(conv.id);
         if (initialMessages.isEmpty) {
@@ -2024,6 +2043,19 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         if (!mounted) return;
         final isGroup = _isGroupConversation(conv);
         final chatReceiverId = isGroup ? conv.id : conv.otherUserId;
+        if (!isGroup) {
+          await AvatarPreloadService.warm(
+            avatar,
+            cacheIdentity: _directAvatarCacheIdentity(conv),
+          );
+          apkLog(
+            'Identity.display',
+            'surface="conversation_open" user_id="${_matrixLocalpart(chatReceiverId) ?? chatReceiverId}" '
+                'name="$name" avatar=${(avatar ?? '').trim().isNotEmpty} '
+                'avatar_url="${avatar ?? ''}"',
+          );
+          if (!mounted) return;
+        }
 
         final groupResult = await Navigator.push<Object?>(
           context,
@@ -2062,7 +2094,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
               );
             },
           ),
-        );
+        ).whenComplete(() => _openingConversationIds.remove(conv.id));
         if (!mounted) return;
         await _loadLocalConversations();
         if (groupResult is GroupExitRequest) {

@@ -6,6 +6,7 @@ import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/backend/backend_realtime_service.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/chats/conversations_screen.dart'; // ← this one
 import 'calls/calls_screen.dart';
@@ -19,6 +20,7 @@ class HomeScreen extends StatefulWidget {
   final String? initialProfileName;
   final String? initialPhone;
   final List<Contact> initialSavedContacts;
+  final bool isFirstSignup;
 
   const HomeScreen({
     super.key,
@@ -26,6 +28,7 @@ class HomeScreen extends StatefulWidget {
     this.initialProfileName,
     this.initialPhone,
     this.initialSavedContacts = const [],
+    this.isFirstSignup = false,
   });
 
   @override
@@ -41,15 +44,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _backendTokenTimer;
   bool _backendRefreshInFlight = false;
   UserProfile? _bottomNavProfile;
+  late bool _profileBootstrapComplete;
 
   @override
   void initState() {
     super.initState();
+    UserProfileService.instance.setFirstSignupMode(widget.isFirstSignup);
+    _profileBootstrapComplete = widget.isFirstSignup;
     WidgetsBinding.instance.addObserver(this);
-    final cached = UserProfileService.instance.cachedProfile;
-    if (_isDisplayReadyProfile(cached)) {
-      _bottomNavProfile = cached;
-    } else {
+    if (widget.isFirstSignup) {
       final initialProfile = _initialSessionProfile();
       if (_isDisplayReadyProfile(initialProfile)) {
         _bottomNavProfile = initialProfile;
@@ -73,18 +76,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _primeBottomNavProfile() async {
+    if (!widget.isFirstSignup) {
+      final profile =
+          await UserProfileService.instance.getCurrentUserProfileForLogin();
+      if (profile?.hasProfileImage == true) {
+        final preloadStarted = DateTime.now();
+        await AvatarPreloadService.warm(
+          profile!.profileImage,
+          cacheIdentity:
+              'account:${profile.uid.trim().toLowerCase()}'
+              '|avatar:v${profile.avatarVersion}',
+        );
+        debugPrint(
+          '[HomeScreen] navbar avatar ready '
+          'user_id="${profile.uid}" version=${profile.avatarVersion} '
+          'elapsed_ms=${DateTime.now().difference(preloadStarted).inMilliseconds}',
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _bottomNavProfile = _isDisplayReadyProfile(profile) ? profile : null;
+        _profileBootstrapComplete = true;
+      });
+      return;
+    }
+
     final cached = UserProfileService.instance.cachedProfile;
     if (_isDisplayReadyProfile(cached)) {
       setState(() {
         _bottomNavProfile = cached;
       });
-      unawaited(UserProfileService.instance.warmUp());
       return;
     }
 
-    final profile = await UserProfileService.instance.getCurrentUserProfile(
-      forceRefresh: true,
-    );
+    final profile =
+        await UserProfileService.instance.getCurrentUserProfileLocalOnly();
     if (!mounted) return;
     setState(() {
       _bottomNavProfile = _isDisplayReadyProfile(profile) ? profile : null;
@@ -205,6 +231,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (!_profileBootstrapComplete) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF08090B),
+        body: Center(
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: Color(0xFF4DA3FF),
+          ),
+        ),
+      );
+    }
     return Scaffold(
       // CRITICAL FOR GLASS UI
       extendBody: true,
@@ -227,6 +264,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onTap: _onTabTapped,
         totalUnreadCount: _totalUnreadCount,
         initialProfile: _bottomNavProfile,
+        // Returning login already completed the authoritative backend fetch
+        // before this navbar was allowed to paint.
+        fetchProfileFromBackend: false,
       ),
     );
   }

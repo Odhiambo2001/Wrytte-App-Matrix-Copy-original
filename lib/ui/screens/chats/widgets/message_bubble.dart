@@ -101,19 +101,21 @@ class MessageBubble extends StatelessWidget {
           bottomRight: Radius.circular(isMine ? (showTail ? 2 : 18) : 18),
         ),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (!isMine &&
-              (senderName?.trim().isNotEmpty == true || showAdminLabel))
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Row(
-                children: [
-                  if (senderName?.trim().isNotEmpty == true)
-                    Expanded(
-                      child: Text(
+      child: IntrinsicWidth(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (!isMine &&
+                (senderName?.trim().isNotEmpty == true || showAdminLabel))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  mainAxisSize: MainAxisSize.max,
+                  children: [
+                    if (senderName?.trim().isNotEmpty == true)
+                      Text(
                         senderName!.trim(),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -123,63 +125,61 @@ class MessageBubble extends StatelessWidget {
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                    )
-                  else
-                    const Spacer(),
-                  if (showAdminLabel) ...[
-                    const SizedBox(width: 10),
-                    const Text(
-                      'Admin',
-                      style: TextStyle(
-                        color: Colors.white54,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
+                    if (showAdminLabel) ...[
+                      const SizedBox(width: 60),
+                      const Text(
+                        'Admin',
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-          if (isVoiceNote)
-            _VoiceNotePlayer(
-              audioUrl: audioUrl ?? '',
-              totalSeconds: voiceDuration ?? 0,
-              isMine: isMine,
-              timeWidget: timeWidget,
-            )
-          else if (attachmentType == 'image')
-            _ImageMessageBubble(
-              imageUrl: attachmentUrl ?? '',
-              timeWidget: timeWidget,
-              isForwarded: isForwarded,
-            )
-          else if (attachmentType == 'file')
-            WrytteFileCard(
-              fileName: content.trim().isEmpty ? 'File' : content,
-              source: attachmentUrl ?? '',
-              trailing: timeWidget,
-              isForwarded: isForwarded,
-            )
-          else if (isVideoNote)
-            _VideoMessageBubble(
-              videoUrl: attachmentUrl ?? '',
-              totalSeconds: voiceDuration ?? 0,
-              timeWidget: timeWidget,
-              isForwarded: isForwarded,
-            )
-          else
-            _BubbleContent(
-              content: content,
-              timeWidget: timeWidget,
-              isForwarded: isForwarded,
-              isStarred: isStarred,
-              isDeleted: isDeleted,
-              isEdited: isEdited,
-              replyPreview: replyPreview,
-              replySender: replySender,
-              isMine: isMine,
-            ),
-        ],
+            if (isVoiceNote)
+              _VoiceNotePlayer(
+                audioUrl: audioUrl ?? '',
+                totalSeconds: voiceDuration ?? 0,
+                isMine: isMine,
+                timeWidget: timeWidget,
+              )
+            else if (attachmentType == 'image')
+              _ImageMessageBubble(
+                imageUrl: attachmentUrl ?? '',
+                timeWidget: timeWidget,
+                isForwarded: isForwarded,
+              )
+            else if (attachmentType == 'file')
+              WrytteFileCard(
+                fileName: content.trim().isEmpty ? 'File' : content,
+                source: attachmentUrl ?? '',
+                trailing: timeWidget,
+                isForwarded: isForwarded,
+              )
+            else if (isVideoNote)
+              _VideoMessageBubble(
+                videoUrl: attachmentUrl ?? '',
+                totalSeconds: voiceDuration ?? 0,
+                timeWidget: timeWidget,
+                isForwarded: isForwarded,
+              )
+            else
+              _BubbleContent(
+                content: content,
+                timeWidget: timeWidget,
+                isForwarded: isForwarded,
+                isStarred: isStarred,
+                isDeleted: isDeleted,
+                isEdited: isEdited,
+                replyPreview: replyPreview,
+                replySender: replySender,
+                isMine: isMine,
+              ),
+          ],
+        ),
       ),
     );
 
@@ -188,12 +188,9 @@ class MessageBubble extends StatelessWidget {
         showTail
             ? _buildTail(bubbleColor, incoming: !isMine)
             : const SizedBox(width: _tailW, height: _tailH);
-    final fixedBubbleSlot = SizedBox(
-      width: maxBubbleWidth,
-      child: Align(
-        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-        child: bubble,
-      ),
+    final constrainedBubble = ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+      child: bubble,
     );
 
     final messageRow = SizedBox(
@@ -204,8 +201,8 @@ class MessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.end,
           children:
               isMine
-                  ? [const Spacer(), fixedBubbleSlot, tail]
-                  : [tail, fixedBubbleSlot, const Spacer()],
+                  ? [const Spacer(), constrainedBubble, tail]
+                  : [tail, constrainedBubble, const Spacer()],
         ),
       ),
     );
@@ -922,7 +919,6 @@ class _BubbleContent extends StatelessWidget {
                 ),
               if (replyPreview != null && replyPreview!.isNotEmpty)
                 Container(
-                  width: double.infinity,
                   margin: const EdgeInsets.only(bottom: 6),
                   padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
                   decoration: BoxDecoration(

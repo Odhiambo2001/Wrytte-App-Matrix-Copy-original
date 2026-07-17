@@ -17,6 +17,7 @@ import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/ui/screens/calls/call_screen.dart';
 import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
@@ -1051,6 +1052,18 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     final directConversationId = await ChatService().findMatrixConversationId(
       userId,
     );
+    String? matrixFallbackAvatar;
+    for (final member in _members) {
+      if (member.id == userId) {
+        matrixFallbackAvatar = member.avatarUrl?.toString();
+        break;
+      }
+    }
+    final initialAvatar = _displayMemberAvatar(userId, matrixFallbackAvatar);
+    await AvatarPreloadService.warm(
+      initialAvatar,
+      cacheIdentity: 'user:${userId.trim().toLowerCase()}',
+    );
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -1059,6 +1072,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
               uid: userId,
               conversationId: directConversationId,
               savedNameHint: savedNameHint,
+              initialAvatarUrl: initialAvatar,
             ),
       ),
     );
