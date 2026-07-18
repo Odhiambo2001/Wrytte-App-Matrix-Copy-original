@@ -411,7 +411,7 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
                     children: [
                       _actionItem(Icons.group_outlined, 'New group'),
                       _actionItem(Icons.person_add_outlined, 'New contact'),
-                      _actionItem(Icons.campaign_outlined, 'New channel'),
+                      _actionItem(Icons.campaign_outlined, 'Create channel'),
                     ],
                   ),
                 ),

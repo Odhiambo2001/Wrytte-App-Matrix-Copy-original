@@ -76,7 +76,7 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
         PopupMenuItem(
           padding: EdgeInsets.zero,
           value: 'channel',
-          child: _buildMenuItem(Icons.campaign_outlined, 'New channel'),
+          child: _buildMenuItem(Icons.campaign_outlined, 'Create channel'),
         ),
         PopupMenuItem(
           padding: EdgeInsets.zero,
@@ -101,8 +101,8 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
           MaterialPageRoute(builder: (_) => const NewGroupScreen()),
         );
       } else if (value == 'channel') {
-        // Add navigation for New channel when screen is created
-        debugPrint('Navigate to New channel');
+        // Add navigation for Create channel when screen is created
+        debugPrint('Navigate to Create channel');
       }
     });
   }

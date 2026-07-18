@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -976,6 +977,17 @@ class AuthService {
       apkLog('Auth.logout', 'secure storage delete FAILED: $e');
       debugPrint('[AuthService] secure storage clear failed: $e');
     }
+    // Requests started by the outgoing widget tree can complete while the
+    // disk purge is running. Clear process-wide caches again at the terminal
+    // boundary so those late completions cannot leak into the next signup.
+    ContactService.clearAllCachesForLogout();
+    ContactService().invalidateCache();
+    UserProfileService.instance.clearCache();
+    UserAvatar.clearMemoryCache();
+    AvatarPreloadService.clearMemoryCache();
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    apkLog('Auth.logout', 'terminal memory cache purge complete');
     apkLog('Auth.logout', 'DONE logout local wipe finished');
   }
 
@@ -988,6 +1000,14 @@ class AuthService {
     apkLog('Auth.logout', 'Flutter in-memory image cache cleared');
 
     try {
+      await DefaultCacheManager().emptyCache();
+      apkLog('Auth.logout', 'network image disk cache cleared');
+    } catch (e) {
+      apkLog('Auth.logout', 'network image disk cache clear FAILED: $e');
+      debugPrint('[AuthService] network image cache purge failed: $e');
+    }
+
+    try {
       await ChatLocalDb.instance.deleteAllLocalDatabases();
       apkLog('Auth.logout', 'chat SQLite databases deleted');
     } catch (e) {
@@ -998,27 +1018,10 @@ class AuthService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final prefCount = prefs.getKeys().length;
-      // These values contain only account-scoped room IDs, not credentials or
-      // cached content. Keep them across logout so a room the user permanently
-      // deleted cannot be recreated by the next Matrix sync on this device.
-      final permanentGroupDeletionPrefs = <String, List<String>>{};
-      for (final key in prefs.getKeys()) {
-        if (key.startsWith('wrytte.dismissed_deleted_group_room_ids.') ||
-            key.startsWith('wrytte.dismissed_public_groups.')) {
-          final values = prefs.getStringList(key);
-          if (values != null) {
-            permanentGroupDeletionPrefs[key] = List<String>.from(values);
-          }
-        }
-      }
       await prefs.clear();
-      for (final entry in permanentGroupDeletionPrefs.entries) {
-        await prefs.setStringList(entry.key, entry.value);
-      }
       apkLog(
         'Auth.logout',
-        'SharedPreferences cleared keys=$prefCount '
-            'preserved_group_tombstones=${permanentGroupDeletionPrefs.length}',
+        'SharedPreferences cleared keys=$prefCount preserved_keys=0',
       );
     } catch (e) {
       apkLog('Auth.logout', 'SharedPreferences clear FAILED: $e');

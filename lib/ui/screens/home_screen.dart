@@ -44,13 +44,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _backendTokenTimer;
   bool _backendRefreshInFlight = false;
   UserProfile? _bottomNavProfile;
-  late bool _profileBootstrapComplete;
 
   @override
   void initState() {
     super.initState();
     UserProfileService.instance.setFirstSignupMode(widget.isFirstSignup);
-    _profileBootstrapComplete = widget.isFirstSignup;
     WidgetsBinding.instance.addObserver(this);
     if (widget.isFirstSignup) {
       final initialProfile = _initialSessionProfile();
@@ -58,7 +56,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _bottomNavProfile = initialProfile;
       }
     }
-    unawaited(_primeBottomNavProfile());
+    // A first signup must never inherit a profile/avatar from a previous
+    // session on this device. Its first frame is built only from the newly
+    // authenticated signup result. Returning login is backend-authoritative.
+    if (!widget.isFirstSignup) {
+      unawaited(_primeBottomNavProfile());
+    }
     _refreshBackendTokenIfNeeded();
     _scheduleBackendTokenRefresh();
     unawaited(BackendRealtimeService.instance.connect());
@@ -96,25 +99,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _bottomNavProfile = _isDisplayReadyProfile(profile) ? profile : null;
-        _profileBootstrapComplete = true;
       });
       return;
     }
 
-    final cached = UserProfileService.instance.cachedProfile;
-    if (_isDisplayReadyProfile(cached)) {
-      setState(() {
-        _bottomNavProfile = cached;
-      });
-      return;
-    }
-
-    final profile =
-        await UserProfileService.instance.getCurrentUserProfileLocalOnly();
-    if (!mounted) return;
-    setState(() {
-      _bottomNavProfile = _isDisplayReadyProfile(profile) ? profile : null;
-    });
+    // Signup intentionally performs no local profile/avatar lookup. The
+    // caller-provided new-account identity was installed synchronously in
+    // initState and the user can create an avatar after entering the account.
+    return;
   }
 
   bool _isDisplayReadyProfile(UserProfile? profile) {
@@ -231,17 +223,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    if (!_profileBootstrapComplete) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF08090B),
-        body: Center(
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            color: Color(0xFF4DA3FF),
-          ),
-        ),
-      );
-    }
     return Scaffold(
       // CRITICAL FOR GLASS UI
       extendBody: true,
@@ -264,8 +245,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onTap: _onTabTapped,
         totalUnreadCount: _totalUnreadCount,
         initialProfile: _bottomNavProfile,
-        // Returning login already completed the authoritative backend fetch
-        // before this navbar was allowed to paint.
+        // Profile is primed in the background; the navbar paints immediately
+        // and updates via setState when the backend profile arrives.
         fetchProfileFromBackend: false,
       ),
     );

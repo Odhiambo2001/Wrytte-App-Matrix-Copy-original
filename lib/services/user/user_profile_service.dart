@@ -38,6 +38,9 @@ class UserProfileService {
   final Set<String> _publicProfileMisses = {};
   Future<UserProfile?>? _loginProfileInFlight;
   DateTime? _currentProfileBackendFetchedAt;
+  int _sessionGeneration = 0;
+  String? _activeAccountUid;
+  bool _logoutInProgress = false;
   static const _currentProfileFreshness = Duration(minutes: 5);
   bool _suppressBackendProfileReads = false;
   final StreamController<UserProfile?> _profileController =
@@ -49,7 +52,12 @@ class UserProfileService {
 
   void setFirstSignupMode(bool enabled) {
     _suppressBackendProfileReads = enabled;
-    if (enabled) _loginProfileInFlight = null;
+    _logoutInProgress = false;
+    if (enabled) {
+      // A signup starts a different account. Do not let a prior account's
+      // in-flight profile read or in-memory identity reach the new account.
+      clearCache();
+    }
   }
 
   /// Returns the current user's profile, using the in-memory cache when
@@ -75,6 +83,7 @@ class UserProfileService {
   /// the only source allowed to repopulate it for this session.
   Future<UserProfile?> getCurrentUserProfileForLogin() {
     _suppressBackendProfileReads = false;
+    _logoutInProgress = false;
     final pending = _loginProfileInFlight;
     if (pending != null) return pending;
     _cache = null;
@@ -82,6 +91,7 @@ class UserProfileService {
       forceRefresh: true,
       allowBackendRefresh: true,
       ignoreStoredAvatar: true,
+      ignoreStoredProfile: true,
     );
     _loginProfileInFlight = future;
     return future
@@ -331,8 +341,10 @@ class UserProfileService {
     String uid, {
     String? phone,
   }) async {
+    final generation = _sessionGeneration;
     final cacheKey = _publicProfileCacheKey(uid, phone);
     final remote = await _readPublicBackendProfileBestEffort(uid, phone: phone);
+    if (generation != _sessionGeneration) return null;
     if (remote.isEmpty) {
       final fallback = _fallbackPublicProfile(uid, phone: phone);
       _publicProfileCache[cacheKey] = fallback;
@@ -368,6 +380,8 @@ class UserProfileService {
 
   /// Wipe cache on logout.
   void clearCache() {
+    _sessionGeneration += 1;
+    _activeAccountUid = null;
     _cache = null;
     _publicProfileCache.clear();
     _publicProfileInFlight.clear();
@@ -376,6 +390,14 @@ class UserProfileService {
     _loginProfileInFlight = null;
     _currentProfileBackendFetchedAt = null;
     _profileController.add(null);
+  }
+
+  /// Called before the logout storage purge starts. It prevents outgoing
+  /// widgets from starting another read against the former account while its
+  /// shared legacy storage keys are being deleted.
+  void beginLogout() {
+    _logoutInProgress = true;
+    clearCache();
   }
 
   // Expose cached value synchronously for widgets that need it immediately
@@ -403,26 +425,42 @@ class UserProfileService {
     bool forceRefresh = false,
     bool allowBackendRefresh = true,
     bool ignoreStoredAvatar = false,
+    bool ignoreStoredProfile = false,
   }) async {
     try {
+      if (_logoutInProgress) return null;
       final uid = await AuthService.instance.getCurrentUserId();
       if (uid == null || uid.isEmpty) return null;
+      final generation = _bindActiveAccount(uid);
+      if (_logoutInProgress || !_isActiveSession(generation, uid)) return null;
 
       final phone = _normalizePhone(await _storage.read(key: _phoneKey) ?? '');
-      var name = await _storage.read(key: _nameKey) ?? '';
-      var firstName = await _storage.read(key: _firstNameKey) ?? '';
-      var lastName = await _storage.read(key: _lastNameKey) ?? '';
-      var bio = await _storage.read(key: _bioKey) ?? '';
+      var name =
+          ignoreStoredProfile ? '' : await _storage.read(key: _nameKey) ?? '';
+      var firstName =
+          ignoreStoredProfile
+              ? ''
+              : await _storage.read(key: _firstNameKey) ?? '';
+      var lastName =
+          ignoreStoredProfile
+              ? ''
+              : await _storage.read(key: _lastNameKey) ?? '';
+      var bio =
+          ignoreStoredProfile ? '' : await _storage.read(key: _bioKey) ?? '';
       var profileImage =
-          ignoreStoredAvatar
+          ignoreStoredAvatar || ignoreStoredProfile
               ? ''
               : await _storage.read(key: _profileImageKey) ?? '';
       var localProfileImagePath =
-          ignoreStoredAvatar ? '' : await _readLocalProfileImagePath(uid);
+          ignoreStoredAvatar || ignoreStoredProfile
+              ? ''
+              : await _readLocalProfileImagePath(uid);
       var avatarVersion =
-          ignoreStoredAvatar ? 0 : await _readAvatarVersion(uid);
+          ignoreStoredAvatar || ignoreStoredProfile
+              ? 0
+              : await _readAvatarVersion(uid);
 
-      if (forceRefresh) {
+      if (forceRefresh && !ignoreStoredProfile) {
         final uploaded = await _syncPendingAvatarUploadForUid(uid);
         if (uploaded) {
           profileImage = await _storage.read(key: _profileImageKey) ?? '';
@@ -434,13 +472,23 @@ class UserProfileService {
           !_suppressBackendProfileReads &&
           (forceRefresh || !_hasRealName(name) || profileImage.isEmpty)) {
         final remote = await _readBackendProfileBestEffort();
+        if (!_isActiveSession(generation, uid)) return null;
         if (remote.isNotEmpty) {
           firstName = _field(remote, 'FirstName') ?? firstName;
           lastName = _field(remote, 'LastName') ?? lastName;
           bio = _field(remote, 'Bio') ?? bio;
-          profileImage = _resolveAvatarUrl(
+          final remoteAvatar = _resolveAvatarUrl(
             _field(remote, 'AvatarImg') ?? profileImage,
           );
+          if (remoteAvatar.isNotEmpty && !_avatarUrlBelongsToUid(remoteAvatar, uid)) {
+            debugPrint(
+              '[UserProfileService] rejected cross-account current avatar '
+              'active_user="$uid" avatar_url="$remoteAvatar"',
+            );
+            profileImage = '';
+          } else {
+            profileImage = remoteAvatar;
+          }
           avatarVersion = _avatarVersionFromFields(remote);
           if (profileImage.isNotEmpty) {
             profileImage = _withAvatarFetchVersion(
@@ -455,12 +503,14 @@ class UserProfileService {
                 lastName,
               ].where((part) => part.trim().isNotEmpty).join(' ').trim();
           if (_hasRealName(remoteName)) {
+            if (!_isActiveSession(generation, uid)) return null;
             name = remoteName;
             await _storage.write(key: _nameKey, value: name);
             await _storage.write(key: _firstNameKey, value: firstName);
             await _storage.write(key: _lastNameKey, value: lastName);
             await AuthService.instance.updateStoredUsername(name);
           }
+          if (!_isActiveSession(generation, uid)) return null;
           await _storage.write(key: _bioKey, value: bio);
           if (profileImage.isNotEmpty) {
             await _storage.write(key: _profileImageKey, value: profileImage);
@@ -468,18 +518,21 @@ class UserProfileService {
           }
         }
       }
-      if (!_hasRealName(name)) {
+      if (!_hasRealName(name) && !ignoreStoredProfile) {
         await AuthService.instance.getValidBackendToken();
         name = await _storage.read(key: _nameKey) ?? name;
       }
-      if (!_hasRealName(name)) {
+      if (!_hasRealName(name) && !ignoreStoredProfile) {
         final restored = await AuthService.instance.hydrateStoredProfile(uid);
         if (restored != null && restored.hasUsableName) {
           name = restored.username;
           await _storage.write(key: _nameKey, value: name);
         }
       }
-      final linksRaw = await _storage.read(key: 'user_links') ?? '';
+      final linksRaw =
+          ignoreStoredProfile
+              ? ''
+              : await _storage.read(key: 'user_links') ?? '';
 
       final profile = UserProfile(
         uid: uid,
@@ -498,6 +551,10 @@ class UserProfileService {
                 .toList(),
       );
 
+      // A logout/account switch may finish while a backend request from the
+      // previous screen is still in flight. Never allow that stale completion
+      // to repopulate the process-wide profile cache for the next account.
+      if (!_isActiveSession(generation, uid)) return null;
       _cache = profile;
       _profileController.add(profile);
       return profile;
@@ -515,6 +572,41 @@ class UserProfileService {
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
     cleaned = _stripInvalidNorthAmericaPrefix(cleaned);
     return cleaned;
+  }
+
+  /// Binds all current-profile reads to one authenticated account. Secure
+  /// storage uses a few legacy shared keys, so an async read that belongs to
+  /// a former account must become invalid as soon as another account starts.
+  int _bindActiveAccount(String uid) {
+    final normalizedUid = _matrixLocalpart(uid).toLowerCase();
+    if (_activeAccountUid == normalizedUid) return _sessionGeneration;
+
+    _sessionGeneration += 1;
+    _activeAccountUid = normalizedUid;
+    _cache = null;
+    _loginProfileInFlight = null;
+    _currentProfileBackendFetchedAt = null;
+    _profileController.add(null);
+    debugPrint(
+      '[UserProfileService] profile session bound '
+      'user_id="$normalizedUid" generation=$_sessionGeneration',
+    );
+    return _sessionGeneration;
+  }
+
+  bool _isActiveSession(int generation, String uid) {
+    return generation == _sessionGeneration &&
+        _activeAccountUid == _matrixLocalpart(uid).toLowerCase();
+  }
+
+  /// Backend avatar paths are account-owned (for example
+  /// `/usrimg/<user-id>/avatar_img.jpg`). Never display an avatar whose path
+  /// identifies another account, even if a stale response reaches this code.
+  bool _avatarUrlBelongsToUid(String avatarUrl, String uid) {
+    final owner = _matrixLocalpart(uid).toLowerCase();
+    final path = Uri.tryParse(avatarUrl)?.path.toLowerCase() ??
+        avatarUrl.toLowerCase().split('?').first;
+    return path.contains('/$owner/');
   }
 
   bool get _currentBackendProfileIsFresh {
