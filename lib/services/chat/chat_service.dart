@@ -2621,7 +2621,12 @@ class ChatService {
     required bool isPublic,
     String? aliasLocalpart,
     List<String> memberIds = const [],
+    String conversationKind = ConversationKind.group,
   }) async {
+    final kind = ConversationKind.normalize(conversationKind);
+    if (kind != ConversationKind.group && kind != ConversationKind.channel) {
+      throw ArgumentError('Conversation kind must be a group or channel.');
+    }
     await connect();
     final invites =
         memberIds
@@ -2634,6 +2639,7 @@ class ChatService {
       isPublic: isPublic,
       aliasLocalpart: aliasLocalpart,
       invite: invites,
+      conversationKind: kind,
     );
     final room = createdRoom.room;
     final roomId = createdRoom.roomId;
@@ -2653,7 +2659,7 @@ class ChatService {
       lastMessageType: 'group',
       otherUserName: name.trim(),
       otherUserAvatar: room == null ? null : _groupRoomAvatarUrl(room),
-      conversationKind: ConversationKind.group,
+      conversationKind: kind,
     );
     _conversationsMap[roomId] = conversation;
     await markGroupCreated(roomId);
@@ -2661,7 +2667,7 @@ class ChatService {
     _emitConversations();
     apkLog(
       'ChatService.groupCreate',
-      'saved local group room_id="$roomId" name="${name.trim()}" participants=${conversation.participants.length}',
+      'saved local $kind room_id="$roomId" name="${name.trim()}" participants=${conversation.participants.length}',
     );
     return conversation;
   }

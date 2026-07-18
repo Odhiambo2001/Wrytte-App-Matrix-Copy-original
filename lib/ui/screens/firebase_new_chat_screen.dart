@@ -585,6 +585,13 @@ class _FirebaseNewChatScreenState extends State<FirebaseNewChatScreen> {
                 context,
                 MaterialPageRoute(builder: (_) => const NewGroupScreen()),
               );
+            } else if (title == 'Create channel') {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const NewGroupScreen(isChannel: true),
+                ),
+              );
             }
           },
         ),

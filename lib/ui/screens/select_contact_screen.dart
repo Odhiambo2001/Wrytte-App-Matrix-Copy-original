@@ -686,6 +686,13 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
                 context,
                 MaterialPageRoute(builder: (_) => const NewGroupScreen()),
               );
+            } else if (title == 'Create channel') {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const NewGroupScreen(isChannel: true),
+                ),
+              );
             }
           },
         ),

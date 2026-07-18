@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
@@ -10,7 +11,9 @@ import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 
 class NewGroupScreen extends StatefulWidget {
-  const NewGroupScreen({super.key});
+  final bool isChannel;
+
+  const NewGroupScreen({super.key, this.isChannel = false});
 
   @override
   State<NewGroupScreen> createState() => _NewGroupScreenState();
@@ -19,7 +22,7 @@ class NewGroupScreen extends StatefulWidget {
 class _NewGroupScreenState extends State<NewGroupScreen> {
   final _chat = ChatService();
   final _nameController = TextEditingController();
-  final _aliasController = TextEditingController(text: 'gr.@');
+  late final _aliasController = TextEditingController(text: _aliasPrefix);
   Timer? _aliasDebounce;
   bool? _isPublic;
   bool _checkingAlias = false;
@@ -28,9 +31,14 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
   int _aliasCheckGeneration = 0;
 
   bool get _hasName => _nameController.text.isNotEmpty;
+  String get _aliasPrefix => widget.isChannel ? '.@' : 'gr.@';
   bool get _aliasHasBody => _aliasBody(_aliasController.text).isNotEmpty;
   bool get _canGoNext {
-    if (!_hasName || _isPublic == null) return false;
+    if (!_hasName) return false;
+    if (widget.isChannel) {
+      return _aliasHasBody && _aliasAvailable && !_checkingAlias;
+    }
+    if (_isPublic == null) return false;
     if (_isPublic == false) return true;
     return _aliasHasBody && _aliasAvailable && !_checkingAlias;
   }
@@ -52,8 +60,8 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
 
   String _aliasBody(String value) {
     final raw = value.trim().toLowerCase();
-    if (!raw.startsWith('gr.@')) return raw;
-    return raw.substring(4);
+    if (!raw.startsWith(_aliasPrefix)) return raw;
+    return raw.substring(_aliasPrefix.length);
   }
 
   String _cleanAliasBody(String value) {
@@ -62,7 +70,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
 
   void _onAliasChanged() {
     final body = _cleanAliasBody(_aliasBody(_aliasController.text));
-    final next = 'gr.@$body';
+    final next = '$_aliasPrefix$body';
     if (_aliasController.text != next) {
       _aliasController.value = TextEditingValue(
         text: next,
@@ -81,7 +89,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
 
     final generation = ++_aliasCheckGeneration;
     _aliasDebounce = Timer(const Duration(milliseconds: 450), () async {
-      final available = await _chat.isGroupAliasAvailable('gr.@$body');
+      final available = await _chat.isGroupAliasAvailable('$_aliasPrefix$body');
       if (!mounted || generation != _aliasCheckGeneration) return;
       setState(() {
         _checkingAlias = false;
@@ -100,8 +108,12 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
         builder:
             (_) => _NewGroupMembersScreen(
               groupName: _nameController.text,
-              isPublic: _isPublic == true,
-              aliasLocalpart: _isPublic == true ? _aliasController.text : null,
+              isPublic: widget.isChannel || _isPublic == true,
+              aliasLocalpart:
+                  widget.isChannel || _isPublic == true
+                      ? _aliasController.text
+                      : null,
+              isChannel: widget.isChannel,
             ),
       ),
     );
@@ -117,7 +129,10 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
               title: conversation.otherUserName ?? _nameController.text,
               avatarUrl: conversation.otherUserAvatar,
               initialMemberCount: conversation.participants.length,
-              conversationKind: ConversationKind.group,
+              conversationKind:
+                  widget.isChannel
+                      ? ConversationKind.channel
+                      : ConversationKind.group,
             ),
       ),
     );
@@ -127,7 +142,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
     setState(() {
       _isPublic = value;
       if (value && _aliasController.text.trim().isEmpty) {
-        _aliasController.text = 'gr.@';
+        _aliasController.text = _aliasPrefix;
       }
     });
   }
@@ -150,10 +165,10 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
                     Icons.arrow_back_ios_new,
                     () => Navigator.pop(context),
                   ),
-                  const Expanded(
+                  Expanded(
                     child: Center(
                       child: Text(
-                        'New Group',
+                        widget.isChannel ? 'New Channel' : 'New Group',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 17,
@@ -174,41 +189,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
                 padding: EdgeInsets.fromLTRB(24, top > 0 ? 10 : 20, 24, 24),
                 children: [
                   _nameCard(),
-                  const SizedBox(height: 16),
-                  const Text(
-                    "Private group can't be found in search,\nyou can join only if you were invited.",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
-                      height: 1.35,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _choiceRow(
-                    'Private',
-                    _isPublic == false,
-                    () => _setPublic(false),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Public group can be found in search,\nanyone can join.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
-                      height: 1.35,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _choiceRow(
-                    'Public',
-                    _isPublic == true,
-                    () => _setPublic(true),
-                  ),
-                  if (_isPublic == true) ...[
+                  if (widget.isChannel) ...[
                     const SizedBox(height: 14),
                     _aliasField(),
                     if (_aliasError.isNotEmpty)
@@ -222,6 +203,56 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
                           ),
                         ),
                       ),
+                  ] else ...[
+                    const SizedBox(height: 16),
+                    const Text(
+                      "Private group can't be found in search,\nyou can join only if you were invited.",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        height: 1.35,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _choiceRow(
+                      'Private',
+                      _isPublic == false,
+                      () => _setPublic(false),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Public group can be found in search,\nanyone can join.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        height: 1.35,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _choiceRow(
+                      'Public',
+                      _isPublic == true,
+                      () => _setPublic(true),
+                    ),
+                    if (_isPublic == true) ...[
+                      const SizedBox(height: 14),
+                      _aliasField(),
+                      if (_aliasError.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 32, top: 10),
+                          child: Text(
+                            _aliasError,
+                            style: const TextStyle(
+                              color: Color(0xFFFF5A66),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                    ],
                   ],
                 ],
               ),
@@ -302,8 +333,8 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
               autofocus: true,
               style: const TextStyle(color: Colors.white, fontSize: 18),
               cursorColor: const Color(0xFF4DA3FF),
-              decoration: const InputDecoration(
-                hintText: 'Group name',
+              decoration: InputDecoration(
+                hintText: widget.isChannel ? 'Channel name' : 'Group name',
                 hintStyle: TextStyle(color: Colors.white38, fontSize: 18),
                 border: InputBorder.none,
               ),
@@ -367,7 +398,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
       suffix = const Icon(Icons.check, color: Colors.greenAccent, size: 24);
     } else if (_aliasHasBody) {
       suffix = GestureDetector(
-        onTap: () => _aliasController.text = 'gr.@',
+        onTap: () => _aliasController.text = _aliasPrefix,
         child: const Icon(Icons.close, color: Colors.white54, size: 22),
       );
     }
@@ -384,6 +415,16 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
           Expanded(
             child: TextField(
               controller: _aliasController,
+              inputFormatters:
+                  widget.isChannel
+                      ? [
+                        TextInputFormatter.withFunction((oldValue, newValue) {
+                          return newValue.text.startsWith(_aliasPrefix)
+                              ? newValue
+                              : oldValue;
+                        }),
+                      ]
+                      : null,
               keyboardType: TextInputType.visiblePassword,
               autocorrect: false,
               enableSuggestions: false,
@@ -406,11 +447,13 @@ class _NewGroupMembersScreen extends StatefulWidget {
   final String groupName;
   final bool isPublic;
   final String? aliasLocalpart;
+  final bool isChannel;
 
   const _NewGroupMembersScreen({
     required this.groupName,
     required this.isPublic,
     this.aliasLocalpart,
+    this.isChannel = false,
   });
 
   @override
@@ -488,14 +531,22 @@ class _NewGroupMembersScreenState extends State<_NewGroupMembersScreen> {
         isPublic: widget.isPublic,
         aliasLocalpart: widget.aliasLocalpart,
         memberIds: selectedIds,
+        conversationKind:
+            widget.isChannel
+                ? ConversationKind.channel
+                : ConversationKind.group,
       );
       if (!mounted) return;
       Navigator.pop(context, conversation);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to create group: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Failed to create ${widget.isChannel ? 'channel' : 'group'}: $e',
+          ),
+        ),
+      );
       setState(() => _creating = false);
     }
   }
@@ -528,8 +579,8 @@ class _NewGroupMembersScreenState extends State<_NewGroupMembersScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Text(
-                          'New group',
+                        Text(
+                          widget.isChannel ? 'New channel' : 'New group',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 18,

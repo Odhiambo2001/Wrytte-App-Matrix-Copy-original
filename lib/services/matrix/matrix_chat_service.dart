@@ -496,6 +496,7 @@ class MatrixChatService {
     required bool isPublic,
     String? aliasLocalpart,
     List<String> invite = const [],
+    String conversationKind = 'group',
   }) async {
     final client = await connect();
     if (!client.isLogged()) {
@@ -550,6 +551,7 @@ class MatrixChatService {
           content: {
             'owner_user_id': creatorId,
             'group_origin': 'user_created',
+            'conversation_kind': conversationKind,
             'avatar_version': 0,
             'name_version': 0,
             'description_version': 0,

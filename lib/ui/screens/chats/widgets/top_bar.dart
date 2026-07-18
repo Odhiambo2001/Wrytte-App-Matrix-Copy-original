@@ -101,8 +101,12 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
           MaterialPageRoute(builder: (_) => const NewGroupScreen()),
         );
       } else if (value == 'channel') {
-        // Add navigation for Create channel when screen is created
-        debugPrint('Navigate to Create channel');
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const NewGroupScreen(isChannel: true),
+          ),
+        );
       }
     });
   }
