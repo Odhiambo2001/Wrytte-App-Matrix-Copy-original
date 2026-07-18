@@ -9,6 +9,7 @@ import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
+import 'package:wrytte/ui/screens/channels/channel_feed_screen.dart';
 
 class NewGroupScreen extends StatefulWidget {
   final bool isChannel;
@@ -122,18 +123,24 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
       context,
       MaterialPageRoute(
         builder:
-            (_) => ChatScreen(
-              conversationId: conversation.id,
-              receiverId: conversation.otherUserId,
-              currentUserId: _chat.currentUserId ?? '',
-              title: conversation.otherUserName ?? _nameController.text,
-              avatarUrl: conversation.otherUserAvatar,
-              initialMemberCount: conversation.participants.length,
-              conversationKind:
-                  widget.isChannel
-                      ? ConversationKind.channel
-                      : ConversationKind.group,
-            ),
+            (_) =>
+                widget.isChannel
+                    ? ChannelFeedScreen(
+                      conversationId: conversation.id,
+                      currentUserId: _chat.currentUserId ?? '',
+                      title: conversation.otherUserName ?? _nameController.text,
+                      avatarUrl: conversation.otherUserAvatar,
+                      subscriberCount: conversation.participants.length,
+                    )
+                    : ChatScreen(
+                      conversationId: conversation.id,
+                      receiverId: conversation.otherUserId,
+                      currentUserId: _chat.currentUserId ?? '',
+                      title: conversation.otherUserName ?? _nameController.text,
+                      avatarUrl: conversation.otherUserAvatar,
+                      initialMemberCount: conversation.participants.length,
+                      conversationKind: ConversationKind.group,
+                    ),
       ),
     );
   }

@@ -24,6 +24,7 @@ import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
+import 'package:wrytte/ui/screens/channels/channel_feed_screen.dart';
 import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/conversation_tile.dart';
 import 'package:wrytte/ui/screens/chats/widgets/mini_chat_window.dart';
@@ -2063,22 +2064,32 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             transitionDuration: const Duration(milliseconds: 300),
             reverseTransitionDuration: const Duration(milliseconds: 220),
             pageBuilder:
-                (_, __, ___) => ChatScreen(
-                  conversationId: conv.id,
-                  receiverId: chatReceiverId,
-                  currentUserId: _currentUserId,
-                  title: name,
-                  avatarUrl: avatar,
-                  initialMessages: initialMessages,
-                  initialMemberCount:
-                      isGroup && conv.participants.length > 1
-                          ? conv.participants.length
-                          : null,
-                  conversationKind:
-                      isGroup
-                          ? ConversationKind.group
-                          : ConversationKind.direct,
-                ),
+                (_, __, ___) =>
+                    conv.isChannelKind
+                        ? ChannelFeedScreen(
+                          conversationId: conv.id,
+                          currentUserId: _currentUserId,
+                          title: name,
+                          avatarUrl: avatar,
+                          initialPosts: initialMessages,
+                          subscriberCount: conv.participants.length,
+                        )
+                        : ChatScreen(
+                          conversationId: conv.id,
+                          receiverId: chatReceiverId,
+                          currentUserId: _currentUserId,
+                          title: name,
+                          avatarUrl: avatar,
+                          initialMessages: initialMessages,
+                          initialMemberCount:
+                              isGroup && conv.participants.length > 1
+                                  ? conv.participants.length
+                                  : null,
+                          conversationKind:
+                              isGroup
+                                  ? ConversationKind.group
+                                  : ConversationKind.direct,
+                        ),
             transitionsBuilder: (_, animation, __, child) {
               final curved = CurvedAnimation(
                 parent: animation,
@@ -2355,9 +2366,33 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     );
   }
 
+  Widget _buildChannelsTab(double topPadding) {
+    final channels =
+        _conversations
+            .where(
+              (conversation) =>
+                  conversation.isChannelKind &&
+                  _isDisplayableGroupConversation(conversation),
+            )
+            .toList();
+    return _buildConversationTab(
+      topPadding,
+      conversations: channels,
+      emptyTitle: 'No channels yet',
+      emptySubtitle: 'Tap the menu and create a new channel',
+      emptyIcon: Icons.campaign_outlined,
+    );
+  }
+
   Widget _buildGroupsTab(double topPadding) {
     final allGroups =
-        _conversations.where(_isDisplayableGroupConversation).toList();
+        _conversations
+            .where(
+              (conversation) =>
+                  !conversation.isChannelKind &&
+                  _isDisplayableGroupConversation(conversation),
+            )
+            .toList();
     final createdIds = _chat.createdGroupRoomIds;
     final shouldPromotePublicGroupsAsOwn =
         allGroups.isEmpty &&
@@ -2949,15 +2984,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
               controller: _tabController,
               children: [
                 _buildChatsTab(headerH),
-                Center(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: headerH),
-                    child: const Text(
-                      'Channels coming soon',
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ),
-                ),
+                _buildChannelsTab(headerH),
                 _buildGroupsTab(headerH),
               ],
             ),
