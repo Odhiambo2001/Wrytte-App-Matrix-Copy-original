@@ -2788,6 +2788,26 @@ class ChatService {
     return null;
   }
 
+  String _kindForGroupRoom(mx.Room room) {
+    final stateKind = ConversationKind.normalize(
+      room
+              .getState('com.wrytte.group.info')
+              ?.content['conversation_kind']
+              ?.toString() ??
+          '',
+    );
+    if (stateKind == ConversationKind.channel ||
+        stateKind == ConversationKind.group) {
+      return stateKind;
+    }
+
+    final alias = room.canonicalAlias.trim();
+    final localpart = alias.startsWith('#') ? alias.substring(1) : alias;
+    if (localpart.startsWith('gr.@')) return ConversationKind.group;
+    if (localpart.startsWith('.@')) return ConversationKind.channel;
+    return ConversationKind.group;
+  }
+
   ChatConversation _toConversation(mx.Room room) {
     final client = MatrixClientService.instance.client;
     final existing = _conversationsMap[room.id];
@@ -2806,6 +2826,12 @@ class ChatService {
               ? lastMessage
               : null;
       final groupName = _groupDisplayName(room, existing);
+      final participants =
+          <String>{
+            if (client.userID != null) client.userID!,
+            if (existing != null) ...existing.participants,
+            ...room.getParticipants().map((user) => user.id),
+          }.where((id) => id.trim().isNotEmpty).toList();
       final deletedAt =
           deletedState?.content[groupDeletedEventKey] == true
               ? _groupDeletedAtFromContent(deletedState!.content) ??
@@ -2815,13 +2841,7 @@ class ChatService {
               : existing?.deletedAt;
       return ChatConversation(
         id: room.id,
-        participants: [
-          if (client.userID != null) client.userID!,
-          ...room
-              .getParticipants()
-              .map((user) => user.id)
-              .where((id) => id != client.userID),
-        ],
+        participants: participants,
         otherUserId: room.id,
         lastMessage: deletedAt == null ? visibleLastMessage?.content ?? '' : '',
         lastMessageSenderId:
@@ -2832,10 +2852,13 @@ class ChatService {
             DateTime.now(),
         unreadCount: _displayableUnreadCountForRoom(room, client.userID),
         lastMessageType: deletedAt == null ? 'group' : groupDeletedMessageType,
-        conversationKind:
-            existing?.hasExplicitKind == true
-                ? existing!.conversationKind
-                : ConversationKind.group,
+        conversationKind: () {
+          final derived = _kindForGroupRoom(room);
+          if (derived == ConversationKind.channel) return derived;
+          return existing?.hasExplicitKind == true
+              ? existing!.conversationKind
+              : derived;
+        }(),
         deletedAt: deletedAt,
         deletedBy:
             deletedState?.content[groupDeletedEventKey] == true
