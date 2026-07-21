@@ -606,7 +606,7 @@ class _NewGroupMembersScreenState extends State<_NewGroupMembersScreen> {
                         ),
                         Text(
                           widget.isChannel
-                              ? '${_selectedKeys.length} subscribers'
+                              ? '${_selectedKeys.length} ${_selectedKeys.length == 1 ? 'subscriber' : 'subscribers'}'
                               : '${_selectedKeys.length}/0 members',
                           style: const TextStyle(
                             color: Colors.white54,
