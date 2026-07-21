@@ -1859,7 +1859,18 @@ class ChatService {
       _emitRoomMessages(conversationId);
       return memory;
     }
-    return loadCachedMessages(conversationId);
+    final cached = await loadCachedMessages(conversationId);
+    if (cached.isNotEmpty) return cached;
+
+    // A fresh login can have an empty local cache even though Matrix still
+    // contains the room history. Restore this room before the UI reports an
+    // empty conversation, especially for channel feeds.
+    final room = _roomById(conversationId);
+    if (room != null) {
+      await _restoreRoomHistoryFromServer(room);
+      return getConversationMessages(conversationId);
+    }
+    return const <ChatMessage>[];
   }
 
   Future<void> hydrateLocalConversations({bool syncReadMarkers = true}) async {
@@ -1922,6 +1933,25 @@ class ChatService {
               ?.content[groupDeletedEventKey] ==
           true;
       final deletedGroup = tombstoned || _isDeletedGroupConversationRow(conv);
+      final roomKind =
+          room != null && MatrixChatService.instance.isMatrixGroupRoom(room)
+              ? _kindForGroupRoom(room)
+              : ConversationKind.unknown;
+      // Matrix room state/alias is authoritative for group rooms. This also
+      // repairs rows cached as groups before channel classification existed.
+      if (roomKind == ConversationKind.channel &&
+          conv.conversationKind != ConversationKind.channel) {
+        final stamped = conv.copyWith(
+          conversationKind: ConversationKind.channel,
+          otherUserId: conv.id,
+          otherUserAvatar:
+              room != null ? (_groupRoomAvatarUrl(room) ?? '') : '',
+          otherUserName: room != null ? _groupDisplayName(room, conv) : null,
+        );
+        _conversationsMap[entry.key] = stamped;
+        upgraded.add(stamped);
+        continue;
+      }
       if (conv.hasExplicitKind &&
           !(deletedGroup && !conv.isGroupKind && !conv.isChannelKind)) {
         continue;

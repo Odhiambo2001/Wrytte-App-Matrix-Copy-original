@@ -26,6 +26,12 @@ class MatrixPublicGroup {
   final int aliasVersion;
   final String? link;
 
+  bool get isChannel {
+    final alias = canonicalAlias?.trim().toLowerCase() ?? '';
+    final localpart = alias.startsWith('#') ? alias.substring(1) : alias;
+    return localpart.startsWith('.@');
+  }
+
   const MatrixPublicGroup({
     required this.roomId,
     required this.name,

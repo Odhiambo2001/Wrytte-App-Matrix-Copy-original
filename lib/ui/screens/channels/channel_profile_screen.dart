@@ -1,8 +1,11 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/ui/screens/channels/channel_edit_screen.dart';
+import 'package:wrytte/services/chat/chat_service.dart';
+import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 
 /// Profile page for a channel, opened by tapping the channel header.
 /// Layout mirrors the reference: centered avatar, name, @handle,
@@ -232,6 +235,38 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   // ---------------------------------------------------------- action buttons
 
   Widget _actionButtons() {
+    if (!widget.isOwner) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Row(
+          children: [
+            _actionButton(
+              icon: Icons.logout,
+              label: 'Leave',
+              onTap: _leaveChannel,
+            ),
+            const SizedBox(width: 10),
+            _actionButton(
+              icon: Icons.ios_share_outlined,
+              label: 'Share',
+              onTap: _shareChannel,
+            ),
+            const SizedBox(width: 10),
+            _actionButton(
+              icon: Icons.search,
+              label: 'Search',
+              onTap: () => _showUnavailable('Searching posts'),
+            ),
+            const SizedBox(width: 10),
+            _actionButton(
+              icon: Icons.notifications_off_outlined,
+              label: 'Mute',
+              onTap: () => _showUnavailable('Muting channels'),
+            ),
+          ],
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
@@ -262,6 +297,44 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _shareChannel() async {
+    final room = MatrixChatService.instance.getRoomById(widget.conversationId);
+    final alias = room?.canonicalAlias.trim();
+    final link = (alias?.isNotEmpty == true)
+        ? 'https://matrix.to/#/${Uri.encodeComponent(alias!)}'
+        : 'https://matrix.to/#/${Uri.encodeComponent(widget.conversationId)}';
+    await Clipboard.setData(ClipboardData(text: link));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Channel link copied')),
+      );
+    }
+  }
+
+  Future<void> _leaveChannel() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Leave channel?'),
+        content: const Text('You will no longer receive posts from this channel.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Leave')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    if (mounted) {
+      Navigator.pop(
+        context,
+        GroupExitRequest.leave(
+          roomId: widget.conversationId,
+          commit: () => MatrixChatService.instance.leaveGroup(widget.conversationId),
+        ),
+      );
+    }
   }
 
   Widget _actionButton({

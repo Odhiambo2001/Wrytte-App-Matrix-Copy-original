@@ -4,12 +4,15 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:matrix/matrix.dart' as mx;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/ui/screens/channels/channel_profile_screen.dart';
 import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_chat_service.dart';
+import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 
 class ChannelFeedScreen extends StatefulWidget {
@@ -19,6 +22,9 @@ class ChannelFeedScreen extends StatefulWidget {
   final String? avatarUrl;
   final List<ChatMessage> initialPosts;
   final int subscriberCount;
+  final bool readOnlyUntilSubscribe;
+  final String? subscribeAlias;
+  final bool canPost;
 
   const ChannelFeedScreen({
     super.key,
@@ -28,6 +34,9 @@ class ChannelFeedScreen extends StatefulWidget {
     this.avatarUrl,
     this.initialPosts = const [],
     this.subscriberCount = 0,
+    this.readOnlyUntilSubscribe = false,
+    this.subscribeAlias,
+    this.canPost = false,
   });
 
   @override
@@ -63,6 +72,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   @override
   void initState() {
     super.initState();
+    _postController.addListener(_onPostTextChanged);
     _posts = List<ChatMessage>.from(widget.initialPosts);
     _subscriberCount = widget.subscriberCount;
     _channelAvatarUrl =
@@ -70,6 +80,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             ? widget.avatarUrl!.trim()
             : null;
     _loadPosts();
+    _loadInteractionState();
     _resolveChannelAvatar();
     _postsSubscription = _chat.messagesStreamFor(widget.conversationId).listen((
       posts,
@@ -93,8 +104,60 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void dispose() {
     _postsSubscription?.cancel();
     _syncSubscription?.cancel();
+    _postController.removeListener(_onPostTextChanged);
     _postController.dispose();
     super.dispose();
+  }
+
+  void _onPostTextChanged() {
+    if (mounted) setState(() {});
+  }
+
+  String _interactionKey(String type, String postId) =>
+      'channel_interaction_${widget.currentUserId}_${type}_'
+      '${widget.conversationId}_$postId';
+
+  Future<void> _loadInteractionState() async {
+    final preferences = await SharedPreferences.getInstance();
+    final postIds = _posts.map((post) => post.id).toSet();
+    for (final postId in postIds) {
+      final liked =
+          preferences.getBool(_interactionKey('liked', postId)) ?? false;
+      final reposted =
+          preferences.getBool(_interactionKey('reposted', postId)) ?? false;
+      final likeCount =
+          preferences.getInt(_interactionKey('like_count', postId)) ?? 0;
+      final repostCount =
+          preferences.getInt(_interactionKey('repost_count', postId)) ?? 0;
+      if (liked) _likedPostIds.add(postId);
+      if (reposted) _repostedPostIds.add(postId);
+      if (likeCount > 0) _likeCounts[postId] = likeCount;
+      if (repostCount > 0) _repostCounts[postId] = repostCount;
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _saveInteractionState(String type, String postId) async {
+    final preferences = await SharedPreferences.getInstance();
+    if (type == 'liked') {
+      await preferences.setBool(
+        _interactionKey(type, postId),
+        _likedPostIds.contains(postId),
+      );
+      await preferences.setInt(
+        _interactionKey('like_count', postId),
+        _likeCounts[postId] ?? 0,
+      );
+    } else {
+      await preferences.setBool(
+        _interactionKey(type, postId),
+        _repostedPostIds.contains(postId),
+      );
+      await preferences.setInt(
+        _interactionKey('repost_count', postId),
+        _repostCounts[postId] ?? 0,
+      );
+    }
   }
 
   /// Resolve the avatar shown in the header and next to every post:
@@ -156,6 +219,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final posts = await _chat.hydrateConversation(widget.conversationId);
     if (!mounted) return;
     setState(() => _posts = posts);
+    await _loadInteractionState();
   }
 
   /// Open the channel profile page (tapping the header pill).
@@ -171,8 +235,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               avatarUrl: _channelAvatarUrl,
               subscriberCount: _subscriberCount,
               posts: _posts,
-              // The feed is rendered as the owner's channel, so allow Edit.
-              isOwner: true,
+              isOwner: widget.canPost,
             ),
       ),
     );
@@ -182,6 +245,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Future<void> _publishPost() async {
+    if (widget.readOnlyUntilSubscribe || !widget.canPost) return;
     final content = _postController.text.trim();
     if (content.isEmpty || _publishing) return;
     setState(() => _publishing = true);
@@ -291,7 +355,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                               _channelPost(post),
                               // Divider under every post, like the reference.
                               const Padding(
-                                padding: EdgeInsets.only(top: 14, bottom: 16),
+                                padding: EdgeInsets.only(
+                                  left: 56,
+                                  top: 14,
+                                  bottom: 16,
+                                ),
                                 child: Divider(
                                   color: Color(0xFF3A3D42),
                                   thickness: 0.6,
@@ -518,40 +586,50 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final bookmarked = _bookmarkedPostIds.contains(postId);
     return Padding(
       padding: const EdgeInsets.only(right: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.start,
+          children: [
           _PostAction(
-            icon: Icons.mode_comment_outlined,
+            icon: Icons.comment_outlined,
             label: _formatCount(commentCount),
             onTap: () => _openComments(post),
           ),
+          const SizedBox(width: 18),
           _PostAction(
             icon: Icons.repeat,
             label: _formatCount(_repostCounts[postId] ?? 0),
             color: reposted ? const Color(0xFF4DA3FF) : null,
             onTap: () => _toggleRepost(postId),
           ),
+          const SizedBox(width: 18),
           _PostAction(
             icon: liked ? Icons.favorite : Icons.favorite_border,
             label: _formatCount(_likeCounts[postId] ?? 0),
             color: liked ? const Color(0xFFE85D75) : null,
             onTap: () => _toggleLike(postId),
           ),
+          const SizedBox(width: 18),
           _PostAction(
             icon: Icons.ios_share_outlined,
             onTap: () => _openShareSheet(post),
           ),
+          const SizedBox(width: 8),
           _PostAction(
             icon: bookmarked ? Icons.bookmark : Icons.bookmark_border,
             color: bookmarked ? const Color(0xFF4DA3FF) : null,
             onTap: () => _toggleBookmark(postId),
           ),
+          const SizedBox(width: 18),
           _PostAction(
             icon: Icons.more_horiz,
             onTap: () => _openMoreOptions(post),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -704,10 +782,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                               color: Color(0xFF4DA3FF),
                             ),
                             onPressed: () async {
-                              final text = commentController.text;
+                              if (!sheetContext.mounted) return;
+                              final text = commentController.text.trim();
+                              if (text.isEmpty) return;
                               commentController.clear();
                               await _publishComment(post, text);
-                              setSheetState(() {});
+                              if (sheetContext.mounted) setSheetState(() {});
                             },
                           ),
                         ],
@@ -720,56 +800,28 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           ),
         );
       },
-    ).whenComplete(commentController.dispose);
+    ).whenComplete(() {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        commentController.dispose();
+      });
+    });
   }
 
   // ------------------------------------------------------------------- share
 
+  String _postLink(ChatMessage post) {
+    final roomId = Uri.encodeComponent(widget.conversationId);
+    final eventId = Uri.encodeComponent(post.id);
+    return 'https://matrix.to/#/$roomId/$eventId';
+  }
+
   void _openShareSheet(ChatMessage post) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF15171B),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 14),
-              ListTile(
-                leading: const Icon(Icons.copy, color: Colors.white),
-                title: const Text(
-                  'Copy post text',
-                  style: TextStyle(color: Colors.white),
-                ),
-                onTap: () async {
-                  await Clipboard.setData(ClipboardData(text: post.content));
-                  if (!sheetContext.mounted) return;
-                  Navigator.pop(sheetContext);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Post copied to clipboard')),
-                  );
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.forward, color: Colors.white),
-                title: const Text(
-                  'Forward to a chat',
-                  style: TextStyle(color: Colors.white),
-                ),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _showUnavailable('Forwarding');
-                },
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
+    Clipboard.setData(ClipboardData(text: _postLink(post))).then((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Post link copied')),
+      );
+    });
   }
 
   // ----------------------------------------------------------- more options
@@ -848,6 +900,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         _repostCounts[postId] = (_repostCounts[postId] ?? 1) - 1;
       }
     });
+    unawaited(_saveInteractionState('reposted', postId));
   }
 
   void _toggleLike(String postId) {
@@ -859,6 +912,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         _likeCounts[postId] = (_likeCounts[postId] ?? 1) - 1;
       }
     });
+    unawaited(_saveInteractionState('liked', postId));
   }
 
   void _toggleBookmark(String postId) {
@@ -880,26 +934,48 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Widget _postComposer() {
+    if (widget.readOnlyUntilSubscribe) {
+      return SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          child: SizedBox(
+            width: double.infinity,
+            height: 54,
+            child: FilledButton(
+              onPressed: _subscribeToChannel,
+              child: const Text('Subscribe'),
+            ),
+          ),
+        ),
+      );
+    }
+    if (!widget.canPost) return const SizedBox.shrink();
     return SafeArea(
       top: false,
       child: Container(
-        height: 82,
         padding: const EdgeInsets.fromLTRB(8, 10, 8, 16),
         decoration: const BoxDecoration(color: Color(0xFF08090B)),
         child: Row(
           children: [
-            _circleButton(Icons.add, () {}, size: 54),
-            const SizedBox(width: 8),
+            _circleButton(Icons.add, () {}, size: 46),
+            const SizedBox(width: 6),
             Expanded(
-              child: Container(
-                height: 52,
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minHeight: 50,
+                  maxHeight: 160,
+                ),
+                child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 decoration: BoxDecoration(
                   color: const Color(0xFF23262C),
                   borderRadius: BorderRadius.circular(28),
                 ),
                 child: TextField(
                   controller: _postController,
+                  minLines: 1,
+                  maxLines: 4,
                   onSubmitted: (_) => _publishPost(),
                   style: const TextStyle(color: Colors.white, fontSize: 17),
                   decoration: const InputDecoration(
@@ -908,18 +984,47 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     border: InputBorder.none,
                   ),
                 ),
+                ),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             _circleButton(
-              _publishing ? Icons.hourglass_top : Icons.camera_alt_outlined,
-              () {},
-              size: 54,
+              _publishing
+                  ? Icons.hourglass_top
+                  : (_postController.text.trim().isNotEmpty
+                      ? Icons.send
+                      : Icons.camera_alt_outlined),
+              _publishing
+                  ? null
+                  : (_postController.text.trim().isNotEmpty
+                      ? _publishPost
+                      : () {}),
+              size: 46,
             ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _subscribeToChannel() async {
+    try {
+      await MatrixChatService.instance.joinGroup(
+        widget.subscribeAlias?.trim().isNotEmpty == true
+            ? widget.subscribeAlias!.trim()
+            : widget.conversationId,
+      );
+      await ChatService().markConversationAsRead(widget.conversationId);
+      await NotificationService.instance.clearConversationNotifications(
+        widget.conversationId,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not subscribe: $error')),
+      );
+    }
   }
 
   Widget _circleButton(IconData icon, VoidCallback? onTap, {double size = 68}) {

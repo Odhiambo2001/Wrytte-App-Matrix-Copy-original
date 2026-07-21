@@ -92,7 +92,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
 
     final generation = ++_aliasCheckGeneration;
     _aliasDebounce = Timer(const Duration(milliseconds: 450), () async {
-      final matrixAlias = widget.isChannel ? '.@$body' : 'gr.@$body';
+      final matrixAlias = widget.isChannel ? '@$body' : 'gr.@$body';
       final available = await _chat.isGroupAliasAvailable(matrixAlias);
       if (!mounted || generation != _aliasCheckGeneration) return;
       setState(() {
@@ -116,7 +116,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
               aliasLocalpart:
                   widget.isChannel || _isPublic == true
                       ? (widget.isChannel
-                          ? '.@${_aliasBody(_aliasController.text)}'
+                          ? '@${_aliasBody(_aliasController.text)}'
                           : _aliasController.text)
                       : null,
               isChannel: widget.isChannel,
@@ -136,6 +136,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
                       title: conversation.otherUserName ?? _nameController.text,
                       avatarUrl: conversation.otherUserAvatar,
                       subscriberCount: conversation.participants.length,
+                      canPost: true,
                     )
                     : ChatScreen(
                       conversationId: conversation.id,

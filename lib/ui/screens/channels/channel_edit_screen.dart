@@ -108,7 +108,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
       _cleanAliasBody(_aliasBody(_handleController.text)).isNotEmpty;
 
   String get _candidateAlias =>
-      '.@${_cleanAliasBody(_aliasBody(_handleController.text))}';
+      '@${_cleanAliasBody(_aliasBody(_handleController.text))}';
 
   void _onAliasChanged() {
     final body = _cleanAliasBody(_aliasBody(_handleController.text));

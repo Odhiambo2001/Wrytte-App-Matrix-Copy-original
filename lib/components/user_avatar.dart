@@ -243,10 +243,13 @@ class _UserAvatarState extends State<UserAvatar> {
     final url = _resolveImageUrl(rawUrl);
     if (url.isEmpty) return _buildPlaceholder();
     final providerKey = _providerCacheKey(rawUrl);
+    final logIdentity = widget.cacheIdentity?.trim().isNotEmpty == true
+        ? widget.cacheIdentity!.trim()
+        : providerKey;
     if (_loggedLoadKeys.add(providerKey)) {
       apkLog(
         'Avatar.load',
-        'state="started" identity="${widget.cacheIdentity ?? ''}" '
+        'state="started" identity="$logIdentity" '
             'size=${widget.size} url="$url"',
       );
     }
@@ -285,7 +288,7 @@ class _UserAvatarState extends State<UserAvatar> {
           debugPrint('[UserAvatar] image load failed url="$url" error=$error');
           apkLog(
             'Avatar.load',
-            'state="failed" identity="${widget.cacheIdentity ?? ''}" '
+            'state="failed" identity="$logIdentity" '
                 'size=${widget.size} url="$url" error="$error"',
           );
           return _buildPlaceholder();
@@ -297,10 +300,13 @@ class _UserAvatarState extends State<UserAvatar> {
   void _logPaintOnce(String rawUrl, {required String source}) {
     final key = _providerCacheKey(rawUrl);
     if (!_loggedPaintKeys.add(key)) return;
+    final logIdentity = widget.cacheIdentity?.trim().isNotEmpty == true
+        ? widget.cacheIdentity!.trim()
+        : key;
     apkLog(
       'Avatar.load',
       'state="painted" source="$source" '
-          'identity="${widget.cacheIdentity ?? ''}" size=${widget.size} '
+          'identity="$logIdentity" size=${widget.size} '
           'url="${_resolveImageUrl(rawUrl)}"',
     );
   }

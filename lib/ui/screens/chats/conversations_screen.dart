@@ -1355,6 +1355,17 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   String? _avatarForConversation(ChatConversation conv) {
     if (_isGroupConversation(conv)) {
+      if (conv.isChannelKind) {
+        final room = MatrixChatService.instance.getRoomById(conv.id);
+        final rawAvatar = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
+        final channelAvatar = rawAvatar is String ? rawAvatar.trim() : '';
+        if (channelAvatar.isNotEmpty) return channelAvatar;
+        final publicAvatar = _suggestedGroups
+            .where((group) => group.roomId == conv.id)
+            .map((group) => group.avatarUrl?.trim() ?? '')
+            .firstWhere((avatar) => avatar.isNotEmpty, orElse: () => '');
+        if (publicAvatar.isNotEmpty) return publicAvatar;
+      }
       final roomAvatar = _groupRoomAvatarUrl(
         MatrixChatService.instance.getRoomById(conv.id),
       );
@@ -2073,6 +2084,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                           avatarUrl: avatar,
                           initialPosts: initialMessages,
                           subscriberCount: conv.participants.length,
+                          canPost: _isOwnGroupConversation(conv),
                         )
                         : ChatScreen(
                           conversationId: conv.id,
@@ -2367,7 +2379,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Widget _buildChannelsTab(double topPadding) {
-    final channels =
+    final allChannels =
         _conversations
             .where(
               (conversation) =>
@@ -2375,12 +2387,68 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                   _isDisplayableGroupConversation(conversation),
             )
             .toList();
-    return _buildConversationTab(
-      topPadding,
-      conversations: channels,
-      emptyTitle: 'No channels yet',
-      emptySubtitle: 'Tap the menu and create a new channel',
-      emptyIcon: Icons.campaign_outlined,
+    final createdIds = _chat.createdGroupRoomIds;
+    final ownChannels = allChannels
+        .where((channel) =>
+            createdIds.contains(channel.id) || _isOwnGroupConversation(channel))
+        .toList();
+    final subscriptions = allChannels
+        .where((channel) => !ownChannels.any((own) => own.id == channel.id))
+        .toList();
+    final suggestedChannels = _suggestedGroups
+        .where((group) => group.isChannel)
+        .where((group) =>
+            !allChannels.any((channel) => channel.id == group.roomId))
+        .toList();
+
+    return ListView(
+      padding: EdgeInsets.only(top: topPadding, bottom: 120),
+      children: [
+        if (ownChannels.isNotEmpty) ...[
+          _groupSectionHeader('My Channels ${ownChannels.length}'),
+          ...ownChannels.map(_buildTile),
+        ],
+        if (subscriptions.isNotEmpty) ...[
+          _groupSectionHeader('Subscriptions ${subscriptions.length}'),
+          ...subscriptions.map(_buildTile),
+        ],
+        if (suggestedChannels.isNotEmpty) ...[
+          _groupSectionHeader('Suggested Subscribes'),
+          ...suggestedChannels.map(_suggestedChannelTile),
+        ],
+        if (ownChannels.isEmpty &&
+            subscriptions.isEmpty &&
+            suggestedChannels.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 280),
+            child: Center(
+              child: Text(
+                'No channels yet',
+                style: TextStyle(color: Colors.white54, fontSize: 16),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _suggestedChannelTile(MatrixPublicGroup channel) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+      leading: UserAvatar(
+        imageUrl: channel.avatarUrl,
+        name: channel.name,
+        size: 54,
+      ),
+      title: Text(channel.name,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+      subtitle: Text('${channel.memberCount} subscribers',
+          style: const TextStyle(color: Colors.white54)),
+      trailing: FilledButton(
+        onPressed: () => _joinSuggestedGroup(channel),
+        child: const Text('Subscribe'),
+      ),
+      onTap: () => _openSuggestedGroup(channel),
     );
   }
 
@@ -2749,8 +2817,18 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 300),
           reverseTransitionDuration: const Duration(milliseconds: 220),
-          pageBuilder:
-              (_, __, ___) => ChatScreen(
+            pageBuilder: (_, __, ___) => group.isChannel
+                ? ChannelFeedScreen(
+                    conversationId: group.roomId,
+                    currentUserId: _currentUserId,
+                    title: group.name,
+                    avatarUrl: group.avatarUrl,
+                    initialPosts: previewMessages,
+                    subscriberCount: group.memberCount,
+                    readOnlyUntilSubscribe: true,
+                    subscribeAlias: group.canonicalAlias,
+                  )
+                : ChatScreen(
                 conversationId: group.roomId,
                 receiverId: group.roomId,
                 currentUserId: _currentUserId,
