@@ -63,6 +63,14 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     return '@${slug.isEmpty ? 'channel' : slug}';
   }
 
+  String get _avatarCacheIdentity =>
+      MatrixChatService.instance.roomProfileCacheIdentity(
+        accountId: widget.currentUserId,
+        roomId: widget.conversationId,
+        avatarUrl: _avatarUrl,
+        room: MatrixChatService.instance.getRoomById(widget.conversationId),
+      );
+
   /// Open the edit page and apply the returned changes.
   Future<void> _openEditScreen() async {
     final result = await Navigator.push<ChannelEditResult>(
@@ -203,7 +211,12 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   Widget _profileHeader() {
     return Column(
       children: [
-        UserAvatar(imageUrl: _avatarUrl, name: _title, size: 96),
+        UserAvatar(
+          imageUrl: _avatarUrl,
+          cacheIdentity: _avatarCacheIdentity,
+          name: _title,
+          size: 96,
+        ),
         const SizedBox(height: 12),
         Text(
           _title,
@@ -462,7 +475,12 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        UserAvatar(imageUrl: _avatarUrl, name: _title, size: 40),
+        UserAvatar(
+          imageUrl: _avatarUrl,
+          cacheIdentity: _avatarCacheIdentity,
+          name: _title,
+          size: 40,
+        ),
         const SizedBox(width: 12),
         Expanded(
           child: Column(

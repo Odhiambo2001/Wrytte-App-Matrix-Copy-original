@@ -199,12 +199,14 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
       return;
     }
     try {
+      var avatarChanged = false;
       if (_pickedImageFile != null) {
         final matrixFile = mx.MatrixFile(
           bytes: await _pickedImageFile!.readAsBytes(),
           name: _pickedImageFile!.path.split(Platform.pathSeparator).last,
         );
         await room.setAvatar(matrixFile);
+        avatarChanged = true;
       }
       if (name != room.name.trim()) await room.setName(name);
       final description = _descriptionController.text.trim();
@@ -216,6 +218,22 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
           roomId: room.id,
           oldAlias: room.canonicalAlias,
           newAliasLocalpart: _candidateAlias,
+        );
+      }
+      if (avatarChanged) {
+        final info = Map<String, dynamic>.from(
+          room.getState('com.wrytte.group.info')?.content ?? const {},
+        );
+        final version = int.tryParse(info['avatar_version']?.toString() ?? '') ?? 0;
+        info['avatar_version'] = version + 1;
+        final profileVersion = int.tryParse(info['profile_version']?.toString() ?? '') ?? 0;
+        info['profile_version'] = profileVersion + 1;
+        info['updated_at'] = DateTime.now().toUtc().toIso8601String();
+        await room.client.setRoomStateWithKey(
+          room.id,
+          'com.wrytte.group.info',
+          '',
+          info,
         );
       }
     } catch (error) {

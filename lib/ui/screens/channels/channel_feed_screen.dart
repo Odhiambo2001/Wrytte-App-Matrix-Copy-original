@@ -70,6 +70,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   int _subscriberCount = 0;
   String? _channelAvatarUrl;
 
+  String get _channelAvatarCacheIdentity =>
+      MatrixChatService.instance.roomProfileCacheIdentity(
+        accountId: widget.currentUserId,
+        roomId: widget.conversationId,
+        avatarUrl: _channelAvatarUrl,
+        room: MatrixChatService.instance.getRoomById(widget.conversationId),
+      );
+
   @override
   void initState() {
     super.initState();
@@ -413,6 +421,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   children: [
                     UserAvatar(
                       imageUrl: _channelAvatarUrl,
+                      cacheIdentity: _channelAvatarCacheIdentity,
                       name: widget.title,
                       size: 40,
                     ),
@@ -480,6 +489,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           onTap: _openChannelProfile,
           child: UserAvatar(
             imageUrl: _channelAvatarUrl,
+            cacheIdentity: _channelAvatarCacheIdentity,
             name: widget.title,
             size: 44,
           ),
