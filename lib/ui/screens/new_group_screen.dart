@@ -597,7 +597,7 @@ class _NewGroupMembersScreenState extends State<_NewGroupMembersScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          widget.isChannel ? 'New channel' : 'New group',
+                          widget.isChannel ? 'Add subscribers' : 'New group',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 18,
@@ -605,7 +605,9 @@ class _NewGroupMembersScreenState extends State<_NewGroupMembersScreen> {
                           ),
                         ),
                         Text(
-                          '${_selectedKeys.length}/0 members',
+                          widget.isChannel
+                              ? '${_selectedKeys.length} subscribers'
+                              : '${_selectedKeys.length}/0 members',
                           style: const TextStyle(
                             color: Colors.white54,
                             fontSize: 12,
