@@ -2622,6 +2622,7 @@ class ChatService {
     String? aliasLocalpart,
     List<String> memberIds = const [],
     String conversationKind = ConversationKind.group,
+    String link = '',
   }) async {
     final kind = ConversationKind.normalize(conversationKind);
     if (kind != ConversationKind.group && kind != ConversationKind.channel) {
@@ -2640,6 +2641,7 @@ class ChatService {
       aliasLocalpart: aliasLocalpart,
       invite: invites,
       conversationKind: kind,
+      link: link,
     );
     final room = createdRoom.room;
     final roomId = createdRoom.roomId;

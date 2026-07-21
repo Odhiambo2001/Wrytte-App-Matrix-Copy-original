@@ -497,6 +497,7 @@ class MatrixChatService {
     String? aliasLocalpart,
     List<String> invite = const [],
     String conversationKind = 'group',
+    String link = '',
   }) async {
     final client = await connect();
     if (!client.isLogged()) {
@@ -552,6 +553,7 @@ class MatrixChatService {
             'owner_user_id': creatorId,
             'group_origin': 'user_created',
             'conversation_kind': conversationKind,
+            if (link.trim().isNotEmpty) 'link': link.trim(),
             'avatar_version': 0,
             'name_version': 0,
             'description_version': 0,

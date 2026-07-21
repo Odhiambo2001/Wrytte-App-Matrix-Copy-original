@@ -23,7 +23,9 @@ class NewGroupScreen extends StatefulWidget {
 class _NewGroupScreenState extends State<NewGroupScreen> {
   final _chat = ChatService();
   final _nameController = TextEditingController();
-  late final _aliasController = TextEditingController(text: _aliasPrefix);
+  late final _aliasController = TextEditingController(
+    text: widget.isChannel ? '' : _aliasPrefix,
+  );
   Timer? _aliasDebounce;
   bool? _isPublic;
   bool _checkingAlias = false;
@@ -32,7 +34,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
   int _aliasCheckGeneration = 0;
 
   bool get _hasName => _nameController.text.isNotEmpty;
-  String get _aliasPrefix => widget.isChannel ? '.@' : 'gr.@';
+  String get _aliasPrefix => widget.isChannel ? '@' : 'gr.@';
   bool get _aliasHasBody => _aliasBody(_aliasController.text).isNotEmpty;
   bool get _canGoNext {
     if (!_hasName) return false;
@@ -71,7 +73,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
 
   void _onAliasChanged() {
     final body = _cleanAliasBody(_aliasBody(_aliasController.text));
-    final next = '$_aliasPrefix$body';
+    final next = widget.isChannel ? body : '$_aliasPrefix$body';
     if (_aliasController.text != next) {
       _aliasController.value = TextEditingValue(
         text: next,
@@ -90,7 +92,8 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
 
     final generation = ++_aliasCheckGeneration;
     _aliasDebounce = Timer(const Duration(milliseconds: 450), () async {
-      final available = await _chat.isGroupAliasAvailable('$_aliasPrefix$body');
+      final matrixAlias = widget.isChannel ? '.@$body' : 'gr.@$body';
+      final available = await _chat.isGroupAliasAvailable(matrixAlias);
       if (!mounted || generation != _aliasCheckGeneration) return;
       setState(() {
         _checkingAlias = false;
@@ -112,7 +115,9 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
               isPublic: widget.isChannel || _isPublic == true,
               aliasLocalpart:
                   widget.isChannel || _isPublic == true
-                      ? _aliasController.text
+                      ? (widget.isChannel
+                          ? '.@${_aliasBody(_aliasController.text)}'
+                          : _aliasController.text)
                       : null,
               isChannel: widget.isChannel,
             ),
@@ -419,25 +424,26 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
       ),
       child: Row(
         children: [
+          if (widget.isChannel)
+            const Text(
+              '@',
+              style: TextStyle(color: Color(0xFF4DA3FF), fontSize: 18),
+            ),
           Expanded(
             child: TextField(
               controller: _aliasController,
-              inputFormatters:
-                  widget.isChannel
-                      ? [
-                        TextInputFormatter.withFunction((oldValue, newValue) {
-                          return newValue.text.startsWith(_aliasPrefix)
-                              ? newValue
-                              : oldValue;
-                        }),
-                      ]
-                      : null,
+              inputFormatters: null,
               keyboardType: TextInputType.visiblePassword,
               autocorrect: false,
               enableSuggestions: false,
               style: const TextStyle(color: Color(0xFF4DA3FF), fontSize: 18),
               cursorColor: const Color(0xFF4DA3FF),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
+                hintText: widget.isChannel ? 'link' : null,
+                hintStyle: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: 18,
+                ),
                 border: InputBorder.none,
                 isCollapsed: true,
               ),
@@ -448,16 +454,19 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
       ),
     );
   }
+
 }
 
 class _NewGroupMembersScreen extends StatefulWidget {
   final String groupName;
+  final String channelLink;
   final bool isPublic;
   final String? aliasLocalpart;
   final bool isChannel;
 
   const _NewGroupMembersScreen({
     required this.groupName,
+    this.channelLink = '',
     required this.isPublic,
     this.aliasLocalpart,
     this.isChannel = false,
@@ -538,6 +547,7 @@ class _NewGroupMembersScreenState extends State<_NewGroupMembersScreen> {
         isPublic: widget.isPublic,
         aliasLocalpart: widget.aliasLocalpart,
         memberIds: selectedIds,
+        link: widget.channelLink,
         conversationKind:
             widget.isChannel
                 ? ConversationKind.channel
