@@ -14,6 +14,7 @@ import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
+import 'package:wrytte/ui/widgets/wrytte_video_player.dart';
 
 class ChannelFeedScreen extends StatefulWidget {
   final String conversationId;
@@ -460,7 +461,18 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final hasImage =
         post.attachmentType == 'image' &&
         (post.attachmentUrl?.trim().isNotEmpty ?? false);
+    final hasVideo =
+        post.attachmentType == 'video' &&
+        (post.attachmentUrl?.trim().isNotEmpty ?? false);
+    final mediaAspectRatio =
+        post.mediaWidth != null && post.mediaHeight != null && post.mediaHeight! > 0
+            ? post.mediaWidth! / post.mediaHeight!
+            : null;
+    final isPortraitMedia = mediaAspectRatio != null
+        ? mediaAspectRatio < 1
+        : hasImage;
     final viewLabel = _formatCount(_viewCounts[post.id] ?? 0);
+    final viewCount = _viewCounts[post.id] ?? 0;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -505,7 +517,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ),
                   if (viewLabel != null)
                     Text(
-                      ' · $viewLabel views',
+                      ' · $viewLabel ${viewCount == 1 ? 'view' : 'views'}',
                       style: const TextStyle(
                         color: Color(0xFF8C8F95),
                         fontSize: 13.5,
@@ -513,45 +525,58 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     ),
                 ],
               ),
-              if (hasImage) ...[
+              if (hasImage || hasVideo) ...[
                 const SizedBox(height: 10),
                 Padding(
-                  padding: const EdgeInsets.only(right: 12),
+                  padding: EdgeInsets.only(right: isPortraitMedia ? 50 : 8),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(14),
-                    child: AspectRatio(
-                      aspectRatio: 4 / 5,
-                      child: CachedNetworkImage(
-                        imageUrl: post.attachmentUrl!,
-                        fit: BoxFit.cover,
-                        placeholder:
-                            (_, __) => const ColoredBox(
-                              color: Color(0xFF23262C),
-                              child: Center(
-                                child: CircularProgressIndicator(
-                                  color: Color(0xFF4DA3FF),
+                    child: hasVideo
+                        ? (mediaAspectRatio == null
+                            ? WrytteVideoPlayer(
+                                source: post.attachmentUrl!,
+                                borderRadius: BorderRadius.circular(14),
+                              )
+                            : AspectRatio(
+                                aspectRatio: mediaAspectRatio,
+                                child: WrytteVideoPlayer(
+                                  source: post.attachmentUrl!,
+                                  borderRadius: BorderRadius.circular(14),
                                 ),
-                              ),
+                              ))
+                        : AspectRatio(
+                            aspectRatio: mediaAspectRatio ?? 9 / 16,
+                            child: CachedNetworkImage(
+                              imageUrl: post.attachmentUrl!,
+                              fit: BoxFit.cover,
+                              placeholder:
+                                  (_, __) => const ColoredBox(
+                                    color: Color(0xFF23262C),
+                                    child: Center(
+                                      child: CircularProgressIndicator(
+                                        color: Color(0xFF4DA3FF),
+                                      ),
+                                    ),
+                                  ),
+                              errorWidget:
+                                  (_, __, ___) => const ColoredBox(
+                                    color: Color(0xFF23262C),
+                                    child: Center(
+                                      child: Icon(
+                                        Icons.broken_image_outlined,
+                                        color: Colors.white54,
+                                      ),
+                                    ),
+                                  ),
                             ),
-                        errorWidget:
-                            (_, __, ___) => const ColoredBox(
-                              color: Color(0xFF23262C),
-                              child: Center(
-                                child: Icon(
-                                  Icons.broken_image_outlined,
-                                  color: Colors.white54,
-                                ),
-                              ),
-                            ),
-                      ),
-                    ),
+                          ),
                   ),
                 ),
               ],
               if (post.content.trim().isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Padding(
-                  padding: const EdgeInsets.only(right: 24),
+                  padding: const EdgeInsets.only(right: 8),
                   child: Text(
                     post.content,
                     style: const TextStyle(

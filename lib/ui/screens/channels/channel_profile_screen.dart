@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/ui/screens/channels/channel_edit_screen.dart';
+import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 

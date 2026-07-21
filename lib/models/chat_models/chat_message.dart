@@ -47,6 +47,8 @@ class ChatMessage {
   // 'video'  → video clip
   // 'image'  → image
   final String? attachmentType;
+  final int? mediaWidth;
+  final int? mediaHeight;
 
   // ── Voice-note duration in seconds (null for non-voice messages) ───────────
   // Populated from Matrix media metadata when receiving and recorder output
@@ -75,6 +77,8 @@ class ChatMessage {
     this.status = MessageStatus.sending,
     this.attachmentUrl,
     this.attachmentType,
+    this.mediaWidth,
+    this.mediaHeight,
     this.voiceDuration, // ← NEW
     this.unreadCount = 0,
     this.replyToMessageId,
@@ -106,6 +110,8 @@ class ChatMessage {
       status: _statusFromString(json["status"]?.toString()),
       attachmentUrl: json["attachmentUrl"]?.toString(),
       attachmentType: json["attachmentType"]?.toString(),
+      mediaWidth: int.tryParse(json["mediaWidth"]?.toString() ?? ''),
+      mediaHeight: int.tryParse(json["mediaHeight"]?.toString() ?? ''),
       voiceDuration:
           json["voiceDuration"] !=
                   null // ← NEW
@@ -133,8 +139,14 @@ class ChatMessage {
             : _attachmentTypeFromMatrix(msgType);
     final info = content['info'];
     int? duration;
+    int? mediaWidth;
+    int? mediaHeight;
     if (info is Map && info['duration'] != null) {
       duration = ((info['duration'] as num).toInt() / 1000).round();
+    }
+    if (info is Map) {
+      mediaWidth = int.tryParse(info['w']?.toString() ?? '');
+      mediaHeight = int.tryParse(info['h']?.toString() ?? '');
     }
 
     return ChatMessage(
@@ -150,6 +162,8 @@ class ChatMessage {
       status: _statusFromMatrix(event.status),
       attachmentUrl: _attachmentUrlFromMatrix(event),
       attachmentType: attachmentType,
+      mediaWidth: mediaWidth,
+      mediaHeight: mediaHeight,
       voiceDuration: duration,
       replyToMessageId: event.inReplyToEventId(),
       replyToSenderId: _replySenderFromFallback(event.body),
@@ -193,6 +207,8 @@ class ChatMessage {
       "status": _statusToString(status),
       if (attachmentUrl != null) "attachmentUrl": attachmentUrl,
       if (attachmentType != null) "attachmentType": attachmentType,
+      if (mediaWidth != null) "mediaWidth": mediaWidth,
+      if (mediaHeight != null) "mediaHeight": mediaHeight,
       if (voiceDuration != null) "voiceDuration": voiceDuration, // ← NEW
       if (replyToMessageId != null) "replyToMessageId": replyToMessageId,
       if (replyToSenderId != null) "replyToSenderId": replyToSenderId,
@@ -219,6 +235,8 @@ class ChatMessage {
     MessageStatus? status,
     String? attachmentUrl,
     String? attachmentType,
+    int? mediaWidth,
+    int? mediaHeight,
     int? voiceDuration, // ← NEW
     String? replyToMessageId,
     String? replyToSenderId,
@@ -241,6 +259,8 @@ class ChatMessage {
       status: status ?? this.status,
       attachmentUrl: attachmentUrl ?? this.attachmentUrl,
       attachmentType: attachmentType ?? this.attachmentType,
+      mediaWidth: mediaWidth ?? this.mediaWidth,
+      mediaHeight: mediaHeight ?? this.mediaHeight,
       voiceDuration: voiceDuration ?? this.voiceDuration, // ← NEW
       replyToMessageId: replyToMessageId ?? this.replyToMessageId,
       replyToSenderId: replyToSenderId ?? this.replyToSenderId,
