@@ -62,15 +62,21 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     final result = await Navigator.push<ChannelEditResult>(
       context,
       MaterialPageRoute(
-        builder: (_) => ChannelEditScreen(
-          title: _title,
-          handle: _handle,
-          description: _description.isEmpty ? null : _description,
-          avatarUrl: widget.avatarUrl,
-        ),
+        builder:
+            (_) => ChannelEditScreen(
+              title: _title,
+              handle: _handle,
+              conversationId: widget.conversationId,
+              description: _description.isEmpty ? null : _description,
+              avatarUrl: widget.avatarUrl,
+            ),
       ),
     );
     if (result == null || !mounted) return;
+    if (result.deleted) {
+      Navigator.pop(context, result.pendingAction);
+      return;
+    }
     setState(() {
       _title = result.name;
       _customHandle = result.handle;
@@ -85,23 +91,26 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
 
   /// Top-level (non-reply, non-deleted) posts, newest first.
   List<ChatMessage> get _topLevelPosts {
-    final posts = widget.posts
-        .where(
-          (post) =>
-              !post.isDeletedForMe && (post.replyToMessageId?.isEmpty ?? true),
-        )
-        .toList()
-      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    final posts =
+        widget.posts
+            .where(
+              (post) =>
+                  !post.isDeletedForMe &&
+                  (post.replyToMessageId?.isEmpty ?? true),
+            )
+            .toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
     return posts;
   }
 
-  List<ChatMessage> get _mediaPosts => _topLevelPosts
-      .where(
-        (post) =>
-            post.attachmentType == 'image' &&
-            (post.attachmentUrl?.trim().isNotEmpty ?? false),
-      )
-      .toList();
+  List<ChatMessage> get _mediaPosts =>
+      _topLevelPosts
+          .where(
+            (post) =>
+                post.attachmentType == 'image' &&
+                (post.attachmentUrl?.trim().isNotEmpty ?? false),
+          )
+          .toList();
 
   void _showUnavailable(String feature) {
     ScaffoldMessenger.of(
@@ -187,11 +196,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   Widget _profileHeader() {
     return Column(
       children: [
-        UserAvatar(
-          imageUrl: widget.avatarUrl,
-          name: _title,
-          size: 96,
-        ),
+        UserAvatar(imageUrl: widget.avatarUrl, name: _title, size: 96),
         const SizedBox(height: 12),
         Text(
           _title,
@@ -317,8 +322,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                     style: TextStyle(
                       color: selected ? Colors.white : const Color(0xFF8C8F95),
                       fontSize: 14,
-                      fontWeight:
-                          selected ? FontWeight.w700 : FontWeight.w500,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                     ),
                   ),
                 ),
@@ -361,10 +365,15 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
       itemCount: posts.length,
-      separatorBuilder: (_, __) => const Padding(
-        padding: EdgeInsets.symmetric(vertical: 14),
-        child: Divider(color: Color(0xFF3A3D42), thickness: 0.6, height: 0.6),
-      ),
+      separatorBuilder:
+          (_, __) => const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Divider(
+              color: Color(0xFF3A3D42),
+              thickness: 0.6,
+              height: 0.6,
+            ),
+          ),
       itemBuilder: (_, index) => _postTile(posts[index]),
     );
   }
@@ -376,11 +385,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        UserAvatar(
-          imageUrl: widget.avatarUrl,
-          name: _title,
-          size: 40,
-        ),
+        UserAvatar(imageUrl: widget.avatarUrl, name: _title, size: 40),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
@@ -390,10 +395,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                 '$_title · ${_postAge(post.timestamp)}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFF8C8F95),
-                  fontSize: 13,
-                ),
+                style: const TextStyle(color: Color(0xFF8C8F95), fontSize: 13),
               ),
               if (hasImage) ...[
                 const SizedBox(height: 8),
@@ -404,23 +406,25 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                     child: CachedNetworkImage(
                       imageUrl: post.attachmentUrl!,
                       fit: BoxFit.cover,
-                      placeholder: (_, __) => const ColoredBox(
-                        color: Color(0xFF23262C),
-                        child: Center(
-                          child: CircularProgressIndicator(
-                            color: Color(0xFF4DA3FF),
+                      placeholder:
+                          (_, __) => const ColoredBox(
+                            color: Color(0xFF23262C),
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                color: Color(0xFF4DA3FF),
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                      errorWidget: (_, __, ___) => const ColoredBox(
-                        color: Color(0xFF23262C),
-                        child: Center(
-                          child: Icon(
-                            Icons.broken_image_outlined,
-                            color: Colors.white54,
+                      errorWidget:
+                          (_, __, ___) => const ColoredBox(
+                            color: Color(0xFF23262C),
+                            child: Center(
+                              child: Icon(
+                                Icons.broken_image_outlined,
+                                color: Colors.white54,
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
                     ),
                   ),
                 ),
@@ -463,12 +467,15 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
           child: CachedNetworkImage(
             imageUrl: post.attachmentUrl!,
             fit: BoxFit.cover,
-            placeholder: (_, __) =>
-                const ColoredBox(color: Color(0xFF23262C)),
-            errorWidget: (_, __, ___) => const ColoredBox(
-              color: Color(0xFF23262C),
-              child: Icon(Icons.broken_image_outlined, color: Colors.white54),
-            ),
+            placeholder: (_, __) => const ColoredBox(color: Color(0xFF23262C)),
+            errorWidget:
+                (_, __, ___) => const ColoredBox(
+                  color: Color(0xFF23262C),
+                  child: Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white54,
+                  ),
+                ),
           ),
         );
       },

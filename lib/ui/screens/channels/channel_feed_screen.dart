@@ -7,6 +7,7 @@ import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/ui/screens/channels/channel_profile_screen.dart';
+import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
@@ -64,9 +65,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     super.initState();
     _posts = List<ChatMessage>.from(widget.initialPosts);
     _subscriberCount = widget.subscriberCount;
-    _channelAvatarUrl = widget.avatarUrl?.trim().isNotEmpty == true
-        ? widget.avatarUrl!.trim()
-        : null;
+    _channelAvatarUrl =
+        widget.avatarUrl?.trim().isNotEmpty == true
+            ? widget.avatarUrl!.trim()
+            : null;
     _loadPosts();
     _resolveChannelAvatar();
     _postsSubscription = _chat.messagesStreamFor(widget.conversationId).listen((
@@ -157,22 +159,26 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   /// Open the channel profile page (tapping the header pill).
-  void _openChannelProfile() {
-    Navigator.push(
+  Future<void> _openChannelProfile() async {
+    final result = await Navigator.push<Object?>(
       context,
       MaterialPageRoute(
-        builder: (_) => ChannelProfileScreen(
-          conversationId: widget.conversationId,
-          currentUserId: widget.currentUserId,
-          title: widget.title,
-          avatarUrl: _channelAvatarUrl,
-          subscriberCount: _subscriberCount,
-          posts: _posts,
-          // The feed is rendered as the owner's channel, so allow Edit.
-          isOwner: true,
-        ),
+        builder:
+            (_) => ChannelProfileScreen(
+              conversationId: widget.conversationId,
+              currentUserId: widget.currentUserId,
+              title: widget.title,
+              avatarUrl: _channelAvatarUrl,
+              subscriberCount: _subscriberCount,
+              posts: _posts,
+              // The feed is rendered as the owner's channel, so allow Edit.
+              isOwner: true,
+            ),
       ),
     );
+    if (result is GroupExitRequest && mounted) {
+      Navigator.pop(context, result);
+    }
   }
 
   Future<void> _publishPost() async {
@@ -216,9 +222,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           timestamp: DateTime.now(),
           status: MessageStatus.sending,
           replyToMessageId: post.id,
-          replyPreview: post.content.length > 120
-              ? '${post.content.substring(0, 120)}...'
-              : post.content,
+          replyPreview:
+              post.content.length > 120
+                  ? '${post.content.substring(0, 120)}...'
+                  : post.content,
         ),
       );
     } catch (error) {
@@ -608,10 +615,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                                 itemCount: comments.length,
                                 itemBuilder: (_, index) {
                                   final comment = comments[index];
-                                  final isMine =
-                                      comment.senderId.contains(
-                                        widget.currentUserId,
-                                      );
+                                  final isMine = comment.senderId.contains(
+                                    widget.currentUserId,
+                                  );
                                   return Padding(
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 8,
@@ -622,9 +628,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                                       children: [
                                         UserAvatar(
                                           imageUrl:
-                                              isMine
-                                                  ? _channelAvatarUrl
-                                                  : null,
+                                              isMine ? _channelAvatarUrl : null,
                                           name:
                                               comment.senderName ??
                                               comment.senderId,
@@ -959,10 +963,7 @@ class _PostAction extends StatelessWidget {
             Icon(icon, color: actionColor, size: 24),
             if (label != null) ...[
               const SizedBox(width: 5),
-              Text(
-                label!,
-                style: TextStyle(color: actionColor, fontSize: 14),
-              ),
+              Text(label!, style: TextStyle(color: actionColor, fontSize: 14)),
             ],
           ],
         ),
