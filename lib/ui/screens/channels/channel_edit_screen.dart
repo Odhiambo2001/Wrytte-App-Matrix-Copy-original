@@ -291,11 +291,11 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
             _topBar(),
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 30, 20, 24),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
                 child: Column(
                   children: [
                     _avatarSection(),
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 18),
                     _textField(
                       controller: _nameController,
                       hint: 'Channel name',
@@ -305,7 +305,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     _textField(
                       controller: _handleController,
                       hint: '@handle',
@@ -336,34 +336,40 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
                           ),
                         ),
                       ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     _textField(
                       controller: _descriptionController,
                       hint: 'Description',
                       style: const TextStyle(color: Colors.white, fontSize: 17),
-                      maxLines: 3,
+                      maxLines: 1,
                       minLines: 1,
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     _addRow('Link', () => _showUnavailable('Adding links')),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     _addRow('Group', () => _showUnavailable('Linking groups')),
-                    const SizedBox(height: 28),
-                    TextButton(
-                      onPressed: _saving ? null : _deleteChannel,
-                      child: const Text(
-                        'Delete channel',
-                        style: TextStyle(
-                          color: Color(0xFFE85D75),
-                          fontSize: 17,
-                        ),
-                      ),
-                    ),
                   ],
                 ),
               ),
             ),
+            _deleteFooter(),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _deleteFooter() {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+        child: TextButton(
+          onPressed: _saving ? null : _deleteChannel,
+          child: const Text(
+            'Delete channel',
+            style: TextStyle(color: Color(0xFFE85D75), fontSize: 17),
+          ),
         ),
       ),
     );
@@ -410,14 +416,14 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
               _nameController.text.isEmpty
                   ? widget.title
                   : _nameController.text,
-          size: 140,
+          size: 104,
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 10),
         GestureDetector(
           onTap: () => _showUnavailable('Changing the photo'),
           child: const Text(
             'Set new photo',
-            style: TextStyle(color: Color(0xFF4DA3FF), fontSize: 19),
+            style: TextStyle(color: Color(0xFF4DA3FF), fontSize: 17),
           ),
         ),
       ],
@@ -436,7 +442,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
     Widget? suffix,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
       decoration: BoxDecoration(
         color: _fieldColor,
         borderRadius: BorderRadius.circular(36),
@@ -451,7 +457,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
           hintText: hint,
           hintStyle: const TextStyle(color: Color(0xFF8C8F95), fontSize: 17),
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(vertical: 16),
+          contentPadding: const EdgeInsets.symmetric(vertical: 11),
           suffixIcon: suffix,
         ),
       ),
@@ -483,8 +489,8 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(36),
       child: Container(
-        height: 62,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        height: 54,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         decoration: BoxDecoration(
           color: _fieldColor,
           borderRadius: BorderRadius.circular(36),
