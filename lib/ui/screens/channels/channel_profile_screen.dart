@@ -19,6 +19,7 @@ class ChannelProfileScreen extends StatefulWidget {
   final int subscriberCount;
   final List<ChatMessage> posts;
   final bool isOwner;
+  final bool isSubscribed;
 
   const ChannelProfileScreen({
     super.key,
@@ -29,6 +30,7 @@ class ChannelProfileScreen extends StatefulWidget {
     this.subscriberCount = 0,
     this.posts = const [],
     this.isOwner = true,
+    this.isSubscribed = false,
   });
 
   @override
@@ -254,11 +256,18 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Row(
           children: [
-            _actionButton(
-              icon: Icons.logout,
-              label: 'Leave',
-              onTap: _leaveChannel,
-            ),
+            if (widget.isSubscribed)
+              _actionButton(
+                icon: Icons.logout,
+                label: 'Leave',
+                onTap: _leaveChannel,
+              )
+            else
+              _actionButton(
+                icon: Icons.bolt_outlined,
+                label: 'Boost',
+                onTap: () => _showUnavailable('Boosting'),
+              ),
             const SizedBox(width: 10),
             _actionButton(
               icon: Icons.ios_share_outlined,
@@ -553,24 +562,44 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
         crossAxisCount: 3,
         crossAxisSpacing: 4,
         mainAxisSpacing: 4,
+        childAspectRatio: 0.72,
       ),
       itemCount: media.length,
       itemBuilder: (_, index) {
         final post = media[index];
         return ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: CachedNetworkImage(
-            imageUrl: post.attachmentUrl!,
-            fit: BoxFit.cover,
-            placeholder: (_, __) => const ColoredBox(color: Color(0xFF23262C)),
-            errorWidget:
-                (_, __, ___) => const ColoredBox(
-                  color: Color(0xFF23262C),
-                  child: Icon(
-                    Icons.broken_image_outlined,
-                    color: Colors.white54,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              CachedNetworkImage(
+                imageUrl: post.attachmentUrl!,
+                fit: BoxFit.cover,
+                placeholder:
+                    (_, __) => const ColoredBox(color: Color(0xFF23262C)),
+                errorWidget:
+                    (_, __, ___) => const ColoredBox(
+                      color: Color(0xFF23262C),
+                      child: Icon(
+                        Icons.broken_image_outlined,
+                        color: Colors.white54,
+                      ),
+                    ),
+              ),
+              if (post.attachmentType == 'video')
+                const Center(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(Icons.play_arrow, color: Colors.white),
+                    ),
                   ),
                 ),
+            ],
           ),
         );
       },

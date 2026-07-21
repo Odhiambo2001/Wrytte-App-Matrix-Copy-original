@@ -13,7 +13,6 @@ import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/notification_service.dart';
-import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_player.dart';
 
 class ChannelFeedScreen extends StatefulWidget {
@@ -169,9 +168,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     }
   }
 
-  /// Resolve the avatar shown in the header and next to every post:
-  /// 1. explicit channel avatar passed in, 2. Matrix room avatar,
-  /// 3. the channel owner's (current user's) profile avatar.
+  /// Resolve only the avatar belonging to this channel room.
   Future<void> _resolveChannelAvatar() async {
     if (_channelAvatarUrl != null) return;
 
@@ -188,19 +185,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       }
     } catch (_) {}
 
-    // 3. Owner's profile avatar (this channel is rendered as its owner).
-    try {
-      final profile = await UserProfileService.instance.getProfileByUid(
-        widget.currentUserId,
-      );
-      final avatar =
-          profile != null && profile.hasProfileImage
-              ? profile.profileImage.trim()
-              : '';
-      if (avatar.isNotEmpty && mounted) {
-        setState(() => _channelAvatarUrl = avatar);
-      }
-    } catch (_) {}
   }
 
   void _refreshSubscriberCount() {
@@ -245,6 +229,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               subscriberCount: _subscriberCount,
               posts: _posts,
               isOwner: widget.canPost,
+              isSubscribed: !widget.readOnlyUntilSubscribe && !widget.canPost,
             ),
       ),
     );
