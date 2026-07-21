@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
@@ -12,6 +15,7 @@ class ChannelEditResult {
   final String name;
   final String handle;
   final String description;
+  final String? avatarUrl;
   final bool deleted;
   final GroupExitRequest? pendingAction;
 
@@ -19,6 +23,7 @@ class ChannelEditResult {
     required this.name,
     required this.handle,
     required this.description,
+    this.avatarUrl,
     this.deleted = false,
     this.pendingAction,
   });
@@ -52,6 +57,8 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
   late final TextEditingController _nameController;
   late final TextEditingController _handleController;
   late final TextEditingController _descriptionController;
+  final ImagePicker _picker = ImagePicker();
+  File? _pickedImageFile;
   bool _saving = false;
   Timer? _aliasDebounce;
   bool _checkingAlias = false;
@@ -192,6 +199,13 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
       return;
     }
     try {
+      if (_pickedImageFile != null) {
+        final matrixFile = mx.MatrixFile(
+          bytes: await _pickedImageFile!.readAsBytes(),
+          name: _pickedImageFile!.path.split(Platform.pathSeparator).last,
+        );
+        await room.setAvatar(matrixFile);
+      }
       if (name != room.name.trim()) await room.setName(name);
       final description = _descriptionController.text.trim();
       if (description != room.topic.trim()) {
@@ -220,8 +234,25 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
         name: name,
         handle: _handleController.text.trim(),
         description: _descriptionController.text.trim(),
+        avatarUrl: room.avatar?.toString(),
       ),
     );
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final picked = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (picked == null || !mounted) return;
+      setState(() => _pickedImageFile = File(picked.path));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not select photo.')),
+      );
+    }
   }
 
   Future<void> _deleteChannel() async {
@@ -413,6 +444,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
       children: [
         UserAvatar(
           imageUrl: widget.avatarUrl,
+          localImagePath: _pickedImageFile?.path,
           name:
               _nameController.text.isEmpty
                   ? widget.title
@@ -421,7 +453,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
         ),
         const SizedBox(height: 10),
         GestureDetector(
-          onTap: () => _showUnavailable('Changing the photo'),
+        onTap: _pickImage,
           child: const Text(
             'Set new photo',
             style: TextStyle(color: Color(0xFF4DA3FF), fontSize: 17),

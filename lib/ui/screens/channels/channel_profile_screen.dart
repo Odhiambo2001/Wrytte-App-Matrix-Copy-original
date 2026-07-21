@@ -37,6 +37,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
 
   // Editable channel info (seeded from the widget, updated after editing).
   late String _title;
+  String? _avatarUrl;
   String? _customHandle;
   String _description = '';
 
@@ -44,6 +45,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   void initState() {
     super.initState();
     _title = widget.title;
+    _avatarUrl = widget.avatarUrl;
   }
 
   /// "@carsandtrucks" style handle: the user-edited one if set,
@@ -68,7 +70,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
               handle: _handle,
               conversationId: widget.conversationId,
               description: _description.isEmpty ? null : _description,
-              avatarUrl: widget.avatarUrl,
+              avatarUrl: _avatarUrl,
             ),
       ),
     );
@@ -81,6 +83,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
       _title = result.name;
       _customHandle = result.handle;
       _description = result.description;
+      _avatarUrl = result.avatarUrl ?? _avatarUrl;
     });
   }
 
@@ -196,7 +199,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   Widget _profileHeader() {
     return Column(
       children: [
-        UserAvatar(imageUrl: widget.avatarUrl, name: _title, size: 96),
+        UserAvatar(imageUrl: _avatarUrl, name: _title, size: 96),
         const SizedBox(height: 12),
         Text(
           _title,
@@ -385,7 +388,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        UserAvatar(imageUrl: widget.avatarUrl, name: _title, size: 40),
+        UserAvatar(imageUrl: _avatarUrl, name: _title, size: 40),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
