@@ -264,6 +264,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             .toList()
           ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: const Color(0xFF08090B),
       body: SafeArea(
         child: Column(
@@ -305,7 +306,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: _postComposer(),
+      bottomNavigationBar: AnimatedPadding(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: _postComposer(),
+      ),
     );
   }
 
