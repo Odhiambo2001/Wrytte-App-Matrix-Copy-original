@@ -1854,6 +1854,13 @@ class ChatService {
   }
 
   Future<List<ChatMessage>> hydrateConversation(String conversationId) async {
+    final room = _roomById(conversationId);
+    final isChannel =
+        room != null && _kindForGroupRoom(room) == ConversationKind.channel;
+    if (isChannel) {
+      await _restoreRoomHistoryFromServer(room);
+      return getConversationMessages(conversationId);
+    }
     final memory = getConversationMessages(conversationId);
     if (memory.isNotEmpty) {
       _emitRoomMessages(conversationId);
@@ -1865,7 +1872,6 @@ class ChatService {
     // A fresh login can have an empty local cache even though Matrix still
     // contains the room history. Restore this room before the UI reports an
     // empty conversation, especially for channel feeds.
-    final room = _roomById(conversationId);
     if (room != null) {
       await _restoreRoomHistoryFromServer(room);
       return getConversationMessages(conversationId);

@@ -100,6 +100,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       posts,
     ) {
       if (!mounted) return;
+      // The stream can briefly emit the locally cached subset while Matrix
+      // history is still being hydrated. Never replace a complete history
+      // with that partial snapshot.
+      if (posts.length < _posts.length) return;
       setState(() => _posts = List<ChatMessage>.from(posts));
     });
 
@@ -386,13 +390,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                             children: [
                               _channelPost(post),
                               // Divider under every post, like the reference.
-                              const Padding(
-                                padding: EdgeInsets.only(
+                              Padding(
+                                padding: const EdgeInsets.only(
                                   left: 56,
                                   top: 14,
                                   bottom: 16,
                                 ),
-                                child: Divider(
+                                child: const Divider(
                                   color: Color(0xFF3A3D42),
                                   thickness: 0.6,
                                   height: 0.6,

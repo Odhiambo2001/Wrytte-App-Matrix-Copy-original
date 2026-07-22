@@ -490,9 +490,9 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
       itemCount: posts.length,
       separatorBuilder:
-          (_, __) => const Padding(
-            padding: EdgeInsets.only(left: 52, top: 14, bottom: 14),
-            child: Divider(
+          (_, __) => Padding(
+            padding: const EdgeInsets.only(left: 52, top: 14, bottom: 14),
+            child: const Divider(
               color: Color(0xFF3A3D42),
               thickness: 0.6,
               height: 0.6,
