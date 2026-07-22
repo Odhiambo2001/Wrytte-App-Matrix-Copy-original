@@ -7,6 +7,7 @@ import 'package:wrytte/ui/screens/channels/channel_edit_screen.dart';
 import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
+import 'package:wrytte/ui/widgets/wrytte_video_player.dart';
 
 /// Profile page for a channel, opened by tapping the channel header.
 /// Layout mirrors the reference: centered avatar, name, @handle,
@@ -466,7 +467,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
       itemCount: posts.length,
       separatorBuilder:
           (_, __) => const Padding(
-            padding: EdgeInsets.symmetric(vertical: 14),
+            padding: EdgeInsets.only(left: 52, top: 14, bottom: 14),
             child: Divider(
               color: Color(0xFF3A3D42),
               thickness: 0.6,
@@ -481,6 +482,14 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     final hasImage =
         post.attachmentType == 'image' &&
         (post.attachmentUrl?.trim().isNotEmpty ?? false);
+    final hasVideo =
+        post.attachmentType == 'video' &&
+        (post.attachmentUrl?.trim().isNotEmpty ?? false);
+    final aspectRatio =
+        post.mediaWidth != null && post.mediaHeight != null && post.mediaHeight! > 0
+            ? post.mediaWidth! / post.mediaHeight!
+            : null;
+    final portrait = aspectRatio != null ? aspectRatio < 1 : hasImage;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -501,35 +510,45 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: Color(0xFF8C8F95), fontSize: 13),
               ),
-              if (hasImage) ...[
+              if (hasImage || hasVideo) ...[
                 const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: AspectRatio(
-                    aspectRatio: 4 / 5,
-                    child: CachedNetworkImage(
-                      imageUrl: post.attachmentUrl!,
-                      fit: BoxFit.cover,
-                      placeholder:
-                          (_, __) => const ColoredBox(
-                            color: Color(0xFF23262C),
-                            child: Center(
-                              child: CircularProgressIndicator(
-                                color: Color(0xFF4DA3FF),
+                Padding(
+                  padding: EdgeInsets.only(right: portrait ? 50 : 8),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: hasVideo
+                        ? (aspectRatio == null
+                            ? WrytteVideoPlayer(source: post.attachmentUrl!)
+                            : AspectRatio(
+                                aspectRatio: aspectRatio,
+                                child: WrytteVideoPlayer(
+                                  source: post.attachmentUrl!,
+                                ),
+                              ))
+                        : AspectRatio(
+                            aspectRatio: aspectRatio ?? 9 / 16,
+                            child: CachedNetworkImage(
+                              imageUrl: post.attachmentUrl!,
+                              fit: BoxFit.cover,
+                              placeholder: (_, __) => const ColoredBox(
+                                color: Color(0xFF23262C),
+                                child: Center(
+                                  child: CircularProgressIndicator(
+                                    color: Color(0xFF4DA3FF),
+                                  ),
+                                ),
+                              ),
+                              errorWidget: (_, __, ___) => const ColoredBox(
+                                color: Color(0xFF23262C),
+                                child: Center(
+                                  child: Icon(
+                                    Icons.broken_image_outlined,
+                                    color: Colors.white54,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
-                      errorWidget:
-                          (_, __, ___) => const ColoredBox(
-                            color: Color(0xFF23262C),
-                            child: Center(
-                              child: Icon(
-                                Icons.broken_image_outlined,
-                                color: Colors.white54,
-                              ),
-                            ),
-                          ),
-                    ),
                   ),
                 ),
               ],
@@ -544,12 +563,50 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                   ),
                 ),
               ],
+              const SizedBox(height: 12),
+              _profilePostActions(post),
             ],
           ),
         ),
       ],
     );
   }
+
+  Widget _profilePostActions(ChatMessage post) {
+    final comments = widget.posts.where((item) =>
+        item.replyToMessageId == post.id && !item.isDeletedForMe).length;
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _profileAction(Icons.comment_outlined, '$comments'),
+          const SizedBox(width: 28),
+          _profileAction(Icons.repeat, ''),
+          const SizedBox(width: 28),
+          _profileAction(Icons.favorite_border, ''),
+          const SizedBox(width: 28),
+          _profileAction(Icons.ios_share_outlined, ''),
+          const SizedBox(width: 28),
+          _profileAction(Icons.bookmark_border, ''),
+          const SizedBox(width: 28),
+          _profileAction(Icons.more_horiz, ''),
+        ],
+      ),
+    );
+  }
+
+  Widget _profileAction(IconData icon, String label) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, color: const Color(0xFF8C8F95), size: 28),
+      if (label.isNotEmpty) ...[
+        const SizedBox(width: 5),
+        Text(label, style: const TextStyle(color: Color(0xFF8C8F95), fontSize: 15)),
+      ],
+    ],
+  );
 
   // --------------------------------------------------------------- media tab
 
