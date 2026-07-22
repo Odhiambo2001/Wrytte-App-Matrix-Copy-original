@@ -2461,6 +2461,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           style: const TextStyle(color: Colors.white54)),
       trailing: FilledButton(
         onPressed: () => _joinSuggestedGroup(channel),
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF4DA3FF),
+          foregroundColor: Colors.white,
+        ),
         child: const Text('Subscribe'),
       ),
       onTap: () => _openSuggestedGroup(channel),

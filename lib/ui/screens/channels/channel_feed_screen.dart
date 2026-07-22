@@ -230,6 +230,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               posts: _posts,
               isOwner: widget.canPost,
               isSubscribed: !widget.readOnlyUntilSubscribe && !widget.canPost,
+              subscribeAlias: widget.subscribeAlias,
             ),
       ),
     );
@@ -476,7 +477,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             imageUrl: _channelAvatarUrl,
             cacheIdentity: _channelAvatarCacheIdentity,
             name: widget.title,
-            size: 44,
+            size: 34,
           ),
         ),
         const SizedBox(width: 12),
@@ -964,8 +965,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             height: 54,
             child: FilledButton(
               onPressed: _subscribeToChannel,
-              child: const Text('Subscribe'),
+            child: const Text('Subscribe'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF4DA3FF),
+              foregroundColor: Colors.white,
             ),
+          ),
           ),
         ),
       );

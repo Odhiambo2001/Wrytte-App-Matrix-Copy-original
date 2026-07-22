@@ -21,6 +21,7 @@ class ChannelProfileScreen extends StatefulWidget {
   final List<ChatMessage> posts;
   final bool isOwner;
   final bool isSubscribed;
+  final String? subscribeAlias;
 
   const ChannelProfileScreen({
     super.key,
@@ -32,6 +33,7 @@ class ChannelProfileScreen extends StatefulWidget {
     this.posts = const [],
     this.isOwner = true,
     this.isSubscribed = false,
+    this.subscribeAlias,
   });
 
   @override
@@ -44,6 +46,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
 
   // Editable channel info (seeded from the widget, updated after editing).
   late String _title;
+  late bool _isSubscribed;
   String? _avatarUrl;
   String? _customHandle;
   String _description = '';
@@ -52,6 +55,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   void initState() {
     super.initState();
     _title = widget.title;
+    _isSubscribed = widget.isSubscribed;
     _avatarUrl = widget.avatarUrl;
   }
 
@@ -257,7 +261,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Row(
           children: [
-            if (widget.isSubscribed)
+            if (_isSubscribed)
               _actionButton(
                 icon: Icons.logout,
                 label: 'Leave',
@@ -265,9 +269,9 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
               )
             else
               _actionButton(
-                icon: Icons.bolt_outlined,
-                label: 'Boost',
-                onTap: () => _showUnavailable('Boosting'),
+                icon: Icons.person_add_alt_1,
+                label: 'Subscribe',
+                onTap: _subscribeChannel,
               ),
             const SizedBox(width: 10),
             _actionButton(
@@ -321,6 +325,21 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _subscribeChannel() async {
+    final alias = widget.subscribeAlias?.trim() ?? '';
+    if (alias.isEmpty) return;
+    try {
+      await MatrixChatService.instance.joinGroup(alias);
+      if (mounted) setState(() => _isSubscribed = true);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not subscribe: $error')),
+        );
+      }
+    }
   }
 
   Future<void> _shareChannel() async {
