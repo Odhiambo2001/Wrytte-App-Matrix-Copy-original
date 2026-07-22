@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:matrix/matrix.dart' as mx;
+import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
@@ -46,6 +49,9 @@ class ChannelFeedScreen extends StatefulWidget {
 class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final ChatService _chat = ChatService();
   final TextEditingController _postController = TextEditingController();
+  final TextEditingController _captionController = TextEditingController();
+  final ImagePicker _mediaPicker = ImagePicker();
+  final List<XFile> _selectedMedia = [];
   StreamSubscription<List<ChatMessage>>? _postsSubscription;
   StreamSubscription? _syncSubscription;
   late List<ChatMessage> _posts;
@@ -114,6 +120,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     _syncSubscription?.cancel();
     _postController.removeListener(_onPostTextChanged);
     _postController.dispose();
+    _captionController.dispose();
     super.dispose();
   }
 
@@ -242,21 +249,51 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<void> _publishPost() async {
     if (widget.readOnlyUntilSubscribe || !widget.canPost) return;
     final content = _postController.text.trim();
-    if (content.isEmpty || _publishing) return;
+    final caption = _captionController.text.trim();
+    if ((content.isEmpty && _selectedMedia.isEmpty) || _publishing) return;
     setState(() => _publishing = true);
     _postController.clear();
     try {
-      await _chat.sendMessage(
-        ChatMessage(
-          id: 'opt_${DateTime.now().millisecondsSinceEpoch}',
-          conversationId: widget.conversationId,
-          senderId: widget.currentUserId,
-          receiverId: widget.conversationId,
-          content: content,
-          timestamp: DateTime.now(),
-          status: MessageStatus.sending,
-        ),
-      );
+      final media = List<XFile>.from(_selectedMedia);
+      if (media.isNotEmpty) {
+        for (final file in media) {
+          await MatrixChatService.instance.sendFile(
+            roomId: widget.conversationId,
+            filePath: file.path,
+          );
+        }
+        if (caption.isNotEmpty) {
+          await _chat.sendMessage(
+            ChatMessage(
+              id: 'opt_${DateTime.now().millisecondsSinceEpoch}',
+              conversationId: widget.conversationId,
+              senderId: widget.currentUserId,
+              receiverId: widget.conversationId,
+              content: caption,
+              timestamp: DateTime.now(),
+              status: MessageStatus.sending,
+            ),
+          );
+        }
+        if (mounted) {
+          setState(() {
+            _selectedMedia.clear();
+            _captionController.clear();
+          });
+        }
+      } else {
+        await _chat.sendMessage(
+          ChatMessage(
+            id: 'opt_${DateTime.now().millisecondsSinceEpoch}',
+            conversationId: widget.conversationId,
+            senderId: widget.currentUserId,
+            receiverId: widget.conversationId,
+            content: content,
+            timestamp: DateTime.now(),
+            status: MessageStatus.sending,
+          ),
+        );
+      }
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -976,14 +1013,23 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       );
     }
     if (!widget.canPost) return const SizedBox.shrink();
+    final hasMedia = _selectedMedia.isNotEmpty;
+    final hasText = (hasMedia ? _captionController : _postController)
+        .text
+        .trim()
+        .isNotEmpty;
     return SafeArea(
       top: false,
-      child: Container(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (hasMedia) _selectedMediaPreview(),
+          Container(
         padding: const EdgeInsets.fromLTRB(8, 10, 8, 16),
         decoration: const BoxDecoration(color: Color(0xFF08090B)),
         child: Row(
           children: [
-            _circleButton(Icons.add, () {}, size: 46),
+            _circleButton(Icons.add, _openMediaPicker, size: 46),
             const SizedBox(width: 6),
             Expanded(
               child: ConstrainedBox(
@@ -998,13 +1044,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   borderRadius: BorderRadius.circular(28),
                 ),
                 child: TextField(
-                  controller: _postController,
+                  controller: _selectedMedia.isEmpty
+                      ? _postController
+                      : _captionController,
                   minLines: 1,
                   maxLines: 4,
+                  onChanged: (_) => setState(() {}),
                   onSubmitted: (_) => _publishPost(),
                   style: const TextStyle(color: Colors.white, fontSize: 17),
-                  decoration: const InputDecoration(
-                    hintText: 'Write post',
+                  decoration: InputDecoration(
+                    hintText: _selectedMedia.isEmpty ? 'Write post' : 'Add a caption...',
                     hintStyle: TextStyle(color: Colors.white38),
                     border: InputBorder.none,
                   ),
@@ -1016,20 +1065,102 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             _circleButton(
               _publishing
                   ? Icons.hourglass_top
-                  : (_postController.text.trim().isNotEmpty
+                  : (hasText
                       ? Icons.send
                       : Icons.camera_alt_outlined),
               _publishing
                   ? null
-                  : (_postController.text.trim().isNotEmpty
+                  : (hasText
                       ? _publishPost
                       : () {}),
               size: 46,
             ),
           ],
         ),
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _selectedMediaPreview() {
+    return SizedBox(
+      height: 78,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        itemCount: _selectedMedia.length,
+        itemBuilder: (context, index) {
+          final file = _selectedMedia[index];
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.file(
+                    File(file.path),
+                    width: 66,
+                    height: 66,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 66,
+                      height: 66,
+                      color: const Color(0xFF23262C),
+                      child: const Icon(Icons.insert_drive_file),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: -5,
+                  top: -5,
+                  child: GestureDetector(
+                    onTap: () => setState(() => _selectedMedia.removeAt(index)),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.black87,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close, size: 18),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _openMediaPicker() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(leading: const Icon(Icons.camera_alt), title: const Text('Camera'), onTap: () => Navigator.pop(context, 'camera')),
+            ListTile(leading: const Icon(Icons.photo_library), title: const Text('Gallery'), onTap: () => Navigator.pop(context, 'gallery')),
+            ListTile(leading: const Icon(Icons.insert_drive_file), title: const Text('Files'), onTap: () => Navigator.pop(context, 'files')),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    List<XFile> picked = [];
+    if (choice == 'camera') {
+      final file = await _mediaPicker.pickImage(source: ImageSource.camera);
+      if (file != null) picked = [file];
+    } else if (choice == 'gallery') {
+      picked = await _mediaPicker.pickMultiImage();
+    } else {
+      final result = await FilePicker.platform.pickFiles(allowMultiple: true);
+      picked = result?.files.where((file) => file.path != null).map((file) => XFile(file.path!)).toList() ?? [];
+    }
+    if (!mounted || picked.isEmpty) return;
+    setState(() => _selectedMedia.addAll(picked));
   }
 
   Future<void> _subscribeToChannel() async {

@@ -289,6 +289,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
             _actionButton(
               icon: Icons.notifications_off_outlined,
               label: 'Mute',
+              enabled: _isSubscribed,
               onTap: () => _showUnavailable('Muting channels'),
             ),
           ],
@@ -384,10 +385,11 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     required IconData icon,
     required String label,
     required VoidCallback onTap,
+    bool enabled = true,
   }) {
     return Expanded(
       child: InkWell(
-        onTap: onTap,
+      onTap: enabled ? onTap : null,
         borderRadius: BorderRadius.circular(26),
         child: Container(
           height: 66,
@@ -398,11 +400,14 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: Colors.white, size: 20),
+              Icon(icon, color: enabled ? Colors.white : Colors.white38, size: 20),
               const SizedBox(height: 4),
               Text(
                 label,
-                style: const TextStyle(color: Colors.white, fontSize: 13),
+                style: TextStyle(
+                  color: enabled ? Colors.white : Colors.white38,
+                  fontSize: 13,
+                ),
               ),
             ],
           ),

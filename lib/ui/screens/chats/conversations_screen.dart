@@ -2420,11 +2420,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       padding: EdgeInsets.only(top: topPadding, bottom: 120),
       children: [
         if (ownChannels.isNotEmpty) ...[
-          _groupSectionHeader('My channels ${ownChannels.length}'),
+          _groupSectionHeader('Your channels ${ownChannels.length}'),
           ...ownChannels.map((channel) => _buildTile(channel, channelOnly: true)),
         ],
         if (subscriptions.isNotEmpty) ...[
-          _groupSectionHeader('Subscribes ${subscriptions.length}'),
+          _groupSectionHeader('Subscriptions ${subscriptions.length}'),
           ...subscriptions.map((channel) => _buildTile(channel, channelOnly: true)),
         ],
         if (suggestedChannels.isNotEmpty) ...[
@@ -2448,26 +2448,34 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Widget _suggestedChannelTile(MatrixPublicGroup channel) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
-      leading: UserAvatar(
-        imageUrl: channel.avatarUrl,
-        name: channel.name,
-        size: 54,
-      ),
-      title: Text(channel.name,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-      subtitle: Text('${channel.memberCount} subscribers',
-          style: const TextStyle(color: Colors.white54)),
-      trailing: FilledButton(
-        onPressed: () => _joinSuggestedGroup(channel),
-        style: FilledButton.styleFrom(
-          backgroundColor: const Color(0xFF4DA3FF),
-          foregroundColor: Colors.white,
+    return Column(
+      children: [
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+          leading: UserAvatar(
+            imageUrl: channel.avatarUrl,
+            name: channel.name,
+            size: 54,
+          ),
+          title: Text(channel.name,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+          subtitle: Text('${channel.memberCount} subscribers',
+              style: const TextStyle(color: Colors.white54)),
+          trailing: FilledButton(
+            onPressed: () => _joinSuggestedGroup(channel),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF4DA3FF),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Subscribe'),
+          ),
+          onTap: () => _openSuggestedGroup(channel),
         ),
-        child: const Text('Subscribe'),
-      ),
-      onTap: () => _openSuggestedGroup(channel),
+        const Padding(
+          padding: EdgeInsets.only(left: 84),
+          child: Divider(height: 1, thickness: 1, color: Color(0xFF202228)),
+        ),
+      ],
     );
   }
 

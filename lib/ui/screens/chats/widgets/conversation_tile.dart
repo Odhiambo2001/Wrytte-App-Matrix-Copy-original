@@ -52,12 +52,14 @@ class ConversationTile extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       color: isSelected ? _blue.withOpacity(0.08) : Colors.transparent,
-      child: InkWell(
-        onTap: isSelectionMode ? onSelectionToggle : onTap,
-        onLongPress: onLongPress,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
+      child: Column(
+        children: [
+          InkWell(
+            onTap: isSelectionMode ? onSelectionToggle : onTap,
+            onLongPress: onLongPress,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
             children: [
               // ── Selection circle ────────────────────────────────────────
               AnimatedContainer(
@@ -141,8 +143,15 @@ class ConversationTile extends StatelessWidget {
                         ),
               ),
             ],
+              ),
+            ),
           ),
-        ),
+          if (channelOnly)
+            const Padding(
+              padding: EdgeInsets.only(left: 84),
+              child: Divider(height: 1, thickness: 1, color: Color(0xFF202228)),
+            ),
+        ],
       ),
     );
   }
