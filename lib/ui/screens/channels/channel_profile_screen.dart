@@ -492,10 +492,21 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
       separatorBuilder:
           (_, __) => Padding(
             padding: const EdgeInsets.only(left: 52, top: 14, bottom: 14),
-            child: const Divider(
-              color: Color(0xFF3A3D42),
-              thickness: 0.6,
+            child: SizedBox(
               height: 0.6,
+              child: OverflowBox(
+                alignment: Alignment.centerLeft,
+                maxWidth: double.infinity,
+                maxHeight: 0.6,
+                child: SizedBox(
+                  width: MediaQuery.sizeOf(context).width - 72,
+                  child: const Divider(
+                    color: Color(0xFF3A3D42),
+                    thickness: 0.6,
+                    height: 0.6,
+                  ),
+                ),
+              ),
             ),
           ),
       itemBuilder: (_, index) => _postTile(posts[index]),

@@ -391,15 +391,22 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                               _channelPost(post),
                               // Divider under every post, like the reference.
                               Padding(
-                                padding: const EdgeInsets.only(
-                                  left: 56,
-                                  top: 14,
-                                  bottom: 16,
-                                ),
-                                child: const Divider(
-                                  color: Color(0xFF3A3D42),
-                                  thickness: 0.6,
+                                padding: const EdgeInsets.only(left: 56, top: 14, bottom: 16),
+                                child: SizedBox(
                                   height: 0.6,
+                                  child: OverflowBox(
+                                    alignment: Alignment.centerLeft,
+                                    maxWidth: double.infinity,
+                                    maxHeight: 0.6,
+                                    child: SizedBox(
+                                      width: MediaQuery.sizeOf(context).width - 72,
+                                      child: const Divider(
+                                        color: Color(0xFF3A3D42),
+                                        thickness: 0.6,
+                                        height: 0.6,
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ],
