@@ -2451,7 +2451,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     return Column(
       children: [
         ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+          contentPadding: const EdgeInsets.only(left: 24, right: 22, top: 6, bottom: 6),
           leading: UserAvatar(
             imageUrl: channel.avatarUrl,
             name: channel.name,
