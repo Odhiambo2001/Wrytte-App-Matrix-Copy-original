@@ -85,6 +85,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   StreamSubscription<bool>? _chatConnectionSub;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   StreamSubscription<String>? _contactsChangedSub;
+  StreamSubscription? _matrixSyncSub;
   Timer? _conversationBatchTimer;
   Timer? _groupExitTimer;
   GroupExitRequest? _pendingGroupExit;
@@ -133,6 +134,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // persisted identity cache and Profile 2 contacts, then publishes rows.
     _scrollCtrl.addListener(_onScroll);
     Future.microtask(_initialize);
+    try {
+      _matrixSyncSub = MatrixClientService.instance.client.onSync.stream.listen((_) {
+        if (mounted && _tabController.index == 1) setState(() {});
+      });
+    } catch (_) {}
   }
 
   void _seedHydratedConversationSnapshot() {
@@ -151,6 +157,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _chatConnectionSub?.cancel();
     _connectivitySub?.cancel();
     _contactsChangedSub?.cancel();
+    _matrixSyncSub?.cancel();
     _conversationBatchTimer?.cancel();
     _groupExitTimer?.cancel();
     _scrollCtrl.removeListener(_onScroll);
@@ -1957,7 +1964,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   //  CONVERSATION TILE
   // ===========================================================================
 
-  Widget _buildTile(ChatConversation conv) {
+  Widget _buildTile(ChatConversation conv, {bool channelOnly = false}) {
     final name = _sanitize(_conversationTitle(conv));
     final avatar = _avatarForConversation(conv);
     final localAvatarPath = _localAvatarPathForConversation(conv);
@@ -1996,6 +2003,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       isSelectionMode: _isSelectionMode,
       isSelected: selected,
       onSelectionToggle: () => _toggleSelection(conv.id),
+      channelOnly: channelOnly,
+      channelSubscriberCount: channelOnly
+          ? _channelSubscriberCount(conv)
+          : null,
       onLongPress: () async {
         if (isDeleted) {
           await _removeDeletedGroupShell(conv, name);
@@ -2129,6 +2140,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         }
       },
     );
+  }
+
+  int _channelSubscriberCount(ChatConversation conversation) {
+    final room = MatrixChatService.instance.getRoomById(conversation.id);
+    return room?.getParticipants([mx.Membership.join]).length ?? 0;
   }
 
   Future<void> _removeDeletedGroupShell(
@@ -2405,15 +2421,15 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       padding: EdgeInsets.only(top: topPadding, bottom: 120),
       children: [
         if (ownChannels.isNotEmpty) ...[
-          _groupSectionHeader('My Channels ${ownChannels.length}'),
-          ...ownChannels.map(_buildTile),
+          _groupSectionHeader('My channels ${ownChannels.length}'),
+          ...ownChannels.map((channel) => _buildTile(channel, channelOnly: true)),
         ],
         if (subscriptions.isNotEmpty) ...[
-          _groupSectionHeader('Subscriptions ${subscriptions.length}'),
-          ...subscriptions.map(_buildTile),
+          _groupSectionHeader('Subscribes ${subscriptions.length}'),
+          ...subscriptions.map((channel) => _buildTile(channel, channelOnly: true)),
         ],
         if (suggestedChannels.isNotEmpty) ...[
-          _groupSectionHeader('Suggested Subscribes'),
+          _groupSectionHeader('Suggested'),
           ...suggestedChannels.map(_suggestedChannelTile),
         ],
         if (ownChannels.isEmpty &&

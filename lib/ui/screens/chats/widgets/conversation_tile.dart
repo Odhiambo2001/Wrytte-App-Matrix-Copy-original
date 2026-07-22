@@ -20,6 +20,8 @@ class ConversationTile extends StatelessWidget {
   final bool isSelectionMode;
   final bool isSelected;
   final VoidCallback? onSelectionToggle;
+  final bool channelOnly;
+  final int? channelSubscriberCount;
 
   static const Color _blue = Color(0xFF4DA3FF);
 
@@ -41,6 +43,8 @@ class ConversationTile extends StatelessWidget {
     this.isSelectionMode = false,
     this.isSelected = false,
     this.onSelectionToggle,
+    this.channelOnly = false,
+    this.channelSubscriberCount,
   });
 
   @override
@@ -104,7 +108,12 @@ class ConversationTile extends StatelessWidget {
               // ── Name + message ─────────────────────────────────────────
               Expanded(
                 child:
-                    hasMessage
+                    channelOnly
+                        ? _ChannelDetails(
+                          name: name,
+                          subscriberCount: channelSubscriberCount ?? 0,
+                        )
+                        : hasMessage
                         ? _ConversationDetails(
                           name: name,
                           senderName: senderName,
@@ -137,6 +146,26 @@ class ConversationTile extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ChannelDetails extends StatelessWidget {
+  final String name;
+  final int subscriberCount;
+
+  const _ChannelDetails({required this.name, required this.subscriberCount});
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
+        style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 4),
+      Text('$subscriberCount ${subscriberCount == 1 ? 'subscriber' : 'subscribers'}',
+        style: const TextStyle(color: Colors.white54, fontSize: 15)),
+    ],
+  );
 }
 
 class _ConversationDetails extends StatelessWidget {
