@@ -2143,8 +2143,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   int _channelSubscriberCount(ChatConversation conversation) {
-    final room = MatrixChatService.instance.getRoomById(conversation.id);
-    return room?.getParticipants([mx.Membership.join]).length ?? 0;
+    return conversation.participants.length;
   }
 
   Future<void> _removeDeletedGroupShell(
