@@ -2448,37 +2448,83 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Widget _suggestedChannelTile(MatrixPublicGroup channel) {
-    return Column(
-      children: [
-        ListTile(
-          contentPadding: const EdgeInsets.only(left: 24, right: 22, top: 6, bottom: 6),
-          leading: UserAvatar(
+  return InkWell(
+    onTap: () => _openSuggestedGroup(channel),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        children: [
+          UserAvatar(
             imageUrl: channel.avatarUrl,
             name: channel.name,
-            size: 54,
+            size: 60,
           ),
-          title: Text(channel.name,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-          subtitle: Text('${channel.memberCount} subscribers',
-              style: const TextStyle(color: Colors.white54)),
-          trailing: FilledButton(
-            onPressed: () => _joinSuggestedGroup(channel),
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF4DA3FF),
-              foregroundColor: Colors.white,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  channel.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${channel.memberCount} subscribers',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  height: 1,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => OverflowBox(
+                      alignment: Alignment.centerLeft,
+                      maxWidth: constraints.maxWidth + 20,
+                      maxHeight: 1,
+                      child: SizedBox(
+                        width: constraints.maxWidth + 20,
+                        height: 1,
+                        child: Divider(
+                          color: Colors.grey.withOpacity(0.3),
+                          thickness: 0.5,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            child: const Text('Subscribe'),
           ),
-          onTap: () => _openSuggestedGroup(channel),
-        ),
-        const Padding(
-          padding: EdgeInsets.only(left: 84),
-          child: Divider(height: 1, thickness: 1, color: Color(0xFF202228)),
-        ),
-      ],
-    );
-  }
-
+          const SizedBox(width: 12),
+          SizedBox(
+            height: 36,
+            child: FilledButton(
+              onPressed: () => _joinSuggestedGroup(channel),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF4DA3FF),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+              ),
+              child: const Text('Subscribe'),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
   Widget _buildGroupsTab(double topPadding) {
     final allGroups =
         _conversations

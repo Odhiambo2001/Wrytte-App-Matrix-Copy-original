@@ -552,19 +552,45 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       ),
                     ),
                   ),
-                  Text(
-                    ' · ${_postAge(post.timestamp)}',
-                    style: const TextStyle(
-                      color: Color(0xFF8C8F95),
-                      fontSize: 13.5,
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        const TextSpan(
+                          text: ' · ',
+                          style: TextStyle(
+                            color: Color(0xFF8C8F95),
+                            fontSize: 16,
+                          ),
+                        ),
+                        TextSpan(
+                          text: _postAge(post.timestamp),
+                          style: const TextStyle(
+                            color: Color(0xFF8C8F95),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   if (viewLabel != null)
-                    Text(
-                      ' · $viewLabel ${viewCount == 1 ? 'view' : 'views'}',
-                      style: const TextStyle(
-                        color: Color(0xFF8C8F95),
-                        fontSize: 13.5,
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          const TextSpan(
+                            text: ' · ',
+                            style: TextStyle(
+                              color: Color(0xFF8C8F95),
+                              fontSize: 16,
+                            ),
+                          ),
+                          TextSpan(
+                            text: '$viewLabel ${viewCount == 1 ? 'view' : 'views'}',
+                            style: const TextStyle(
+                              color: Color(0xFF8C8F95),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                 ],
@@ -626,7 +652,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 17,
-                      height: 1.35,
+                      height: 1.18,
                     ),
                   ),
                 ),
@@ -997,7 +1023,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   String? _formatCount(int count) {
-    if (count <= 0) return null;
+    if (count <= 0) return '0';
     if (count < 1000) return '$count';
     return '${(count / 1000).toStringAsFixed(count % 1000 == 0 ? 0 : 1)}K';
   }
@@ -1240,10 +1266,10 @@ class _PostAction extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: actionColor, size: 24),
+            Icon(icon, color: actionColor, size: 20),
             if (label != null) ...[
               const SizedBox(width: 5),
-              Text(label!, style: TextStyle(color: actionColor, fontSize: 14)),
+              Text(label!, style: TextStyle(color: actionColor, fontSize: 10)),
             ],
           ],
         ),

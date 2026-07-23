@@ -593,8 +593,8 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                   post.content,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 16,
-                    height: 1.35,
+                    fontSize: 17,
+                    height: 1.18,
                   ),
                 ),
               ],
@@ -618,9 +618,9 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
         children: [
           _profileAction(Icons.comment_outlined, '$comments'),
           const SizedBox(width: 28),
-          _profileAction(Icons.repeat, ''),
+          _profileAction(Icons.repeat, '0'),
           const SizedBox(width: 28),
-          _profileAction(Icons.favorite_border, ''),
+          _profileAction(Icons.favorite_border, '0'),
           const SizedBox(width: 28),
           _profileAction(Icons.ios_share_outlined, ''),
           const SizedBox(width: 28),
@@ -635,10 +635,10 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   Widget _profileAction(IconData icon, String label) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Icon(icon, color: const Color(0xFF8C8F95), size: 28),
+      Icon(icon, color: const Color(0xFF8C8F95), size: 20),
       if (label.isNotEmpty) ...[
         const SizedBox(width: 5),
-        Text(label, style: const TextStyle(color: Color(0xFF8C8F95), fontSize: 15)),
+        Text(label, style: const TextStyle(color: Color(0xFF8C8F95), fontSize: 10)),
       ],
     ],
   );

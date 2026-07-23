@@ -334,6 +334,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
+      bottomNavigationBar: _deleteFooter(),
       body: SafeArea(
         child: Column(
           children: [
@@ -353,6 +354,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
                         fontSize: 17,
                         fontWeight: FontWeight.w700,
                       ),
+                      maxLength: 64,
                     ),
                     const SizedBox(height: 10),
                     _textField(
@@ -363,6 +365,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
                         fontSize: 17,
                       ),
                       inputFormatters: [
+                        LengthLimitingTextInputFormatter(35),
                         TextInputFormatter.withFunction((oldValue, newValue) {
                           return newValue.text.startsWith('@')
                               ? newValue
@@ -389,7 +392,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
                     _textField(
                       controller: _descriptionController,
                       hint: 'Description',
-                      style: const TextStyle(color: Colors.white, fontSize: 17),
+                      style: const TextStyle(color: Colors.white, fontSize: 17, height: 1.18),
                       maxLines: null,
                       minLines: 1,
                       maxLength: 220,
@@ -402,7 +405,6 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
                 ),
               ),
             ),
-            _deleteFooter(),
           ],
         ),
       ),
@@ -413,12 +415,22 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
-        child: TextButton(
-          onPressed: _saving ? null : _deleteChannel,
-          child: const Text(
-            'Delete channel',
-            style: TextStyle(color: Color(0xFFE85D75), fontSize: 17),
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 56),
+        child: SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: TextButton(
+            onPressed: _saving ? null : _deleteChannel,
+            style: TextButton.styleFrom(
+              backgroundColor: _fieldColor,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(30),
+              ),
+            ),
+            child: const Text(
+              'Delete Channel',
+              style: TextStyle(color: Color(0xFFE85D75), fontSize: 17),
+            ),
           ),
         ),
       ),
@@ -497,7 +509,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
       decoration: BoxDecoration(
         color: _fieldColor,
-        borderRadius: BorderRadius.circular(36),
+        borderRadius: BorderRadius.circular(maxLines == null ? 28 : 36),
       ),
       child: TextField(
         controller: controller,
@@ -511,6 +523,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
           hintStyle: const TextStyle(color: Color(0xFF8C8F95), fontSize: 17),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(vertical: 11),
+          counterText: maxLength == null ? null : '',
           suffixIcon: suffix,
         ),
       ),
