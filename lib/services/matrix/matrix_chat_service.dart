@@ -53,6 +53,42 @@ class MatrixPublicGroup {
     this.roomType,
   });
 
+  factory MatrixPublicGroup.fromJson(Map<String, dynamic> json) {
+    return MatrixPublicGroup(
+      roomId: json['roomId']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      avatarUrl: json['avatarUrl']?.toString(),
+      canonicalAlias: json['canonicalAlias']?.toString(),
+      topic: json['topic']?.toString(),
+      memberCount: (json['memberCount'] as num?)?.toInt() ?? 0,
+      worldReadable: json['worldReadable'] == true,
+      avatarVersion: (json['avatarVersion'] as num?)?.toInt() ?? 0,
+      nameVersion: (json['nameVersion'] as num?)?.toInt() ?? 0,
+      descriptionVersion: (json['descriptionVersion'] as num?)?.toInt() ?? 0,
+      linkVersion: (json['linkVersion'] as num?)?.toInt() ?? 0,
+      aliasVersion: (json['aliasVersion'] as num?)?.toInt() ?? 0,
+      link: json['link']?.toString(),
+      roomType: json['roomType']?.toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'roomId': roomId,
+    'name': name,
+    'avatarUrl': avatarUrl,
+    'canonicalAlias': canonicalAlias,
+    'topic': topic,
+    'memberCount': memberCount,
+    'worldReadable': worldReadable,
+    'avatarVersion': avatarVersion,
+    'nameVersion': nameVersion,
+    'descriptionVersion': descriptionVersion,
+    'linkVersion': linkVersion,
+    'aliasVersion': aliasVersion,
+    'link': link,
+    'roomType': roomType,
+  };
+
   int get profileVersionFingerprint {
     var value = 17;
     for (final version in [

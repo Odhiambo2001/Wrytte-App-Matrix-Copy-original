@@ -113,6 +113,9 @@ class ChatService {
   final Map<String, String> _groupCacheCategoryByRoom = {};
   final Map<String, int> _groupCachedMessageCountByRoom = {};
   final Map<String, bool> _groupHistoryCachedByRoom = {};
+  final Map<String, String> _directCacheCategoryByRoom = {};
+  final Map<String, int> _directCachedMessageCountByRoom = {};
+  final Map<String, bool> _directHistoryCachedByRoom = {};
   final Map<String, Future<void>> _markReadInFlight = {};
   final Map<String, String> _lastReadReceiptEventByConversation = {};
   Future<void> _suggestedPreviewQueue = Future.value();
@@ -2059,6 +2062,7 @@ class ChatService {
         await _syncLocalReadMarkerToMatrix(conversation.id);
       }
     }
+    await auditDirectChatCacheCoverage();
     _emitConversations();
   }
 
@@ -2757,6 +2761,9 @@ class ChatService {
     _groupCacheCategoryByRoom.clear();
     _groupCachedMessageCountByRoom.clear();
     _groupHistoryCachedByRoom.clear();
+    _directCacheCategoryByRoom.clear();
+    _directCachedMessageCountByRoom.clear();
+    _directHistoryCachedByRoom.clear();
     _roomsRefreshTimer?.cancel();
     _roomsRefreshTimer = null;
     _lastRoomsRefreshAt = null;
@@ -4097,6 +4104,46 @@ class ChatService {
     }
   }
 
+  /// Logs SQLite message and persistent attachment coverage for every direct
+  /// chat, including conversations that contain no media.
+  Future<void> auditDirectChatCacheCoverage() async {
+    final directIds = <String>{
+      ..._conversationsMap.values
+          .where((conversation) => conversation.isDirectKind)
+          .map((conversation) => conversation.id),
+      ...MatrixClientService.instance.client.rooms
+          .where((room) => room.membership == mx.Membership.join)
+          .where((room) => room.isDirectChat)
+          .map((room) => room.id),
+    };
+
+    for (final roomId in directIds) {
+      final messages = await ChatLocalDb.instance.loadMessages(roomId);
+      final visibleMessages = messages
+          .where((message) => !_isHiddenForMe(message))
+          .toList(growable: false);
+      const persistentTypes = {'image', 'video', 'file', 'voice'};
+      final media = visibleMessages
+          .where(
+            (message) =>
+                persistentTypes.contains(message.attachmentType?.trim()) &&
+                (message.attachmentUrl?.trim().isNotEmpty ?? false),
+          )
+          .toList(growable: false);
+
+      _directCacheCategoryByRoom[roomId] = 'direct';
+      _directCachedMessageCountByRoom[roomId] = visibleMessages.length;
+      _directHistoryCachedByRoom[roomId] = true;
+
+      for (final message in media) {
+        _attachmentCacheExpectedByRoom
+            .putIfAbsent(roomId, () => <String>{})
+            .add(message.id);
+      }
+      _logAttachmentCacheSummary(roomId);
+    }
+  }
+
   Future<void> _prefetchAttachment(
     ChatMessage message,
     String source,
@@ -4151,8 +4198,10 @@ class ChatService {
   String _mediaCacheRoomKind(String roomId) {
     if (_channelCacheCategoryByRoom.containsKey(roomId)) return 'channel';
     if (_groupCacheCategoryByRoom.containsKey(roomId)) return 'group';
+    if (_directCacheCategoryByRoom.containsKey(roomId)) return 'direct';
     final room = _roomById(roomId);
     if (room == null) return 'unknown';
+    if (room.isDirectChat) return 'direct';
     return _kindForGroupRoom(room);
   }
 
@@ -4174,11 +4223,14 @@ class ChatService {
     final failed = _attachmentCacheFailedByRoom[roomId] ?? const <String>{};
     final category = _channelCacheCategoryByRoom[roomId];
     final groupCategory = _groupCacheCategoryByRoom[roomId];
+    final directCategory = _directCacheCategoryByRoom[roomId];
     final historyCached =
         category != null
             ? (_channelHistoryCachedByRoom[roomId] ?? false)
             : groupCategory != null
             ? (_groupHistoryCachedByRoom[roomId] ?? false)
+            : directCategory != null
+            ? (_directHistoryCachedByRoom[roomId] ?? false)
             : true;
     final fullyCached =
         complete.length == expected.length &&
@@ -4197,11 +4249,17 @@ class ChatService {
             : ' group_category="$groupCategory" '
                 'messages=${_groupCachedMessageCountByRoom[roomId] ?? 0} '
                 'history_cached=${_groupHistoryCachedByRoom[roomId] ?? false}';
+    final directFields =
+        directCategory == null
+            ? ''
+            : ' direct_category="$directCategory" '
+                'messages=${_directCachedMessageCountByRoom[roomId] ?? 0} '
+                'history_cached=${_directHistoryCachedByRoom[roomId] ?? false}';
     apkLog(
       'MediaCache.room',
       'state="${fullyCached ? 'fully_cached' : 'incomplete'}" '
           'room_kind="${_mediaCacheRoomKind(roomId)}" room_id="$roomId" '
-          '$channelFields$groupFields media=${expected.length} '
+          '$channelFields$groupFields$directFields media=${expected.length} '
           'expected=${expected.length} complete=${complete.length} '
           'pending=${pending.length} failed=${failed.length}',
     );
@@ -4377,6 +4435,26 @@ class ChatService {
     MatrixChatService.instance.registerCreatedGroupRooms(
       _createdGroupRoomIds,
     ); // add
+  }
+
+  /// Restores the account-scoped ownership registry without requiring Matrix
+  /// connectivity, so channel/group tabs classify their first local paint.
+  Future<Set<String>> restoreCreatedGroupRoomIdsForOwner(
+    String ownerUserId,
+  ) async {
+    final owner = ownerUserId.trim();
+    if (owner.isEmpty) return const <String>{};
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList(_createdGroupRoomIdsKey(owner)) ?? const [];
+    _createdGroupRoomIds
+      ..clear()
+      ..addAll(ids.map((id) => id.trim()).where((id) => id.isNotEmpty));
+    MatrixChatService.instance.registerCreatedGroupRooms(_createdGroupRoomIds);
+    apkLog(
+      'ChatService.local',
+      'restored ownership owner="$owner" rooms=${_createdGroupRoomIds.length}',
+    );
+    return Set<String>.unmodifiable(_createdGroupRoomIds);
   }
 
   Future<void> _saveCreatedGroupRoomIds() async {

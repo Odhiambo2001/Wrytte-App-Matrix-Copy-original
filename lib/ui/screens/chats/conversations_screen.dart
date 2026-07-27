@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart' as mx;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
@@ -213,6 +215,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       ..._dismissedDeletedGroupRoomIds,
       ...MatrixChatService.retiredTestGroupRoomIds,
     };
+    await _chat.restoreCreatedGroupRoomIdsForOwner(_currentUserId);
+    await _loadCachedPublicRoomDirectory();
     await _loadIdentityCacheFast();
     await _loadSavedContacts();
     await _loadLocalConversations();
@@ -311,6 +315,70 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     );
   }
 
+  String get _publicRoomDirectoryCacheKey =>
+      'wrytte.public_room_directory.$_currentUserId';
+
+  Future<void> _loadCachedPublicRoomDirectory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = prefs.getString(_publicRoomDirectoryCacheKey);
+      if (encoded == null || encoded.isEmpty) return;
+      final decoded = jsonDecode(encoded);
+      if (decoded is! List) return;
+      final groups = decoded
+          .whereType<Map>()
+          .map(
+            (item) => MatrixPublicGroup.fromJson(
+              item.map((key, value) => MapEntry(key.toString(), value)),
+            ),
+          )
+          .where((group) => group.roomId.trim().isNotEmpty)
+          .where(
+            (group) =>
+                !_dismissedDeletedGroupRoomIds.contains(group.roomId) &&
+                !MatrixChatService.retiredTestGroupRoomIds.contains(
+                  group.roomId,
+                ),
+          )
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() => _suggestedGroups = groups);
+      apkLog(
+        'PublicRooms.local',
+        'restored owner="$_currentUserId" rooms=${groups.length} '
+            'channels=${groups.where((group) => group.isChannel).length} '
+            'groups=${groups.where((group) => !group.isChannel).length}',
+      );
+    } catch (error) {
+      apkLog(
+        'PublicRooms.local',
+        'restore failed owner="$_currentUserId" error="$error"',
+      );
+    }
+  }
+
+  Future<void> _saveCachedPublicRoomDirectory(
+    List<MatrixPublicGroup> groups,
+  ) async {
+    if (_currentUserId.trim().isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _publicRoomDirectoryCacheKey,
+        jsonEncode(groups.map((group) => group.toJson()).toList()),
+      );
+      apkLog(
+        'PublicRooms.local',
+        'saved owner="$_currentUserId" rooms=${groups.length}',
+      );
+    } catch (error) {
+      apkLog(
+        'PublicRooms.local',
+        'save failed owner="$_currentUserId" error="$error"',
+      );
+    }
+  }
+
   Future<void> _loadSuggestedGroups({bool force = false}) async {
     if (_loadingSuggestedGroups) return;
     final now = DateTime.now();
@@ -338,6 +406,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       );
       if (!mounted) return;
       setState(() => _suggestedGroups = groups);
+      await _saveCachedPublicRoomDirectory(groups);
       unawaited(_chat.auditDiscoveredChannelCacheCoverage(groups));
       unawaited(_chat.auditDiscoveredGroupCacheCoverage(groups));
       apkLog(
@@ -416,6 +485,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         'removed zero-member suggestion room_id="${group.roomId}"',
       );
     }
+    await _saveCachedPublicRoomDirectory(_suggestedGroups);
     await _chat.auditDiscoveredChannelCacheCoverage(_suggestedGroups);
     await _chat.auditDiscoveredGroupCacheCoverage(_suggestedGroups);
   }
