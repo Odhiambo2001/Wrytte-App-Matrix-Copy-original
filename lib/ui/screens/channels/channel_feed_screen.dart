@@ -750,12 +750,18 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                             ? (mediaAspectRatio == null
                                 ? WrytteVideoPlayer(
                                   source: post.attachmentUrl!,
+                                  autoPlayWhenVisible: true,
+                                  startMuted: true,
+                                  showRemainingTime: true,
                                   borderRadius: BorderRadius.circular(14),
                                 )
                                 : AspectRatio(
                                   aspectRatio: mediaAspectRatio,
                                   child: WrytteVideoPlayer(
                                     source: post.attachmentUrl!,
+                                    autoPlayWhenVisible: true,
+                                    startMuted: true,
+                                    showRemainingTime: true,
                                     borderRadius: BorderRadius.circular(14),
                                   ),
                                 ))

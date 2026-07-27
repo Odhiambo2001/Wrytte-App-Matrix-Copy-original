@@ -624,11 +624,19 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                     child:
                         hasVideo
                             ? (aspectRatio == null
-                                ? WrytteVideoPlayer(source: post.attachmentUrl!)
+                                ? WrytteVideoPlayer(
+                                  source: post.attachmentUrl!,
+                                  autoPlayWhenVisible: true,
+                                  startMuted: true,
+                                  showRemainingTime: true,
+                                )
                                 : AspectRatio(
                                   aspectRatio: aspectRatio,
                                   child: WrytteVideoPlayer(
                                     source: post.attachmentUrl!,
+                                    autoPlayWhenVisible: true,
+                                    startMuted: true,
+                                    showRemainingTime: true,
                                   ),
                                 ))
                             : AspectRatio(
