@@ -673,6 +673,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             : null;
     final isPortraitMedia =
         mediaAspectRatio != null ? mediaAspectRatio < 1 : hasImage;
+    final isNineBySixteenImage =
+        hasImage &&
+        (mediaAspectRatio == null || (mediaAspectRatio - 9 / 16).abs() <= 0.08);
     final postContent = _mediaDisplayContent(post, hasImage || hasVideo);
     final viewLabel = _formatCount(_viewCounts[post.id] ?? 0);
     final viewCount = _viewCounts[post.id] ?? 0;
@@ -742,72 +745,102 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               if (hasImage || hasVideo) ...[
                 const SizedBox(height: 10),
                 Padding(
-                  padding: EdgeInsets.only(right: isPortraitMedia ? 50 : 8),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child:
-                        hasVideo
-                            ? (mediaAspectRatio == null
-                                ? WrytteVideoPlayer(
-                                  source: post.attachmentUrl!,
-                                  autoPlayWhenVisible: true,
-                                  startMuted: true,
-                                  showRemainingTime: true,
-                                  borderRadius: BorderRadius.circular(14),
-                                )
-                                : AspectRatio(
-                                  aspectRatio: mediaAspectRatio,
-                                  child: WrytteVideoPlayer(
-                                    source: post.attachmentUrl!,
-                                    autoPlayWhenVisible: true,
-                                    startMuted: true,
-                                    showRemainingTime: true,
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                ))
-                            : AspectRatio(
-                              aspectRatio: mediaAspectRatio ?? 9 / 16,
-                              child:
-                                  post.attachmentUrl!.startsWith('/')
-                                      ? Image.file(
-                                        File(post.attachmentUrl!),
-                                        fit: BoxFit.cover,
-                                        errorBuilder:
-                                            (_, __, ___) => const ColoredBox(
-                                              color: Color(0xFF23262C),
-                                              child: Center(
-                                                child: Icon(
-                                                  Icons.broken_image_outlined,
-                                                  color: Colors.white54,
-                                                ),
-                                              ),
-                                            ),
-                                      )
-                                      : CachedNetworkImage(
-                                        imageUrl: post.attachmentUrl!,
-                                        fit: BoxFit.cover,
-                                        placeholder:
-                                            (_, __) => const ColoredBox(
-                                              color: Color(0xFF23262C),
-                                              child: Center(
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      color: Color(0xFF4DA3FF),
-                                                    ),
-                                              ),
-                                            ),
-                                        errorWidget:
-                                            (_, __, ___) => const ColoredBox(
-                                              color: Color(0xFF23262C),
-                                              child: Center(
-                                                child: Icon(
-                                                  Icons.broken_image_outlined,
-                                                  color: Colors.white54,
-                                                ),
-                                              ),
-                                            ),
+                  padding: EdgeInsets.only(
+                    right:
+                        isNineBySixteenImage
+                            ? 0
+                            : isPortraitMedia
+                            ? 50
+                            : 8,
+                  ),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FractionallySizedBox(
+                      // The first three actions occupy the row up to the share
+                      // icon. Match that span for 9:16 media.
+                      widthFactor: isNineBySixteenImage ? 0.70 : 1,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child:
+                            hasVideo
+                                ? (mediaAspectRatio == null
+                                    ? WrytteVideoPlayer(
+                                      source: post.attachmentUrl!,
+                                      autoPlayWhenVisible: true,
+                                      startMuted: true,
+                                      showRemainingTime: true,
+                                      borderRadius: BorderRadius.circular(14),
+                                    )
+                                    : AspectRatio(
+                                      aspectRatio: mediaAspectRatio,
+                                      child: WrytteVideoPlayer(
+                                        source: post.attachmentUrl!,
+                                        autoPlayWhenVisible: true,
+                                        startMuted: true,
+                                        showRemainingTime: true,
+                                        borderRadius: BorderRadius.circular(14),
                                       ),
-                            ),
+                                    ))
+                                : AspectRatio(
+                                  aspectRatio:
+                                      isNineBySixteenImage
+                                          ? 9 / 16
+                                          : mediaAspectRatio ?? 9 / 16,
+                                  child:
+                                      post.attachmentUrl!.startsWith('/')
+                                          ? Image.file(
+                                            File(post.attachmentUrl!),
+                                            fit: BoxFit.cover,
+                                            errorBuilder:
+                                                (
+                                                  _,
+                                                  __,
+                                                  ___,
+                                                ) => const ColoredBox(
+                                                  color: Color(0xFF23262C),
+                                                  child: Center(
+                                                    child: Icon(
+                                                      Icons
+                                                          .broken_image_outlined,
+                                                      color: Colors.white54,
+                                                    ),
+                                                  ),
+                                                ),
+                                          )
+                                          : CachedNetworkImage(
+                                            imageUrl: post.attachmentUrl!,
+                                            fit: BoxFit.cover,
+                                            placeholder:
+                                                (_, __) => const ColoredBox(
+                                                  color: Color(0xFF23262C),
+                                                  child: Center(
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                          color: Color(
+                                                            0xFF4DA3FF,
+                                                          ),
+                                                        ),
+                                                  ),
+                                                ),
+                                            errorWidget:
+                                                (
+                                                  _,
+                                                  __,
+                                                  ___,
+                                                ) => const ColoredBox(
+                                                  color: Color(0xFF23262C),
+                                                  child: Center(
+                                                    child: Icon(
+                                                      Icons
+                                                          .broken_image_outlined,
+                                                      color: Colors.white54,
+                                                    ),
+                                                  ),
+                                                ),
+                                          ),
+                                ),
+                      ),
+                    ),
                   ),
                 ),
               ],

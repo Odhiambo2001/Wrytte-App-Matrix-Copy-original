@@ -594,6 +594,9 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
             ? post.mediaWidth! / post.mediaHeight!
             : null;
     final portrait = aspectRatio != null ? aspectRatio < 1 : hasImage;
+    final isNineBySixteenImage =
+        hasImage &&
+        (aspectRatio == null || (aspectRatio - 9 / 16).abs() <= 0.08);
     final postContent = _mediaDisplayContent(post, hasImage || hasVideo);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -618,53 +621,69 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
               if (hasImage || hasVideo) ...[
                 const SizedBox(height: 8),
                 Padding(
-                  padding: EdgeInsets.only(right: portrait ? 50 : 8),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child:
-                        hasVideo
-                            ? (aspectRatio == null
-                                ? WrytteVideoPlayer(
-                                  source: post.attachmentUrl!,
-                                  autoPlayWhenVisible: true,
-                                  startMuted: true,
-                                  showRemainingTime: true,
-                                )
+                  padding: EdgeInsets.only(
+                    right:
+                        isNineBySixteenImage
+                            ? 0
+                            : portrait
+                            ? 50
+                            : 8,
+                  ),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FractionallySizedBox(
+                      widthFactor: isNineBySixteenImage ? 0.70 : 1,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child:
+                            hasVideo
+                                ? (aspectRatio == null
+                                    ? WrytteVideoPlayer(
+                                      source: post.attachmentUrl!,
+                                      autoPlayWhenVisible: true,
+                                      startMuted: true,
+                                      showRemainingTime: true,
+                                    )
+                                    : AspectRatio(
+                                      aspectRatio: aspectRatio,
+                                      child: WrytteVideoPlayer(
+                                        source: post.attachmentUrl!,
+                                        autoPlayWhenVisible: true,
+                                        startMuted: true,
+                                        showRemainingTime: true,
+                                      ),
+                                    ))
                                 : AspectRatio(
-                                  aspectRatio: aspectRatio,
-                                  child: WrytteVideoPlayer(
-                                    source: post.attachmentUrl!,
-                                    autoPlayWhenVisible: true,
-                                    startMuted: true,
-                                    showRemainingTime: true,
+                                  aspectRatio:
+                                      isNineBySixteenImage
+                                          ? 9 / 16
+                                          : aspectRatio ?? 9 / 16,
+                                  child: CachedNetworkImage(
+                                    imageUrl: post.attachmentUrl!,
+                                    fit: BoxFit.cover,
+                                    placeholder:
+                                        (_, __) => const ColoredBox(
+                                          color: Color(0xFF23262C),
+                                          child: Center(
+                                            child: CircularProgressIndicator(
+                                              color: Color(0xFF4DA3FF),
+                                            ),
+                                          ),
+                                        ),
+                                    errorWidget:
+                                        (_, __, ___) => const ColoredBox(
+                                          color: Color(0xFF23262C),
+                                          child: Center(
+                                            child: Icon(
+                                              Icons.broken_image_outlined,
+                                              color: Colors.white54,
+                                            ),
+                                          ),
+                                        ),
                                   ),
-                                ))
-                            : AspectRatio(
-                              aspectRatio: aspectRatio ?? 9 / 16,
-                              child: CachedNetworkImage(
-                                imageUrl: post.attachmentUrl!,
-                                fit: BoxFit.cover,
-                                placeholder:
-                                    (_, __) => const ColoredBox(
-                                      color: Color(0xFF23262C),
-                                      child: Center(
-                                        child: CircularProgressIndicator(
-                                          color: Color(0xFF4DA3FF),
-                                        ),
-                                      ),
-                                    ),
-                                errorWidget:
-                                    (_, __, ___) => const ColoredBox(
-                                      color: Color(0xFF23262C),
-                                      child: Center(
-                                        child: Icon(
-                                          Icons.broken_image_outlined,
-                                          color: Colors.white54,
-                                        ),
-                                      ),
-                                    ),
-                              ),
-                            ),
+                                ),
+                      ),
+                    ),
                   ),
                 ),
               ],
