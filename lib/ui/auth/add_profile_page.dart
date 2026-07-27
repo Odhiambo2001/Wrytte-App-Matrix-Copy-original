@@ -129,24 +129,13 @@ class _AddProfilePageState extends State<AddProfilePage> {
     // Re-persist the local session quickly; Matrix can finish in the background.
     final secret = await AuthService.instance.getStoredSecret() ?? '';
     final phone = await AuthService.instance.getSavedPhone() ?? '';
-    await AuthService.instance
-        .persistPhoneSession(
-          userId: uid,
-          username:
-              name, // explicit real name — bypasses the phone-number guard
-          phone: phone,
-          secret: secret,
-          matrixBootstrapTimeout: const Duration(milliseconds: 500),
-          preferMatrixRegisterFirst: widget.isNewUser,
-        )
-        .timeout(
-          const Duration(seconds: 2),
-          onTimeout: () {
-            debugPrint(
-              '[AddProfilePage] Session re-persist queued; continuing.',
-            );
-          },
-        );
+    await AuthService.instance.persistPhoneSession(
+      userId: uid,
+      username: name, // explicit real name — bypasses the phone-number guard
+      phone: phone,
+      secret: secret,
+      preferMatrixRegisterFirst: widget.isNewUser,
+    );
 
     _syncProfileInBackground(name);
     await _navigateHome(uid);

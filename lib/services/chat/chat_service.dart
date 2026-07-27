@@ -74,7 +74,9 @@ class ChatService {
   String? _currentUserPhone;
   String? _currentUserName;
   bool _isConnected = false;
+  bool _loginHistoryPrepared = false;
   Future<void>? _connectFuture;
+  Future<void>? _loginHistoryPreparationFuture;
   Future<void>? _historyRestoreFuture;
   Future<void>? _directHistoryRestoreFuture;
   Future<void>? _fetchConversationsFuture;
@@ -549,7 +551,11 @@ class ChatService {
     // Let the SDK finish /sync and any internal last-event gap repair before
     // starting potentially deep pagination across every DM room.
     await Future<void>.delayed(const Duration(seconds: 4));
-    if (!_isConnected) return;
+    if (!_isConnected ||
+        _loginHistoryPrepared ||
+        _loginHistoryPreparationFuture != null) {
+      return;
+    }
     await _ensureAllDirectRoomHistoryRestored();
   }
 
@@ -564,6 +570,46 @@ class ChatService {
         _historyRestoreFuture = null;
       }
     });
+  }
+
+  /// Completes the login-time server-to-local hydration barrier.
+  ///
+  /// Once this returns, every joined DM, group, and channel room has been
+  /// paginated and written to Wrytte's local SQLite cache. Conversation
+  /// screens can then render locally instead of starting another Matrix
+  /// history request when opened.
+  Future<void> prepareAllHistoryForLogin() {
+    if (_loginHistoryPrepared) return Future<void>.value();
+    final pending = _loginHistoryPreparationFuture;
+    if (pending != null) return pending;
+    final future = _prepareAllHistoryForLogin();
+    _loginHistoryPreparationFuture = future;
+    return future.whenComplete(() {
+      if (identical(_loginHistoryPreparationFuture, future)) {
+        _loginHistoryPreparationFuture = null;
+      }
+    });
+  }
+
+  Future<void> _prepareAllHistoryForLogin() async {
+    await connect();
+    apkLog(
+      'Matrix.loginHydration',
+      'start user_id="$_currentUserId" rooms=${MatrixClientService.instance.client.rooms.length}',
+    );
+    await MatrixChatService.instance.ensureSyncedAndAutoJoinInvites();
+    _refreshConversationsFromRooms(force: true);
+    await restoreAllRoomHistoryFromServer();
+    _refreshConversationsFromRooms(force: true);
+    await ChatLocalDb.instance.replaceConversations(
+      _conversationsMap.values.toList(),
+    );
+    await hydrateLocalConversations(syncReadMarkers: false);
+    _loginHistoryPrepared = true;
+    apkLog(
+      'Matrix.loginHydration',
+      'complete user_id="$_currentUserId" conversations=${_conversationsMap.length}',
+    );
   }
 
   Future<void> _restoreAllDirectRoomHistoryFromServer() async {
@@ -1280,6 +1326,9 @@ class ChatService {
     Object? startMsg,
     int count = 40,
   }) async {
+    if (_loginHistoryPrepared) {
+      return loadCachedMessages(conversationID);
+    }
     try {
       return await _withMatrixTokenRetry('fetchMessageHistory', () async {
         await _waitForConnection();
@@ -1869,7 +1918,7 @@ class ChatService {
     final room = _roomById(conversationId);
     final isChannel =
         room != null && _kindForGroupRoom(room) == ConversationKind.channel;
-    if (isChannel) {
+    if (isChannel && !_loginHistoryPrepared) {
       await _restoreRoomHistoryFromServer(room);
       return getConversationMessages(conversationId);
     }
@@ -2604,7 +2653,9 @@ class ChatService {
 
   Future<void> reset() async {
     _isConnected = false;
+    _loginHistoryPrepared = false;
     _connectFuture = null;
+    _loginHistoryPreparationFuture = null;
     _historyRestoreFuture = null;
     _directHistoryRestoreFuture = null;
     _roomsRefreshTimer?.cancel();

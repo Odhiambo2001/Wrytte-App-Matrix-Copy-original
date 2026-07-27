@@ -301,7 +301,6 @@ class AuthService {
     required String secret,
     String? token,
     DateTime? expiresAt,
-    Duration matrixBootstrapTimeout = const Duration(seconds: 3),
     bool preferMatrixRegisterFirst = false,
   }) async {
     // Never carry a different account's name into this session, and never
@@ -356,26 +355,12 @@ class AuthService {
 
     if (secret.trim().isNotEmpty) {
       final generation = ++_matrixBootstrapGeneration;
-      unawaited(
-        _tryLoginToMatrix(
-              userId: userId,
-              nickname: nameToSave,
-              generation: generation,
-              preferRegisterFirst: preferMatrixRegisterFirst,
-            )
-            .then((_) => ChatService().connect())
-            .timeout(
-              matrixBootstrapTimeout,
-              onTimeout: () {
-                debugPrint(
-                  '[AuthService] Matrix bootstrap timed out; continuing.',
-                );
-              },
-            )
-            .catchError((e) {
-              debugPrint('[AuthService] Matrix/chat bootstrap skipped: $e');
-            }),
-      );
+      await _tryLoginToMatrix(
+        userId: userId,
+        nickname: nameToSave,
+        generation: generation,
+        preferRegisterFirst: preferMatrixRegisterFirst,
+      ).then((_) => ChatService().prepareAllHistoryForLogin());
     }
   }
 
