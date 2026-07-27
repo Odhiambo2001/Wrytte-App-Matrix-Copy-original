@@ -21,7 +21,7 @@ class WrytteVideoPlayer extends StatefulWidget {
     this.autoPlay = false,
     this.loop = false,
     this.controlsEnabled = true,
-    this.showProgress = true,
+    this.showProgress = false,
     this.autoPlayWhenVisible = false,
     this.startMuted = false,
     this.showRemainingTime = false,
@@ -33,11 +33,12 @@ class WrytteVideoPlayer extends StatefulWidget {
 }
 
 class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
+  static _WrytteVideoPlayerState? _activeAutoPlayer;
+
   VideoPlayerController? _controller;
   Future<void>? _initialise;
   Timer? _visibilityTimer;
   bool _muted = false;
-  bool _isVisible = false;
   int _remainingSeconds = 0;
   bool _lastPlaying = false;
 
@@ -65,6 +66,9 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
   }
 
   void _disposeController() {
+    if (identical(_activeAutoPlayer, this)) {
+      _activeAutoPlayer = null;
+    }
     _visibilityTimer?.cancel();
     _visibilityTimer = null;
     _controller?.removeListener(_onControllerChanged);
@@ -79,7 +83,9 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
     } else {
       _controller = VideoPlayerController.file(File(source));
     }
-    _controller!.setLooping(widget.loop);
+    // Muted feed autoplay loops until the viewer deliberately opens/taps the
+    // video. Explicit non-feed players continue to respect [widget.loop].
+    _controller!.setLooping(widget.loop || widget.autoPlayWhenVisible);
     _initialise = _controller!.initialize().then((_) async {
       final controller = _controller;
       if (controller == null) return;
@@ -140,11 +146,22 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
             : visibleBounds.width * visibleBounds.height;
     final totalArea = bounds.width * bounds.height;
     final visible = totalArea > 0 && visibleArea / totalArea >= 0.55;
-    if (visible == _isVisible) return;
-    _isVisible = visible;
-    if (visible) {
+
+    if (!visible) {
+      if (identical(_activeAutoPlayer, this)) {
+        _activeAutoPlayer = null;
+      }
+      controller.pause();
+      return;
+    }
+
+    final active = _activeAutoPlayer;
+    if (active == null || identical(active, this)) {
+      _activeAutoPlayer = this;
       controller.play();
     } else {
+      // Another visible post owns autoplay. Keep this video paused until that
+      // player leaves the viewport and releases ownership.
       controller.pause();
     }
   }
@@ -160,8 +177,25 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
   Future<void> _handleVideoTap() async {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
-    if (widget.autoPlayWhenVisible && _muted) {
-      await _setMuted(false);
+    if (widget.autoPlayWhenVisible) {
+      // A deliberate tap switches this instance from passive, muted feed
+      // playback to active viewing. Active viewing must not loop.
+      await controller.setLooping(false);
+      if (identical(_activeAutoPlayer, this) &&
+          controller.value.isPlaying &&
+          !_muted) {
+        _togglePlay();
+        return;
+      }
+      final previous = _activeAutoPlayer;
+      if (previous != null && !identical(previous, this)) {
+        previous._controller?.pause();
+      }
+      _activeAutoPlayer = this;
+      await controller.play();
+      if (_muted) {
+        await _setMuted(false);
+      }
       return;
     }
     _togglePlay();

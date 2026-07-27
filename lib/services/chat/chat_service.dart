@@ -574,10 +574,10 @@ class ChatService {
 
   /// Completes the login-time server-to-local hydration barrier.
   ///
-  /// Once this returns, every joined DM, group, and channel room has been
-  /// paginated and written to Wrytte's local SQLite cache. Conversation
-  /// screens can then render locally instead of starting another Matrix
-  /// history request when opened.
+  /// Once this returns, the recent `/sync` timeline for every joined DM,
+  /// group, and channel has been written to Wrytte's local SQLite cache.
+  /// Conversation screens can render locally while older history continues
+  /// backfilling in the background.
   Future<void> prepareAllHistoryForLogin() {
     if (_loginHistoryPrepared) return Future<void>.value();
     final pending = _loginHistoryPreparationFuture;
@@ -599,7 +599,15 @@ class ChatService {
     );
     await MatrixChatService.instance.ensureSyncedAndAutoJoinInvites();
     _refreshConversationsFromRooms(force: true);
-    await restoreAllRoomHistoryFromServer();
+    final joinedRooms =
+        MatrixClientService.instance.client.rooms
+            .where((room) => room.membership == mx.Membership.join)
+            .toList();
+    // Persist the recent timeline already delivered by /sync for every room.
+    // Do not paginate to the beginning of large rooms on the login screen.
+    for (final room in joinedRooms) {
+      await _restoreRoomHistoryFromServer(room, maxHistoryPages: 0);
+    }
     _refreshConversationsFromRooms(force: true);
     await ChatLocalDb.instance.replaceConversations(
       _conversationsMap.values.toList(),
@@ -608,8 +616,24 @@ class ChatService {
     _loginHistoryPrepared = true;
     apkLog(
       'Matrix.loginHydration',
-      'complete user_id="$_currentUserId" conversations=${_conversationsMap.length}',
+      'recent complete user_id="$_currentUserId" '
+          'conversations=${_conversationsMap.length}; full backfill queued',
     );
+    unawaited(_backfillAllHistoryAfterLogin());
+  }
+
+  Future<void> _backfillAllHistoryAfterLogin() async {
+    // Give Home and its first local paint priority over deep pagination.
+    await Future<void>.delayed(const Duration(seconds: 3));
+    if (!_isConnected || !_loginHistoryPrepared) return;
+    apkLog('Matrix.loginHydration', 'background full backfill start');
+    await restoreAllRoomHistoryFromServer();
+    if (!_isConnected) return;
+    _refreshConversationsFromRooms(force: true);
+    await ChatLocalDb.instance.replaceConversations(
+      _conversationsMap.values.toList(),
+    );
+    apkLog('Matrix.loginHydration', 'background full backfill complete');
   }
 
   Future<void> _restoreAllDirectRoomHistoryFromServer() async {
@@ -649,10 +673,16 @@ class ChatService {
     });
   }
 
-  Future<List<ChatMessage>> _restoreRoomHistoryFromServer(mx.Room room) async {
+  Future<List<ChatMessage>> _restoreRoomHistoryFromServer(
+    mx.Room room, {
+    int? maxHistoryPages,
+  }) async {
     final pending = _roomHistoryInFlight[room.id];
     if (pending != null) return pending;
-    final future = _restoreRoomHistoryFromServerInternal(room);
+    final future = _restoreRoomHistoryFromServerInternal(
+      room,
+      maxHistoryPages: maxHistoryPages,
+    );
     _roomHistoryInFlight[room.id] = future;
     try {
       return await future;
@@ -664,15 +694,70 @@ class ChatService {
   }
 
   Future<List<ChatMessage>> _restoreRoomHistoryFromServerInternal(
-    mx.Room room,
-  ) async {
+    mx.Room room, {
+    int? maxHistoryPages,
+  }) async {
     mx.Timeline? timeline;
     try {
       timeline = await room.getTimeline(limit: null);
+      final localById = {
+        for (final message in await ChatLocalDb.instance.loadMessages(room.id))
+          message.id: message,
+      };
+      final hiddenIds = _hiddenEventIdsForRoom(room.id, room: room);
+      final groupJoinCutoff = _groupJoinCutoffForRoom(room);
+
+      Future<List<ChatMessage>> persistCurrentTimeline(String stage) async {
+        final messages = _messagesFromMatrixEvents(
+          timeline!.events,
+          localById: localById,
+          hiddenIds: hiddenIds,
+          groupJoinCutoff: groupJoinCutoff,
+        );
+
+        final latestRestoredAt =
+            messages.isNotEmpty ? messages.last.timestamp : null;
+        final serverReadAt = _serverReadTimeForRoom(room, messages);
+        final restoredReadAt =
+            latestRestoredAt == null
+                ? serverReadAt
+                : serverReadAt == null || latestRestoredAt.isAfter(serverReadAt)
+                ? latestRestoredAt
+                : serverReadAt;
+        if (restoredReadAt != null) {
+          _readConversationIds.add(room.id);
+          _lastReadAtByConversation[room.id] = restoredReadAt;
+          await ChatLocalDb.instance.markConversationReadAt(
+            room.id,
+            restoredReadAt,
+          );
+        }
+
+        for (final message in messages) {
+          localById[message.id] = message;
+          _cacheMessage(message, countUnread: false, publish: false);
+        }
+        await ChatLocalDb.instance.saveMessages(messages);
+        _emitRoomMessages(room.id);
+        _emitConversations();
+        _refreshMessageStatusesForRoom(room);
+        apkLog(
+          'Matrix.history',
+          'published room_id="${room.id}" stage="$stage" '
+              'messages=${messages.length}',
+        );
+        return messages;
+      }
+
+      // Make the recent /sync timeline visible before requesting any older
+      // pages. This is shared by DMs, groups, and channels.
+      var messages = await persistCurrentTimeline('recent');
       var page = 0;
       var emptyAdvancingPages = 0;
 
-      while (timeline.canRequestHistory) {
+      while (_isConnected &&
+          timeline.canRequestHistory &&
+          (maxHistoryPages == null || page < maxHistoryPages)) {
         final beforeCount = timeline.events.length;
         final beforeToken = room.prev_batch;
         page += 1;
@@ -693,6 +778,9 @@ class ChatService {
 
         if (afterCount > beforeCount) {
           emptyAdvancingPages = 0;
+          // Deep history can take minutes for large rooms. Persist and notify
+          // after every page so an open conversation updates progressively.
+          messages = await persistCurrentTimeline('page_$page');
         }
 
         if (afterCount <= beforeCount) {
@@ -724,45 +812,6 @@ class ChatService {
           break;
         }
       }
-
-      final localById = {
-        for (final message in await ChatLocalDb.instance.loadMessages(room.id))
-          message.id: message,
-      };
-      final hiddenIds = _hiddenEventIdsForRoom(room.id, room: room);
-      final groupJoinCutoff = _groupJoinCutoffForRoom(room);
-      final messages = _messagesFromMatrixEvents(
-        timeline.events,
-        localById: localById,
-        hiddenIds: hiddenIds,
-        groupJoinCutoff: groupJoinCutoff,
-      );
-
-      final latestRestoredAt =
-          messages.isNotEmpty ? messages.last.timestamp : null;
-      final serverReadAt = _serverReadTimeForRoom(room, messages);
-      final restoredReadAt =
-          latestRestoredAt == null
-              ? serverReadAt
-              : serverReadAt == null || latestRestoredAt.isAfter(serverReadAt)
-              ? latestRestoredAt
-              : serverReadAt;
-      if (restoredReadAt != null) {
-        _readConversationIds.add(room.id);
-        _lastReadAtByConversation[room.id] = restoredReadAt;
-        await ChatLocalDb.instance.markConversationReadAt(
-          room.id,
-          restoredReadAt,
-        );
-      }
-
-      for (final message in messages) {
-        _cacheMessage(message, countUnread: false, publish: false);
-      }
-      await ChatLocalDb.instance.saveMessages(messages);
-      _emitRoomMessages(room.id);
-      _emitConversations();
-      _refreshMessageStatusesForRoom(room);
       apkLog(
         'Matrix.history',
         'restored room_id="${room.id}" messages=${messages.length}',
@@ -2653,11 +2702,23 @@ class ChatService {
 
   Future<void> reset() async {
     _isConnected = false;
+    final pendingHistory = <Future<dynamic>>{
+      if (_historyRestoreFuture != null) _historyRestoreFuture!,
+      if (_directHistoryRestoreFuture != null) _directHistoryRestoreFuture!,
+      ..._roomHistoryInFlight.values,
+    };
     _loginHistoryPrepared = false;
     _connectFuture = null;
     _loginHistoryPreparationFuture = null;
     _historyRestoreFuture = null;
     _directHistoryRestoreFuture = null;
+    if (pendingHistory.isNotEmpty) {
+      await Future.wait(pendingHistory).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => const <dynamic>[],
+      );
+    }
+    _roomHistoryInFlight.clear();
     _roomsRefreshTimer?.cancel();
     _roomsRefreshTimer = null;
     _lastRoomsRefreshAt = null;

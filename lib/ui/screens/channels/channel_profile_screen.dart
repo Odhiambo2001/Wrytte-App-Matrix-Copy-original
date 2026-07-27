@@ -7,6 +7,9 @@ import 'package:wrytte/ui/screens/channels/channel_edit_screen.dart';
 import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
+import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
+import 'package:wrytte/ui/widgets/full_screen_video_viewer.dart';
+import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_player.dart';
 
 /// Profile page for a channel, opened by tapping the channel header.
@@ -131,12 +134,13 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
       const {'image', 'video'}.contains(post.attachmentType) &&
       (post.attachmentUrl?.trim().isNotEmpty ?? false);
 
-  /// Posts are publications containing a picture or video. A caption does not
-  /// change the category: media with text still belongs in Posts.
+  /// Media contains every publication with an image or video. Captions do not
+  /// affect whether an item appears in this gallery.
   List<ChatMessage> get _mediaPosts =>
       _topLevelPosts.where(_hasVisualMedia).toList();
 
-  /// Updates are strictly text-only publications.
+  /// Updates contains text-only publications. A caption attached to media
+  /// remains part of its post and is not duplicated here.
   List<ChatMessage> get _textUpdatePosts =>
       _topLevelPosts
           .where(
@@ -540,7 +544,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   // --------------------------------------------------------------- posts tab
 
   Widget _postsTab() {
-    return _postList(_mediaPosts, emptyMessage: 'No posts yet');
+    return _mediaGrid();
   }
 
   Widget _updatesTab() {
@@ -580,6 +584,77 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     );
   }
 
+  Widget _mediaGrid() {
+    if (_mediaPosts.isEmpty) return _emptyState('No media yet');
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 4,
+        mainAxisSpacing: 4,
+        childAspectRatio: 0.72,
+      ),
+      itemCount: _mediaPosts.length,
+      itemBuilder: (_, index) => _mediaTile(_mediaPosts[index]),
+    );
+  }
+
+  Widget _mediaTile(ChatMessage post) {
+    final url = post.attachmentUrl!.trim();
+    final isVideo = post.attachmentType == 'video';
+    return GestureDetector(
+      onTap:
+          () =>
+              isVideo
+                  ? FullScreenVideoViewer.open(context, url)
+                  : FullScreenImageViewer.open(context, url),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (isVideo)
+              WrytteVideoThumbnail(source: url)
+            else
+              CachedNetworkImage(
+                imageUrl: url,
+                fit: BoxFit.cover,
+                placeholder:
+                    (_, __) => const ColoredBox(color: Color(0xFF23262C)),
+                errorWidget:
+                    (_, __, ___) => const ColoredBox(
+                      color: Color(0xFF23262C),
+                      child: Center(
+                        child: Icon(
+                          Icons.broken_image_outlined,
+                          color: Colors.white54,
+                        ),
+                      ),
+                    ),
+              ),
+            if (isVideo)
+              const Center(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Padding(
+                    padding: EdgeInsets.all(7),
+                    child: Icon(
+                      Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _postTile(ChatMessage post) {
     final hasImage =
         post.attachmentType == 'image' &&
@@ -594,9 +669,11 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
             ? post.mediaWidth! / post.mediaHeight!
             : null;
     final portrait = aspectRatio != null ? aspectRatio < 1 : hasImage;
-    final isNineBySixteenImage =
-        hasImage &&
-        (aspectRatio == null || (aspectRatio - 9 / 16).abs() <= 0.08);
+    final isNineBySixteenMedia =
+        (hasImage && aspectRatio == null) ||
+        ((hasImage || hasVideo) &&
+            aspectRatio != null &&
+            (aspectRatio - 9 / 16).abs() <= 0.08);
     final postContent = _mediaDisplayContent(post, hasImage || hasVideo);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -623,7 +700,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                 Padding(
                   padding: EdgeInsets.only(
                     right:
-                        isNineBySixteenImage
+                        isNineBySixteenMedia
                             ? 0
                             : portrait
                             ? 50
@@ -632,7 +709,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: FractionallySizedBox(
-                      widthFactor: isNineBySixteenImage ? 0.70 : 1,
+                      widthFactor: isNineBySixteenMedia ? 0.70 : 1,
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(14),
                         child:
@@ -655,7 +732,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                                     ))
                                 : AspectRatio(
                                   aspectRatio:
-                                      isNineBySixteenImage
+                                      isNineBySixteenMedia
                                           ? 9 / 16
                                           : aspectRatio ?? 9 / 16,
                                   child: CachedNetworkImage(
@@ -718,13 +795,6 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   }
 
   Widget _profilePostActions(ChatMessage post) {
-    final comments =
-        widget.posts
-            .where(
-              (item) =>
-                  item.replyToMessageId == post.id && !item.isDeletedForMe,
-            )
-            .length;
     return FittedBox(
       fit: BoxFit.scaleDown,
       alignment: Alignment.centerLeft,
