@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +18,7 @@ import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_player.dart';
+import 'package:wrytte/ui/screens/channels/channel_gallery_picker.dart';
 
 class ChannelFeedScreen extends StatefulWidget {
   final String conversationId;
@@ -52,6 +54,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final TextEditingController _captionController = TextEditingController();
   final ImagePicker _mediaPicker = ImagePicker();
   final List<XFile> _selectedMedia = [];
+  final Map<String, ChatMessage> _optimisticMediaPosts = {};
   StreamSubscription<List<ChatMessage>>? _postsSubscription;
   StreamSubscription? _syncSubscription;
   late List<ChatMessage> _posts;
@@ -100,11 +103,15 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       posts,
     ) {
       if (!mounted) return;
+      final hadPendingOptimistic = _optimisticMediaPosts.isNotEmpty;
+      final merged = _mergeIncomingPosts(posts);
       // The stream can briefly emit the locally cached subset while Matrix
       // history is still being hydrated. Never replace a complete history
-      // with that partial snapshot.
-      if (posts.length < _posts.length) return;
-      setState(() => _posts = List<ChatMessage>.from(posts));
+      // with that partial snapshot unless an optimistic post is pending.
+      if (posts.length < _posts.length && !hadPendingOptimistic) {
+        return;
+      }
+      setState(() => _posts = merged);
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -195,7 +202,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         return;
       }
     } catch (_) {}
-
   }
 
   void _refreshSubscriberCount() {
@@ -258,32 +264,72 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     setState(() => _publishing = true);
     _postController.clear();
     try {
-      final media = List<XFile>.from(_selectedMedia);
+      final media = <XFile>[];
+      final seenMediaKeys = <String>{};
+      for (final file in _selectedMedia) {
+        final path = file.path.trim();
+        final key = path.isNotEmpty ? path : '${file.name}:${file.length}';
+        if (seenMediaKeys.add(key)) media.add(file);
+      }
       if (media.isNotEmpty) {
-        for (final file in media) {
-          await MatrixChatService.instance.sendFile(
-            roomId: widget.conversationId,
-            filePath: file.path,
-          );
-        }
-        if (caption.isNotEmpty) {
-          await _chat.sendMessage(
-            ChatMessage(
-              id: 'opt_${DateTime.now().millisecondsSinceEpoch}',
-              conversationId: widget.conversationId,
-              senderId: widget.currentUserId,
-              receiverId: widget.conversationId,
-              content: caption,
-              timestamp: DateTime.now(),
-              status: MessageStatus.sending,
-            ),
-          );
-        }
         if (mounted) {
           setState(() {
             _selectedMedia.clear();
             _captionController.clear();
           });
+        }
+        for (var index = 0; index < media.length; index++) {
+          final file = media[index];
+          final localId =
+              'local_media_${DateTime.now().microsecondsSinceEpoch}_$index';
+          final attachmentType = _mediaTypeForFile(file);
+          final dimensions =
+              attachmentType == 'image'
+                  ? await _readImageDimensions(file)
+                  : null;
+          final optimistic = ChatMessage(
+            id: localId,
+            conversationId: widget.conversationId,
+            senderId: widget.currentUserId,
+            receiverId: widget.conversationId,
+            content: index == 0 ? caption : '',
+            timestamp: DateTime.now(),
+            status: MessageStatus.sending,
+            attachmentUrl: file.path,
+            attachmentType: attachmentType,
+            mediaWidth: dimensions?.width,
+            mediaHeight: dimensions?.height,
+          );
+          _optimisticMediaPosts[localId] = optimistic;
+          if (mounted) {
+            setState(() => _posts = [optimistic, ..._posts]);
+          }
+          try {
+            final sent = await _chat.sendAttachmentMessage(
+              receiverID: widget.conversationId,
+              conversationId: widget.conversationId,
+              filePath: file.path,
+              attachmentType: attachmentType,
+              caption: index == 0 ? caption : null,
+              mediaWidth: dimensions?.width,
+              mediaHeight: dimensions?.height,
+            );
+            if (mounted) {
+              setState(() {
+                _posts =
+                    _posts
+                        .map((post) => post.id == localId ? sent : post)
+                        .toList();
+              });
+            }
+            _optimisticMediaPosts.remove(localId);
+          } catch (_) {
+            _optimisticMediaPosts.remove(localId);
+            if (mounted) {
+              setState(() => _posts.removeWhere((post) => post.id == localId));
+            }
+            rethrow;
+          }
         }
       } else {
         await _chat.sendMessage(
@@ -305,6 +351,77 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       ).showSnackBar(SnackBar(content: Text('Could not publish post: $error')));
     } finally {
       if (mounted) setState(() => _publishing = false);
+    }
+  }
+
+  List<ChatMessage> _mergeIncomingPosts(List<ChatMessage> incoming) {
+    final merged = <ChatMessage>[];
+    final seenIds = <String>{};
+    final seenAttachments = <String>{};
+    for (final post in incoming) {
+      if (!seenIds.add(post.id)) continue;
+      final attachment = post.attachmentUrl?.trim() ?? '';
+      if (attachment.isNotEmpty && !seenAttachments.add(attachment)) continue;
+      merged.add(post);
+    }
+    for (final optimistic in _optimisticMediaPosts.values.toList()) {
+      final matchIndex = merged.indexWhere(
+        (post) =>
+            post.id == optimistic.id ||
+            _matchesOptimisticMedia(post, optimistic),
+      );
+      if (matchIndex >= 0) {
+        _optimisticMediaPosts.remove(optimistic.id);
+      } else if (!merged.any((post) => post.id == optimistic.id)) {
+        merged.insert(0, optimistic);
+      }
+    }
+    return merged;
+  }
+
+  bool _matchesOptimisticMedia(ChatMessage post, ChatMessage optimistic) {
+    if (post.attachmentType == null ||
+        post.attachmentType != optimistic.attachmentType) {
+      return false;
+    }
+    final closeInTime =
+        post.timestamp.difference(optimistic.timestamp).abs() <
+        const Duration(minutes: 2);
+    final postCaption = post.content.trim();
+    final optimisticCaption = optimistic.content.trim();
+    return closeInTime &&
+        (postCaption.isEmpty ||
+            optimisticCaption.isEmpty ||
+            postCaption == optimisticCaption);
+  }
+
+  String _mediaTypeForFile(XFile file) {
+    final mimeType = file.mimeType?.toLowerCase() ?? '';
+    final path = file.path.toLowerCase();
+    if (mimeType.startsWith('video/') ||
+        ['.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi'].any(path.endsWith)) {
+      return 'video';
+    }
+    return 'image';
+  }
+
+  Future<({int width, int height})?> _readImageDimensions(XFile file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      try {
+        final frame = await codec.getNextFrame();
+        final dimensions = (
+          width: frame.image.width,
+          height: frame.image.height,
+        );
+        frame.image.dispose();
+        return dimensions;
+      } finally {
+        codec.dispose();
+      }
+    } catch (_) {
+      return null;
     }
   }
 
@@ -380,7 +497,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                         ),
                       )
                       : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(16, 22, 16, 112),
+                        padding: const EdgeInsets.fromLTRB(16, 22, 16, 160),
                         itemCount: posts.length,
                         itemBuilder: (_, index) {
                           final post = posts[index];
@@ -391,7 +508,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                               _channelPost(post),
                               // Divider under every post, like the reference.
                               Padding(
-                                padding: const EdgeInsets.only(left: 56, top: 14, bottom: 16),
+                                padding: const EdgeInsets.only(
+                                  left: 56,
+                                  top: 14,
+                                  bottom: 16,
+                                ),
                                 child: SizedBox(
                                   height: 0.6,
                                   child: OverflowBox(
@@ -399,7 +520,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                                     maxWidth: double.infinity,
                                     maxHeight: 0.6,
                                     child: SizedBox(
-                                      width: MediaQuery.sizeOf(context).width - 72,
+                                      width:
+                                          MediaQuery.sizeOf(context).width - 72,
                                       child: const Divider(
                                         color: Color(0xFF3A3D42),
                                         thickness: 0.6,
@@ -437,6 +559,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             Icons.arrow_back_ios_new,
             () => Navigator.pop(context),
             size: 48,
+            backgroundColor: const Color(0xFF23262C).withOpacity(0.30),
+            borderColor: const Color(0xFF23262C),
+            iconColor: Colors.white.withOpacity(0.70),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -445,11 +570,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               onTap: _openChannelProfile,
               borderRadius: BorderRadius.circular(28),
               child: Container(
-                height: 56,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
+                height: 48,
+                padding: EdgeInsets.zero,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF23262C),
+                  color: const Color(0xFF23262C).withOpacity(0.30),
                   borderRadius: BorderRadius.circular(28),
+                  border: Border.all(color: const Color(0xFF23262C)),
                 ),
                 child: Row(
                   children: [
@@ -457,7 +583,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       imageUrl: _channelAvatarUrl,
                       cacheIdentity: _channelAvatarCacheIdentity,
                       name: widget.title,
-                      size: 40,
+                      size: 48,
                     ),
                     const SizedBox(width: 6),
                     Expanded(
@@ -494,8 +620,40 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             ),
           ),
           const SizedBox(width: 6),
-          _circleButton(Icons.more_vert, () {}, size: 48),
+          _circleButton(
+            Icons.more_vert,
+            () {},
+            size: 48,
+            backgroundColor: const Color(0xFF23262C).withOpacity(0.30),
+            borderColor: const Color(0xFF23262C),
+            iconColor: Colors.white.withOpacity(0.70),
+          ),
         ],
+      ),
+    );
+  }
+
+  /// A middot separator drawn as a circle rather than a text glyph.
+  ///
+  /// A `·` character isn't vertically centered in its own em-box, so scaling
+  /// its font size to make it "bigger" also drags the visible dot upward.
+  /// Drawing it as a plain circle decouples size from vertical position:
+  /// [size] controls how big it is, [verticalOffset] controls how high/low
+  /// it sits, and the two never fight each other.
+  WidgetSpan _dotSpan({double size = 4, double verticalOffset = -1}) {
+    return WidgetSpan(
+      alignment: PlaceholderAlignment.middle,
+      child: Transform.translate(
+        offset: Offset(0, verticalOffset),
+        child: Container(
+          width: size,
+          height: size,
+          margin: const EdgeInsets.symmetric(horizontal: 5),
+          decoration: const BoxDecoration(
+            color: Color(0xFF8C8F95),
+            shape: BoxShape.circle,
+          ),
+        ),
       ),
     );
   }
@@ -508,12 +666,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         post.attachmentType == 'video' &&
         (post.attachmentUrl?.trim().isNotEmpty ?? false);
     final mediaAspectRatio =
-        post.mediaWidth != null && post.mediaHeight != null && post.mediaHeight! > 0
+        post.mediaWidth != null &&
+                post.mediaHeight != null &&
+                post.mediaHeight! > 0
             ? post.mediaWidth! / post.mediaHeight!
             : null;
-    final isPortraitMedia = mediaAspectRatio != null
-        ? mediaAspectRatio < 1
-        : hasImage;
+    final isPortraitMedia =
+        mediaAspectRatio != null ? mediaAspectRatio < 1 : hasImage;
+    final postContent = _mediaDisplayContent(post, hasImage || hasVideo);
     final viewLabel = _formatCount(_viewCounts[post.id] ?? 0);
     final viewCount = _viewCounts[post.id] ?? 0;
     return Row(
@@ -525,7 +685,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             imageUrl: _channelAvatarUrl,
             cacheIdentity: _channelAvatarCacheIdentity,
             name: widget.title,
-            size: 34,
+            size: 36,
           ),
         ),
         const SizedBox(width: 12),
@@ -555,44 +715,28 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   Text.rich(
                     TextSpan(
                       children: [
-                        const TextSpan(
-                          text: ' · ',
-                          style: TextStyle(
-                            color: Color(0xFF8C8F95),
-                            fontSize: 16,
-                          ),
-                        ),
+                        _dotSpan(size: 4),
                         TextSpan(
                           text: _postAge(post.timestamp),
                           style: const TextStyle(
                             color: Color(0xFF8C8F95),
-                            fontSize: 13,
+                            fontSize: 17,
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-                  if (viewLabel != null)
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          const TextSpan(
-                            text: ' · ',
-                            style: TextStyle(
-                              color: Color(0xFF8C8F95),
-                              fontSize: 16,
-                            ),
-                          ),
+                        if (viewLabel != null) ...[
+                          _dotSpan(size: 4),
                           TextSpan(
-                            text: '$viewLabel ${viewCount == 1 ? 'view' : 'views'}',
+                            text:
+                                '$viewLabel ${viewCount == 1 ? 'view' : 'views'}',
                             style: const TextStyle(
                               color: Color(0xFF8C8F95),
-                              fontSize: 13,
+                              fontSize: 17,
                             ),
                           ),
                         ],
-                      ),
+                      ],
                     ),
+                  ),
                 ],
               ),
               if (hasImage || hasVideo) ...[
@@ -601,54 +745,72 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   padding: EdgeInsets.only(right: isPortraitMedia ? 50 : 8),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(14),
-                    child: hasVideo
-                        ? (mediaAspectRatio == null
-                            ? WrytteVideoPlayer(
-                                source: post.attachmentUrl!,
-                                borderRadius: BorderRadius.circular(14),
-                              )
-                            : AspectRatio(
-                                aspectRatio: mediaAspectRatio,
-                                child: WrytteVideoPlayer(
+                    child:
+                        hasVideo
+                            ? (mediaAspectRatio == null
+                                ? WrytteVideoPlayer(
                                   source: post.attachmentUrl!,
                                   borderRadius: BorderRadius.circular(14),
-                                ),
-                              ))
-                        : AspectRatio(
-                            aspectRatio: mediaAspectRatio ?? 9 / 16,
-                            child: CachedNetworkImage(
-                              imageUrl: post.attachmentUrl!,
-                              fit: BoxFit.cover,
-                              placeholder:
-                                  (_, __) => const ColoredBox(
-                                    color: Color(0xFF23262C),
-                                    child: Center(
-                                      child: CircularProgressIndicator(
-                                        color: Color(0xFF4DA3FF),
-                                      ),
-                                    ),
+                                )
+                                : AspectRatio(
+                                  aspectRatio: mediaAspectRatio,
+                                  child: WrytteVideoPlayer(
+                                    source: post.attachmentUrl!,
+                                    borderRadius: BorderRadius.circular(14),
                                   ),
-                              errorWidget:
-                                  (_, __, ___) => const ColoredBox(
-                                    color: Color(0xFF23262C),
-                                    child: Center(
-                                      child: Icon(
-                                        Icons.broken_image_outlined,
-                                        color: Colors.white54,
+                                ))
+                            : AspectRatio(
+                              aspectRatio: mediaAspectRatio ?? 9 / 16,
+                              child:
+                                  post.attachmentUrl!.startsWith('/')
+                                      ? Image.file(
+                                        File(post.attachmentUrl!),
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (_, __, ___) => const ColoredBox(
+                                              color: Color(0xFF23262C),
+                                              child: Center(
+                                                child: Icon(
+                                                  Icons.broken_image_outlined,
+                                                  color: Colors.white54,
+                                                ),
+                                              ),
+                                            ),
+                                      )
+                                      : CachedNetworkImage(
+                                        imageUrl: post.attachmentUrl!,
+                                        fit: BoxFit.cover,
+                                        placeholder:
+                                            (_, __) => const ColoredBox(
+                                              color: Color(0xFF23262C),
+                                              child: Center(
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      color: Color(0xFF4DA3FF),
+                                                    ),
+                                              ),
+                                            ),
+                                        errorWidget:
+                                            (_, __, ___) => const ColoredBox(
+                                              color: Color(0xFF23262C),
+                                              child: Center(
+                                                child: Icon(
+                                                  Icons.broken_image_outlined,
+                                                  color: Colors.white54,
+                                                ),
+                                              ),
+                                            ),
                                       ),
-                                    ),
-                                  ),
                             ),
-                          ),
                   ),
                 ),
               ],
-              if (post.content.trim().isNotEmpty) ...[
-                const SizedBox(height: 4),
+              if (postContent.isNotEmpty) ...[
+                SizedBox(height: hasImage || hasVideo ? 8 : 4),
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: Text(
-                    post.content,
+                    postContent,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 17,
@@ -664,6 +826,20 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         ),
       ],
     );
+  }
+
+  String _mediaDisplayContent(ChatMessage post, bool hasMedia) {
+    final content = post.content.trim();
+    if (hasMedia &&
+        const {'photo', 'image', 'video'}.contains(content.toLowerCase())) {
+      return '';
+    }
+    final isGeneratedFilename = RegExp(
+      r'^[^/\\]+\.(?:jpg|jpeg|png|gif|webp|svg|mp4|mov|m4v|avi|mkv)$',
+      caseSensitive: false,
+    ).hasMatch(content);
+    if (isGeneratedFilename) return '';
+    return content;
   }
 
   Widget _postActions(ChatMessage post) {
@@ -684,46 +860,50 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       child: FittedBox(
         fit: BoxFit.scaleDown,
         alignment: Alignment.centerLeft,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.start,
-          children: [
-          _PostAction(
-            icon: Icons.comment_outlined,
-            label: _formatCount(commentCount),
-            onTap: () => _openComments(post),
+        child: SizedBox(
+          height: 28,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _PostAction(
+                icon: Icons.comment_outlined,
+                label: '100',
+                onTap: () => _openComments(post),
+              ),
+              const SizedBox(width: 18),
+              _PostAction(
+                icon: Icons.repeat,
+                label: '100',
+                color: reposted ? const Color(0xFF4DA3FF) : null,
+                onTap: () => _toggleRepost(postId),
+              ),
+              const SizedBox(width: 18),
+              _PostAction(
+                icon: liked ? Icons.favorite : Icons.favorite_border,
+                label: '100',
+                color: liked ? const Color(0xFFE85D75) : null,
+                onTap: () => _toggleLike(postId),
+              ),
+              const SizedBox(width: 18),
+              _PostAction(
+                icon: Icons.ios_share_outlined,
+                onTap: () => _openShareSheet(post),
+              ),
+              const SizedBox(width: 2),
+              _PostAction(
+                icon: bookmarked ? Icons.bookmark : Icons.bookmark_border,
+                color: bookmarked ? const Color(0xFF4DA3FF) : null,
+                onTap: () => _toggleBookmark(postId),
+              ),
+              const SizedBox(width: 18),
+              _PostAction(
+                icon: Icons.more_horiz,
+                onTap: () => _openMoreOptions(post),
+              ),
+            ],
           ),
-          const SizedBox(width: 18),
-          _PostAction(
-            icon: Icons.repeat,
-            label: _formatCount(_repostCounts[postId] ?? 0),
-            color: reposted ? const Color(0xFF4DA3FF) : null,
-            onTap: () => _toggleRepost(postId),
-          ),
-          const SizedBox(width: 18),
-          _PostAction(
-            icon: liked ? Icons.favorite : Icons.favorite_border,
-            label: _formatCount(_likeCounts[postId] ?? 0),
-            color: liked ? const Color(0xFFE85D75) : null,
-            onTap: () => _toggleLike(postId),
-          ),
-          const SizedBox(width: 18),
-          _PostAction(
-            icon: Icons.ios_share_outlined,
-            onTap: () => _openShareSheet(post),
-          ),
-          const SizedBox(width: 8),
-          _PostAction(
-            icon: bookmarked ? Icons.bookmark : Icons.bookmark_border,
-            color: bookmarked ? const Color(0xFF4DA3FF) : null,
-            onTap: () => _toggleBookmark(postId),
-          ),
-          const SizedBox(width: 18),
-          _PostAction(
-            icon: Icons.more_horiz,
-            onTap: () => _openMoreOptions(post),
-          ),
-          ],
         ),
       ),
     );
@@ -813,7 +993,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                                           name:
                                               comment.senderName ??
                                               comment.senderId,
-                                          size: 32,
+                                          size: 36,
                                         ),
                                         const SizedBox(width: 10),
                                         Expanded(
@@ -913,9 +1093,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void _openShareSheet(ChatMessage post) {
     Clipboard.setData(ClipboardData(text: _postLink(post))).then((_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Post link copied')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Post link copied')));
     });
   }
 
@@ -1039,22 +1219,22 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             height: 54,
             child: FilledButton(
               onPressed: _subscribeToChannel,
-            child: const Text('Subscribe'),
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF4DA3FF),
-              foregroundColor: Colors.white,
+              child: const Text('Subscribe'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF4DA3FF),
+                foregroundColor: Colors.white,
+              ),
             ),
-          ),
           ),
         ),
       );
     }
     if (!widget.canPost) return const SizedBox.shrink();
     final hasMedia = _selectedMedia.isNotEmpty;
-    final hasText = (hasMedia ? _captionController : _postController)
-        .text
-        .trim()
-        .isNotEmpty;
+    final hasText =
+        (hasMedia ? _captionController : _postController).text
+            .trim()
+            .isNotEmpty;
     return SafeArea(
       top: false,
       child: Column(
@@ -1062,58 +1242,70 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         children: [
           if (hasMedia) _selectedMediaPreview(),
           Container(
-        padding: const EdgeInsets.fromLTRB(8, 10, 8, 16),
-        decoration: const BoxDecoration(color: Color(0xFF08090B)),
-        child: Row(
-          children: [
-            _circleButton(Icons.add, _openMediaPicker, size: 46),
-            const SizedBox(width: 6),
-            Expanded(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(
-                  minHeight: 50,
-                  maxHeight: 160,
+            padding: const EdgeInsets.fromLTRB(8, 10, 8, 16),
+            decoration: const BoxDecoration(color: Color(0xFF08090B)),
+            child: Row(
+              children: [
+                _circleButton(
+                  Icons.add,
+                  _openMediaPicker,
+                  size: 40,
+                  backgroundColor: const Color(0xFF23262C).withOpacity(0.30),
+                  borderColor: const Color(0xFF23262C),
+                  iconColor: Colors.white.withOpacity(0.70),
                 ),
-                child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF23262C),
-                  borderRadius: BorderRadius.circular(28),
-                ),
-                child: TextField(
-                  controller: _selectedMedia.isEmpty
-                      ? _postController
-                      : _captionController,
-                  minLines: 1,
-                  maxLines: 4,
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: (_) => _publishPost(),
-                  style: const TextStyle(color: Colors.white, fontSize: 17),
-                  decoration: InputDecoration(
-                    hintText: _selectedMedia.isEmpty ? 'Write post' : 'Add a caption...',
-                    hintStyle: TextStyle(color: Colors.white38),
-                    border: InputBorder.none,
+                const SizedBox(width: 4),
+                Expanded(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      minHeight: 40,
+                      maxHeight: 120,
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF23262C).withOpacity(0.30),
+                        borderRadius: BorderRadius.circular(28),
+                        border: Border.all(color: const Color(0xFF23262C)),
+                      ),
+                      child: TextField(
+                        controller:
+                            _selectedMedia.isEmpty
+                                ? _postController
+                                : _captionController,
+                        minLines: 1,
+                        maxLines: 4,
+                        onChanged: (_) => setState(() {}),
+                        onSubmitted: (_) => _publishPost(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                        ),
+                        decoration: InputDecoration(
+                          hintText:
+                              _selectedMedia.isEmpty
+                                  ? 'Write post'
+                                  : 'Add a caption...',
+                          hintStyle: TextStyle(color: Colors.white38),
+                          border: InputBorder.none,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
+                const SizedBox(width: 6),
+                _circleButton(
+                  _publishing
+                      ? Icons.hourglass_top
+                      : (hasText ? Icons.send : Icons.camera_alt_outlined),
+                  _publishing ? null : (hasText ? _publishPost : () {}),
+                  size: 40,
+                  backgroundColor: const Color(0xFF23262C).withOpacity(0.30),
+                  borderColor: const Color(0xFF23262C),
+                  iconColor: Colors.white.withOpacity(0.70),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(width: 6),
-            _circleButton(
-              _publishing
-                  ? Icons.hourglass_top
-                  : (hasText
-                      ? Icons.send
-                      : Icons.camera_alt_outlined),
-              _publishing
-                  ? null
-                  : (hasText
-                      ? _publishPost
-                      : () {}),
-              size: 46,
-            ),
-          ],
-        ),
           ),
         ],
       ),
@@ -1141,12 +1333,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     width: 66,
                     height: 66,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                      width: 66,
-                      height: 66,
-                      color: const Color(0xFF23262C),
-                      child: const Icon(Icons.insert_drive_file),
-                    ),
+                    errorBuilder:
+                        (_, __, ___) => Container(
+                          width: 66,
+                          height: 66,
+                          color: const Color(0xFF23262C),
+                          child: const Icon(Icons.insert_drive_file),
+                        ),
                   ),
                 ),
                 Positioned(
@@ -1174,30 +1367,61 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<void> _openMediaPicker() async {
     final choice = await showModalBottomSheet<String>(
       context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(leading: const Icon(Icons.camera_alt), title: const Text('Camera'), onTap: () => Navigator.pop(context, 'camera')),
-            ListTile(leading: const Icon(Icons.photo_library), title: const Text('Gallery'), onTap: () => Navigator.pop(context, 'gallery')),
-            ListTile(leading: const Icon(Icons.insert_drive_file), title: const Text('Files'), onTap: () => Navigator.pop(context, 'files')),
-          ],
-        ),
-      ),
+      builder:
+          (context) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.camera_alt),
+                  title: const Text('Camera'),
+                  onTap: () => Navigator.pop(context, 'camera'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.photo_library),
+                  title: const Text('Gallery'),
+                  onTap: () => Navigator.pop(context, 'gallery'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.insert_drive_file),
+                  title: const Text('Files'),
+                  onTap: () => Navigator.pop(context, 'files'),
+                ),
+              ],
+            ),
+          ),
     );
     if (choice == null || !mounted) return;
     List<XFile> picked = [];
+    var gallerySelectionWasSubmitted = false;
     if (choice == 'camera') {
       final file = await _mediaPicker.pickImage(source: ImageSource.camera);
       if (file != null) picked = [file];
     } else if (choice == 'gallery') {
-      picked = await _mediaPicker.pickMultiImage();
+      final selection = await Navigator.push<ChannelGallerySelection>(
+        context,
+        MaterialPageRoute(builder: (_) => const ChannelGalleryPicker()),
+      );
+      if (selection != null) {
+        picked = selection.files;
+        _captionController.text = selection.caption;
+        gallerySelectionWasSubmitted = true;
+      }
     } else {
       final result = await FilePicker.platform.pickFiles(allowMultiple: true);
-      picked = result?.files.where((file) => file.path != null).map((file) => XFile(file.path!)).toList() ?? [];
+      picked =
+          result?.files
+              .where((file) => file.path != null)
+              .map((file) => XFile(file.path!))
+              .toList() ??
+          [];
     }
     if (!mounted || picked.isEmpty) return;
     setState(() => _selectedMedia.addAll(picked));
+
+    if (gallerySelectionWasSubmitted) {
+      await _publishPost();
+    }
   }
 
   Future<void> _subscribeToChannel() async {
@@ -1214,24 +1438,32 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not subscribe: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not subscribe: $error')));
     }
   }
 
-  Widget _circleButton(IconData icon, VoidCallback? onTap, {double size = 68}) {
+  Widget _circleButton(
+    IconData icon,
+    VoidCallback? onTap, {
+    double size = 68,
+    Color backgroundColor = const Color(0xFF23262C),
+    Color? borderColor,
+    Color iconColor = Colors.white,
+  }) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(size / 2),
       child: Container(
         width: size,
         height: size,
-        decoration: const BoxDecoration(
-          color: Color(0xFF23262C),
+        decoration: BoxDecoration(
+          color: backgroundColor,
           shape: BoxShape.circle,
+          border: borderColor == null ? null : Border.all(color: borderColor),
         ),
-        child: Icon(icon, color: Colors.white, size: size * 0.42),
+        child: Icon(icon, color: iconColor, size: size * 0.42),
       ),
     );
   }
@@ -1247,7 +1479,18 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 }
 
+/// A single action item (icon, optional count label) inside the post
+/// action bar. Every instance is forced to the same fixed [_actionHeight],
+/// regardless of whether it carries a label next to its icon. Before this
+/// fix, icon-only actions (share, bookmark, more) were shorter than
+/// label+icon actions (comment, repost, like), so the parent Row's
+/// `crossAxisAlignment.center` centered each item within a *different*
+/// height — which visually dropped the icon-only actions a couple of
+/// pixels below the others. Giving every action the same height first
+/// means centering afterwards lines every icon up on one row.
 class _PostAction extends StatelessWidget {
+  static const double _actionHeight = 20;
+
   final IconData icon;
   final String? label;
   final Color? color;
@@ -1263,15 +1506,22 @@ class _PostAction extends StatelessWidget {
       borderRadius: BorderRadius.circular(20),
       child: Padding(
         padding: const EdgeInsets.all(3),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: actionColor, size: 20),
-            if (label != null) ...[
-              const SizedBox(width: 5),
-              Text(label!, style: TextStyle(color: actionColor, fontSize: 10)),
+        child: SizedBox(
+          height: _actionHeight,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(icon, color: actionColor, size: 20),
+              if (label != null) ...[
+                const SizedBox(width: 5),
+                Text(
+                  label!,
+                  style: TextStyle(color: actionColor, fontSize: 14),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

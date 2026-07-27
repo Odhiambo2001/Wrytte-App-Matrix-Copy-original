@@ -224,9 +224,11 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
         final info = Map<String, dynamic>.from(
           room.getState('com.wrytte.group.info')?.content ?? const {},
         );
-        final version = int.tryParse(info['avatar_version']?.toString() ?? '') ?? 0;
+        final version =
+            int.tryParse(info['avatar_version']?.toString() ?? '') ?? 0;
         info['avatar_version'] = version + 1;
-        final profileVersion = int.tryParse(info['profile_version']?.toString() ?? '') ?? 0;
+        final profileVersion =
+            int.tryParse(info['profile_version']?.toString() ?? '') ?? 0;
         info['profile_version'] = profileVersion + 1;
         info['updated_at'] = DateTime.now().toUtc().toIso8601String();
         await room.client.setRoomStateWithKey(
@@ -267,9 +269,9 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
       setState(() => _pickedImageFile = File(picked.path));
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not select photo.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Could not select photo.')));
     }
   }
 
@@ -315,6 +317,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
         deleted: true,
         pendingAction: GroupExitRequest.delete(
           roomId: widget.conversationId,
+          isChannel: true,
           commit: () async {
             await ChatService().dismissDeletedGroupLocally(
               widget.conversationId,
@@ -392,7 +395,11 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
                     _textField(
                       controller: _descriptionController,
                       hint: 'Description',
-                      style: const TextStyle(color: Colors.white, fontSize: 17, height: 1.18),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        height: 1.18,
+                      ),
                       maxLines: null,
                       minLines: 1,
                       maxLength: 220,
@@ -483,7 +490,7 @@ class _ChannelEditScreenState extends State<ChannelEditScreen> {
         ),
         const SizedBox(height: 10),
         GestureDetector(
-        onTap: _pickImage,
+          onTap: _pickImage,
           child: const Text(
             'Set new photo',
             style: TextStyle(color: Color(0xFF4DA3FF), fontSize: 17),

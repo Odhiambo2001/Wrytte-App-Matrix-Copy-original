@@ -645,13 +645,17 @@ class ChatService {
               'canMore=${timeline.canRequestHistory}',
         );
 
+        if (afterCount > beforeCount) {
+          emptyAdvancingPages = 0;
+        }
+
         if (afterCount <= beforeCount) {
           if (timeline.canRequestHistory &&
               afterToken != null &&
               afterToken.isNotEmpty &&
               afterToken != beforeToken) {
             emptyAdvancingPages += 1;
-            if (emptyAdvancingPages >= 2) {
+            if (emptyAdvancingPages >= 20) {
               apkLog(
                 'Matrix.history',
                 'stop room_id="${room.id}" page=$page '
@@ -1118,6 +1122,8 @@ class ChatService {
     required String attachmentType,
     String? conversationId,
     String? caption,
+    int? mediaWidth,
+    int? mediaHeight,
   }) async {
     return _withMatrixTokenRetry('sendAttachmentMessage', () async {
       await _waitForConnection();
@@ -1160,12 +1166,16 @@ class ChatService {
                 bytes: bytes,
                 name: p.basename(filePath),
               );
+      final mediaCaption = caption?.trim() ?? '';
+      final extraContent = <String, dynamic>{
+        if (attachmentType == 'file') 'wrytte.sent_as_file': true,
+        // Matrix media captions use `body` while `filename` continues to hold
+        // the original upload name. sendFileEvent supplies `filename`.
+        if (mediaCaption.isNotEmpty) 'body': mediaCaption,
+      };
       final eventId = await room.sendFileEvent(
         matrixFile,
-        extraContent:
-            attachmentType == 'file'
-                ? const {'wrytte.sent_as_file': true}
-                : null,
+        extraContent: extraContent.isEmpty ? null : extraContent,
       );
       final local = ChatMessage(
         id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
@@ -1183,6 +1193,8 @@ class ChatService {
         status: MessageStatus.sent,
         attachmentUrl: filePath,
         attachmentType: attachmentType,
+        mediaWidth: mediaWidth,
+        mediaHeight: mediaHeight,
         senderPhone: _currentUserPhone,
       );
       _cacheMessage(local);
@@ -2714,6 +2726,7 @@ class ChatService {
     required String roomId,
     required String name,
     String? avatarUrl,
+    String conversationKind = ConversationKind.group,
   }) async {
     final id = roomId.trim();
     if (id.isEmpty) {
@@ -2734,7 +2747,7 @@ class ChatService {
       lastMessageType: 'group',
       otherUserName: name.trim().isEmpty ? 'Group' : name.trim(),
       otherUserAvatar: avatarUrl,
-      conversationKind: ConversationKind.group,
+      conversationKind: conversationKind,
     );
     await markGroupJoined(id);
     await clearGroupJoinCutoff(id);
@@ -2745,7 +2758,7 @@ class ChatService {
             : _preferImmediateConversation(
               existing,
               conversation,
-            ).copyWith(conversationKind: ConversationKind.group);
+            ).copyWith(conversationKind: conversationKind);
     await ChatLocalDb.instance.saveConversations([_conversationsMap[id]!]);
     _emitConversations();
     return _conversationsMap[id]!;
@@ -2827,6 +2840,18 @@ class ChatService {
   }
 
   String _kindForGroupRoom(mx.Room room) {
+    final roomType =
+        room
+            .getState(mx.EventTypes.RoomCreate)
+            ?.content['type']
+            ?.toString()
+            .trim()
+            .toLowerCase() ??
+        '';
+    if (roomType == MatrixPublicGroup.channelRoomType) {
+      return ConversationKind.channel;
+    }
+
     final stateKind = ConversationKind.normalize(
       room
               .getState('com.wrytte.group.info')
@@ -2842,7 +2867,9 @@ class ChatService {
     final alias = room.canonicalAlias.trim();
     final localpart = alias.startsWith('#') ? alias.substring(1) : alias;
     if (localpart.startsWith('gr.@')) return ConversationKind.group;
-    if (localpart.startsWith('.@')) return ConversationKind.channel;
+    if (localpart.startsWith('@') || localpart.startsWith('.@')) {
+      return ConversationKind.channel;
+    }
     return ConversationKind.group;
   }
 

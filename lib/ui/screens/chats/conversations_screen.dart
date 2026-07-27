@@ -113,6 +113,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   Future<void>? _contactRestoreFuture;
   bool _loadingSuggestedGroups = false;
   final Set<String> _openingSuggestedGroupIds = {};
+  final Set<String> _subscribingSuggestedGroupIds = {};
   final Set<String> _openingConversationIds = {};
   DateTime? _lastSuggestedGroupsLoadAt;
   String? _lastGroupsDiagnostic;
@@ -135,9 +136,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _scrollCtrl.addListener(_onScroll);
     Future.microtask(_initialize);
     try {
-      _matrixSyncSub = MatrixClientService.instance.client.onSync.stream.listen((_) {
-        if (mounted && _tabController.index == 1) setState(() {});
-      });
+      _matrixSyncSub = MatrixClientService.instance.client.onSync.stream.listen(
+        (_) {
+          if (mounted && _tabController.index == 1) setState(() {});
+        },
+      );
     } catch (_) {}
   }
 
@@ -1364,7 +1367,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     if (_isGroupConversation(conv)) {
       if (conv.isChannelKind) {
         final room = MatrixChatService.instance.getRoomById(conv.id);
-        final rawAvatar = room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
+        final rawAvatar =
+            room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
         final channelAvatar = rawAvatar is String ? rawAvatar.trim() : '';
         if (channelAvatar.isNotEmpty) return channelAvatar;
         final publicAvatar = _suggestedGroups
@@ -2004,9 +2008,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       isSelected: selected,
       onSelectionToggle: () => _toggleSelection(conv.id),
       channelOnly: channelOnly,
-      channelSubscriberCount: channelOnly
-          ? _channelSubscriberCount(conv)
-          : null,
+      channelSubscriberCount:
+          channelOnly ? _channelSubscriberCount(conv) : null,
       onLongPress: () async {
         if (isDeleted) {
           await _removeDeletedGroupShell(conv, name);
@@ -2403,29 +2406,41 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             )
             .toList();
     final createdIds = _chat.createdGroupRoomIds;
-    final ownChannels = allChannels
-        .where((channel) =>
-            createdIds.contains(channel.id) || _isOwnGroupConversation(channel))
-        .toList();
-    final subscriptions = allChannels
-        .where((channel) => !ownChannels.any((own) => own.id == channel.id))
-        .toList();
-    final suggestedChannels = _suggestedGroups
-        .where((group) => group.isChannel)
-        .where((group) =>
-            !allChannels.any((channel) => channel.id == group.roomId))
-        .toList();
+    final ownChannels =
+        allChannels
+            .where(
+              (channel) =>
+                  createdIds.contains(channel.id) ||
+                  _isOwnGroupConversation(channel),
+            )
+            .toList();
+    final subscriptions =
+        allChannels
+            .where((channel) => !ownChannels.any((own) => own.id == channel.id))
+            .toList();
+    final suggestedChannels =
+        _suggestedGroups
+            .where((group) => group.isChannel)
+            .where(
+              (group) =>
+                  !allChannels.any((channel) => channel.id == group.roomId),
+            )
+            .toList();
 
     return ListView(
       padding: EdgeInsets.only(top: topPadding, bottom: 120),
       children: [
         if (ownChannels.isNotEmpty) ...[
           _groupSectionHeader('Your channels ${ownChannels.length}'),
-          ...ownChannels.map((channel) => _buildTile(channel, channelOnly: true)),
+          ...ownChannels.map(
+            (channel) => _buildTile(channel, channelOnly: true),
+          ),
         ],
         if (subscriptions.isNotEmpty) ...[
           _groupSectionHeader('Subscriptions ${subscriptions.length}'),
-          ...subscriptions.map((channel) => _buildTile(channel, channelOnly: true)),
+          ...subscriptions.map(
+            (channel) => _buildTile(channel, channelOnly: true),
+          ),
         ],
         if (suggestedChannels.isNotEmpty) ...[
           _groupSectionHeader('Suggested'),
@@ -2448,83 +2463,106 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Widget _suggestedChannelTile(MatrixPublicGroup channel) {
-  return InkWell(
-    onTap: () => _openSuggestedGroup(channel),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        children: [
-          UserAvatar(
-            imageUrl: channel.avatarUrl,
-            name: channel.name,
-            size: 60,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  channel.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${channel.memberCount} subscribers',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-                ),
-                const SizedBox(height: 14),
-                SizedBox(
-                  height: 1,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => OverflowBox(
-                      alignment: Alignment.centerLeft,
-                      maxWidth: constraints.maxWidth + 20,
-                      maxHeight: 1,
-                      child: SizedBox(
-                        width: constraints.maxWidth + 20,
-                        height: 1,
-                        child: Divider(
-                          color: Colors.grey.withOpacity(0.3),
-                          thickness: 0.5,
-                          height: 1,
-                        ),
-                      ),
+    final isSubscribing = _subscribingSuggestedGroupIds.contains(
+      channel.roomId,
+    );
+    return InkWell(
+      onTap: () => _openSuggestedGroup(channel),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            UserAvatar(
+              imageUrl: channel.avatarUrl,
+              name: channel.name,
+              size: 60,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    channel.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: Colors.white,
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          SizedBox(
-            height: 36,
-            child: FilledButton(
-              onPressed: () => _joinSuggestedGroup(channel),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF4DA3FF),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                padding: const EdgeInsets.symmetric(horizontal: 24),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${channel.memberCount} subscribers',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 1,
+                    child: LayoutBuilder(
+                      builder:
+                          (context, constraints) => OverflowBox(
+                            alignment: Alignment.centerLeft,
+                            maxWidth: constraints.maxWidth + 20,
+                            maxHeight: 1,
+                            child: SizedBox(
+                              width: constraints.maxWidth + 20,
+                              height: 1,
+                              child: Divider(
+                                color: Colors.grey.withOpacity(0.3),
+                                thickness: 0.5,
+                                height: 1,
+                              ),
+                            ),
+                          ),
+                    ),
+                  ),
+                ],
               ),
-              child: const Text('Subscribe'),
             ),
-          ),
-        ],
+            const SizedBox(width: 12),
+            SizedBox(
+              height: 36,
+              child: FilledButton(
+                onPressed:
+                    isSubscribing ? null : () => _joinSuggestedGroup(channel),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF4DA3FF),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                ),
+                child:
+                    isSubscribing
+                        ? const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            ),
+                            SizedBox(width: 8),
+                            Text('Subscribing'),
+                          ],
+                        )
+                        : const Text('Subscribe'),
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
+
   Widget _buildGroupsTab(double topPadding) {
     final allGroups =
         _conversations
@@ -2542,6 +2580,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final promotedOwnGroups =
         shouldPromotePublicGroupsAsOwn
             ? _suggestedGroups
+                .where((g) => !g.isChannel)
                 .where((g) => createdIds.contains(g.roomId))
                 .where(
                   (g) => !MatrixChatService.instance.isPublicGroupDismissed(g),
@@ -2565,6 +2604,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final joinedAliases = _joinedMatrixGroupAliases();
     final suggested =
         _suggestedGroups
+            .where((group) => !group.isChannel)
             .where(
               (group) =>
                   group.memberCount > 0 &&
@@ -2890,31 +2930,34 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 300),
           reverseTransitionDuration: const Duration(milliseconds: 220),
-            pageBuilder: (_, __, ___) => group.isChannel
-                ? ChannelFeedScreen(
-                    conversationId: group.roomId,
-                    currentUserId: _currentUserId,
-                    title: group.name,
-                    avatarUrl: group.avatarUrl,
-                    initialPosts: previewMessages,
-                    subscriberCount: group.memberCount,
-                    readOnlyUntilSubscribe: true,
-                    subscribeAlias: group.canonicalAlias,
-                  )
-                : ChatScreen(
-                conversationId: group.roomId,
-                receiverId: group.roomId,
-                currentUserId: _currentUserId,
-                title: group.name,
-                avatarUrl: group.avatarUrl,
-                readOnlyUntilJoin: true,
-                initialMessages: previewMessages,
-                initialMemberCount: group.memberCount,
-                groupAlias: group.canonicalAlias,
-                groupDescription: group.topic,
-                conversationKind: ConversationKind.group,
-                initialRoomProfileVersion: group.profileVersionFingerprint,
-              ),
+          pageBuilder:
+              (_, __, ___) =>
+                  group.isChannel
+                      ? ChannelFeedScreen(
+                        conversationId: group.roomId,
+                        currentUserId: _currentUserId,
+                        title: group.name,
+                        avatarUrl: group.avatarUrl,
+                        initialPosts: previewMessages,
+                        subscriberCount: group.memberCount,
+                        readOnlyUntilSubscribe: true,
+                        subscribeAlias: group.canonicalAlias,
+                      )
+                      : ChatScreen(
+                        conversationId: group.roomId,
+                        receiverId: group.roomId,
+                        currentUserId: _currentUserId,
+                        title: group.name,
+                        avatarUrl: group.avatarUrl,
+                        readOnlyUntilJoin: true,
+                        initialMessages: previewMessages,
+                        initialMemberCount: group.memberCount,
+                        groupAlias: group.canonicalAlias,
+                        groupDescription: group.topic,
+                        conversationKind: ConversationKind.group,
+                        initialRoomProfileVersion:
+                            group.profileVersionFingerprint,
+                      ),
           transitionsBuilder: (_, animation, __, child) {
             final curved = CurvedAnimation(
               parent: animation,
@@ -2948,8 +2991,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _tabController.animateTo(2);
   }
 
+  void _showChannelsHomepage() {
+    _tabController.animateTo(1);
+  }
+
   Future<void> _handleGroupExit(GroupExitRequest request) async {
-    _showGroupsHomepage();
+    if (request.isChannel) {
+      _showChannelsHomepage();
+    } else {
+      _showGroupsHomepage();
+    }
     if (mounted) {
       setState(() {
         _conversations =
@@ -3030,7 +3081,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       await _loadSuggestedGroups(force: true);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Could not update group: $error'),
+          content: Text(
+            'Could not update ${request.isChannel ? 'channel' : 'group'}: '
+            '$error',
+          ),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -3038,6 +3092,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Future<void> _joinSuggestedGroup(MatrixPublicGroup group) async {
+    if (_subscribingSuggestedGroupIds.contains(group.roomId)) return;
+    setState(() => _subscribingSuggestedGroupIds.add(group.roomId));
     try {
       final room = await MatrixChatService.instance.joinGroup(
         group.canonicalAlias?.trim().isNotEmpty == true
@@ -3045,28 +3101,50 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             : group.roomId,
       );
       final roomId = room?.id ?? group.roomId;
-      await _chat.saveJoinedGroupShell(
+      final joinedConversation = await _chat.saveJoinedGroupShell(
         roomId: roomId,
         name: group.name,
         avatarUrl: group.avatarUrl,
+        conversationKind:
+            group.isChannel ? ConversationKind.channel : ConversationKind.group,
       );
-      await _chat.backfillGroupHistory(roomId);
       if (mounted) {
         setState(() {
+          _subscribingSuggestedGroupIds.remove(group.roomId);
+          _conversations = [
+            ..._conversations.where(
+              (conversation) => conversation.id != roomId,
+            ),
+            joinedConversation,
+          ];
           _suggestedGroups =
               _suggestedGroups
                   .where((candidate) => candidate.roomId != group.roomId)
                   .toList();
         });
       }
-      await _chat.fetchConversations();
-      await _loadLocalConversations();
-      await _loadSuggestedGroups(force: true);
+      unawaited(_finishSuggestedGroupSubscription(roomId));
     } catch (e) {
       if (!mounted) return;
+      setState(() => _subscribingSuggestedGroupIds.remove(group.roomId));
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Could not join group: $e')));
+    }
+  }
+
+  Future<void> _finishSuggestedGroupSubscription(String roomId) async {
+    try {
+      await _chat.backfillGroupHistory(roomId);
+      await _chat.fetchConversations();
+      if (!mounted) return;
+      await _loadLocalConversations();
+      await _loadSuggestedGroups(force: true);
+    } catch (error) {
+      apkLog(
+        'Groups.subscribe',
+        'background refresh failed room_id="$roomId" error="$error"',
+      );
     }
   }
 
@@ -3279,8 +3357,8 @@ class _GroupExitUndoBanner extends StatelessWidget {
             Expanded(
               child: Text(
                 request.type == GroupExitType.delete
-                    ? 'You deleted the group.'
-                    : 'You left the group.',
+                    ? 'You deleted the ${request.isChannel ? 'channel' : 'group'}.'
+                    : 'You left the ${request.isChannel ? 'channel' : 'group'}.',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(

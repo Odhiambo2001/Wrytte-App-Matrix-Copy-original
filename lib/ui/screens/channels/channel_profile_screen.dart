@@ -11,7 +11,7 @@ import 'package:wrytte/ui/widgets/wrytte_video_player.dart';
 
 /// Profile page for a channel, opened by tapping the channel header.
 /// Layout mirrors the reference: centered avatar, name, @handle,
-/// subscriber count, action buttons and Posts/Media/Highlights/Reposts tabs.
+/// subscriber count, action buttons and Posts/Highlights/Updates/Reposts tabs.
 class ChannelProfileScreen extends StatefulWidget {
   final String conversationId;
   final String currentUserId;
@@ -41,7 +41,7 @@ class ChannelProfileScreen extends StatefulWidget {
 }
 
 class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
-  static const _tabs = ['Posts', 'Media', 'Highlights', 'Reposts'];
+  static const _tabs = ['Posts', 'Highlights', 'Updates', 'Reposts'];
   int _selectedTab = 0;
 
   // Editable channel info (seeded from the widget, updated after editing).
@@ -57,6 +57,8 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     _title = widget.title;
     _isSubscribed = widget.isSubscribed;
     _avatarUrl = widget.avatarUrl;
+    final room = MatrixChatService.instance.getRoomById(widget.conversationId);
+    _description = room?.topic.trim() ?? '';
   }
 
   /// "@carsandtrucks" style handle: the user-edited one if set,
@@ -125,14 +127,25 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     return posts;
   }
 
+  bool _hasVisualMedia(ChatMessage post) =>
+      const {'image', 'video'}.contains(post.attachmentType) &&
+      (post.attachmentUrl?.trim().isNotEmpty ?? false);
+
+  /// Posts are publications containing a picture or video. A caption does not
+  /// change the category: media with text still belongs in Posts.
   List<ChatMessage> get _mediaPosts =>
+      _topLevelPosts.where(_hasVisualMedia).toList();
+
+  /// Updates are strictly text-only publications.
+  List<ChatMessage> get _textUpdatePosts =>
       _topLevelPosts
           .where(
-            (post) =>
-                post.attachmentType == 'image' &&
-                (post.attachmentUrl?.trim().isNotEmpty ?? false),
+            (post) => !_hasVisualMedia(post) && post.content.trim().isNotEmpty,
           )
           .toList();
+
+  List<ChatMessage> get _repostPosts =>
+      _topLevelPosts.where((post) => post.isForwarded).toList();
 
   void _showUnavailable(String feature) {
     ScaffoldMessenger.of(
@@ -249,6 +262,23 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
           _subscriberLabel,
           style: const TextStyle(color: Colors.white54, fontSize: 14),
         ),
+        if (_description.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Text(
+              _description,
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Color(0xFFB7BAC1),
+                fontSize: 15,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -336,9 +366,9 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
       if (mounted) setState(() => _isSubscribed = true);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not subscribe: $error')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not subscribe: $error')));
       }
     }
   }
@@ -346,36 +376,58 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   Future<void> _shareChannel() async {
     final room = MatrixChatService.instance.getRoomById(widget.conversationId);
     final alias = room?.canonicalAlias.trim();
-    final link = (alias?.isNotEmpty == true)
-        ? 'https://matrix.to/#/${Uri.encodeComponent(alias!)}'
-        : 'https://matrix.to/#/${Uri.encodeComponent(widget.conversationId)}';
+    final link =
+        (alias?.isNotEmpty == true)
+            ? 'https://matrix.to/#/${Uri.encodeComponent(alias!)}'
+            : 'https://matrix.to/#/${Uri.encodeComponent(widget.conversationId)}';
     await Clipboard.setData(ClipboardData(text: link));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Channel link copied')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Channel link copied')));
     }
   }
 
   Future<void> _leaveChannel() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Leave channel?'),
-        content: const Text('You will no longer receive posts from this channel.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Leave')),
-        ],
-      ),
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Leave channel?'),
+            content: const Text(
+              'You will no longer receive posts from this channel.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Leave'),
+              ),
+            ],
+          ),
     );
     if (confirmed != true || !mounted) return;
+    final room = MatrixChatService.instance.getRoomById(widget.conversationId);
+    final alias = room?.canonicalAlias;
     if (mounted) {
       Navigator.pop(
         context,
         GroupExitRequest.leave(
           roomId: widget.conversationId,
-          commit: () => MatrixChatService.instance.leaveGroup(widget.conversationId),
+          isChannel: true,
+          commit: () async {
+            await ChatService().dismissDeletedGroupLocally(
+              widget.conversationId,
+            );
+            await MatrixChatService.instance.markPublicGroupDeleted(
+              roomId: widget.conversationId,
+              canonicalAlias: alias,
+            );
+            await MatrixChatService.instance.leaveGroup(widget.conversationId);
+          },
         ),
       );
     }
@@ -389,7 +441,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   }) {
     return Expanded(
       child: InkWell(
-      onTap: enabled ? onTap : null,
+        onTap: enabled ? onTap : null,
         borderRadius: BorderRadius.circular(26),
         child: Container(
           height: 66,
@@ -400,7 +452,11 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: enabled ? Colors.white : Colors.white38, size: 20),
+              Icon(
+                icon,
+                color: enabled ? Colors.white : Colors.white38,
+                size: 20,
+              ),
               const SizedBox(height: 4),
               Text(
                 label,
@@ -463,12 +519,12 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
       case 0:
         return _postsTab();
       case 1:
-        return _mediaTab();
-      case 2:
         return _emptyState('No highlights yet');
+      case 2:
+        return _updatesTab();
       case 3:
       default:
-        return _emptyState('No reposts yet');
+        return _repostsTab();
     }
   }
 
@@ -484,8 +540,19 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   // --------------------------------------------------------------- posts tab
 
   Widget _postsTab() {
-    final posts = _topLevelPosts;
-    if (posts.isEmpty) return _emptyState('No posts yet');
+    return _postList(_mediaPosts, emptyMessage: 'No posts yet');
+  }
+
+  Widget _updatesTab() {
+    return _postList(_textUpdatePosts, emptyMessage: 'No updates yet');
+  }
+
+  Widget _repostsTab() {
+    return _postList(_repostPosts, emptyMessage: 'No reposts yet');
+  }
+
+  Widget _postList(List<ChatMessage> posts, {required String emptyMessage}) {
+    if (posts.isEmpty) return _emptyState(emptyMessage);
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
       itemCount: posts.length,
@@ -521,10 +588,13 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
         post.attachmentType == 'video' &&
         (post.attachmentUrl?.trim().isNotEmpty ?? false);
     final aspectRatio =
-        post.mediaWidth != null && post.mediaHeight != null && post.mediaHeight! > 0
+        post.mediaWidth != null &&
+                post.mediaHeight != null &&
+                post.mediaHeight! > 0
             ? post.mediaWidth! / post.mediaHeight!
             : null;
     final portrait = aspectRatio != null ? aspectRatio < 1 : hasImage;
+    final postContent = _mediaDisplayContent(post, hasImage || hasVideo);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -551,46 +621,49 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
                   padding: EdgeInsets.only(right: portrait ? 50 : 8),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(14),
-                    child: hasVideo
-                        ? (aspectRatio == null
-                            ? WrytteVideoPlayer(source: post.attachmentUrl!)
+                    child:
+                        hasVideo
+                            ? (aspectRatio == null
+                                ? WrytteVideoPlayer(source: post.attachmentUrl!)
+                                : AspectRatio(
+                                  aspectRatio: aspectRatio,
+                                  child: WrytteVideoPlayer(
+                                    source: post.attachmentUrl!,
+                                  ),
+                                ))
                             : AspectRatio(
-                                aspectRatio: aspectRatio,
-                                child: WrytteVideoPlayer(
-                                  source: post.attachmentUrl!,
-                                ),
-                              ))
-                        : AspectRatio(
-                            aspectRatio: aspectRatio ?? 9 / 16,
-                            child: CachedNetworkImage(
-                              imageUrl: post.attachmentUrl!,
-                              fit: BoxFit.cover,
-                              placeholder: (_, __) => const ColoredBox(
-                                color: Color(0xFF23262C),
-                                child: Center(
-                                  child: CircularProgressIndicator(
-                                    color: Color(0xFF4DA3FF),
-                                  ),
-                                ),
-                              ),
-                              errorWidget: (_, __, ___) => const ColoredBox(
-                                color: Color(0xFF23262C),
-                                child: Center(
-                                  child: Icon(
-                                    Icons.broken_image_outlined,
-                                    color: Colors.white54,
-                                  ),
-                                ),
+                              aspectRatio: aspectRatio ?? 9 / 16,
+                              child: CachedNetworkImage(
+                                imageUrl: post.attachmentUrl!,
+                                fit: BoxFit.cover,
+                                placeholder:
+                                    (_, __) => const ColoredBox(
+                                      color: Color(0xFF23262C),
+                                      child: Center(
+                                        child: CircularProgressIndicator(
+                                          color: Color(0xFF4DA3FF),
+                                        ),
+                                      ),
+                                    ),
+                                errorWidget:
+                                    (_, __, ___) => const ColoredBox(
+                                      color: Color(0xFF23262C),
+                                      child: Center(
+                                        child: Icon(
+                                          Icons.broken_image_outlined,
+                                          color: Colors.white54,
+                                        ),
+                                      ),
+                                    ),
                               ),
                             ),
-                          ),
                   ),
                 ),
               ],
-              if (post.content.trim().isNotEmpty) ...[
-                const SizedBox(height: 4),
+              if (postContent.isNotEmpty) ...[
+                SizedBox(height: hasImage || hasVideo ? 8 : 4),
                 Text(
-                  post.content,
+                  postContent,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 17,
@@ -607,27 +680,46 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     );
   }
 
+  String _mediaDisplayContent(ChatMessage post, bool hasMedia) {
+    final content = post.content.trim();
+    if (!hasMedia || content.isEmpty) return content;
+    final isGeneratedFilename = RegExp(
+      r'^[^/\\]+\.(?:jpg|jpeg|png|gif|webp|svg|mp4|mov|m4v|avi|mkv)$',
+      caseSensitive: false,
+    ).hasMatch(content);
+    return isGeneratedFilename ? '' : content;
+  }
+
   Widget _profilePostActions(ChatMessage post) {
-    final comments = widget.posts.where((item) =>
-        item.replyToMessageId == post.id && !item.isDeletedForMe).length;
+    final comments =
+        widget.posts
+            .where(
+              (item) =>
+                  item.replyToMessageId == post.id && !item.isDeletedForMe,
+            )
+            .length;
     return FittedBox(
       fit: BoxFit.scaleDown,
       alignment: Alignment.centerLeft,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _profileAction(Icons.comment_outlined, '$comments'),
-          const SizedBox(width: 28),
-          _profileAction(Icons.repeat, '0'),
-          const SizedBox(width: 28),
-          _profileAction(Icons.favorite_border, '0'),
-          const SizedBox(width: 28),
-          _profileAction(Icons.ios_share_outlined, ''),
-          const SizedBox(width: 28),
-          _profileAction(Icons.bookmark_border, ''),
-          const SizedBox(width: 28),
-          _profileAction(Icons.more_horiz, ''),
-        ],
+      child: SizedBox(
+        height: 28,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _profileAction(Icons.comment_outlined, '100'),
+            const SizedBox(width: 28),
+            _profileAction(Icons.repeat, '100'),
+            const SizedBox(width: 28),
+            _profileAction(Icons.favorite_border, '100'),
+            const SizedBox(width: 28),
+            _profileAction(Icons.ios_share_outlined, ''),
+            const SizedBox(width: 2),
+            _profileAction(Icons.bookmark_border, ''),
+            const SizedBox(width: 28),
+            _profileAction(Icons.more_horiz, ''),
+          ],
+        ),
       ),
     );
   }
@@ -635,68 +727,19 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   Widget _profileAction(IconData icon, String label) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Icon(icon, color: const Color(0xFF8C8F95), size: 20),
+      Transform.translate(
+        offset: Offset.zero,
+        child: Icon(icon, color: const Color(0xFF8C8F95), size: 20),
+      ),
       if (label.isNotEmpty) ...[
         const SizedBox(width: 5),
-        Text(label, style: const TextStyle(color: Color(0xFF8C8F95), fontSize: 10)),
+        Text(
+          label,
+          style: const TextStyle(color: Color(0xFF8C8F95), fontSize: 14),
+        ),
       ],
     ],
   );
-
-  // --------------------------------------------------------------- media tab
-
-  Widget _mediaTab() {
-    final media = _mediaPosts;
-    if (media.isEmpty) return _emptyState('No media yet');
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 4,
-        mainAxisSpacing: 4,
-        childAspectRatio: 0.72,
-      ),
-      itemCount: media.length,
-      itemBuilder: (_, index) {
-        final post = media[index];
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              CachedNetworkImage(
-                imageUrl: post.attachmentUrl!,
-                fit: BoxFit.cover,
-                placeholder:
-                    (_, __) => const ColoredBox(color: Color(0xFF23262C)),
-                errorWidget:
-                    (_, __, ___) => const ColoredBox(
-                      color: Color(0xFF23262C),
-                      child: Icon(
-                        Icons.broken_image_outlined,
-                        color: Colors.white54,
-                      ),
-                    ),
-              ),
-              if (post.attachmentType == 'video')
-                const Center(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Icon(Icons.play_arrow, color: Colors.white),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
 
   String _postAge(DateTime timestamp) {
     final elapsed = DateTime.now().difference(timestamp);

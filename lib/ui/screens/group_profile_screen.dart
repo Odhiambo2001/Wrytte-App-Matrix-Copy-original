@@ -1704,29 +1704,35 @@ enum GroupExitType { leave, delete }
 class GroupExitRequest {
   final String roomId;
   final GroupExitType type;
+  final bool isChannel;
   final Future<void> Function() commit;
 
   const GroupExitRequest._({
     required this.roomId,
     required this.type,
+    required this.isChannel,
     required this.commit,
   });
 
   factory GroupExitRequest.leave({
     required String roomId,
+    bool isChannel = false,
     required Future<void> Function() commit,
   }) => GroupExitRequest._(
     roomId: roomId,
     type: GroupExitType.leave,
+    isChannel: isChannel,
     commit: commit,
   );
 
   factory GroupExitRequest.delete({
     required String roomId,
+    bool isChannel = false,
     required Future<void> Function() commit,
   }) => GroupExitRequest._(
     roomId: roomId,
     type: GroupExitType.delete,
+    isChannel: isChannel,
     commit: commit,
   );
 }

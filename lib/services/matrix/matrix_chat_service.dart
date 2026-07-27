@@ -12,6 +12,8 @@ import 'matrix_config.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class MatrixPublicGroup {
+  static const String channelRoomType = 'channel';
+
   final String roomId;
   final String name;
   final String? avatarUrl;
@@ -25,11 +27,13 @@ class MatrixPublicGroup {
   final int linkVersion;
   final int aliasVersion;
   final String? link;
+  final String? roomType;
 
   bool get isChannel {
+    if (roomType?.trim().toLowerCase() == channelRoomType) return true;
     final alias = canonicalAlias?.trim().toLowerCase() ?? '';
     final localpart = alias.startsWith('#') ? alias.substring(1) : alias;
-    return localpart.startsWith('.@');
+    return localpart.startsWith('@') || localpart.startsWith('.@');
   }
 
   const MatrixPublicGroup({
@@ -46,6 +50,7 @@ class MatrixPublicGroup {
     this.linkVersion = 0,
     this.aliasVersion = 0,
     this.link,
+    this.roomType,
   });
 
   int get profileVersionFingerprint {
@@ -87,6 +92,7 @@ class MatrixPublicGroup {
         linkVersion: profile['linkVersion'] as int? ?? linkVersion,
         aliasVersion: profile['aliasVersion'] as int? ?? aliasVersion,
         link: profile['link']?.toString() ?? link,
+        roomType: roomType,
       );
 }
 
@@ -536,6 +542,10 @@ class MatrixChatService {
     }
 
     final roomId = await client.createRoom(
+      creationContent:
+          conversationKind == MatrixPublicGroup.channelRoomType
+              ? const {'type': MatrixPublicGroup.channelRoomType}
+              : null,
       name: cleanName,
       invite: cleanInvites,
       isDirect: false,
@@ -587,6 +597,26 @@ class MatrixChatService {
         ),
       ],
     );
+
+    if (conversationKind == MatrixPublicGroup.channelRoomType) {
+      final createState = await client.getRoomStateWithKey(
+        roomId,
+        EventTypes.RoomCreate,
+        '',
+      );
+      final appliedRoomType =
+          createState['type']?.toString().trim().toLowerCase() ?? '';
+      if (appliedRoomType != MatrixPublicGroup.channelRoomType) {
+        throw StateError(
+          'Channel $roomId was created without '
+          'm.room.create.type="${MatrixPublicGroup.channelRoomType}".',
+        );
+      }
+      apkLog(
+        'Matrix.groups',
+        'channel type verified room_id="$roomId" type="$appliedRoomType"',
+      );
+    }
 
     // Dendrite may accept createRoom.initial_state before the room is visible
     // in the local sync store. Write the preview policy directly by room ID as
@@ -703,6 +733,7 @@ class MatrixChatService {
                   topic: room.topic,
                   memberCount: room.numJoinedMembers,
                   worldReadable: room.worldReadable,
+                  roomType: room.roomType,
                 ),
               )
               // Empty rooms are abandoned/deleted groups. Dendrite can keep
