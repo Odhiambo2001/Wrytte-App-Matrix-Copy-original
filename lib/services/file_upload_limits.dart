@@ -31,10 +31,15 @@ class InvalidUploadFileTypeException implements Exception {
 class FileUploadLimits {
   FileUploadLimits._();
 
-  static const int avatarImageMaxBytes = 25 * 1024 * 1024;
-  static const int voiceMessageMaxBytes = 25 * 1024 * 1024;
-  static const int videoMessageMaxBytes = 100 * 1024 * 1024;
-  static const int chatFileMaxBytes = 100 * 1024 * 1024;
+  /// Maximum size accepted by the app for any uploaded media or attachment.
+  /// The Matrix homeserver may advertise a lower limit, in which case the
+  /// lower server limit remains authoritative.
+  static const int mediaMaxBytes = 100 * 1024 * 1024;
+
+  static const int avatarImageMaxBytes = mediaMaxBytes;
+  static const int voiceMessageMaxBytes = mediaMaxBytes;
+  static const int videoMessageMaxBytes = mediaMaxBytes;
+  static const int chatFileMaxBytes = mediaMaxBytes;
 
   static const List<String> avatarImageExtensions = [
     '.jpg',
