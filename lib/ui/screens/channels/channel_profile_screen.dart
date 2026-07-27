@@ -7,10 +7,11 @@ import 'package:wrytte/ui/screens/channels/channel_edit_screen.dart';
 import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
+import 'package:wrytte/ui/widgets/channel_post_image.dart';
+import 'package:wrytte/ui/widgets/channel_post_video.dart';
 import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
 import 'package:wrytte/ui/widgets/full_screen_video_viewer.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
-import 'package:wrytte/ui/widgets/wrytte_video_player.dart';
 
 /// Profile page for a channel, opened by tapping the channel header.
 /// Layout mirrors the reference: centered avatar, name, @handle,
@@ -123,6 +124,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
             .where(
               (post) =>
                   !post.isDeletedForMe &&
+                  !post.isDeletedForEveryone &&
                   (post.replyToMessageId?.isEmpty ?? true),
             )
             .toList()
@@ -662,18 +664,6 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     final hasVideo =
         post.attachmentType == 'video' &&
         (post.attachmentUrl?.trim().isNotEmpty ?? false);
-    final aspectRatio =
-        post.mediaWidth != null &&
-                post.mediaHeight != null &&
-                post.mediaHeight! > 0
-            ? post.mediaWidth! / post.mediaHeight!
-            : null;
-    final portrait = aspectRatio != null ? aspectRatio < 1 : hasImage;
-    final isNineBySixteenMedia =
-        (hasImage && aspectRatio == null) ||
-        ((hasImage || hasVideo) &&
-            aspectRatio != null &&
-            (aspectRatio - 9 / 16).abs() <= 0.08);
     final postContent = _mediaDisplayContent(post, hasImage || hasVideo);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -697,72 +687,18 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
               ),
               if (hasImage || hasVideo) ...[
                 const SizedBox(height: 8),
-                Padding(
-                  padding: EdgeInsets.only(
-                    right:
-                        isNineBySixteenMedia
-                            ? 0
-                            : portrait
-                            ? 50
-                            : 8,
+                if (hasImage)
+                  ChannelPostImage(
+                    source: post.attachmentUrl!,
+                    mediaWidth: post.mediaWidth,
+                    mediaHeight: post.mediaHeight,
+                  )
+                else
+                  ChannelPostVideo(
+                    source: post.attachmentUrl!,
+                    mediaWidth: post.mediaWidth,
+                    mediaHeight: post.mediaHeight,
                   ),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: FractionallySizedBox(
-                      widthFactor: isNineBySixteenMedia ? 0.70 : 1,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
-                        child:
-                            hasVideo
-                                ? (aspectRatio == null
-                                    ? WrytteVideoPlayer(
-                                      source: post.attachmentUrl!,
-                                      autoPlayWhenVisible: true,
-                                      startMuted: true,
-                                      showRemainingTime: true,
-                                    )
-                                    : AspectRatio(
-                                      aspectRatio: aspectRatio,
-                                      child: WrytteVideoPlayer(
-                                        source: post.attachmentUrl!,
-                                        autoPlayWhenVisible: true,
-                                        startMuted: true,
-                                        showRemainingTime: true,
-                                      ),
-                                    ))
-                                : AspectRatio(
-                                  aspectRatio:
-                                      isNineBySixteenMedia
-                                          ? 9 / 16
-                                          : aspectRatio ?? 9 / 16,
-                                  child: CachedNetworkImage(
-                                    imageUrl: post.attachmentUrl!,
-                                    fit: BoxFit.cover,
-                                    placeholder:
-                                        (_, __) => const ColoredBox(
-                                          color: Color(0xFF23262C),
-                                          child: Center(
-                                            child: CircularProgressIndicator(
-                                              color: Color(0xFF4DA3FF),
-                                            ),
-                                          ),
-                                        ),
-                                    errorWidget:
-                                        (_, __, ___) => const ColoredBox(
-                                          color: Color(0xFF23262C),
-                                          child: Center(
-                                            child: Icon(
-                                              Icons.broken_image_outlined,
-                                              color: Colors.white54,
-                                            ),
-                                          ),
-                                        ),
-                                  ),
-                                ),
-                      ),
-                    ),
-                  ),
-                ),
               ],
               if (postContent.isNotEmpty) ...[
                 SizedBox(height: hasImage || hasVideo ? 8 : 4),

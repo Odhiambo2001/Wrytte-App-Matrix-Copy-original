@@ -102,6 +102,17 @@ class ChatService {
   final Map<String, Future<void>> _profileRefreshInFlight = {};
   final Map<String, Future<List<ChatMessage>>> _suggestedPreviewInFlight = {};
   final Map<String, Future<List<ChatMessage>>> _roomHistoryInFlight = {};
+  final Map<String, Set<String>> _attachmentCacheExpectedByRoom = {};
+  final Map<String, Set<String>> _attachmentCacheCompleteByRoom = {};
+  final Map<String, Set<String>> _attachmentCacheFailedByRoom = {};
+  final Map<String, Set<String>> _attachmentCachePendingByRoom = {};
+  final Map<String, Timer> _attachmentCacheSummaryTimers = {};
+  final Map<String, String> _channelCacheCategoryByRoom = {};
+  final Map<String, int> _channelCachedMessageCountByRoom = {};
+  final Map<String, bool> _channelHistoryCachedByRoom = {};
+  final Map<String, String> _groupCacheCategoryByRoom = {};
+  final Map<String, int> _groupCachedMessageCountByRoom = {};
+  final Map<String, bool> _groupHistoryCachedByRoom = {};
   final Map<String, Future<void>> _markReadInFlight = {};
   final Map<String, String> _lastReadReceiptEventByConversation = {};
   Future<void> _suggestedPreviewQueue = Future.value();
@@ -1375,20 +1386,27 @@ class ChatService {
     Object? startMsg,
     int count = 40,
   }) async {
-    if (_loginHistoryPrepared) {
-      return loadCachedMessages(conversationID);
-    }
-    try {
-      return await _withMatrixTokenRetry('fetchMessageHistory', () async {
+    // Always paint a room from Wrytte's SQLite cache first. A restored app
+    // process starts with [_loginHistoryPrepared] false, but that must not
+    // force a full Matrix pagination every time a group screen is opened.
+    final cached = await loadCachedMessages(conversationID);
+    if (cached.isNotEmpty || _loginHistoryPrepared) return cached;
+
+    // This is a genuinely uncached room (for example the first time it is
+    // opened). Restore it asynchronously; _cacheMessage publishes each saved
+    // page through messagesStreamFor so the already-open screen updates.
+    unawaited(
+      _withMatrixTokenRetry('fetchMessageHistory', () async {
         await _waitForConnection();
         final room = _roomById(conversationID);
-        if (room == null) return [];
+        if (room == null) return <ChatMessage>[];
         return _restoreRoomHistoryFromServer(room);
-      });
-    } catch (e) {
-      debugPrint('[ChatService] fetchMessageHistory error: $e');
-      return [];
-    }
+      }).catchError((Object error, StackTrace stackTrace) {
+        debugPrint('[ChatService] fetchMessageHistory error: $error');
+        return <ChatMessage>[];
+      }),
+    );
+    return cached;
   }
 
   Future<void> fetchConversations({int offset = 0, int count = 100}) async {
@@ -1964,13 +1982,6 @@ class ChatService {
   }
 
   Future<List<ChatMessage>> hydrateConversation(String conversationId) async {
-    final room = _roomById(conversationId);
-    final isChannel =
-        room != null && _kindForGroupRoom(room) == ConversationKind.channel;
-    if (isChannel && !_loginHistoryPrepared) {
-      await _restoreRoomHistoryFromServer(room);
-      return getConversationMessages(conversationId);
-    }
     final memory = getConversationMessages(conversationId);
     if (memory.isNotEmpty) {
       _emitRoomMessages(conversationId);
@@ -1979,12 +1990,19 @@ class ChatService {
     final cached = await loadCachedMessages(conversationId);
     if (cached.isNotEmpty) return cached;
 
-    // A fresh login can have an empty local cache even though Matrix still
-    // contains the room history. Restore this room before the UI reports an
-    // empty conversation, especially for channel feeds.
+    // Only a genuinely uncached room needs Matrix history. Do this in the
+    // background so the screen is never held behind network pagination.
+    final room = _roomById(conversationId);
     if (room != null) {
-      await _restoreRoomHistoryFromServer(room);
-      return getConversationMessages(conversationId);
+      unawaited(
+        _restoreRoomHistoryFromServer(room).catchError((
+          Object error,
+          StackTrace stackTrace,
+        ) {
+          debugPrint('[ChatService] background room hydration error: $error');
+          return <ChatMessage>[];
+        }),
+      );
     }
     return const <ChatMessage>[];
   }
@@ -2030,7 +2048,13 @@ class ChatService {
     );
     _emitConversations();
     for (final conversation in conversations) {
-      await loadCachedMessages(conversation.id);
+      final cachedMessages = await loadCachedMessages(conversation.id);
+      // Audit every locally known attachment on cold start. Completed files
+      // resolve from disk without a network request; missing/incomplete files
+      // are downloaded and reflected in the per-room MediaCache summary.
+      for (final message in cachedMessages) {
+        _prefetchPersistentAttachment(message);
+      }
       if (syncReadMarkers && conversation.id.startsWith('!')) {
         await _syncLocalReadMarkerToMatrix(conversation.id);
       }
@@ -2719,6 +2743,20 @@ class ChatService {
       );
     }
     _roomHistoryInFlight.clear();
+    for (final timer in _attachmentCacheSummaryTimers.values) {
+      timer.cancel();
+    }
+    _attachmentCacheSummaryTimers.clear();
+    _attachmentCacheExpectedByRoom.clear();
+    _attachmentCacheCompleteByRoom.clear();
+    _attachmentCacheFailedByRoom.clear();
+    _attachmentCachePendingByRoom.clear();
+    _channelCacheCategoryByRoom.clear();
+    _channelCachedMessageCountByRoom.clear();
+    _channelHistoryCachedByRoom.clear();
+    _groupCacheCategoryByRoom.clear();
+    _groupCachedMessageCountByRoom.clear();
+    _groupHistoryCachedByRoom.clear();
     _roomsRefreshTimer?.cancel();
     _roomsRefreshTimer = null;
     _lastRoomsRefreshAt = null;
@@ -3923,7 +3961,140 @@ class ChatService {
     final source = message.attachmentUrl?.trim() ?? '';
     const persistentTypes = {'image', 'video', 'file', 'voice'};
     if (source.isEmpty || !persistentTypes.contains(type)) return;
+    _attachmentCacheExpectedByRoom
+        .putIfAbsent(message.conversationId, () => <String>{})
+        .add(message.id);
+    _attachmentCachePendingByRoom
+        .putIfAbsent(message.conversationId, () => <String>{})
+        .add(message.id);
+    _attachmentCacheFailedByRoom[message.conversationId]?.remove(message.id);
+    apkLog(
+      'MediaCache.item',
+      'state="checking" room_kind="${_mediaCacheRoomKind(message.conversationId)}" '
+          'room_id="${message.conversationId}" event_id="${message.id}" '
+          'media_type="$type"',
+    );
     unawaited(_prefetchAttachment(message, source, type == 'file'));
+  }
+
+  /// Logs cache coverage for every channel shown by channel discovery,
+  /// including channels with no media. Categories intentionally mirror the
+  /// Channels tab: joined owner rooms, joined subscriptions, then unjoined
+  /// public suggestions.
+  Future<void> auditDiscoveredChannelCacheCoverage(
+    List<MatrixPublicGroup> discovered,
+  ) async {
+    final discoveredChannels = {
+      for (final channel in discovered.where((room) => room.isChannel))
+        channel.roomId: channel,
+    };
+    final channelIds = <String>{
+      ..._conversationsMap.values
+          .where((conversation) => conversation.isChannelKind)
+          .map((conversation) => conversation.id),
+      ...discoveredChannels.keys,
+    };
+
+    for (final roomId in channelIds) {
+      final conversation = _conversationsMap[roomId];
+      final room = _roomById(roomId);
+      final joinedChannel = conversation?.isChannelKind == true;
+      final owned =
+          joinedChannel &&
+          ((room != null &&
+                  room.membership == mx.Membership.join &&
+                  MatrixChatService.instance.isGroupOwner(room)) ||
+              _createdGroupRoomIds.contains(roomId));
+      final category =
+          owned ? 'owned' : (joinedChannel ? 'subscribed' : 'suggested');
+      final messages = await ChatLocalDb.instance.loadMessages(roomId);
+      final visibleMessages = messages
+          .where(
+            (message) =>
+                !_isHiddenForMe(message) && !_isBeforeGroupJoinCutoff(message),
+          )
+          .toList(growable: false);
+      const persistentTypes = {'image', 'video', 'file', 'voice'};
+      final media = visibleMessages
+          .where(
+            (message) =>
+                persistentTypes.contains(message.attachmentType?.trim()) &&
+                (message.attachmentUrl?.trim().isNotEmpty ?? false),
+          )
+          .toList(growable: false);
+      final historyCached =
+          category == 'suggested'
+              ? await ChatLocalDb.instance.isSuggestedPreviewComplete(roomId)
+              : true;
+
+      _channelCacheCategoryByRoom[roomId] = category;
+      _channelCachedMessageCountByRoom[roomId] = visibleMessages.length;
+      _channelHistoryCachedByRoom[roomId] = historyCached;
+
+      for (final message in media) {
+        _prefetchPersistentAttachment(message);
+      }
+      _logAttachmentCacheSummary(roomId);
+    }
+  }
+
+  /// Group equivalent of [auditDiscoveredChannelCacheCoverage]. Categories
+  /// mirror the Groups tab: rooms owned by the current user, other joined
+  /// rooms, and unjoined public suggestions.
+  Future<void> auditDiscoveredGroupCacheCoverage(
+    List<MatrixPublicGroup> discovered,
+  ) async {
+    final discoveredGroups = {
+      for (final group in discovered.where((room) => !room.isChannel))
+        group.roomId: group,
+    };
+    final groupIds = <String>{
+      ..._conversationsMap.values
+          .where((conversation) => conversation.isGroupKind)
+          .map((conversation) => conversation.id),
+      ...discoveredGroups.keys,
+    };
+
+    for (final roomId in groupIds) {
+      final conversation = _conversationsMap[roomId];
+      final room = _roomById(roomId);
+      final joinedGroup = conversation?.isGroupKind == true;
+      final owned =
+          joinedGroup &&
+          ((room != null &&
+                  room.membership == mx.Membership.join &&
+                  MatrixChatService.instance.isGroupOwner(room)) ||
+              _createdGroupRoomIds.contains(roomId));
+      final category = owned ? 'owned' : (joinedGroup ? 'joined' : 'suggested');
+      final messages = await ChatLocalDb.instance.loadMessages(roomId);
+      final visibleMessages = messages
+          .where(
+            (message) =>
+                !_isHiddenForMe(message) && !_isBeforeGroupJoinCutoff(message),
+          )
+          .toList(growable: false);
+      const persistentTypes = {'image', 'video', 'file', 'voice'};
+      final media = visibleMessages
+          .where(
+            (message) =>
+                persistentTypes.contains(message.attachmentType?.trim()) &&
+                (message.attachmentUrl?.trim().isNotEmpty ?? false),
+          )
+          .toList(growable: false);
+      final historyCached =
+          category == 'suggested'
+              ? await ChatLocalDb.instance.isSuggestedPreviewComplete(roomId)
+              : true;
+
+      _groupCacheCategoryByRoom[roomId] = category;
+      _groupCachedMessageCountByRoom[roomId] = visibleMessages.length;
+      _groupHistoryCachedByRoom[roomId] = historyCached;
+
+      for (final message in media) {
+        _prefetchPersistentAttachment(message);
+      }
+      _logAttachmentCacheSummary(roomId);
+    }
   }
 
   Future<void> _prefetchAttachment(
@@ -3932,17 +4103,108 @@ class ChatService {
     bool allowPartial,
   ) async {
     try {
-      await AttachmentLocalStore.instance.ensureInitial(
+      final copy = await AttachmentLocalStore.instance.ensureInitial(
         source: source,
         fileName: message.content,
         allowPartial: allowPartial,
       );
-    } catch (error) {
+      final bytes = await copy.file.length();
+      final roomId = message.conversationId;
+      _attachmentCachePendingByRoom[roomId]?.remove(message.id);
+      if (copy.isComplete) {
+        _attachmentCacheCompleteByRoom
+            .putIfAbsent(roomId, () => <String>{})
+            .add(message.id);
+        _attachmentCacheFailedByRoom[roomId]?.remove(message.id);
+      } else {
+        _attachmentCacheCompleteByRoom[roomId]?.remove(message.id);
+        _attachmentCacheFailedByRoom
+            .putIfAbsent(roomId, () => <String>{})
+            .add(message.id);
+      }
       apkLog(
-        'ChatService.attachmentCache',
-        'prefetch failed event_id="${message.id}" error="$error"',
+        'MediaCache.item',
+        'state="${copy.isComplete ? 'complete' : 'partial'}" '
+            'room_kind="${_mediaCacheRoomKind(roomId)}" room_id="$roomId" '
+            'event_id="${message.id}" media_type="${message.attachmentType}" '
+            'bytes=$bytes total_bytes=${copy.totalBytes ?? -1} '
+            'local_path="${copy.file.path}"',
       );
+      _scheduleAttachmentCacheSummary(roomId);
+    } catch (error) {
+      final roomId = message.conversationId;
+      _attachmentCachePendingByRoom[roomId]?.remove(message.id);
+      _attachmentCacheCompleteByRoom[roomId]?.remove(message.id);
+      _attachmentCacheFailedByRoom
+          .putIfAbsent(roomId, () => <String>{})
+          .add(message.id);
+      apkLog(
+        'MediaCache.item',
+        'state="failed" room_kind="${_mediaCacheRoomKind(roomId)}" '
+            'room_id="$roomId" event_id="${message.id}" '
+            'media_type="${message.attachmentType}" error="$error"',
+      );
+      _scheduleAttachmentCacheSummary(roomId);
     }
+  }
+
+  String _mediaCacheRoomKind(String roomId) {
+    if (_channelCacheCategoryByRoom.containsKey(roomId)) return 'channel';
+    if (_groupCacheCategoryByRoom.containsKey(roomId)) return 'group';
+    final room = _roomById(roomId);
+    if (room == null) return 'unknown';
+    return _kindForGroupRoom(room);
+  }
+
+  void _scheduleAttachmentCacheSummary(String roomId) {
+    _attachmentCacheSummaryTimers[roomId]?.cancel();
+    _attachmentCacheSummaryTimers[roomId] = Timer(
+      const Duration(milliseconds: 500),
+      () {
+        _attachmentCacheSummaryTimers.remove(roomId);
+        _logAttachmentCacheSummary(roomId);
+      },
+    );
+  }
+
+  void _logAttachmentCacheSummary(String roomId) {
+    final expected = _attachmentCacheExpectedByRoom[roomId] ?? const <String>{};
+    final complete = _attachmentCacheCompleteByRoom[roomId] ?? const <String>{};
+    final pending = _attachmentCachePendingByRoom[roomId] ?? const <String>{};
+    final failed = _attachmentCacheFailedByRoom[roomId] ?? const <String>{};
+    final category = _channelCacheCategoryByRoom[roomId];
+    final groupCategory = _groupCacheCategoryByRoom[roomId];
+    final historyCached =
+        category != null
+            ? (_channelHistoryCachedByRoom[roomId] ?? false)
+            : groupCategory != null
+            ? (_groupHistoryCachedByRoom[roomId] ?? false)
+            : true;
+    final fullyCached =
+        complete.length == expected.length &&
+        pending.isEmpty &&
+        failed.isEmpty &&
+        historyCached;
+    final channelFields =
+        category == null
+            ? ''
+            : ' channel_category="$category" '
+                'messages=${_channelCachedMessageCountByRoom[roomId] ?? 0} '
+                'history_cached=${_channelHistoryCachedByRoom[roomId] ?? false}';
+    final groupFields =
+        groupCategory == null
+            ? ''
+            : ' group_category="$groupCategory" '
+                'messages=${_groupCachedMessageCountByRoom[roomId] ?? 0} '
+                'history_cached=${_groupHistoryCachedByRoom[roomId] ?? false}';
+    apkLog(
+      'MediaCache.room',
+      'state="${fullyCached ? 'fully_cached' : 'incomplete'}" '
+          'room_kind="${_mediaCacheRoomKind(roomId)}" room_id="$roomId" '
+          '$channelFields$groupFields media=${expected.length} '
+          'expected=${expected.length} complete=${complete.length} '
+          'pending=${pending.length} failed=${failed.length}',
+    );
   }
 
   void _applyMatrixEditEvent(mx.Event event) {

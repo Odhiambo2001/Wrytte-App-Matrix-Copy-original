@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:wrytte/services/attachment_local_store.dart';
 
 class WrytteVideoPlayer extends StatefulWidget {
   final String source;
@@ -14,6 +15,8 @@ class WrytteVideoPlayer extends StatefulWidget {
   final bool startMuted;
   final bool showRemainingTime;
   final BorderRadius borderRadius;
+  final ValueChanged<double>? onAspectRatioReady;
+  final bool compactOverlays;
 
   const WrytteVideoPlayer({
     super.key,
@@ -26,6 +29,8 @@ class WrytteVideoPlayer extends StatefulWidget {
     this.startMuted = false,
     this.showRemainingTime = false,
     this.borderRadius = const BorderRadius.all(Radius.circular(12)),
+    this.onAspectRatioReady,
+    this.compactOverlays = true,
   });
 
   @override
@@ -41,6 +46,7 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
   bool _muted = false;
   int _remainingSeconds = 0;
   bool _lastPlaying = false;
+  int _controllerGeneration = 0;
 
   @override
   void initState() {
@@ -66,6 +72,7 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
   }
 
   void _disposeController() {
+    _controllerGeneration++;
     if (identical(_activeAutoPlayer, this)) {
       _activeAutoPlayer = null;
     }
@@ -77,8 +84,23 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
   }
 
   void _createController() {
+    final generation = ++_controllerGeneration;
+    _initialise = _createAndInitialiseController(generation);
+  }
+
+  Future<void> _createAndInitialiseController(int generation) async {
     final source = widget.source.trim();
-    if (source.startsWith('http')) {
+    final localCopy =
+        source.startsWith('http')
+            ? await AttachmentLocalStore.instance.existingComplete(
+              source: source,
+              fileName: 'video.mp4',
+            )
+            : null;
+    if (!mounted || generation != _controllerGeneration) return;
+    if (localCopy != null) {
+      _controller = VideoPlayerController.file(localCopy);
+    } else if (source.startsWith('http')) {
       _controller = VideoPlayerController.networkUrl(Uri.parse(source));
     } else {
       _controller = VideoPlayerController.file(File(source));
@@ -86,25 +108,26 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
     // Muted feed autoplay loops until the viewer deliberately opens/taps the
     // video. Explicit non-feed players continue to respect [widget.loop].
     _controller!.setLooping(widget.loop || widget.autoPlayWhenVisible);
-    _initialise = _controller!.initialize().then((_) async {
-      final controller = _controller;
-      if (controller == null) return;
-      await controller.setVolume(_muted ? 0 : 1);
-      controller.addListener(_onControllerChanged);
-      _remainingSeconds = controller.value.duration.inSeconds;
-      if (widget.autoPlayWhenVisible) {
-        _visibilityTimer = Timer.periodic(
-          const Duration(milliseconds: 300),
-          (_) => _updateViewportPlayback(),
-        );
-        WidgetsBinding.instance.addPostFrameCallback(
-          (_) => _updateViewportPlayback(),
-        );
-      } else if (widget.autoPlay) {
-        await controller.play();
-      }
-      if (mounted) setState(() {});
-    });
+    await _controller!.initialize();
+    final controller = _controller;
+    if (controller == null || generation != _controllerGeneration) return;
+    await controller.setVolume(_muted ? 0 : 1);
+    final aspectRatio = controller.value.aspectRatio;
+    if (aspectRatio > 0) widget.onAspectRatioReady?.call(aspectRatio);
+    controller.addListener(_onControllerChanged);
+    _remainingSeconds = controller.value.duration.inSeconds;
+    if (widget.autoPlayWhenVisible) {
+      _visibilityTimer = Timer.periodic(
+        const Duration(milliseconds: 300),
+        (_) => _updateViewportPlayback(),
+      );
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _updateViewportPlayback(),
+      );
+    } else if (widget.autoPlay) {
+      await controller.play();
+    }
+    if (mounted) setState(() {});
   }
 
   void _onControllerChanged() {
@@ -218,7 +241,7 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
-    if (controller == null) return const _VideoErrorPlaceholder();
+    if (controller == null) return const _VideoLoadingPlaceholder();
 
     return ClipRRect(
       borderRadius: widget.borderRadius,
@@ -261,14 +284,15 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
                   ),
                 if (widget.showRemainingTime)
                   Positioned(
-                    left: 10,
+                    left: widget.compactOverlays ? 8 : 10,
                     bottom: widget.showProgress ? 14 : 8,
                     child: _VideoBadge(
+                      compact: widget.compactOverlays,
                       child: Text(
                         _remainingLabel,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: Colors.white,
-                          fontSize: 14,
+                          fontSize: widget.compactOverlays ? 13 : 14,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -276,18 +300,19 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
                   ),
                 if (widget.controlsEnabled)
                   Positioned(
-                    right: 10,
+                    right: widget.compactOverlays ? 8 : 10,
                     bottom: widget.showProgress ? 14 : 8,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => _setMuted(!_muted),
                       child: _VideoBadge(
+                        compact: widget.compactOverlays,
                         child: Icon(
                           _muted
                               ? Icons.volume_off_rounded
                               : Icons.volume_up_rounded,
                           color: Colors.white,
-                          size: 20,
+                          size: widget.compactOverlays ? 18 : 20,
                         ),
                       ),
                     ),
@@ -317,9 +342,10 @@ class _WrytteVideoPlayerState extends State<WrytteVideoPlayer> {
 }
 
 class _VideoBadge extends StatelessWidget {
-  const _VideoBadge({required this.child});
+  const _VideoBadge({required this.child, this.compact = false});
 
   final Widget child;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -329,7 +355,10 @@ class _VideoBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(7),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 6 : 7,
+          vertical: compact ? 3 : 4,
+        ),
         child: child,
       ),
     );

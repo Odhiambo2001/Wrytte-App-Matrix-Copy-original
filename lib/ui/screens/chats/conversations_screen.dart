@@ -338,6 +338,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       );
       if (!mounted) return;
       setState(() => _suggestedGroups = groups);
+      unawaited(_chat.auditDiscoveredChannelCacheCoverage(groups));
+      unawaited(_chat.auditDiscoveredGroupCacheCoverage(groups));
       apkLog(
         'SuggestedPreview',
         'discovery complete groups=${groups.length} '
@@ -414,6 +416,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         'removed zero-member suggestion room_id="${group.roomId}"',
       );
     }
+    await _chat.auditDiscoveredChannelCacheCoverage(_suggestedGroups);
+    await _chat.auditDiscoveredGroupCacheCoverage(_suggestedGroups);
   }
 
   List<MatrixPublicGroup> _previewEligibleSuggestedGroups(

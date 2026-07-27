@@ -23,6 +23,38 @@ class AttachmentLocalStore {
   static const int initialFileBytes = 35 * 1024 * 1024;
   final Map<String, Future<AttachmentLocalCopy>> _inFlight = {};
 
+  /// Returns an already completed persistent copy without making a network
+  /// request. Callers can use this to prefer disk on cold app starts and only
+  /// fall back to the Matrix URL when the attachment has never been cached.
+  Future<File?> existingComplete({
+    required String source,
+    required String fileName,
+  }) async {
+    final cleanSource = source.trim();
+    if (cleanSource.isEmpty) return null;
+    try {
+      final existing = await _existingCompleteForSource(cleanSource);
+      if (existing != null) return existing;
+      final target = await _targetFile(cleanSource, fileName);
+      final marker = File('${target.path}.complete');
+      if (await target.exists() &&
+          await marker.exists() &&
+          await target.length() > 0) {
+        return target;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> clearAll() async {
+    final root = await getApplicationDocumentsDirectory();
+    final directory = Directory('${root.path}/Wrytte Attachments');
+    if (await directory.exists()) {
+      await directory.delete(recursive: true);
+    }
+    _inFlight.clear();
+  }
+
   Future<AttachmentLocalCopy> ensureInitial({
     required String source,
     required String fileName,
@@ -84,6 +116,15 @@ class AttachmentLocalStore {
   }) async {
     final cleanSource = source.trim();
     if (cleanSource.isEmpty) throw StateError('Attachment URL is unavailable');
+
+    final existing = await _existingCompleteForSource(cleanSource);
+    if (existing != null) {
+      return AttachmentLocalCopy(
+        file: existing,
+        isComplete: true,
+        totalBytes: await existing.length(),
+      );
+    }
 
     final target = await _targetFile(cleanSource, fileName);
     final completeMarker = File('${target.path}.complete');
@@ -175,6 +216,23 @@ class AttachmentLocalStore {
     extension = extension.replaceAll(RegExp(r'[^a-z0-9.]'), '');
     if (extension.isEmpty) extension = '.bin';
     return File('${directory.path}/${_stableSourceKey(source)}$extension');
+  }
+
+  Future<File?> _existingCompleteForSource(String source) async {
+    final root = await getApplicationDocumentsDirectory();
+    final directory = Directory('${root.path}/Wrytte Attachments');
+    if (!await directory.exists()) return null;
+    final prefix = '${_stableSourceKey(source)}.';
+    await for (final entity in directory.list()) {
+      if (entity is! File ||
+          entity.path.endsWith('.complete') ||
+          !p.basename(entity.path).startsWith(prefix)) {
+        continue;
+      }
+      final marker = File('${entity.path}.complete');
+      if (await marker.exists() && await entity.length() > 0) return entity;
+    }
+    return null;
   }
 
   String _stableSourceKey(String source) {

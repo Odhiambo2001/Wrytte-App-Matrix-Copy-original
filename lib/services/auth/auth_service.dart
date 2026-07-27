@@ -15,6 +15,7 @@ import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
+import 'package:wrytte/services/attachment_local_store.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
@@ -990,6 +991,14 @@ class AuthService {
     } catch (e) {
       apkLog('Auth.logout', 'network image disk cache clear FAILED: $e');
       debugPrint('[AuthService] network image cache purge failed: $e');
+    }
+
+    try {
+      await AttachmentLocalStore.instance.clearAll();
+      apkLog('Auth.logout', 'persistent attachment cache cleared');
+    } catch (e) {
+      apkLog('Auth.logout', 'persistent attachment cache clear FAILED: $e');
+      debugPrint('[AuthService] persistent attachment purge failed: $e');
     }
 
     try {
