@@ -679,12 +679,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     final suppliedRoomIsAllowed =
-        widget.conversationId.startsWith('!') &&
-        (widget.conversationKind != ConversationKind.direct ||
-            _chat.isVerifiedDirectConversation(
-              widget.conversationId,
-              normalisedReceiverId,
-            ));
+        widget.conversationId.startsWith('!') && _suppliedRoomMatchesScreenKind;
     if (suppliedRoomIsAllowed) {
       _resolvedConversationId = widget.conversationId;
       _chat.activateConversationRead(widget.conversationId);
@@ -732,12 +727,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final suppliedRoomIsAllowed =
-        widget.conversationId.startsWith('!') &&
-        (widget.conversationKind != ConversationKind.direct ||
-            _chat.isVerifiedDirectConversation(
-              widget.conversationId,
-              normalisedReceiverId,
-            ));
+        widget.conversationId.startsWith('!') && _suppliedRoomMatchesScreenKind;
     if (suppliedRoomIsAllowed) {
       _resolvedConversationId = widget.conversationId;
       _chat.activateConversationRead(widget.conversationId);
@@ -853,15 +843,12 @@ class _ChatScreenState extends State<ChatScreen> {
   bool get _suppliedRoomMatchesScreenKind {
     if (!widget.conversationId.startsWith('!')) return true;
     if (widget.conversationKind != ConversationKind.direct) return true;
-    // Offline there is no live Matrix room available to re-verify. The
-    // account-scoped conversation row already carries the persisted direct
-    // kind, so trust it for local hydration instead of skipping the cache and
-    // showing an empty screen.
-    if (!MatrixClientService.instance.isLoggedIn) return true;
-    return _chat.isVerifiedDirectConversation(
-      widget.conversationId,
-      _normaliseId(widget.receiverId),
-    );
+    // The screen kind comes from the account-scoped persisted conversation
+    // row. A Matrix client may remain "logged in" while the device is offline,
+    // even though no live room state is available to verify the DM again.
+    // Requiring that transient verification made a cached timeline disappear
+    // after closing and reopening the same chat.
+    return true;
   }
 
   Future<void> _hydrateAndSubscribe(

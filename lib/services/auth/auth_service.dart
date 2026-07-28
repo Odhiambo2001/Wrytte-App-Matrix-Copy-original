@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart' as mx;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
@@ -13,6 +15,7 @@ import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/auth/api_service.dart';
+import 'package:wrytte/services/attachment_local_store.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
@@ -910,10 +913,12 @@ class AuthService {
   Future<void> logout() async {
     apkLog(
       'Auth.logout',
-      'START session logout; durable offline cache retained',
+      'START secure logout; all local account data will be deleted',
     );
     _matrixBootstrapGeneration++;
     _pendingTokenRefresh = null;
+    var localPurgeComplete = false;
+    UserProfileService.instance.beginLogout();
     //ADD THIS — clear contact cache before any user switch
     ContactService.clearAllCachesForLogout();
     ContactService()
@@ -932,7 +937,7 @@ class AuthService {
       debugPrint('[AuthService] notification stop failed: $e');
     }
     try {
-      await ChatService().reset().timeout(const Duration(seconds: 3));
+      await ChatService().reset().timeout(const Duration(seconds: 5));
       apkLog('Auth.logout', 'chat service reset complete');
     } catch (e) {
       apkLog('Auth.logout', 'chat service reset FAILED: $e');
@@ -950,7 +955,8 @@ class AuthService {
       );
     }
     try {
-      await _purgeLocalLogoutData().timeout(const Duration(seconds: 8));
+      await _purgeLocalLogoutData();
+      localPurgeComplete = true;
       apkLog('Auth.logout', 'session-only local cleanup complete');
     } catch (e) {
       apkLog('Auth.logout', 'session-only local cleanup FAILED: $e');
@@ -981,7 +987,12 @@ class AuthService {
     PaintingBinding.instance.imageCache.clear();
     PaintingBinding.instance.imageCache.clearLiveImages();
     apkLog('Auth.logout', 'terminal memory cache purge complete');
-    apkLog('Auth.logout', 'DONE logout; account-scoped offline cache retained');
+    apkLog(
+      'Auth.logout',
+      localPurgeComplete
+          ? 'DONE secure logout; local account data deleted'
+          : 'DONE logout with PURGE FAILURE; inspect prior errors',
+    );
   }
 
   Future<void> _purgeLocalLogoutData() async {
@@ -992,14 +1003,79 @@ class AuthService {
     PaintingBinding.instance.imageCache.clearLiveImages();
     apkLog('Auth.logout', 'Flutter in-memory image cache cleared');
 
-    // Durable data is deliberately retained here. ChatLocalDb is
-    // owner-scoped, and the attachment/avatar caches are required for the
-    // next offline/local-first login. An explicit "clear local data" action
-    // should call the destructive cleanup APIs instead of ordinary logout.
+    final failures = <String>[];
+
+    Future<void> purge(String label, Future<void> Function() action) async {
+      try {
+        await action();
+        apkLog('Auth.logout', 'purged $label');
+      } catch (error) {
+        failures.add('$label: $error');
+        apkLog('Auth.logout', 'purge FAILED $label error="$error"');
+      }
+    }
+
+    await purge('chat databases', ChatLocalDb.instance.deleteAllLocalDatabases);
+    await purge(
+      'downloaded attachments',
+      AttachmentLocalStore.instance.clearAll,
+    );
+    await purge(
+      'Matrix stores and media',
+      MatrixClientService.instance.deleteLocalStore,
+    );
+
+    final documents = await getApplicationDocumentsDirectory();
+    final support = await getApplicationSupportDirectory();
+    final cache = await getApplicationCacheDirectory();
+
+    Future<void> deleteDirectory(Directory directory) async {
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    }
+
+    await purge(
+      'room avatars',
+      () => deleteDirectory(Directory('${documents.path}/Wrytte Room Avatars')),
+    );
+    await purge(
+      'profile avatars',
+      () => deleteDirectory(Directory('${support.path}/profile_avatars')),
+    );
+    await purge('application disk cache', () async {
+      if (!await cache.exists()) return;
+      await for (final entity in cache.list()) {
+        await entity.delete(recursive: true);
+      }
+    });
+    await purge('shared preferences', () async {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.clear();
+    });
+
+    final attachmentDirectory = Directory(
+      '${documents.path}/Wrytte Attachments',
+    );
+    final roomAvatarDirectory = Directory(
+      '${documents.path}/Wrytte Room Avatars',
+    );
+    final profileAvatarDirectory = Directory('${support.path}/profile_avatars');
+    final residualDirectories = <String>[
+      if (await attachmentDirectory.exists()) attachmentDirectory.path,
+      if (await roomAvatarDirectory.exists()) roomAvatarDirectory.path,
+      if (await profileAvatarDirectory.exists()) profileAvatarDirectory.path,
+    ];
     apkLog(
       'Auth.logout',
-      'preserved chat SQLite, Matrix store, attachments, avatars, and category metadata',
+      'purge verification residual_directories=${residualDirectories.length} '
+          'failures=${failures.length}',
     );
+    if (failures.isNotEmpty || residualDirectories.isNotEmpty) {
+      throw StateError(
+        'Logout purge incomplete: ${[...failures, ...residualDirectories].join('; ')}',
+      );
+    }
   }
 
   Future<void> signOutFirebase() async {

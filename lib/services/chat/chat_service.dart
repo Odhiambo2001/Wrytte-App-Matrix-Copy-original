@@ -84,6 +84,7 @@ class ChatService {
   StreamSubscription? _syncSub;
   StreamSubscription? _toDeviceSub;
   bool _handlingSync = false;
+  int _runtimeGeneration = 0;
   Timer? _roomsRefreshTimer;
   DateTime? _lastRoomsRefreshAt;
 
@@ -692,6 +693,7 @@ class ChatService {
     final future = _restoreRoomHistoryFromServerInternal(
       room,
       maxHistoryPages: maxHistoryPages,
+      runtimeGeneration: _runtimeGeneration,
     );
     _roomHistoryInFlight[room.id] = future;
     try {
@@ -706,10 +708,14 @@ class ChatService {
   Future<List<ChatMessage>> _restoreRoomHistoryFromServerInternal(
     mx.Room room, {
     int? maxHistoryPages,
+    required int runtimeGeneration,
   }) async {
     mx.Timeline? timeline;
     try {
       timeline = await room.getTimeline(limit: null);
+      if (!_isConnected || runtimeGeneration != _runtimeGeneration) {
+        return const <ChatMessage>[];
+      }
       final localById = {
         for (final message in await ChatLocalDb.instance.loadMessages(room.id))
           message.id: message,
@@ -718,6 +724,9 @@ class ChatService {
       final groupJoinCutoff = _groupJoinCutoffForRoom(room);
 
       Future<List<ChatMessage>> persistCurrentTimeline(String stage) async {
+        if (!_isConnected || runtimeGeneration != _runtimeGeneration) {
+          return const <ChatMessage>[];
+        }
         final messages = _messagesFromMatrixEvents(
           timeline!.events,
           localById: localById,
@@ -792,6 +801,13 @@ class ChatService {
             filter: mx.StateFilter(lazyLoadMembers: true),
           ),
         );
+        if (!_isConnected || runtimeGeneration != _runtimeGeneration) {
+          apkLog(
+            'Matrix.history',
+            'cancelled room_id="${room.id}" reason="session ended"',
+          );
+          return messages;
+        }
         final afterCount = timeline.events.length;
         final afterToken = room.prev_batch;
         apkLog(
@@ -1501,11 +1517,16 @@ class ChatService {
     String roomId, {
     int? limit,
   }) {
+    final runtimeGeneration = _runtimeGeneration;
     final completer = Completer<List<ChatMessage>>();
     _suggestedPreviewQueue = _suggestedPreviewQueue.then((_) async {
       try {
         completer.complete(
-          await _fetchPublicGroupPreview(roomId, limit: limit),
+          await _fetchPublicGroupPreview(
+            roomId,
+            limit: limit,
+            runtimeGeneration: runtimeGeneration,
+          ),
         );
       } catch (error, stackTrace) {
         completer.completeError(error, stackTrace);
@@ -1517,7 +1538,11 @@ class ChatService {
   Future<List<ChatMessage>> _fetchPublicGroupPreview(
     String id, {
     int? limit,
+    required int runtimeGeneration,
   }) async {
+    if (!_isConnected || runtimeGeneration != _runtimeGeneration) {
+      return const [];
+    }
     apkLog('SuggestedPreview', 'fetch started room_id="$id"');
     try {
       return await _withMatrixTokenRetry('fetchPublicGroupPreview', () async {
@@ -1540,6 +1565,9 @@ class ChatService {
               limit: pageLimit,
             ),
           );
+          if (!_isConnected || runtimeGeneration != _runtimeGeneration) {
+            return const <ChatMessage>[];
+          }
           pageCount++;
           for (final event in response.chunk) {
             _collectSuggestedPreviewMember(event, latestMembers);
@@ -1570,6 +1598,9 @@ class ChatService {
         }
 
         messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        if (!_isConnected || runtimeGeneration != _runtimeGeneration) {
+          return const <ChatMessage>[];
+        }
         final adminIds = _suggestedRoomAdminIds(latestProfileState);
         final memberRows =
             latestMembers.values
@@ -1605,6 +1636,9 @@ class ChatService {
         return messages;
       });
     } catch (e) {
+      if (!_isConnected || runtimeGeneration != _runtimeGeneration) {
+        return const [];
+      }
       await ChatLocalDb.instance.saveSuggestedPreviewSync(
         roomId: id,
         status: 'failed',
@@ -2802,21 +2836,36 @@ class ChatService {
 
   Future<void> reset() async {
     _isConnected = false;
-    final pendingHistory = <Future<dynamic>>{
+    _runtimeGeneration++;
+    final pendingWork = <Future<dynamic>>{
       if (_historyRestoreFuture != null) _historyRestoreFuture!,
       ..._roomHistoryInFlight.values,
+      ..._suggestedPreviewInFlight.values,
     };
+    // Cancel event sources before clearing credentials or local storage.
+    // In-flight HTTP requests cannot always be interrupted, so the generation
+    // guard above prevents their late responses from writing after logout.
+    await _timelineSub?.cancel();
+    await _syncSub?.cancel();
+    await _toDeviceSub?.cancel();
+    _timelineSub = null;
+    _syncSub = null;
+    _toDeviceSub = null;
+    // Give an operation that is already inside a local SQLite write a brief
+    // chance to finish before logout closes and deletes the database. Network
+    // work is not awaited; its generation is now stale and cannot write.
+    if (pendingWork.isNotEmpty) {
+      await Future.wait(
+        pendingWork.map((future) => future.catchError((_) => null)),
+      ).timeout(const Duration(seconds: 1), onTimeout: () => const []);
+    }
     _loginHistoryPrepared = false;
     _connectFuture = null;
     _loginHistoryPreparationFuture = null;
     _historyRestoreFuture = null;
-    if (pendingHistory.isNotEmpty) {
-      await Future.wait(pendingHistory).timeout(
-        const Duration(seconds: 15),
-        onTimeout: () => const <dynamic>[],
-      );
-    }
     _roomHistoryInFlight.clear();
+    _suggestedPreviewInFlight.clear();
+    _attachmentPrefetchInFlight.clear();
     for (final timer in _attachmentCacheSummaryTimers.values) {
       timer.cancel();
     }
@@ -2853,12 +2902,6 @@ class ChatService {
     for (final controller in _roomMessagesControllers.values) {
       if (!controller.isClosed) controller.add(const []);
     }
-    await _timelineSub?.cancel();
-    await _syncSub?.cancel();
-    await _toDeviceSub?.cancel();
-    _timelineSub = null;
-    _syncSub = null;
-    _toDeviceSub = null;
     _connectionController.add(false);
   }
 

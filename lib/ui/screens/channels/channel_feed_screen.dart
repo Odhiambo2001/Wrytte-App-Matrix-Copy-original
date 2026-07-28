@@ -25,6 +25,7 @@ class ChannelFeedScreen extends StatefulWidget {
   final String currentUserId;
   final String title;
   final String? avatarUrl;
+  final String? localAvatarPath;
   final List<ChatMessage> initialPosts;
   final int subscriberCount;
   final bool readOnlyUntilSubscribe;
@@ -37,6 +38,7 @@ class ChannelFeedScreen extends StatefulWidget {
     required this.currentUserId,
     required this.title,
     this.avatarUrl,
+    this.localAvatarPath,
     this.initialPosts = const [],
     this.subscriberCount = 0,
     this.readOnlyUntilSubscribe = false,
@@ -582,6 +584,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   children: [
                     UserAvatar(
                       imageUrl: _channelAvatarUrl,
+                      localImagePath: widget.localAvatarPath,
                       cacheIdentity: _channelAvatarCacheIdentity,
                       name: widget.title,
                       size: 48,
@@ -676,6 +679,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           onTap: _openChannelProfile,
           child: UserAvatar(
             imageUrl: _channelAvatarUrl,
+            localImagePath: widget.localAvatarPath,
             cacheIdentity: _channelAvatarCacheIdentity,
             name: widget.title,
             size: 36,
@@ -925,6 +929,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                                         UserAvatar(
                                           imageUrl:
                                               isMine ? _channelAvatarUrl : null,
+                                          localImagePath:
+                                              isMine
+                                                  ? widget.localAvatarPath
+                                                  : null,
                                           name:
                                               comment.senderName ??
                                               comment.senderId,

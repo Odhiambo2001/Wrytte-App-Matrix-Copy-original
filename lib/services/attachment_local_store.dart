@@ -22,6 +22,7 @@ class AttachmentLocalStore {
 
   static const int initialFileBytes = 35 * 1024 * 1024;
   final Map<String, Future<AttachmentLocalCopy>> _inFlight = {};
+  int _generation = 0;
 
   /// Returns an already completed persistent copy without making a network
   /// request. Callers can use this to prefer disk on cold app starts and only
@@ -47,6 +48,7 @@ class AttachmentLocalStore {
   }
 
   Future<void> clearAll() async {
+    _generation++;
     final root = await getApplicationDocumentsDirectory();
     final directory = Directory('${root.path}/Wrytte Attachments');
     if (await directory.exists()) {
@@ -114,6 +116,7 @@ class AttachmentLocalStore {
     required String fileName,
     required bool allowPartial,
   }) async {
+    final generation = _generation;
     final cleanSource = source.trim();
     if (cleanSource.isEmpty) throw StateError('Attachment URL is unavailable');
 
@@ -168,6 +171,9 @@ class AttachmentLocalStore {
       final response = await client
           .send(request)
           .timeout(const Duration(seconds: 30));
+      if (generation != _generation) {
+        throw StateError('Attachment download cancelled');
+      }
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw HttpException(
           'Attachment download failed: ${response.statusCode}',
@@ -181,6 +187,9 @@ class AttachmentLocalStore {
         await for (final chunk in response.stream.timeout(
           const Duration(seconds: 45),
         )) {
+          if (generation != _generation) {
+            throw StateError('Attachment download cancelled');
+          }
           sink.add(chunk);
           received += chunk.length;
           if (shouldPartial &&
@@ -195,6 +204,11 @@ class AttachmentLocalStore {
       }
 
       final actualBytes = await target.length();
+      if (generation != _generation) {
+        if (await target.exists()) await target.delete();
+        if (await completeMarker.exists()) await completeMarker.delete();
+        throw StateError('Attachment download cancelled');
+      }
       final isComplete =
           !shouldPartial &&
           actualBytes > 0 &&

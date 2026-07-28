@@ -2562,6 +2562,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                           currentUserId: _currentUserId,
                           title: name,
                           avatarUrl: avatar,
+                          localAvatarPath: localAvatarPath,
                           initialPosts: initialMessages,
                           subscriberCount: conv.participants.length,
                           canPost: _isOwnGroupConversation(conv),
