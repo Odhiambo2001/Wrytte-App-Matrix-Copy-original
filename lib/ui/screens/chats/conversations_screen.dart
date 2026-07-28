@@ -1,10 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:matrix/matrix.dart' as mx;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:wrytte/components/user_avatar.dart';
@@ -78,6 +82,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   List<ChatConversation> _conversations = [];
   List<MatrixPublicGroup> _suggestedGroups = const [];
+  Map<String, String> _cachedRoomCategories = const {};
+  Map<String, String> _localRoomAvatarPaths = const {};
+  Map<String, String> _localRoomAvatarSources = const {};
 
   String _currentUserId = '';
   bool _isSelectionMode = false;
@@ -216,6 +223,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       ...MatrixChatService.retiredTestGroupRoomIds,
     };
     await _chat.restoreCreatedGroupRoomIdsForOwner(_currentUserId);
+    await _loadCachedRoomCategories();
+    await _loadLocalRoomAvatarPaths();
     await _loadCachedPublicRoomDirectory();
     await _loadIdentityCacheFast();
     await _loadSavedContacts();
@@ -239,6 +248,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _chatConnectionSub = _chat.connectionStream.listen((connected) {
       if (connected) {
         unawaited(_restoreContactsAfterMatrixReady());
+        unawaited(_cacheRoomAvatars(_suggestedGroups));
         unawaited(_loadSuggestedGroups());
       }
     });
@@ -248,6 +258,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       await _chat.connect();
       await _retireTestGroupsFromAccount();
       unawaited(_restoreContactsAfterMatrixReady());
+      unawaited(_cacheRoomAvatars(_suggestedGroups));
       unawaited(_loadSuggestedGroups());
     } catch (e) {
       debugPrint('[ConversationsScreen] chat connect skipped: $e');
@@ -317,6 +328,286 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   String get _publicRoomDirectoryCacheKey =>
       'wrytte.public_room_directory.$_currentUserId';
+
+  String get _roomCategoryCacheKey => 'wrytte.room_categories.$_currentUserId';
+
+  String get _roomAvatarPathsCacheKey =>
+      'wrytte.room_avatar_paths.$_currentUserId';
+
+  String get _roomAvatarSourcesCacheKey =>
+      'wrytte.room_avatar_sources.$_currentUserId';
+
+  Future<void> _loadCachedRoomCategories() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = prefs.getString(_roomCategoryCacheKey);
+      if (encoded == null || encoded.isEmpty) return;
+      final decoded = jsonDecode(encoded);
+      if (decoded is! Map) return;
+      final categories = decoded.map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      );
+      if (!mounted) return;
+      _cachedRoomCategories = Map<String, String>.unmodifiable(categories);
+      apkLog(
+        'RoomCategories.local',
+        'restored owner="$_currentUserId" rooms=${categories.length} '
+            'channel_owned=${categories.values.where((v) => v == 'channel_owned').length} '
+            'channel_subscribed=${categories.values.where((v) => v == 'channel_subscribed').length} '
+            'channel_suggested=${categories.values.where((v) => v == 'channel_suggested').length} '
+            'group_owned=${categories.values.where((v) => v == 'group_owned').length} '
+            'group_joined=${categories.values.where((v) => v == 'group_joined').length} '
+            'group_suggested=${categories.values.where((v) => v == 'group_suggested').length}',
+      );
+    } catch (error) {
+      apkLog(
+        'RoomCategories.local',
+        'restore failed owner="$_currentUserId" error="$error"',
+      );
+    }
+  }
+
+  Future<void> _loadLocalRoomAvatarPaths() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = prefs.getString(_roomAvatarPathsCacheKey);
+      if (encoded == null || encoded.isEmpty) return;
+      final decoded = jsonDecode(encoded);
+      if (decoded is! Map) return;
+      final encodedSources = prefs.getString(_roomAvatarSourcesCacheKey);
+      final decodedSources =
+          encodedSources == null || encodedSources.isEmpty
+              ? const <String, dynamic>{}
+              : jsonDecode(encodedSources);
+      final paths = <String, String>{};
+      final sources = <String, String>{};
+      for (final entry in decoded.entries) {
+        final roomId = entry.key.toString().trim();
+        final path = entry.value.toString().trim();
+        if (roomId.isNotEmpty && path.isNotEmpty && File(path).existsSync()) {
+          paths[roomId] = path;
+          if (decodedSources is Map) {
+            final source = decodedSources[roomId]?.toString().trim() ?? '';
+            if (source.isNotEmpty) sources[roomId] = source;
+          }
+        }
+      }
+      if (!mounted) return;
+      _localRoomAvatarPaths = Map<String, String>.unmodifiable(paths);
+      _localRoomAvatarSources = Map<String, String>.unmodifiable(sources);
+      apkLog(
+        'RoomAvatars.local',
+        'restored owner="$_currentUserId" complete=${paths.length}',
+      );
+    } catch (error) {
+      apkLog(
+        'RoomAvatars.local',
+        'restore failed owner="$_currentUserId" error="$error"',
+      );
+    }
+  }
+
+  Future<void> _cacheRoomAvatars(List<MatrixPublicGroup> discovered) async {
+    final sources = <String, String>{
+      for (final room in discovered)
+        if (room.avatarUrl?.trim().isNotEmpty == true)
+          room.roomId: room.avatarUrl!.trim(),
+    };
+    for (final conversation in _conversations.where(
+      _isDisplayableGroupConversation,
+    )) {
+      final liveAvatar = _groupRoomAvatarUrl(
+        MatrixChatService.instance.getRoomById(conversation.id),
+      );
+      final source =
+          liveAvatar?.trim().isNotEmpty == true
+              ? liveAvatar!.trim()
+              : conversation.otherUserAvatar?.trim() ?? '';
+      if (source.isNotEmpty) sources[conversation.id] = source;
+    }
+
+    final paths = Map<String, String>.from(_localRoomAvatarPaths);
+    final cachedSources = Map<String, String>.from(_localRoomAvatarSources);
+    final root = await getApplicationDocumentsDirectory();
+    final directory = Directory(p.join(root.path, 'Wrytte Room Avatars'));
+    await directory.create(recursive: true);
+
+    for (final entry in sources.entries) {
+      try {
+        final existingPath = paths[entry.key]?.trim() ?? '';
+        if (existingPath.isNotEmpty &&
+            cachedSources[entry.key] == entry.value &&
+            await File(existingPath).exists() &&
+            await File(existingPath).length() > 0) {
+          apkLog(
+            'RoomAvatars.local',
+            'state="reused" room_id="${entry.key}" '
+                'local_path="$existingPath"',
+          );
+          continue;
+        }
+        var resolved = entry.value;
+        if (resolved.startsWith('mxc://')) {
+          final mxc = Uri.parse(resolved);
+          final mediaId =
+              mxc.pathSegments.isEmpty ? '' : mxc.pathSegments.join('/');
+          if (mxc.host.isEmpty || mediaId.isEmpty) continue;
+          final response = await MatrixClientService.instance.client.getContent(
+            mxc.host,
+            mediaId,
+          );
+          if (response.data.isEmpty) {
+            throw StateError('Matrix avatar response was empty');
+          }
+          final extension = _avatarExtensionForContentType(
+            response.contentType,
+          );
+          final target = File(
+            p.join(
+              directory.path,
+              '${_stableRoomAvatarKey(entry.key)}$extension',
+            ),
+          );
+          await target.writeAsBytes(response.data, flush: true);
+          paths[entry.key] = target.path;
+          cachedSources[entry.key] = entry.value;
+          apkLog(
+            'RoomAvatars.local',
+            'state="complete" source="matrix" room_id="${entry.key}" '
+                'bytes=${response.data.length} local_path="${target.path}"',
+          );
+          continue;
+        } else if (resolved.startsWith('/')) {
+          resolved = '${ApiService.baseUrl}$resolved';
+        }
+        if (!resolved.startsWith('http')) continue;
+        final uri = Uri.tryParse(resolved);
+        final isBackendAvatar =
+            uri?.host == 'wryttedev.azurewebsites.net' ||
+            uri?.host == 'wrytte.com';
+        final backendToken =
+            isBackendAvatar
+                ? (AuthService.instance.cachedBackendToken?.trim().isNotEmpty ==
+                        true
+                    ? AuthService.instance.cachedBackendToken
+                    : await AuthService.instance.getValidBackendToken())
+                : null;
+        final cached = await DefaultCacheManager().getSingleFile(
+          resolved,
+          headers:
+              backendToken?.trim().isNotEmpty == true
+                  ? {'Authorization': 'Bearer ${backendToken!.trim()}'}
+                  : null,
+        );
+        final extension = p
+            .extension(uri?.path ?? '')
+            .replaceAll(RegExp(r'[^a-zA-Z0-9.]'), '');
+        final target = File(
+          p.join(
+            directory.path,
+            '${_stableRoomAvatarKey(entry.key)}'
+            '${extension.isEmpty ? '.img' : extension}',
+          ),
+        );
+        await cached.copy(target.path);
+        paths[entry.key] = target.path;
+        cachedSources[entry.key] = entry.value;
+        apkLog(
+          'RoomAvatars.local',
+          'state="complete" source="backend" room_id="${entry.key}" '
+              'bytes=${await target.length()} local_path="${target.path}"',
+        );
+      } catch (error) {
+        apkLog(
+          'RoomAvatars.local',
+          'state="failed" room_id="${entry.key}" error="$error"',
+        );
+      }
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_roomAvatarPathsCacheKey, jsonEncode(paths));
+    await prefs.setString(
+      _roomAvatarSourcesCacheKey,
+      jsonEncode(cachedSources),
+    );
+    if (mounted) {
+      setState(() {
+        _localRoomAvatarPaths = Map<String, String>.unmodifiable(paths);
+        _localRoomAvatarSources = Map<String, String>.unmodifiable(
+          cachedSources,
+        );
+      });
+    }
+  }
+
+  String _stableRoomAvatarKey(String roomId) {
+    var hash = 0xcbf29ce484222325;
+    for (final byte in roomId.codeUnits) {
+      hash ^= byte;
+      hash = (hash * 0x100000001b3) & 0x7fffffffffffffff;
+    }
+    return hash.toRadixString(16);
+  }
+
+  String _avatarExtensionForContentType(String? contentType) {
+    final type = contentType?.split(';').first.trim().toLowerCase() ?? '';
+    return switch (type) {
+      'image/png' => '.png',
+      'image/webp' => '.webp',
+      'image/gif' => '.gif',
+      'image/bmp' => '.bmp',
+      _ => '.jpg',
+    };
+  }
+
+  Future<void> _saveRoomCategorySnapshot(
+    List<MatrixPublicGroup> discovered,
+  ) async {
+    if (_currentUserId.trim().isEmpty) return;
+    final categories = <String, String>{};
+    final joinedIds =
+        MatrixChatService.instance.rooms
+            .where((room) => room.membership == mx.Membership.join)
+            .map((room) => room.id)
+            .toSet();
+
+    for (final conversation in _conversations
+        .where(_isDisplayableGroupConversation)
+        .where((conversation) => joinedIds.contains(conversation.id))) {
+      final liveRoom = MatrixChatService.instance.getRoomById(conversation.id);
+      final isChannel =
+          liveRoom == null
+              ? conversation.isChannelKind
+              : MatrixChatService.instance.isChannelRoom(liveRoom);
+      final owned = _isOwnGroupConversation(conversation);
+      categories[conversation.id] =
+          isChannel
+              ? (owned ? 'channel_owned' : 'channel_subscribed')
+              : (owned ? 'group_owned' : 'group_joined');
+    }
+    for (final room in discovered.where(
+      (room) => !joinedIds.contains(room.roomId),
+    )) {
+      categories[room.roomId] =
+          room.isChannel ? 'channel_suggested' : 'group_suggested';
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_roomCategoryCacheKey, jsonEncode(categories));
+    if (mounted) {
+      setState(
+        () =>
+            _cachedRoomCategories = Map<String, String>.unmodifiable(
+              categories,
+            ),
+      );
+    }
+    apkLog(
+      'RoomCategories.local',
+      'saved owner="$_currentUserId" rooms=${categories.length}',
+    );
+  }
 
   Future<void> _loadCachedPublicRoomDirectory() async {
     try {
@@ -407,6 +698,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       if (!mounted) return;
       setState(() => _suggestedGroups = groups);
       await _saveCachedPublicRoomDirectory(groups);
+      await _saveRoomCategorySnapshot(groups);
+      unawaited(_cacheRoomAvatars(groups));
       unawaited(_chat.auditDiscoveredChannelCacheCoverage(groups));
       unawaited(_chat.auditDiscoveredGroupCacheCoverage(groups));
       apkLog(
@@ -486,6 +779,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       );
     }
     await _saveCachedPublicRoomDirectory(_suggestedGroups);
+    unawaited(_cacheRoomAvatars(_suggestedGroups));
     await _chat.auditDiscoveredChannelCacheCoverage(_suggestedGroups);
     await _chat.auditDiscoveredGroupCacheCoverage(_suggestedGroups);
   }
@@ -1387,6 +1681,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
     if (ChatService.isGroupDeletedPreview(conv.lastMessage)) return true;
     if (conv.deletedAt != null && conv.id.startsWith('!')) return true;
+    if (_cachedRoomCategories.containsKey(conv.id)) return true;
     if (conv.hasExplicitKind) {
       return conv.isGroupKind || conv.isChannelKind;
     }
@@ -1439,7 +1734,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   String? _avatarForConversation(ChatConversation conv) {
     if (_isGroupConversation(conv)) {
-      if (conv.isChannelKind) {
+      if (_isChannelConversation(conv)) {
         final room = MatrixChatService.instance.getRoomById(conv.id);
         final rawAvatar =
             room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
@@ -1455,7 +1750,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         MatrixChatService.instance.getRoomById(conv.id),
       );
       if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
-      return null;
+      final publicAvatar = _suggestedGroups
+          .where((group) => group.roomId == conv.id)
+          .map((group) => group.avatarUrl?.trim() ?? '')
+          .firstWhere((avatar) => avatar.isNotEmpty, orElse: () => '');
+      if (publicAvatar.isNotEmpty) return publicAvatar;
+      final storedAvatar = conv.otherUserAvatar?.trim() ?? '';
+      return storedAvatar.isEmpty ? null : storedAvatar;
     }
 
     final contactKey = _contactKeyForConversation(conv);
@@ -1563,7 +1864,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   String? _localAvatarPathForConversation(ChatConversation conv) {
-    if (_isGroupConversation(conv)) return null;
+    if (_isGroupConversation(conv)) {
+      final path = _localRoomAvatarPaths[conv.id]?.trim() ?? '';
+      return path.isEmpty ? null : path;
+    }
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final uid = _profileUidForConversation(conv);
     if (uid == null) return null;
@@ -2470,31 +2774,39 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     );
   }
 
+  bool _isChannelConversation(ChatConversation conversation) {
+    final category = _cachedRoomCategories[conversation.id];
+    if (category?.startsWith('channel_') == true) return true;
+    if (category?.startsWith('group_') == true) return false;
+    return conversation.isChannelKind;
+  }
+
+  bool _isSuggestedChannel(MatrixPublicGroup room) {
+    final category = _cachedRoomCategories[room.roomId];
+    if (category?.startsWith('channel_') == true) return true;
+    if (category?.startsWith('group_') == true) return false;
+    return room.isChannel;
+  }
+
   Widget _buildChannelsTab(double topPadding) {
     final allChannels =
         _conversations
             .where(
               (conversation) =>
-                  conversation.isChannelKind &&
+                  _isChannelConversation(conversation) &&
+                  _cachedRoomCategories[conversation.id] !=
+                      'channel_suggested' &&
                   _isDisplayableGroupConversation(conversation),
             )
             .toList();
-    final createdIds = _chat.createdGroupRoomIds;
-    final ownChannels =
-        allChannels
-            .where(
-              (channel) =>
-                  createdIds.contains(channel.id) ||
-                  _isOwnGroupConversation(channel),
-            )
-            .toList();
+    final ownChannels = allChannels.where(_isOwnGroupConversation).toList();
     final subscriptions =
         allChannels
             .where((channel) => !ownChannels.any((own) => own.id == channel.id))
             .toList();
     final suggestedChannels =
         _suggestedGroups
-            .where((group) => group.isChannel)
+            .where(_isSuggestedChannel)
             .where(
               (group) =>
                   !allChannels.any((channel) => channel.id == group.roomId),
@@ -2548,6 +2860,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           children: [
             UserAvatar(
               imageUrl: channel.avatarUrl,
+              localImagePath: _localRoomAvatarPaths[channel.roomId],
               name: channel.name,
               size: 60,
             ),
@@ -2642,7 +2955,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         _conversations
             .where(
               (conversation) =>
-                  !conversation.isChannelKind &&
+                  !_isChannelConversation(conversation) &&
+                  _cachedRoomCategories[conversation.id] != 'group_suggested' &&
                   _isDisplayableGroupConversation(conversation),
             )
             .toList();
@@ -2654,7 +2968,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final promotedOwnGroups =
         shouldPromotePublicGroupsAsOwn
             ? _suggestedGroups
-                .where((g) => !g.isChannel)
+                .where((g) => !_isSuggestedChannel(g))
                 .where((g) => createdIds.contains(g.roomId))
                 .where(
                   (g) => !MatrixChatService.instance.isPublicGroupDismissed(g),
@@ -2678,7 +2992,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final joinedAliases = _joinedMatrixGroupAliases();
     final suggested =
         _suggestedGroups
-            .where((group) => !group.isChannel)
+            .where((group) => !_isSuggestedChannel(group))
             .where(
               (group) =>
                   group.memberCount > 0 &&
@@ -2907,6 +3221,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
               ),
               size: 60,
               imageUrl: group.avatarUrl,
+              localImagePath: _localRoomAvatarPaths[group.roomId],
               cacheIdentity: MatrixChatService.instance
                   .roomProfileCacheIdentity(
                     accountId: _currentUserId,
@@ -3227,8 +3542,15 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     if (room != null && room.membership == mx.Membership.join) {
       return MatrixChatService.instance.isGroupOwner(room);
     }
-    // Offline fallback only. Live Matrix ownership always wins so a room that
-    // was joined through Suggestions cannot be promoted by stale local data.
+    final cachedCategory = _cachedRoomCategories[conv.id];
+    if (cachedCategory == 'channel_owned' || cachedCategory == 'group_owned') {
+      return true;
+    }
+    if (cachedCategory == 'channel_subscribed' ||
+        cachedCategory == 'group_joined') {
+      return false;
+    }
+    // Compatibility fallback for rooms created before category snapshots.
     return _chat.isCreatedGroupRoom(conv.id);
   }
 

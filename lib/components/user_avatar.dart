@@ -107,6 +107,14 @@ class _UserAvatarState extends State<UserAvatar> {
   }
 
   void _warmAuthToken() {
+    final rawUrl = widget.imageUrl?.trim() ?? '';
+    final resolved = _resolveImageUrl(rawUrl);
+    final host = Uri.tryParse(resolved)?.host.toLowerCase() ?? '';
+    final needsBackendToken =
+        rawUrl.startsWith('/usrimg/') ||
+        host == 'wryttedev.azurewebsites.net' ||
+        host == 'wrytte.com';
+    if (!needsBackendToken) return;
     final cached = AuthService.instance.cachedBackendToken?.trim() ?? '';
     if (cached.isNotEmpty) {
       _backendToken = cached;
@@ -243,9 +251,10 @@ class _UserAvatarState extends State<UserAvatar> {
     final url = _resolveImageUrl(rawUrl);
     if (url.isEmpty) return _buildPlaceholder();
     final providerKey = _providerCacheKey(rawUrl);
-    final logIdentity = widget.cacheIdentity?.trim().isNotEmpty == true
-        ? widget.cacheIdentity!.trim()
-        : providerKey;
+    final logIdentity =
+        widget.cacheIdentity?.trim().isNotEmpty == true
+            ? widget.cacheIdentity!.trim()
+            : providerKey;
     if (_loggedLoadKeys.add(providerKey)) {
       apkLog(
         'Avatar.load',
@@ -300,9 +309,10 @@ class _UserAvatarState extends State<UserAvatar> {
   void _logPaintOnce(String rawUrl, {required String source}) {
     final key = _providerCacheKey(rawUrl);
     if (!_loggedPaintKeys.add(key)) return;
-    final logIdentity = widget.cacheIdentity?.trim().isNotEmpty == true
-        ? widget.cacheIdentity!.trim()
-        : key;
+    final logIdentity =
+        widget.cacheIdentity?.trim().isNotEmpty == true
+            ? widget.cacheIdentity!.trim()
+            : key;
     apkLog(
       'Avatar.load',
       'state="painted" source="$source" '

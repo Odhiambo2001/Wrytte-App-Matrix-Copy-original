@@ -1367,6 +1367,32 @@ class MatrixChatService {
         room.ownPowerLevel.level >= 100;
   }
 
+  bool isChannelRoom(Room room) {
+    final createType =
+        room
+            .getState(EventTypes.RoomCreate)
+            ?.content['type']
+            ?.toString()
+            .trim()
+            .toLowerCase() ??
+        '';
+    if (createType == MatrixPublicGroup.channelRoomType) return true;
+    final stateKind =
+        room
+            .getState('com.wrytte.group.info')
+            ?.content['conversation_kind']
+            ?.toString()
+            .trim()
+            .toLowerCase() ??
+        '';
+    if (stateKind == MatrixPublicGroup.channelRoomType) return true;
+    if (stateKind == 'group') return false;
+    final alias = room.canonicalAlias.trim();
+    final localpart = alias.startsWith('#') ? alias.substring(1) : alias;
+    if (localpart.startsWith('gr.@')) return false;
+    return localpart.startsWith('@') || localpart.startsWith('.@');
+  }
+
   bool isMatrixGroupRoom(Room room) {
     // a public room is always a group
     if (room.joinRules == JoinRules.public) return true;
