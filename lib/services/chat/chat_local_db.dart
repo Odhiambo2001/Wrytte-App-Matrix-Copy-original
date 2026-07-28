@@ -64,7 +64,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 12,
+      version: 14,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -130,6 +130,7 @@ class ChatLocalDb {
         ''');
 
         await _createSuggestedPreviewTables(db);
+        await _createRoomCacheStateTable(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -246,8 +247,46 @@ class ChatLocalDb {
             SET isComplete = 0, status = 'stale', lastFetchedAt = 0
           ''');
         }
+        if (oldVersion < 13) {
+          await _createRoomCacheStateTable(db);
+        }
+        if (oldVersion < 14) {
+          await _addColumnIfMissing(
+            db,
+            'room_cache_state',
+            'mediaComplete',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+          await _addColumnIfMissing(
+            db,
+            'room_cache_state',
+            'expectedMediaCount',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+          await _addColumnIfMissing(
+            db,
+            'room_cache_state',
+            'cachedMediaCount',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+        }
       },
     );
+  }
+
+  static Future<void> _createRoomCacheStateTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS room_cache_state (
+        roomId             TEXT PRIMARY KEY,
+        historyComplete    INTEGER NOT NULL DEFAULT 0,
+        cachedMessageCount INTEGER NOT NULL DEFAULT 0,
+        mediaComplete      INTEGER NOT NULL DEFAULT 0,
+        expectedMediaCount INTEGER NOT NULL DEFAULT 0,
+        cachedMediaCount   INTEGER NOT NULL DEFAULT 0,
+        completedAt        INTEGER,
+        updatedAt          INTEGER NOT NULL
+      )
+    ''');
   }
 
   Future<String> _currentOwnerId() async {
@@ -608,6 +647,130 @@ class ChatLocalDb {
     return rows.map(_rowToMessage).toList();
   }
 
+  Future<bool> isRoomHistoryComplete(String roomId) async {
+    final database = await db;
+    final rows = await database.query(
+      'room_cache_state',
+      columns: ['historyComplete'],
+      where: 'roomId = ?',
+      whereArgs: [roomId],
+      limit: 1,
+    );
+    return rows.isNotEmpty && (rows.first['historyComplete'] as int? ?? 0) == 1;
+  }
+
+  Future<void> markRoomHistoryComplete(String roomId) async {
+    final database = await db;
+    final countRows = await database.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM messages
+      WHERE conversationId = ? AND isPreviewOnly = 0
+      ''',
+      [roomId],
+    );
+    final count = (countRows.first['count'] as int?) ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await database.insert('room_cache_state', {
+      'roomId': roomId,
+      'historyComplete': 1,
+      'cachedMessageCount': count,
+      'mediaComplete': 0,
+      'expectedMediaCount': 0,
+      'cachedMediaCount': 0,
+      'completedAt': now,
+      'updatedAt': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> updateRoomCacheProgress(String roomId) async {
+    final database = await db;
+    final countRows = await database.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM messages
+      WHERE conversationId = ? AND isPreviewOnly = 0
+      ''',
+      [roomId],
+    );
+    final count = (countRows.first['count'] as int?) ?? 0;
+    final complete = await isRoomHistoryComplete(roomId);
+    final existing = await database.query(
+      'room_cache_state',
+      columns: [
+        'completedAt',
+        'mediaComplete',
+        'expectedMediaCount',
+        'cachedMediaCount',
+      ],
+      where: 'roomId = ?',
+      whereArgs: [roomId],
+      limit: 1,
+    );
+    await database.insert('room_cache_state', {
+      'roomId': roomId,
+      'historyComplete': complete ? 1 : 0,
+      'cachedMessageCount': count,
+      'mediaComplete':
+          existing.isEmpty ? 0 : existing.first['mediaComplete'] as int? ?? 0,
+      'expectedMediaCount':
+          existing.isEmpty
+              ? 0
+              : existing.first['expectedMediaCount'] as int? ?? 0,
+      'cachedMediaCount':
+          existing.isEmpty
+              ? 0
+              : existing.first['cachedMediaCount'] as int? ?? 0,
+      'completedAt':
+          existing.isEmpty ? null : existing.first['completedAt'] as int?,
+      'updatedAt': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> markRoomMediaCoverage({
+    required String roomId,
+    required int expected,
+    required int complete,
+  }) async {
+    final database = await db;
+    final existing = await database.query(
+      'room_cache_state',
+      where: 'roomId = ?',
+      whereArgs: [roomId],
+      limit: 1,
+    );
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await database.insert('room_cache_state', {
+      'roomId': roomId,
+      'historyComplete':
+          existing.isEmpty ? 0 : existing.first['historyComplete'] as int? ?? 0,
+      'cachedMessageCount':
+          existing.isEmpty
+              ? 0
+              : existing.first['cachedMessageCount'] as int? ?? 0,
+      'mediaComplete': expected == complete ? 1 : 0,
+      'expectedMediaCount': expected,
+      'cachedMediaCount': complete,
+      'completedAt':
+          existing.isEmpty ? null : existing.first['completedAt'] as int?,
+      'updatedAt': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<bool> isRoomOfflineReady(String roomId) async {
+    final database = await db;
+    final rows = await database.query(
+      'room_cache_state',
+      columns: ['historyComplete', 'mediaComplete'],
+      where: 'roomId = ?',
+      whereArgs: [roomId],
+      limit: 1,
+    );
+    return rows.isNotEmpty &&
+        (rows.first['historyComplete'] as int? ?? 0) == 1 &&
+        (rows.first['mediaComplete'] as int? ?? 0) == 1;
+  }
+
   ChatMessage _rowToMessage(Map<String, dynamic> row) {
     return ChatMessage(
       id: row['id'] as String,
@@ -874,6 +1037,11 @@ class ChatLocalDb {
         whereArgs: [id],
       );
       await txn.delete('conversations', where: 'id = ?', whereArgs: [id]);
+      await txn.delete(
+        'room_cache_state',
+        where: 'roomId = ?',
+        whereArgs: [id],
+      );
     });
   }
 
@@ -884,6 +1052,11 @@ class ChatLocalDb {
     await database.delete(
       'messages',
       where: 'conversationId = ?',
+      whereArgs: [id],
+    );
+    await database.delete(
+      'room_cache_state',
+      where: 'roomId = ?',
       whereArgs: [id],
     );
   }
@@ -1587,6 +1760,7 @@ class ChatLocalDb {
     final database = await db;
     await database.delete('messages');
     await database.delete('conversations');
+    await database.delete('room_cache_state');
   }
 
   Future<void> deleteAllLocalDatabases() async {

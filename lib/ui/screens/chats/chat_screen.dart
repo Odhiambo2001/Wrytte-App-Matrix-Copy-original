@@ -853,6 +853,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool get _suppliedRoomMatchesScreenKind {
     if (!widget.conversationId.startsWith('!')) return true;
     if (widget.conversationKind != ConversationKind.direct) return true;
+    // Offline there is no live Matrix room available to re-verify. The
+    // account-scoped conversation row already carries the persisted direct
+    // kind, so trust it for local hydration instead of skipping the cache and
+    // showing an empty screen.
+    if (!MatrixClientService.instance.isLoggedIn) return true;
     return _chat.isVerifiedDirectConversation(
       widget.conversationId,
       _normaliseId(widget.receiverId),
@@ -2999,9 +3004,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildMessageList() {
     if (_isDeletedConversation) {
-      return const SizedBox.expand();
-    }
-    if (_isGroupChat && !_groupProfilesReady) {
       return const SizedBox.expand();
     }
     return Column(

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart' as mx;
@@ -78,7 +79,6 @@ class ChatService {
   Future<void>? _connectFuture;
   Future<void>? _loginHistoryPreparationFuture;
   Future<void>? _historyRestoreFuture;
-  Future<void>? _directHistoryRestoreFuture;
   Future<void>? _fetchConversationsFuture;
   StreamSubscription? _timelineSub;
   StreamSubscription? _syncSub;
@@ -106,6 +106,7 @@ class ChatService {
   final Map<String, Set<String>> _attachmentCacheCompleteByRoom = {};
   final Map<String, Set<String>> _attachmentCacheFailedByRoom = {};
   final Map<String, Set<String>> _attachmentCachePendingByRoom = {};
+  final Set<String> _attachmentPrefetchInFlight = {};
   final Map<String, Timer> _attachmentCacheSummaryTimers = {};
   final Map<String, String> _channelCacheCategoryByRoom = {};
   final Map<String, int> _channelCachedMessageCountByRoom = {};
@@ -172,6 +173,11 @@ class ChatService {
       await _loadCreatedGroupRoomIds();
       await _loadDismissedDeletedGroupRoomIds();
       _suppressRestoredRoomUnread = true;
+
+      // Local SQLite is the first-paint source of truth. Hydrate it before
+      // restoring or validating Matrix so chats, groups, and channel posts
+      // remain visible while the network session is being established.
+      await hydrateLocalConversations(syncReadMarkers: false);
 
       final expectedMatrixUserId = _expectedMatrixUserId(_currentUserId!);
       apkLog(
@@ -292,7 +298,6 @@ class ChatService {
         'ChatService.connect',
         'ready isConnected=true user_id="${client.userID}" rooms=${client.rooms.length}',
       );
-      await hydrateLocalConversations();
       _refreshConversationsFromRooms();
       unawaited(_finishConnectionWarmup());
     } catch (e) {
@@ -535,11 +540,11 @@ class ChatService {
         unawaited(ContactService().syncLocalContactsToBackend(userId));
       }
 
-      // Local history is already hydrated before connection and /sync supplies
-      // Restore verified DMs sequentially in the background. This discovers
-      // conversations whose latest /sync event is state-only and retrieves
-      // every older message batch without mixing group rooms into Chats.
-      unawaited(_restoreDirectHistoryAfterStartupSettles());
+      // A process restart often restores an existing Matrix session instead
+      // of passing through AuthService's fresh-login path. Resume the complete
+      // all-room history job here as well, otherwise only DMs are backfilled
+      // and joined channels/groups remain history_cached=false indefinitely.
+      unawaited(_resumeAllRoomHistoryAfterStartupSettles());
     } catch (e) {
       // ✅ Log the error but DO NOT lift suppression here.
       // Suppression is always lifted in the finally block below,
@@ -561,16 +566,31 @@ class ChatService {
     }
   }
 
-  Future<void> _restoreDirectHistoryAfterStartupSettles() async {
+  Future<void> _resumeAllRoomHistoryAfterStartupSettles() async {
     // Let the SDK finish /sync and any internal last-event gap repair before
-    // starting potentially deep pagination across every DM room.
+    // starting potentially deep pagination across every joined room.
     await Future<void>.delayed(const Duration(seconds: 4));
-    if (!_isConnected ||
-        _loginHistoryPrepared ||
-        _loginHistoryPreparationFuture != null) {
-      return;
+    if (!_isConnected) return;
+    try {
+      if (_loginHistoryPrepared) {
+        apkLog(
+          'Matrix.loginHydration',
+          'startup resume full backfill user_id="$_currentUserId"',
+        );
+        await _backfillAllHistoryAfterLogin();
+      } else {
+        apkLog(
+          'Matrix.loginHydration',
+          'startup prepare all-room history user_id="$_currentUserId"',
+        );
+        await prepareAllHistoryForLogin();
+      }
+    } catch (error) {
+      apkLog(
+        'Matrix.loginHydration',
+        'startup all-room backfill failed error="$error"; retry on next reconnect',
+      );
     }
-    await _ensureAllDirectRoomHistoryRestored();
   }
 
   Future<void> restoreAllRoomHistoryFromServer() {
@@ -648,30 +668,6 @@ class ChatService {
       _conversationsMap.values.toList(),
     );
     apkLog('Matrix.loginHydration', 'background full backfill complete');
-  }
-
-  Future<void> _restoreAllDirectRoomHistoryFromServer() async {
-    final rooms =
-        await MatrixChatService.instance.discoverAndRepairDirectRooms();
-    for (final room in rooms) {
-      await _restoreRoomHistoryFromServer(room);
-      // Keep pagination and read-marker traffic below homeserver burst limits.
-      await Future<void>.delayed(const Duration(milliseconds: 900));
-    }
-    // Refresh once after the batch instead of rebuilding after every room.
-    _refreshConversationsFromRooms(force: true);
-  }
-
-  Future<void> _ensureAllDirectRoomHistoryRestored() {
-    final pending = _directHistoryRestoreFuture;
-    if (pending != null) return pending;
-    final future = _restoreAllDirectRoomHistoryFromServer();
-    _directHistoryRestoreFuture = future;
-    return future.whenComplete(() {
-      if (identical(_directHistoryRestoreFuture, future)) {
-        _directHistoryRestoreFuture = null;
-      }
-    });
   }
 
   Future<void> _restoreAllRoomHistoryFromServer() async {
@@ -766,8 +762,23 @@ class ChatService {
       // Make the recent /sync timeline visible before requesting any older
       // pages. This is shared by DMs, groups, and channels.
       var messages = await persistCurrentTimeline('recent');
+      final historyAlreadyComplete = await ChatLocalDb.instance
+          .isRoomHistoryComplete(room.id);
+      if (historyAlreadyComplete && maxHistoryPages == null) {
+        final completeLocal = await loadCachedMessages(room.id);
+        final mediaComplete = await _cacheAllAttachmentsForRoom(
+          room.id,
+          completeLocal,
+        );
+        apkLog(
+          'Matrix.history',
+          'skip pagination room_id="${room.id}" reason="local history complete" '
+              'messages=${completeLocal.length} media_complete=$mediaComplete',
+        );
+        return completeLocal;
+      }
       var page = 0;
-      var emptyAdvancingPages = 0;
+      var reachedHistoryStart = !timeline.canRequestHistory;
 
       while (_isConnected &&
           timeline.canRequestHistory &&
@@ -791,7 +802,6 @@ class ChatService {
         );
 
         if (afterCount > beforeCount) {
-          emptyAdvancingPages = 0;
           // Deep history can take minutes for large rooms. Persist and notify
           // after every page so an open conversation updates progressively.
           messages = await persistCurrentTimeline('page_$page');
@@ -802,15 +812,6 @@ class ChatService {
               afterToken != null &&
               afterToken.isNotEmpty &&
               afterToken != beforeToken) {
-            emptyAdvancingPages += 1;
-            if (emptyAdvancingPages >= 20) {
-              apkLog(
-                'Matrix.history',
-                'stop room_id="${room.id}" page=$page '
-                    'reason="empty page budget reached"',
-              );
-              break;
-            }
             apkLog(
               'Matrix.history',
               'continue room_id="${room.id}" page=$page '
@@ -823,7 +824,46 @@ class ChatService {
             'stop room_id="${room.id}" page=$page '
                 'reason="no events and pagination token did not advance"',
           );
+          reachedHistoryStart = true;
           break;
+        }
+      }
+      reachedHistoryStart = reachedHistoryStart || !timeline.canRequestHistory;
+      await ChatLocalDb.instance.updateRoomCacheProgress(room.id);
+      if (maxHistoryPages == null && reachedHistoryStart && _isConnected) {
+        await ChatLocalDb.instance.markRoomHistoryComplete(room.id);
+        messages = await loadCachedMessages(room.id);
+        // Keep the in-memory audit snapshot in sync with the durable marker.
+        // Otherwise MediaCache.room can report history_cached=false directly
+        // before Matrix.history reports this same room as offline_ready.
+        if (_channelCacheCategoryByRoom.containsKey(room.id)) {
+          _channelHistoryCachedByRoom[room.id] = true;
+          _channelCachedMessageCountByRoom[room.id] = messages.length;
+        }
+        if (_groupCacheCategoryByRoom.containsKey(room.id)) {
+          _groupHistoryCachedByRoom[room.id] = true;
+          _groupCachedMessageCountByRoom[room.id] = messages.length;
+        }
+        if (_directCacheCategoryByRoom.containsKey(room.id)) {
+          _directHistoryCachedByRoom[room.id] = true;
+          _directCachedMessageCountByRoom[room.id] = messages.length;
+        }
+        final mediaComplete = await _cacheAllAttachmentsForRoom(
+          room.id,
+          messages,
+        );
+        if (mediaComplete) {
+          apkLog(
+            'Matrix.history',
+            'offline_ready room_id="${room.id}" messages=${messages.length} '
+                'history_complete=true media_complete=true',
+          );
+        } else {
+          apkLog(
+            'Matrix.history',
+            'offline_incomplete room_id="${room.id}" messages=${messages.length} '
+                'history_complete=true media_complete=false; retry queued for next online pass',
+          );
         }
       }
       apkLog(
@@ -2007,7 +2047,39 @@ class ChatService {
         }),
       );
     }
-    return const <ChatMessage>[];
+
+    // Conversation rows deliberately duplicate the latest message so the
+    // inbox can paint cheaply. Older installations may have that row without
+    // any corresponding timeline rows. While the one-time Matrix backfill
+    // repairs the full cache, expose the persisted latest DM instead of an
+    // incorrectly empty conversation. Do not insert this synthetic row into
+    // the message cache/database: real Matrix events will replace it.
+    final conversation = await ChatLocalDb.instance.loadConversation(
+      conversationId,
+    );
+    if (conversation == null ||
+        conversation.isGroupKind ||
+        conversation.isChannelKind ||
+        conversation.lastMessage.trim().isEmpty) {
+      return const <ChatMessage>[];
+    }
+    apkLog(
+      'ChatService.local',
+      'timeline fallback conversation_id="$conversationId" source="conversation_preview"',
+    );
+    return <ChatMessage>[
+      ChatMessage(
+        id:
+            'local-preview-${conversation.id}-'
+            '${conversation.lastMessageTime.millisecondsSinceEpoch}',
+        conversationId: conversation.id,
+        senderId: conversation.lastMessageSenderId,
+        receiverId: conversation.otherUserId,
+        content: conversation.lastMessage,
+        timestamp: conversation.lastMessageTime,
+        status: MessageStatus.read,
+      ),
+    ];
   }
 
   Future<void> hydrateLocalConversations({bool syncReadMarkers = true}) async {
@@ -2732,14 +2804,12 @@ class ChatService {
     _isConnected = false;
     final pendingHistory = <Future<dynamic>>{
       if (_historyRestoreFuture != null) _historyRestoreFuture!,
-      if (_directHistoryRestoreFuture != null) _directHistoryRestoreFuture!,
       ..._roomHistoryInFlight.values,
     };
     _loginHistoryPrepared = false;
     _connectFuture = null;
     _loginHistoryPreparationFuture = null;
     _historyRestoreFuture = null;
-    _directHistoryRestoreFuture = null;
     if (pendingHistory.isNotEmpty) {
       await Future.wait(pendingHistory).timeout(
         const Duration(seconds: 15),
@@ -3900,10 +3970,16 @@ class ChatService {
                 ? (existing?.unreadCount ?? 0) + 1
                 : existing?.unreadCount ?? 0,
         lastMessageType: 'group',
-        conversationKind:
-            existing?.hasExplicitKind == true
-                ? existing!.conversationKind
-                : ConversationKind.group,
+        conversationKind: () {
+          final authoritative =
+              room == null ? ConversationKind.unknown : _kindForGroupRoom(room);
+          if (authoritative == ConversationKind.channel) {
+            return ConversationKind.channel;
+          }
+          return existing?.hasExplicitKind == true
+              ? existing!.conversationKind
+              : ConversationKind.group;
+        }(),
         isArchived: existing?.isArchived ?? false,
         isMuted: existing?.isMuted ?? false,
         isPinned: existing?.isPinned ?? false,
@@ -3964,24 +4040,166 @@ class ChatService {
   }
 
   void _prefetchPersistentAttachment(ChatMessage message) {
+    unawaited(_prefetchPersistentAttachmentAsync(message));
+  }
+
+  Future<void> _prefetchPersistentAttachmentAsync(ChatMessage message) async {
     final type = message.attachmentType?.trim();
     final source = message.attachmentUrl?.trim() ?? '';
     const persistentTypes = {'image', 'video', 'file', 'voice'};
     if (source.isEmpty || !persistentTypes.contains(type)) return;
+    final roomId = message.conversationId;
+    final prefetchKey = '$roomId|${message.id}';
+    if (!_attachmentPrefetchInFlight.add(prefetchKey)) return;
+    try {
+      await _prefetchPersistentAttachmentOnce(
+        message: message,
+        roomId: roomId,
+        source: source,
+        type: type!,
+      );
+    } finally {
+      _attachmentPrefetchInFlight.remove(prefetchKey);
+    }
+  }
+
+  Future<void> _prefetchPersistentAttachmentOnce({
+    required ChatMessage message,
+    required String roomId,
+    required String source,
+    required String type,
+  }) async {
     _attachmentCacheExpectedByRoom
-        .putIfAbsent(message.conversationId, () => <String>{})
+        .putIfAbsent(roomId, () => <String>{})
         .add(message.id);
+
+    final existing = await AttachmentLocalStore.instance.existingComplete(
+      source: source,
+      fileName: message.content,
+    );
+    if (existing != null) {
+      _attachmentCachePendingByRoom[roomId]?.remove(message.id);
+      _attachmentCacheFailedByRoom[roomId]?.remove(message.id);
+      _attachmentCacheCompleteByRoom
+          .putIfAbsent(roomId, () => <String>{})
+          .add(message.id);
+      apkLog(
+        'MediaCache.item',
+        'state="already_cached" room_kind="${_mediaCacheRoomKind(roomId)}" '
+            'room_id="$roomId" event_id="${message.id}" media_type="$type" '
+            'bytes=${await existing.length()} local_path="${existing.path}"',
+      );
+      _scheduleAttachmentCacheSummary(roomId);
+      return;
+    }
+
     _attachmentCachePendingByRoom
-        .putIfAbsent(message.conversationId, () => <String>{})
+        .putIfAbsent(roomId, () => <String>{})
         .add(message.id);
-    _attachmentCacheFailedByRoom[message.conversationId]?.remove(message.id);
+    _attachmentCacheFailedByRoom[roomId]?.remove(message.id);
     apkLog(
       'MediaCache.item',
-      'state="checking" room_kind="${_mediaCacheRoomKind(message.conversationId)}" '
-          'room_id="${message.conversationId}" event_id="${message.id}" '
+      'state="checking" room_kind="${_mediaCacheRoomKind(roomId)}" '
+          'room_id="$roomId" event_id="${message.id}" '
           'media_type="$type"',
     );
-    unawaited(_prefetchAttachment(message, source, type == 'file'));
+    await _prefetchAttachment(message, source, type == 'file');
+  }
+
+  Future<bool> _cacheAllAttachmentsForRoom(
+    String roomId,
+    List<ChatMessage> messages,
+  ) async {
+    const persistentTypes = {'image', 'video', 'file', 'voice'};
+    final media = messages
+        .where(
+          (message) =>
+              persistentTypes.contains(message.attachmentType?.trim()) &&
+              (message.attachmentUrl?.trim().isNotEmpty ?? false),
+        )
+        .toList(growable: false);
+    var completed = 0;
+    for (var offset = 0; offset < media.length; offset += 3) {
+      final end = math.min(offset + 3, media.length);
+      final results = await Future.wait(
+        media.sublist(offset, end).map((message) {
+          _attachmentCacheExpectedByRoom
+              .putIfAbsent(roomId, () => <String>{})
+              .add(message.id);
+          _attachmentCachePendingByRoom
+              .putIfAbsent(roomId, () => <String>{})
+              .add(message.id);
+          return _downloadAttachmentFullyWithRetry(message);
+        }),
+      );
+      completed += results.where((result) => result).length;
+    }
+    await ChatLocalDb.instance.markRoomMediaCoverage(
+      roomId: roomId,
+      expected: media.length,
+      complete: completed,
+    );
+    _logAttachmentCacheSummary(roomId);
+    return completed == media.length;
+  }
+
+  Future<bool> _downloadAttachmentFullyWithRetry(ChatMessage message) async {
+    final source = message.attachmentUrl!.trim();
+    Object? lastError;
+    for (var attempt = 1; attempt <= 8 && _isConnected; attempt += 1) {
+      try {
+        final copy = await AttachmentLocalStore.instance.ensureComplete(
+          source: source,
+          fileName: message.content,
+        );
+        final bytes = await copy.file.length();
+        final verified =
+            copy.isComplete &&
+            bytes > 0 &&
+            (copy.totalBytes == null || bytes >= copy.totalBytes!);
+        if (!verified) {
+          throw StateError(
+            'Downloaded attachment did not pass size/completion verification',
+          );
+        }
+        final roomId = message.conversationId;
+        _attachmentCachePendingByRoom[roomId]?.remove(message.id);
+        _attachmentCacheFailedByRoom[roomId]?.remove(message.id);
+        _attachmentCacheCompleteByRoom
+            .putIfAbsent(roomId, () => <String>{})
+            .add(message.id);
+        apkLog(
+          'MediaCache.item',
+          'state="complete_verified" room_id="$roomId" '
+              'event_id="${message.id}" attempt=$attempt bytes=$bytes '
+              'total_bytes=${copy.totalBytes ?? bytes} local_path="${copy.file.path}"',
+        );
+        return true;
+      } catch (error) {
+        lastError = error;
+        apkLog(
+          'MediaCache.item',
+          'state="retry" room_id="${message.conversationId}" '
+              'event_id="${message.id}" attempt=$attempt error="$error"',
+        );
+        if (attempt < 8 && _isConnected) {
+          final seconds = math.min(30, 1 << (attempt - 1));
+          await Future<void>.delayed(Duration(seconds: seconds));
+        }
+      }
+    }
+    final roomId = message.conversationId;
+    _attachmentCachePendingByRoom[roomId]?.remove(message.id);
+    _attachmentCacheCompleteByRoom[roomId]?.remove(message.id);
+    _attachmentCacheFailedByRoom
+        .putIfAbsent(roomId, () => <String>{})
+        .add(message.id);
+    apkLog(
+      'MediaCache.item',
+      'state="incomplete_after_retries" room_id="$roomId" '
+          'event_id="${message.id}" error="$lastError"',
+    );
+    return false;
   }
 
   /// Logs cache coverage for every channel shown by channel discovery,
@@ -4032,7 +4250,7 @@ class ChatService {
       final historyCached =
           category == 'suggested'
               ? await ChatLocalDb.instance.isSuggestedPreviewComplete(roomId)
-              : true;
+              : await ChatLocalDb.instance.isRoomHistoryComplete(roomId);
 
       _channelCacheCategoryByRoom[roomId] = category;
       _channelCachedMessageCountByRoom[roomId] = visibleMessages.length;
@@ -4091,7 +4309,7 @@ class ChatService {
       final historyCached =
           category == 'suggested'
               ? await ChatLocalDb.instance.isSuggestedPreviewComplete(roomId)
-              : true;
+              : await ChatLocalDb.instance.isRoomHistoryComplete(roomId);
 
       _groupCacheCategoryByRoom[roomId] = category;
       _groupCachedMessageCountByRoom[roomId] = visibleMessages.length;
@@ -4133,7 +4351,8 @@ class ChatService {
 
       _directCacheCategoryByRoom[roomId] = 'direct';
       _directCachedMessageCountByRoom[roomId] = visibleMessages.length;
-      _directHistoryCachedByRoom[roomId] = true;
+      _directHistoryCachedByRoom[roomId] = await ChatLocalDb.instance
+          .isRoomHistoryComplete(roomId);
 
       for (final message in media) {
         _attachmentCacheExpectedByRoom

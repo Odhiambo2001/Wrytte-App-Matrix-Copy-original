@@ -140,11 +140,12 @@ class AttachmentLocalStore {
       final local = File(cleanSource);
       if (!await local.exists()) throw StateError('Attachment is unavailable');
       if (local.path != target.path) await local.copy(target.path);
-      await completeMarker.writeAsString('complete', flush: true);
+      final localBytes = await target.length();
+      await completeMarker.writeAsString('$localBytes', flush: true);
       return AttachmentLocalCopy(
         file: target,
         isComplete: true,
-        totalBytes: await target.length(),
+        totalBytes: localBytes,
       );
     }
 
@@ -173,23 +174,35 @@ class AttachmentLocalStore {
         );
       }
 
+      totalBytes ??= response.contentLength;
       final sink = target.openWrite(mode: FileMode.writeOnly);
       var received = 0;
-      await for (final chunk in response.stream) {
-        sink.add(chunk);
-        received += chunk.length;
-        if (shouldPartial &&
-            response.statusCode == 200 &&
-            received >= initialFileBytes) {
-          break;
+      try {
+        await for (final chunk in response.stream.timeout(
+          const Duration(seconds: 45),
+        )) {
+          sink.add(chunk);
+          received += chunk.length;
+          if (shouldPartial &&
+              response.statusCode == 200 &&
+              received >= initialFileBytes) {
+            break;
+          }
         }
+        await sink.flush();
+      } finally {
+        await sink.close();
       }
-      await sink.flush();
-      await sink.close();
 
-      final isComplete = !shouldPartial || await target.length() >= totalBytes;
+      final actualBytes = await target.length();
+      final isComplete =
+          !shouldPartial &&
+          actualBytes > 0 &&
+          (totalBytes == null || actualBytes >= totalBytes);
       if (isComplete) {
-        await completeMarker.writeAsString('complete', flush: true);
+        await completeMarker.writeAsString('$actualBytes', flush: true);
+      } else if (await completeMarker.exists()) {
+        await completeMarker.delete();
       }
       return AttachmentLocalCopy(
         file: target,
@@ -230,7 +243,12 @@ class AttachmentLocalStore {
         continue;
       }
       final marker = File('${entity.path}.complete');
-      if (await marker.exists() && await entity.length() > 0) return entity;
+      if (!await marker.exists()) continue;
+      final bytes = await entity.length();
+      if (bytes <= 0) continue;
+      final recorded = int.tryParse((await marker.readAsString()).trim());
+      if (recorded == null || recorded == bytes) return entity;
+      await marker.delete();
     }
     return null;
   }

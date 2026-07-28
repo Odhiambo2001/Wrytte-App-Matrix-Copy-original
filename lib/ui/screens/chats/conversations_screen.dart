@@ -229,6 +229,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     await _loadIdentityCacheFast();
     await _loadSavedContacts();
     await _loadLocalConversations();
+    await _repairOfflineRoomCategories();
     if (mounted) setState(() => _initialCacheWarmup = false);
 
     // Phonebook matching is not required for the first paint. Deferring it
@@ -365,6 +366,78 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         'restore failed owner="$_currentUserId" error="$error"',
       );
     }
+  }
+
+  Future<void> _repairOfflineRoomCategories() async {
+    if (_currentUserId.trim().isEmpty) return;
+    final repaired = Map<String, String>.from(_cachedRoomCategories);
+    final directoryById = <String, MatrixPublicGroup>{
+      for (final room in _suggestedGroups) room.roomId: room,
+    };
+    final localRoomIds = <String>{};
+    final repairedKinds = <String, String>{};
+
+    for (final conversation in _conversations.where(
+      _isDisplayableGroupConversation,
+    )) {
+      localRoomIds.add(conversation.id);
+      final previous = repaired[conversation.id];
+      final liveRoom = MatrixChatService.instance.getRoomById(conversation.id);
+      final directoryRoom = directoryById[conversation.id];
+      final isChannel =
+          (liveRoom != null &&
+              MatrixChatService.instance.isChannelRoom(liveRoom)) ||
+          directoryRoom?.isChannel == true ||
+          conversation.isChannelKind ||
+          previous?.startsWith('channel_') == true;
+      final owned =
+          previous == 'channel_owned' ||
+          previous == 'group_owned' ||
+          _chat.isCreatedGroupRoom(conversation.id);
+      repaired[conversation.id] =
+          isChannel
+              ? (owned ? 'channel_owned' : 'channel_subscribed')
+              : (owned ? 'group_owned' : 'group_joined');
+      repairedKinds[conversation.id] =
+          isChannel ? ConversationKind.channel : ConversationKind.group;
+    }
+
+    for (final room in _suggestedGroups) {
+      if (localRoomIds.contains(room.roomId)) continue;
+      repaired[room.roomId] =
+          _isSuggestedChannel(room) ? 'channel_suggested' : 'group_suggested';
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_roomCategoryCacheKey, jsonEncode(repaired));
+    final correctedConversations = _conversations
+        .map((conversation) {
+          final kind = repairedKinds[conversation.id];
+          if (kind == null || conversation.conversationKind == kind) {
+            return conversation;
+          }
+          return conversation.copyWith(
+            conversationKind: kind,
+            otherUserId: conversation.id,
+          );
+        })
+        .toList(growable: false);
+    await ChatLocalDb.instance.saveConversations(correctedConversations);
+    if (!mounted) return;
+    setState(() {
+      _cachedRoomCategories = Map<String, String>.unmodifiable(repaired);
+      _conversations = correctedConversations;
+    });
+    apkLog(
+      'RoomCategories.local',
+      'offline repair owner="$_currentUserId" rooms=${repaired.length} '
+          'channel_owned=${repaired.values.where((v) => v == 'channel_owned').length} '
+          'channel_subscribed=${repaired.values.where((v) => v == 'channel_subscribed').length} '
+          'channel_suggested=${repaired.values.where((v) => v == 'channel_suggested').length} '
+          'group_owned=${repaired.values.where((v) => v == 'group_owned').length} '
+          'group_joined=${repaired.values.where((v) => v == 'group_joined').length} '
+          'group_suggested=${repaired.values.where((v) => v == 'group_suggested').length}',
+    );
   }
 
   Future<void> _loadLocalRoomAvatarPaths() async {
@@ -565,32 +638,39 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     List<MatrixPublicGroup> discovered,
   ) async {
     if (_currentUserId.trim().isEmpty) return;
-    final categories = <String, String>{};
+    // Merge instead of replacing. A partial sync must never erase categories
+    // that are required for a later offline launch.
+    final categories = Map<String, String>.from(_cachedRoomCategories);
     final joinedIds =
         MatrixChatService.instance.rooms
             .where((room) => room.membership == mx.Membership.join)
             .map((room) => room.id)
             .toSet();
 
-    for (final conversation in _conversations
-        .where(_isDisplayableGroupConversation)
-        .where((conversation) => joinedIds.contains(conversation.id))) {
+    for (final conversation in _conversations.where(
+      _isDisplayableGroupConversation,
+    )) {
       final liveRoom = MatrixChatService.instance.getRoomById(conversation.id);
-      final isChannel =
-          liveRoom == null
-              ? conversation.isChannelKind
-              : MatrixChatService.instance.isChannelRoom(liveRoom);
+      if (liveRoom == null && !joinedIds.contains(conversation.id)) {
+        // The locally persisted row is still authoritative offline.
+        final cached = categories[conversation.id];
+        if (cached != null) continue;
+      }
+      final isChannel = _isChannelConversation(conversation);
       final owned = _isOwnGroupConversation(conversation);
       categories[conversation.id] =
           isChannel
               ? (owned ? 'channel_owned' : 'channel_subscribed')
               : (owned ? 'group_owned' : 'group_joined');
     }
+    final localRoomIds = _conversations.map((room) => room.id).toSet();
     for (final room in discovered.where(
-      (room) => !joinedIds.contains(room.roomId),
+      (room) =>
+          !joinedIds.contains(room.roomId) &&
+          !localRoomIds.contains(room.roomId),
     )) {
       categories[room.roomId] =
-          room.isChannel ? 'channel_suggested' : 'group_suggested';
+          _isSuggestedChannel(room) ? 'channel_suggested' : 'group_suggested';
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -683,6 +763,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _loadingSuggestedGroups = true;
     try {
       final discovered = await MatrixChatService.instance.fetchPublicGroups();
+      if (discovered.isEmpty && _suggestedGroups.isNotEmpty) {
+        apkLog(
+          'SuggestedPreview',
+          'empty discovery ignored; retained cached rooms=${_suggestedGroups.length}',
+        );
+        return;
+      }
       final groups = await Future.wait(
         discovered
             .where(
@@ -2446,6 +2533,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
         if (!mounted) return;
         final isGroup = _isGroupConversation(conv);
+        final isChannel = _isChannelConversation(conv);
         final chatReceiverId = isGroup ? conv.id : conv.otherUserId;
         if (!isGroup) {
           await AvatarPreloadService.warm(
@@ -2468,7 +2556,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             reverseTransitionDuration: const Duration(milliseconds: 220),
             pageBuilder:
                 (_, __, ___) =>
-                    conv.isChannelKind
+                    isChannel
                         ? ChannelFeedScreen(
                           conversationId: conv.id,
                           currentUserId: _currentUserId,
@@ -2775,17 +2863,31 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   bool _isChannelConversation(ChatConversation conversation) {
+    final liveRoom = MatrixChatService.instance.getRoomById(conversation.id);
+    if (liveRoom != null &&
+        MatrixChatService.instance.isChannelRoom(liveRoom)) {
+      return true;
+    }
+    final directoryRoom =
+        _suggestedGroups
+            .where((room) => room.roomId == conversation.id)
+            .firstOrNull;
+    if (directoryRoom?.isChannel == true) return true;
+    if (conversation.isChannelKind) return true;
     final category = _cachedRoomCategories[conversation.id];
     if (category?.startsWith('channel_') == true) return true;
     if (category?.startsWith('group_') == true) return false;
-    return conversation.isChannelKind;
+    if (liveRoom != null) return false;
+    if (directoryRoom != null) return false;
+    return false;
   }
 
   bool _isSuggestedChannel(MatrixPublicGroup room) {
+    if (room.isChannel) return true;
     final category = _cachedRoomCategories[room.roomId];
     if (category?.startsWith('channel_') == true) return true;
     if (category?.startsWith('group_') == true) return false;
-    return room.isChannel;
+    return false;
   }
 
   Widget _buildChannelsTab(double topPadding) {
@@ -3321,7 +3423,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           reverseTransitionDuration: const Duration(milliseconds: 220),
           pageBuilder:
               (_, __, ___) =>
-                  group.isChannel
+                  _isSuggestedChannel(group)
                       ? ChannelFeedScreen(
                         conversationId: group.roomId,
                         currentUserId: _currentUserId,
@@ -3495,7 +3597,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         name: group.name,
         avatarUrl: group.avatarUrl,
         conversationKind:
-            group.isChannel ? ConversationKind.channel : ConversationKind.group,
+            _isSuggestedChannel(group)
+                ? ConversationKind.channel
+                : ConversationKind.group,
       );
       if (mounted) {
         setState(() {
