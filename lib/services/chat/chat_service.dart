@@ -31,6 +31,8 @@ class ChatService {
   factory ChatService() => _instance;
 
   static const String _hiddenEventsAccountDataType = 'com.wrytte.hidden_events';
+  static const String _pinnedForMeAccountDataType =
+      'com.wrytte.pinned_events_for_me';
   static const String groupDeletedMessageType = 'group_deleted';
   static const String groupDeletedEventKey = 'wrytte.group_deleted';
   static const String groupDeletedAtKey = 'wrytte.deleted_at';
@@ -94,6 +96,8 @@ class ChatService {
   final Map<String, ChatConversation> _conversationsMap = {};
   final Map<String, List<ChatMessage>> _messagesCache = {};
   final Map<String, Set<String>> _hiddenEventIdsByRoom = {};
+  final Map<String, List<String>> _pinnedForMeEventIdsByRoom = {};
+  final Map<String, List<String>> _pendingPinnedForMeEventIdsByRoom = {};
   final Map<String, DateTime> _groupJoinCutoffsByRoom = {};
   final Set<String> _createdGroupRoomIds = {};
   final Set<String> _dismissedDeletedGroupRoomIds = {};
@@ -1108,6 +1112,26 @@ class ChatService {
             .toSet();
     final existing = _hiddenEventIdsByRoom[room.id] ?? <String>{};
     _hiddenEventIdsByRoom[room.id] = {...existing, ...ids};
+  }
+
+  void _syncPinnedForMeFromRoom(mx.Room room) {
+    final content = room.roomAccountData[_pinnedForMeAccountDataType]?.content;
+    final rawIds = content?['pinned_event_ids'];
+    if (rawIds is! Iterable) {
+      _pinnedForMeEventIdsByRoom.putIfAbsent(room.id, () => <String>[]);
+      return;
+    }
+    final ids =
+        rawIds
+            .whereType<Object>()
+            .map((value) => value.toString().trim())
+            .where((value) => value.isNotEmpty)
+            .toSet()
+            .toList();
+    final pending = _pendingPinnedForMeEventIdsByRoom[room.id];
+    if (pending != null && !listEquals(pending, ids)) return;
+    _pendingPinnedForMeEventIdsByRoom.remove(room.id);
+    _pinnedForMeEventIdsByRoom[room.id] = ids;
   }
 
   Future<ChatMessage> sendMessage(ChatMessage message) async {
@@ -2356,6 +2380,78 @@ class ChatService {
         .toList();
   }
 
+  List<String> pinnedForMeEventIdsForRoom(String roomId) {
+    final normalizedRoomId = roomId.trim();
+    if (normalizedRoomId.isEmpty) return <String>[];
+    final room = _roomById(normalizedRoomId);
+    if (room != null) _syncPinnedForMeFromRoom(room);
+    return List<String>.from(
+      _pinnedForMeEventIdsByRoom[normalizedRoomId] ?? const <String>[],
+    );
+  }
+
+  Future<List<String>> setMessagePinnedForMe(
+    ChatMessage message, {
+    required bool pinned,
+  }) async {
+    final roomId = message.conversationId.trim();
+    final eventId = message.id.trim();
+    if (!roomId.startsWith('!') || !eventId.startsWith(r'$')) {
+      throw StateError(
+        'Wait for this message to finish sending before pinning it.',
+      );
+    }
+
+    return _withMatrixTokenRetry('setMessagePinnedForMe', () async {
+      await _waitForConnection();
+      final room = _roomById(roomId);
+      if (room == null) throw StateError('Unknown Matrix room: $roomId');
+      if (MatrixChatService.instance.isMatrixGroupRoom(room)) {
+        throw StateError('Pin for me is only available in direct messages.');
+      }
+      final client = MatrixClientService.instance.client;
+      final userId = client.userID;
+      if (userId == null || userId.isEmpty) {
+        throw StateError('Matrix user is not logged in');
+      }
+
+      var ids = pinnedForMeEventIdsForRoom(roomId);
+      try {
+        final latest = await client.getAccountDataPerRoom(
+          userId,
+          roomId,
+          _pinnedForMeAccountDataType,
+        );
+        final rawIds = latest['pinned_event_ids'];
+        if (rawIds is Iterable) {
+          ids =
+              rawIds
+                  .map((id) => id.toString().trim())
+                  .where((id) => id.isNotEmpty)
+                  .toSet()
+                  .toList();
+        }
+      } catch (_) {
+        // This account-data entry does not exist until the first private pin.
+      }
+      ids.removeWhere((id) => id == eventId);
+      if (pinned) ids.insert(0, eventId);
+      await client
+          .setAccountDataPerRoom(userId, roomId, _pinnedForMeAccountDataType, {
+            'pinned_event_ids': ids,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          });
+      _pinnedForMeEventIdsByRoom[roomId] = List<String>.from(ids);
+      _pendingPinnedForMeEventIdsByRoom[roomId] = List<String>.from(ids);
+      apkLog(
+        'ChatService.pinForMe',
+        '${pinned ? 'pinned' : 'unpinned'} private event '
+            'room_id="$roomId" event_id="$eventId"',
+      );
+      return ids;
+    });
+  }
+
   Future<List<String>> setMessagePinnedForEveryone(
     ChatMessage message, {
     required bool pinned,
@@ -2957,6 +3053,9 @@ class ChatService {
     _currentUserName = null;
     _conversationsMap.clear();
     _messagesCache.clear();
+    _hiddenEventIdsByRoom.clear();
+    _pinnedForMeEventIdsByRoom.clear();
+    _pendingPinnedForMeEventIdsByRoom.clear();
     _markReadInFlight.clear();
     _lastReadReceiptEventByConversation.clear();
     _dismissedDeletedGroupRoomIds.clear();
@@ -3565,6 +3664,7 @@ class ChatService {
     for (final room in rooms) {
       // was: for (final room in client.rooms)
       _syncHiddenEventsFromRoom(room);
+      _syncPinnedForMeFromRoom(room);
       _cacheRoomIdentity(room);
     }
 

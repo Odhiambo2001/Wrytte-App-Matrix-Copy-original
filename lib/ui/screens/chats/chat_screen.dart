@@ -422,7 +422,13 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _latestPinActivityNotice;
   String? _pinActivityAnchorEventId;
   List<String> _pinnedEventIds = [];
+  List<String> _pinnedForMeEventIds = [];
   List<mx.User> _groupMembers = const [];
+
+  List<String> get _visiblePinnedEventIds => <String>[
+    ..._pinnedForMeEventIds,
+    ..._pinnedEventIds.where((id) => !_pinnedForMeEventIds.contains(id)),
+  ];
 
   String? _resolvedConversationId;
 
@@ -536,8 +542,16 @@ class _ChatScreenState extends State<ChatScreen> {
       if (room == null) return;
       if (_pinUpdatesInFlight.isEmpty) {
         final pinned = room.pinnedEventIds.toList();
-        if (!listEquals(pinned, _pinnedEventIds)) {
-          setState(() => _pinnedEventIds = pinned);
+        final pinnedForMe =
+            _isGroupChat
+                ? const <String>[]
+                : _chat.pinnedForMeEventIdsForRoom(room.id);
+        if (!listEquals(pinned, _pinnedEventIds) ||
+            !listEquals(pinnedForMe, _pinnedForMeEventIds)) {
+          setState(() {
+            _pinnedEventIds = pinned;
+            _pinnedForMeEventIds = pinnedForMe;
+          });
         }
       }
       if (!_isGroupChat) {
@@ -810,6 +824,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final realConvId = await _resolveConversationId();
     _chat.activateConversationRead(realConvId);
     _pinnedEventIds = _chat.pinnedEventIdsForRoom(realConvId);
+    _pinnedForMeEventIds =
+        _isGroupChat
+            ? <String>[]
+            : _chat.pinnedForMeEventIdsForRoom(realConvId);
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
     if (realConvId != widget.conversationId) {
       if (widget.conversationId.startsWith('!')) {
@@ -2060,237 +2078,303 @@ class _ChatScreenState extends State<ChatScreen> {
     final canDeleteForEveryone = isMine || (isAdminInGroup && room.canRedact);
     final attachmentType = message.attachmentType?.trim();
     final hasAttachment = attachmentType != null && attachmentType.isNotEmpty;
-    final isPinned = _pinnedEventIds.contains(message.id);
-    final canPin =
-        !_isReadOnlySuggestedGroup &&
-        room != null &&
-        room.canChangeStateEvent(mx.EventTypes.RoomPinnedEvents) &&
+    final isPinnedForEveryone = _pinnedEventIds.contains(message.id);
+    final isPinnedForMe = _pinnedForMeEventIds.contains(message.id);
+    final isPinnableEvent =
         !_pinUpdatesInFlight.contains(message.id) &&
         !message.isDeleted &&
         message.status != MessageStatus.sending &&
         message.status != MessageStatus.failed &&
         message.id.startsWith(r'$');
+    final canPin =
+        !_isReadOnlySuggestedGroup &&
+        room != null &&
+        room.canChangeStateEvent(mx.EventTypes.RoomPinnedEvents) &&
+        isPinnableEvent;
+    final canPinForMe = !_isGroupChat && room != null && isPinnableEvent;
     final link = _firstLinkIn(message.content);
     await showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: const Color(0xFF111318),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
       builder: (context) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 8),
-              if (!_isReadOnlySuggestedGroup)
-                _messageActionTile(
-                  icon: Icons.reply,
-                  label: 'Reply',
-                  onTap: () {
-                    Navigator.pop(context);
-                    setState(() => _replyingTo = message);
-                    _focusNode.requestFocus();
-                  },
-                ),
-              _messageActionTile(
-                icon: Icons.shortcut_rounded,
-                label: 'Forward',
-                onTap: () {
-                  Navigator.pop(context);
-                  _promptForward(message);
-                },
-              ),
-              if (_isReadOnlySuggestedGroup)
-                _messageActionTile(
-                  icon: Icons.copy_outlined,
-                  label: link != null ? 'Copy link' : 'Copy',
-                  onTap: () {
-                    Navigator.pop(context);
-                    Clipboard.setData(
-                      ClipboardData(text: link ?? message.content),
-                    );
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(link != null ? 'Link copied' : 'Copied'),
-                      ),
-                    );
-                  },
-                )
-              else if (!hasAttachment && link != null) ...[
-                _messageActionTile(
-                  icon: Icons.copy_outlined,
-                  label: 'Copy link',
-                  onTap: () {
-                    Navigator.pop(context);
-                    Clipboard.setData(ClipboardData(text: link));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Link copied')),
-                    );
-                  },
-                ),
-              ] else if (!hasAttachment)
-                _messageActionTile(
-                  icon: Icons.copy_outlined,
-                  label: 'Copy',
-                  onTap: () {
-                    Navigator.pop(context);
-                    Clipboard.setData(ClipboardData(text: message.content));
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(const SnackBar(content: Text('Copied')));
-                  },
-                ),
-              if (canPin)
-                _messageActionTile(
-                  icon: isPinned ? Icons.push_pin : Icons.push_pin_outlined,
-                  label: isPinned ? 'Unpin' : 'Pin',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _setMessagePinned(message, pinned: !isPinned);
-                  },
-                ),
-              if (!_isReadOnlySuggestedGroup && !hasAttachment && link != null)
-                _messageActionTile(
-                  icon: Icons.open_in_new,
-                  label: 'Open link',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _openLink(link);
-                  },
-                ),
-              if (!_isReadOnlySuggestedGroup &&
-                  _isGroupChat &&
-                  isAdminInGroup &&
-                  !isMine &&
-                  !isMessageSenderAdmin &&
-                  !message.isDeleted)
-                _messageActionTile(
-                  icon: Icons.person_remove_outlined,
-                  label: 'Remove from group',
-                  destructive: true,
-                  onTap: () {
-                    Navigator.pop(context);
-                    _removeMessageSenderFromGroup(message);
-                  },
-                ),
-              if (hasAttachment && !_isReadOnlySuggestedGroup)
-                _messageActionTile(
-                  icon: Icons.save_alt_outlined,
-                  label: _saveAttachmentLabel(attachmentType),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _saveAttachmentToDevice(message);
-                  },
-                ),
-              if (!_isReadOnlySuggestedGroup && _canEditMessage(message))
-                _messageActionTile(
-                  icon: Icons.edit_outlined,
-                  label: 'Edit',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _promptEditMessage(message);
-                  },
-                ),
-              if (!_isGroupChat)
-                _messageActionTile(
-                  icon: Icons.delete_outline,
-                  label: 'Delete for me',
-                  onTap: () async {
-                    Navigator.pop(context);
-                    await _chat.deleteMessageForMe(message);
-                    if (!mounted) return;
-                    setState(() {
-                      _messages.removeWhere((m) => m.id == message.id);
-                    });
-                  },
-                ),
-              if (!_isReadOnlySuggestedGroup &&
-                  canDeleteForEveryone &&
-                  !message.isDeleted &&
-                  message.status != MessageStatus.sending &&
-                  message.status != MessageStatus.failed &&
-                  !message.id.startsWith('opt_'))
-                _messageActionTile(
-                  icon: Icons.delete_forever_outlined,
-                  label: 'Delete for everyone',
-                  destructive: true,
-                  onTap: () async {
-                    Navigator.pop(context);
-                    try {
-                      await _chat.deleteMessageForEveryone(message);
-                      if (!mounted) return;
-                      setState(() {
-                        _upsertMessage(
-                          message.copyWith(
-                            content:
-                                isMine
-                                    ? 'This message was deleted'
-                                    : 'This message was deleted by admin',
-                            isDeletedForEveryone: true,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 8),
+                  if (!_isReadOnlySuggestedGroup)
+                    _messageActionTile(
+                      icon: Icons.reply,
+                      label: 'Reply',
+                      onTap: () {
+                        Navigator.pop(context);
+                        setState(() => _replyingTo = message);
+                        _focusNode.requestFocus();
+                      },
+                    ),
+                  _messageActionTile(
+                    icon: Icons.shortcut_rounded,
+                    label: 'Forward',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _promptForward(message);
+                    },
+                  ),
+                  if (_isReadOnlySuggestedGroup)
+                    _messageActionTile(
+                      icon: Icons.copy_outlined,
+                      label: link != null ? 'Copy link' : 'Copy',
+                      onTap: () {
+                        Navigator.pop(context);
+                        Clipboard.setData(
+                          ClipboardData(text: link ?? message.content),
+                        );
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              link != null ? 'Link copied' : 'Copied',
+                            ),
                           ),
                         );
-                      });
-                    } catch (e) {
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Could not delete message: $e'),
-                          backgroundColor: Colors.redAccent,
-                        ),
-                      );
-                    }
-                  },
-                ),
-              if (_isReadOnlySuggestedGroup &&
-                  !isMine &&
-                  !message.isDeleted &&
-                  message.status != MessageStatus.sending &&
-                  message.status != MessageStatus.failed &&
-                  !message.id.startsWith('opt_'))
-                _messageActionTile(
-                  icon: Icons.report_gmailerrorred_outlined,
-                  label: 'Report',
-                  destructive: true,
-                  onTap: null,
-                ),
-              if (!_isReadOnlySuggestedGroup &&
-                  _isGroupChat &&
-                  !isGroupOwner &&
-                  !isMine &&
-                  !message.isDeleted &&
-                  message.status != MessageStatus.sending &&
-                  message.status != MessageStatus.failed &&
-                  !message.id.startsWith('opt_'))
-                _messageActionTile(
-                  icon: Icons.report_gmailerrorred_outlined,
-                  label: 'Report',
-                  destructive: true,
-                  onTap: () {
-                    Navigator.pop(context);
-                    _reportGroupMessage(message);
-                  },
-                ),
-              if (!_isReadOnlySuggestedGroup &&
-                  message.status == MessageStatus.sending)
-                _messageActionTile(
-                  icon: Icons.close,
-                  label: 'Cancel',
-                  onTap: () async {
-                    Navigator.pop(context);
-                    await _chat.cancelLocalMessage(message);
-                    if (!mounted) return;
-                    setState(() {
-                      _messages.removeWhere((m) => m.id == message.id);
-                    });
-                  },
-                ),
-              const SizedBox(height: 8),
-            ],
+                      },
+                    )
+                  else if (!hasAttachment && link != null) ...[
+                    _messageActionTile(
+                      icon: Icons.copy_outlined,
+                      label: 'Copy link',
+                      onTap: () {
+                        Navigator.pop(context);
+                        Clipboard.setData(ClipboardData(text: link));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Link copied')),
+                        );
+                      },
+                    ),
+                  ] else if (!hasAttachment)
+                    _messageActionTile(
+                      icon: Icons.copy_outlined,
+                      label: 'Copy',
+                      onTap: () {
+                        Navigator.pop(context);
+                        Clipboard.setData(ClipboardData(text: message.content));
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(const SnackBar(content: Text('Copied')));
+                      },
+                    ),
+                  if (canPin)
+                    _messageActionTile(
+                      icon:
+                          isPinnedForEveryone
+                              ? Icons.push_pin
+                              : Icons.push_pin_outlined,
+                      label:
+                          isPinnedForEveryone
+                              ? (_isGroupChat ? 'Unpin' : 'Unpin for everyone')
+                              : (_isGroupChat ? 'Pin' : 'Pin for everyone'),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _setMessagePinned(
+                          message,
+                          pinned: !isPinnedForEveryone,
+                        );
+                      },
+                    ),
+                  if (canPinForMe)
+                    _messageActionTile(
+                      icon:
+                          isPinnedForMe
+                              ? Icons.push_pin
+                              : Icons.push_pin_outlined,
+                      label: isPinnedForMe ? 'Unpin for me' : 'Pin for me',
+                      onTap: () {
+                        Navigator.pop(context);
+                        _setMessagePinnedForMe(message, pinned: !isPinnedForMe);
+                      },
+                    ),
+                  if (!_isReadOnlySuggestedGroup &&
+                      !hasAttachment &&
+                      link != null)
+                    _messageActionTile(
+                      icon: Icons.open_in_new,
+                      label: 'Open link',
+                      onTap: () {
+                        Navigator.pop(context);
+                        _openLink(link);
+                      },
+                    ),
+                  if (!_isReadOnlySuggestedGroup &&
+                      _isGroupChat &&
+                      isAdminInGroup &&
+                      !isMine &&
+                      !isMessageSenderAdmin &&
+                      !message.isDeleted)
+                    _messageActionTile(
+                      icon: Icons.person_remove_outlined,
+                      label: 'Remove from group',
+                      destructive: true,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _removeMessageSenderFromGroup(message);
+                      },
+                    ),
+                  if (hasAttachment && !_isReadOnlySuggestedGroup)
+                    _messageActionTile(
+                      icon: Icons.save_alt_outlined,
+                      label: _saveAttachmentLabel(attachmentType),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _saveAttachmentToDevice(message);
+                      },
+                    ),
+                  if (!_isReadOnlySuggestedGroup && _canEditMessage(message))
+                    _messageActionTile(
+                      icon: Icons.edit_outlined,
+                      label: 'Edit',
+                      onTap: () {
+                        Navigator.pop(context);
+                        _promptEditMessage(message);
+                      },
+                    ),
+                  if (!_isGroupChat)
+                    _messageActionTile(
+                      icon: Icons.delete_outline,
+                      label: 'Delete for me',
+                      onTap: () async {
+                        Navigator.pop(context);
+                        await _chat.deleteMessageForMe(message);
+                        if (!mounted) return;
+                        setState(() {
+                          _messages.removeWhere((m) => m.id == message.id);
+                        });
+                      },
+                    ),
+                  if (!_isReadOnlySuggestedGroup &&
+                      canDeleteForEveryone &&
+                      !message.isDeleted &&
+                      message.status != MessageStatus.sending &&
+                      message.status != MessageStatus.failed &&
+                      !message.id.startsWith('opt_'))
+                    _messageActionTile(
+                      icon: Icons.delete_forever_outlined,
+                      label: 'Delete for everyone',
+                      destructive: true,
+                      onTap: () async {
+                        Navigator.pop(context);
+                        try {
+                          await _chat.deleteMessageForEveryone(message);
+                          if (!mounted) return;
+                          setState(() {
+                            _upsertMessage(
+                              message.copyWith(
+                                content:
+                                    isMine
+                                        ? 'This message was deleted'
+                                        : 'This message was deleted by admin',
+                                isDeletedForEveryone: true,
+                              ),
+                            );
+                          });
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Could not delete message: $e'),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  if (_isReadOnlySuggestedGroup &&
+                      !isMine &&
+                      !message.isDeleted &&
+                      message.status != MessageStatus.sending &&
+                      message.status != MessageStatus.failed &&
+                      !message.id.startsWith('opt_'))
+                    _messageActionTile(
+                      icon: Icons.report_gmailerrorred_outlined,
+                      label: 'Report',
+                      destructive: true,
+                      onTap: null,
+                    ),
+                  if (!_isReadOnlySuggestedGroup &&
+                      _isGroupChat &&
+                      !isGroupOwner &&
+                      !isMine &&
+                      !message.isDeleted &&
+                      message.status != MessageStatus.sending &&
+                      message.status != MessageStatus.failed &&
+                      !message.id.startsWith('opt_'))
+                    _messageActionTile(
+                      icon: Icons.report_gmailerrorred_outlined,
+                      label: 'Report',
+                      destructive: true,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _reportGroupMessage(message);
+                      },
+                    ),
+                  if (!_isReadOnlySuggestedGroup &&
+                      message.status == MessageStatus.sending)
+                    _messageActionTile(
+                      icon: Icons.close,
+                      label: 'Cancel',
+                      onTap: () async {
+                        Navigator.pop(context);
+                        await _chat.cancelLocalMessage(message);
+                        if (!mounted) return;
+                        setState(() {
+                          _messages.removeWhere((m) => m.id == message.id);
+                        });
+                      },
+                    ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
           ),
         );
       },
     );
+  }
+
+  Future<void> _setMessagePinnedForMe(
+    ChatMessage message, {
+    required bool pinned,
+  }) async {
+    if (_isGroupChat || !_pinUpdatesInFlight.add(message.id)) return;
+    final previousIds = List<String>.from(_pinnedForMeEventIds);
+    final optimisticIds = List<String>.from(previousIds)
+      ..removeWhere((id) => id == message.id);
+    if (pinned) optimisticIds.insert(0, message.id);
+    setState(() => _pinnedForMeEventIds = optimisticIds);
+    try {
+      final ids = await _chat.setMessagePinnedForMe(message, pinned: pinned);
+      if (!mounted) return;
+      setState(() => _pinnedForMeEventIds = ids);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _pinnedForMeEventIds = previousIds);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not ${pinned ? 'pin' : 'unpin'} message for you: $error',
+          ),
+        ),
+      );
+    } finally {
+      _pinUpdatesInFlight.remove(message.id);
+    }
   }
 
   Future<void> _setMessagePinned(
@@ -2841,7 +2925,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 children: [
                   _buildAppBar(statusBarH),
                   PinnedEventsStrip(
-                    pinnedEventIds: _pinnedEventIds,
+                    pinnedEventIds: _visiblePinnedEventIds,
                     events: _messages,
                     onOpenEvent: _openPinnedMessage,
                   ),
@@ -3455,7 +3539,7 @@ class _ChatScreenState extends State<ChatScreen> {
       attachmentUrl: msg.attachmentUrl,
       isForwarded: msg.isForwarded,
       isStarred: msg.isStarred,
-      isPinned: _pinnedEventIds.contains(msg.id),
+      isPinned: _visiblePinnedEventIds.contains(msg.id),
       isHighlighted: _highlightedMessageId == msg.id,
       isDeleted: msg.isDeleted,
       isEdited: msg.isEdited,
