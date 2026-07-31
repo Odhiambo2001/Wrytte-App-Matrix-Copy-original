@@ -67,6 +67,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final Set<String> _repostedPostIds = {};
   final Set<String> _likedPostIds = {};
   final Set<String> _bookmarkedPostIds = {};
+  final Set<String> _pinUpdatesInFlight = {};
+  final Map<String, DateTime> _lastPinUpdateAt = {};
   List<String> _pinnedEventIds = [];
 
   // Incremental per-post counters. Counts start at 0 and only move when an
@@ -1080,6 +1082,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         !widget.readOnlyUntilSubscribe &&
         room != null &&
         room.canChangeStateEvent(mx.EventTypes.RoomPinnedEvents) &&
+        !_pinUpdatesInFlight.contains(post.id) &&
         !post.isDeleted &&
         post.status != MessageStatus.sending &&
         post.status != MessageStatus.failed &&
@@ -1164,6 +1167,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Future<void> _setPostPinned(ChatMessage post, {required bool pinned}) async {
+    final now = DateTime.now();
+    final lastUpdate = _lastPinUpdateAt[post.id];
+    if (lastUpdate != null &&
+        now.difference(lastUpdate) < const Duration(seconds: 1)) {
+      return;
+    }
+    if (!_pinUpdatesInFlight.add(post.id)) return;
+    _lastPinUpdateAt[post.id] = now;
     try {
       final ids = await _chat.setMessagePinnedForEveryone(post, pinned: pinned);
       if (!mounted) return;
@@ -1178,6 +1189,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           content: Text('Could not ${pinned ? 'pin' : 'unpin'} post: $error'),
         ),
       );
+    } finally {
+      _pinUpdatesInFlight.remove(post.id);
     }
   }
 

@@ -416,6 +416,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, String> _groupMemberNames = {};
   final Map<String, String> _groupMemberAvatars = {};
   final Set<String> _groupSenderProfilesInFlight = {};
+  final Set<String> _pinUpdatesInFlight = {};
+  final Map<String, DateTime> _lastPinUpdateAt = {};
   List<String> _pinnedEventIds = [];
   List<mx.User> _groupMembers = const [];
 
@@ -2055,6 +2057,7 @@ class _ChatScreenState extends State<ChatScreen> {
         !_isReadOnlySuggestedGroup &&
         room != null &&
         room.canChangeStateEvent(mx.EventTypes.RoomPinnedEvents) &&
+        !_pinUpdatesInFlight.contains(message.id) &&
         !message.isDeleted &&
         message.status != MessageStatus.sending &&
         message.status != MessageStatus.failed &&
@@ -2286,6 +2289,14 @@ class _ChatScreenState extends State<ChatScreen> {
     ChatMessage message, {
     required bool pinned,
   }) async {
+    final now = DateTime.now();
+    final lastUpdate = _lastPinUpdateAt[message.id];
+    if (lastUpdate != null &&
+        now.difference(lastUpdate) < const Duration(seconds: 1)) {
+      return;
+    }
+    if (!_pinUpdatesInFlight.add(message.id)) return;
+    _lastPinUpdateAt[message.id] = now;
     try {
       final ids = await _chat.setMessagePinnedForEveryone(
         message,
@@ -2305,6 +2316,8 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
       );
+    } finally {
+      _pinUpdatesInFlight.remove(message.id);
     }
   }
 
@@ -3330,6 +3343,7 @@ class _ChatScreenState extends State<ChatScreen> {
       attachmentUrl: msg.attachmentUrl,
       isForwarded: msg.isForwarded,
       isStarred: msg.isStarred,
+      isPinned: _pinnedEventIds.contains(msg.id),
       isDeleted: msg.isDeleted,
       isEdited: msg.isEdited,
       replyPreview: _replyPreviewDisplayText(msg.replyPreview),
@@ -3341,34 +3355,7 @@ class _ChatScreenState extends State<ChatScreen> {
               : null,
     );
 
-    final decoratedBubble =
-        _pinnedEventIds.contains(msg.id)
-            ? Stack(
-              clipBehavior: Clip.none,
-              children: [
-                bubble,
-                Positioned(
-                  top: 5,
-                  left: isMine ? null : 7,
-                  right: isMine ? 7 : null,
-                  child: Container(
-                    padding: const EdgeInsets.all(3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF20252B).withValues(alpha: 0.9),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.push_pin,
-                      size: 13,
-                      color: Color(0xFFB8C0CA),
-                    ),
-                  ),
-                ),
-              ],
-            )
-            : bubble;
-
-    if (!_isGroupChat || isMine) return decoratedBubble;
+    if (!_isGroupChat || isMine) return bubble;
 
     return Padding(
       padding: const EdgeInsets.only(left: 10, right: 10),
@@ -3398,7 +3385,7 @@ class _ChatScreenState extends State<ChatScreen> {
           else
             const SizedBox(width: 40),
           const SizedBox(width: 6),
-          Expanded(child: decoratedBubble),
+          Expanded(child: bubble),
         ],
       ),
     );

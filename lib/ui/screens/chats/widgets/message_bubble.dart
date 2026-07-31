@@ -45,6 +45,7 @@ class MessageBubble extends StatelessWidget {
   final String? attachmentUrl;
   final bool isForwarded;
   final bool isStarred;
+  final bool isPinned;
   final bool isDeleted;
   final bool isEdited;
   final String? replyPreview;
@@ -74,6 +75,7 @@ class MessageBubble extends StatelessWidget {
     this.attachmentUrl,
     this.isForwarded = false,
     this.isStarred = false,
+    this.isPinned = false,
     this.isDeleted = false,
     this.isEdited = false,
     this.replyPreview,
@@ -238,6 +240,14 @@ class MessageBubble extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
+        if (isPinned) ...[
+          Icon(
+            Icons.push_pin,
+            size: 13,
+            color: Colors.white.withOpacity(isMine ? 0.72 : 0.55),
+          ),
+          const SizedBox(width: 3),
+        ],
         if (isEdited && !isDeleted)
           Text(
             'Edited ',
