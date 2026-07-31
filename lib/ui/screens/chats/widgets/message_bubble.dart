@@ -46,6 +46,7 @@ class MessageBubble extends StatelessWidget {
   final bool isForwarded;
   final bool isStarred;
   final bool isPinned;
+  final bool isHighlighted;
   final bool isDeleted;
   final bool isEdited;
   final String? replyPreview;
@@ -76,6 +77,7 @@ class MessageBubble extends StatelessWidget {
     this.isForwarded = false,
     this.isStarred = false,
     this.isPinned = false,
+    this.isHighlighted = false,
     this.isDeleted = false,
     this.isEdited = false,
     this.replyPreview,
@@ -96,6 +98,10 @@ class MessageBubble extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
       decoration: BoxDecoration(
         color: bubbleColor,
+        border:
+            isHighlighted
+                ? Border.all(color: const Color(0xFF90CAF9), width: 2)
+                : null,
         borderRadius: BorderRadius.only(
           topLeft: const Radius.circular(18),
           topRight: const Radius.circular(18),

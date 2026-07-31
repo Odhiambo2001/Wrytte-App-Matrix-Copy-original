@@ -418,6 +418,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final Set<String> _groupSenderProfilesInFlight = {};
   final Set<String> _pinUpdatesInFlight = {};
   final Map<String, DateTime> _lastPinUpdateAt = {};
+  final Map<String, GlobalKey> _messageKeys = {};
   List<String> _pinnedEventIds = [];
   List<mx.User> _groupMembers = const [];
 
@@ -440,6 +441,8 @@ class _ChatScreenState extends State<ChatScreen> {
   ChatMessage? _editingMessage;
   double? _stableStatusBarH;
   String? _stableHeaderAvatarUrl;
+  String? _highlightedMessageId;
+  Timer? _highlightTimer;
 
   // ── debug overlay ──────────────────────────────────────────────────────────
   bool _showDebug = false;
@@ -513,6 +516,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _logger.removeListener(_onNewLog);
     _messagesSub?.cancel();
+    _highlightTimer?.cancel();
     _controller.dispose();
     _focusNode.removeListener(_onInputFocusChanged);
     _scrollCtrl.dispose();
@@ -2816,6 +2820,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   PinnedEventsStrip(
                     pinnedEventIds: _pinnedEventIds,
                     events: _messages,
+                    onOpenEvent: _openPinnedMessage,
                   ),
                   Expanded(
                     child: Padding(
@@ -3051,6 +3056,63 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ─── MESSAGE LIST ──────────────────────────────────────────────────────────
 
+  Future<void> _openPinnedMessage(String eventId) async {
+    var messageIndex = _messages.indexWhere((message) => message.id == eventId);
+    if (messageIndex < 0) {
+      final room = MatrixChatService.instance.getRoomById(
+        _activeConversationId,
+      );
+      final event = await room?.getEventById(eventId);
+      final message = event == null ? null : ChatMessage.fromMatrixEvent(event);
+      if (message != null && mounted) {
+        setState(() => _mergeMessages([message]));
+        messageIndex = _messages.indexWhere(
+          (candidate) => candidate.id == eventId,
+        );
+      }
+    }
+    if (!mounted) return;
+    if (messageIndex < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pinned message is not available')),
+      );
+      return;
+    }
+
+    _highlightTimer?.cancel();
+    setState(() => _highlightedMessageId = eventId);
+    if (_scrollCtrl.hasClients && _messages.length > 1) {
+      final reverseIndex = _messages.length - 1 - messageIndex;
+      final ratio = reverseIndex / (_messages.length - 1);
+      final target = (_scrollCtrl.position.maxScrollExtent * ratio).clamp(
+        0.0,
+        _scrollCtrl.position.maxScrollExtent,
+      );
+      await _scrollCtrl.animateTo(
+        target,
+        duration: const Duration(milliseconds: 420),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    if (!mounted) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final messageContext = _messageKeys[eventId]?.currentContext;
+    if (messageContext != null) {
+      await Scrollable.ensureVisible(
+        messageContext,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        alignment: 0.45,
+      );
+    }
+    _highlightTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted && _highlightedMessageId == eventId) {
+        setState(() => _highlightedMessageId = null);
+      }
+    });
+  }
+
   Widget _buildMessageList() {
     if (_isDeletedConversation) {
       return const SizedBox.expand();
@@ -3121,7 +3183,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         msg,
                       );
                       return Column(
-                        key: ValueKey(msg.id),
+                        key: _messageKeys.putIfAbsent(
+                          msg.id,
+                          () => GlobalKey(debugLabel: 'message:${msg.id}'),
+                        ),
                         children: [
                           if (showDate)
                             _buildDateDivider(
@@ -3344,6 +3409,7 @@ class _ChatScreenState extends State<ChatScreen> {
       isForwarded: msg.isForwarded,
       isStarred: msg.isStarred,
       isPinned: _pinnedEventIds.contains(msg.id),
+      isHighlighted: _highlightedMessageId == msg.id,
       isDeleted: msg.isDeleted,
       isEdited: msg.isEdited,
       replyPreview: _replyPreviewDisplayText(msg.replyPreview),

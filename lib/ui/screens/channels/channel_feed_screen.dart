@@ -56,6 +56,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final ChatService _chat = ChatService();
   final TextEditingController _postController = TextEditingController();
   final TextEditingController _captionController = TextEditingController();
+  final ScrollController _postsScrollController = ScrollController();
   final ImagePicker _mediaPicker = ImagePicker();
   final List<XFile> _selectedMedia = [];
   final Map<String, ChatMessage> _optimisticMediaPosts = {};
@@ -69,6 +70,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final Set<String> _bookmarkedPostIds = {};
   final Set<String> _pinUpdatesInFlight = {};
   final Map<String, DateTime> _lastPinUpdateAt = {};
+  final Map<String, GlobalKey> _postKeys = {};
   List<String> _pinnedEventIds = [];
 
   // Incremental per-post counters. Counts start at 0 and only move when an
@@ -84,6 +86,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   bool _publishing = false;
   int _subscriberCount = 0;
   String? _channelAvatarUrl;
+  String? _highlightedPostId;
+  Timer? _highlightTimer;
 
   String get _channelAvatarCacheIdentity =>
       MatrixChatService.instance.roomProfileCacheIdentity(
@@ -143,6 +147,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     _postController.removeListener(_onPostTextChanged);
     _postController.dispose();
     _captionController.dispose();
+    _postsScrollController.dispose();
+    _highlightTimer?.cancel();
     super.dispose();
   }
 
@@ -488,6 +494,79 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     });
   }
 
+  Future<void> _openPinnedPost(String eventId) async {
+    final existingIndex = _posts.indexWhere(
+      (candidate) => candidate.id == eventId,
+    );
+    ChatMessage? post = existingIndex < 0 ? null : _posts[existingIndex];
+    if (post == null) {
+      final room = MatrixChatService.instance.getRoomById(
+        widget.conversationId,
+      );
+      final event = await room?.getEventById(eventId);
+      post = event == null ? null : ChatMessage.fromMatrixEvent(event);
+      if (post != null && mounted) {
+        final loadedPost = post;
+        setState(() {
+          if (!_posts.any((candidate) => candidate.id == loadedPost.id)) {
+            _posts.add(loadedPost);
+          }
+        });
+      }
+    }
+    if (!mounted) return;
+    if (post == null || (post.replyToMessageId?.isNotEmpty ?? false)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pinned post is not available')),
+      );
+      return;
+    }
+
+    final visiblePosts =
+        _posts
+            .where(
+              (candidate) =>
+                  !candidate.isDeletedForMe &&
+                  !candidate.isDeletedForEveryone &&
+                  (candidate.replyToMessageId?.isEmpty ?? true),
+            )
+            .toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    final index = visiblePosts.indexWhere(
+      (candidate) => candidate.id == eventId,
+    );
+    if (index < 0) return;
+
+    _highlightTimer?.cancel();
+    setState(() => _highlightedPostId = eventId);
+    if (_postsScrollController.hasClients && visiblePosts.length > 1) {
+      final ratio = index / (visiblePosts.length - 1);
+      final target = _postsScrollController.position.maxScrollExtent * ratio;
+      await _postsScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 420),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    if (!mounted) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final postContext = _postKeys[eventId]?.currentContext;
+    if (postContext != null) {
+      await Scrollable.ensureVisible(
+        postContext,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        alignment: 0.25,
+      );
+    }
+    _highlightTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted && _highlightedPostId == eventId) {
+        setState(() => _highlightedPostId = null);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final posts =
@@ -507,7 +586,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         child: Column(
           children: [
             _channelHeader(),
-            PinnedEventsStrip(pinnedEventIds: _pinnedEventIds, events: _posts),
+            PinnedEventsStrip(
+              pinnedEventIds: _pinnedEventIds,
+              events: _posts,
+              onOpenEvent: _openPinnedPost,
+            ),
             Expanded(
               child:
                   posts.isEmpty
@@ -518,41 +601,60 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                         ),
                       )
                       : ListView.builder(
+                        controller: _postsScrollController,
                         padding: const EdgeInsets.fromLTRB(16, 22, 16, 160),
                         itemCount: posts.length,
                         itemBuilder: (_, index) {
                           final post = posts[index];
                           _registerView(post);
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _channelPost(post),
-                              // Divider under every post, like the reference.
-                              Padding(
-                                padding: const EdgeInsets.only(
-                                  left: 56,
-                                  top: 14,
-                                  bottom: 16,
-                                ),
-                                child: SizedBox(
-                                  height: 0.6,
-                                  child: OverflowBox(
-                                    alignment: Alignment.centerLeft,
-                                    maxWidth: double.infinity,
-                                    maxHeight: 0.6,
-                                    child: SizedBox(
-                                      width:
-                                          MediaQuery.sizeOf(context).width - 72,
-                                      child: const Divider(
-                                        color: Color(0xFF3A3D42),
-                                        thickness: 0.6,
-                                        height: 0.6,
+                          return AnimatedContainer(
+                            key: _postKeys.putIfAbsent(
+                              post.id,
+                              () => GlobalKey(debugLabel: 'post:${post.id}'),
+                            ),
+                            duration: const Duration(milliseconds: 180),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              border:
+                                  _highlightedPostId == post.id
+                                      ? Border.all(
+                                        color: const Color(0xFF42A5F5),
+                                        width: 2,
+                                      )
+                                      : null,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _channelPost(post),
+                                // Divider under every post, like the reference.
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: 56,
+                                    top: 14,
+                                    bottom: 16,
+                                  ),
+                                  child: SizedBox(
+                                    height: 0.6,
+                                    child: OverflowBox(
+                                      alignment: Alignment.centerLeft,
+                                      maxWidth: double.infinity,
+                                      maxHeight: 0.6,
+                                      child: SizedBox(
+                                        width:
+                                            MediaQuery.sizeOf(context).width -
+                                            72,
+                                        child: const Divider(
+                                          color: Color(0xFF3A3D42),
+                                          thickness: 0.6,
+                                          height: 0.6,
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           );
                         },
                       ),
