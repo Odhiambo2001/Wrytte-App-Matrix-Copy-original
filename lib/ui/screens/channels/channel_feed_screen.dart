@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show setEquals;
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:matrix/matrix.dart' as mx;
@@ -19,6 +19,7 @@ import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/ui/widgets/channel_post_image.dart';
 import 'package:wrytte/ui/widgets/channel_post_video.dart';
+import 'package:wrytte/ui/widgets/pinned_events_strip.dart';
 import 'package:wrytte/ui/screens/channels/channel_gallery_picker.dart';
 
 class ChannelFeedScreen extends StatefulWidget {
@@ -66,7 +67,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final Set<String> _repostedPostIds = {};
   final Set<String> _likedPostIds = {};
   final Set<String> _bookmarkedPostIds = {};
-  Set<String> _pinnedEventIds = {};
+  List<String> _pinnedEventIds = [];
 
   // Incremental per-post counters. Counts start at 0 and only move when an
   // interaction happens. When server-side reaction storage is added, seed
@@ -223,7 +224,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void _refreshPinnedEvents() {
     if (!mounted) return;
     final pinned = _chat.pinnedEventIdsForRoom(widget.conversationId);
-    if (!setEquals(pinned, _pinnedEventIds)) {
+    if (!listEquals(pinned, _pinnedEventIds)) {
       setState(() => _pinnedEventIds = pinned);
     }
   }
@@ -504,6 +505,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         child: Column(
           children: [
             _channelHeader(),
+            PinnedEventsStrip(pinnedEventIds: _pinnedEventIds, events: _posts),
             Expanded(
               child:
                   posts.isEmpty

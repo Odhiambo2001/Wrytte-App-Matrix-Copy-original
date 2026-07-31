@@ -2347,16 +2347,16 @@ class ChatService {
     _messageController.add(updated);
   }
 
-  Set<String> pinnedEventIdsForRoom(String roomId) {
+  List<String> pinnedEventIdsForRoom(String roomId) {
     final room = _roomById(roomId.trim());
-    if (room == null) return <String>{};
+    if (room == null) return <String>[];
     return room.pinnedEventIds
         .map((id) => id.trim())
         .where((id) => id.isNotEmpty)
-        .toSet();
+        .toList();
   }
 
-  Future<Set<String>> setMessagePinnedForEveryone(
+  Future<List<String>> setMessagePinnedForEveryone(
     ChatMessage message, {
     required bool pinned,
   }) async {
@@ -2402,14 +2402,14 @@ class ChatService {
               .where((id) => id.isNotEmpty)
               .toList();
       ids.removeWhere((id) => id == eventId);
-      if (pinned) ids.add(eventId);
+      if (pinned) ids.insert(0, eventId);
       await room.setPinnedEvents(ids);
       apkLog(
         'ChatService.pinForEveryone',
         '${pinned ? 'pinned' : 'unpinned'} event '
             'room_id="$roomId" event_id="$eventId"',
       );
-      return ids.toSet();
+      return ids;
     });
   }
 

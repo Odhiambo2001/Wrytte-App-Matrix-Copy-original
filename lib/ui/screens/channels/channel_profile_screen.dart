@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/foundation.dart' show setEquals;
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/components/user_avatar.dart';
@@ -57,7 +57,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   String? _avatarUrl;
   String? _customHandle;
   String _description = '';
-  Set<String> _pinnedEventIds = {};
+  List<String> _pinnedEventIds = [];
   StreamSubscription? _syncSubscription;
 
   @override
@@ -74,7 +74,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     _syncSubscription = MatrixChatService.instance.syncStream.listen((_) {
       if (!mounted) return;
       final pinned = ChatService().pinnedEventIdsForRoom(widget.conversationId);
-      if (!setEquals(pinned, _pinnedEventIds)) {
+      if (!listEquals(pinned, _pinnedEventIds)) {
         setState(() => _pinnedEventIds = pinned);
       }
     });

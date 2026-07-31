@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show setEquals;
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -34,6 +34,7 @@ import 'package:wrytte/ui/screens/calls/call_screen.dart';
 import 'package:wrytte/ui/screens/chats/video_message_recorder_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_input.dart';
+import 'package:wrytte/ui/widgets/pinned_events_strip.dart';
 import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
@@ -415,7 +416,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, String> _groupMemberNames = {};
   final Map<String, String> _groupMemberAvatars = {};
   final Set<String> _groupSenderProfilesInFlight = {};
-  Set<String> _pinnedEventIds = {};
+  List<String> _pinnedEventIds = [];
   List<mx.User> _groupMembers = const [];
 
   String? _resolvedConversationId;
@@ -525,8 +526,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _resolvedConversationId ?? widget.conversationId,
       );
       if (room == null) return;
-      final pinned = room.pinnedEventIds.toSet();
-      if (!setEquals(pinned, _pinnedEventIds)) {
+      final pinned = room.pinnedEventIds.toList();
+      if (!listEquals(pinned, _pinnedEventIds)) {
         setState(() => _pinnedEventIds = pinned);
       }
       if (!_isGroupChat) {
@@ -2799,6 +2800,10 @@ class _ChatScreenState extends State<ChatScreen> {
               Column(
                 children: [
                   _buildAppBar(statusBarH),
+                  PinnedEventsStrip(
+                    pinnedEventIds: _pinnedEventIds,
+                    events: _messages,
+                  ),
                   Expanded(
                     child: Padding(
                       padding: EdgeInsets.only(bottom: keyboardInset),
