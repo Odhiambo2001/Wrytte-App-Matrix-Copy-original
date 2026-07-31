@@ -33,6 +33,8 @@ class ChatService {
   static const String _hiddenEventsAccountDataType = 'com.wrytte.hidden_events';
   static const String _pinnedForMeAccountDataType =
       'com.wrytte.pinned_events_for_me';
+  static const String voiceListenedEventType =
+      'com.wrytte.voice_message_listened';
   static const String groupDeletedMessageType = 'group_deleted';
   static const String groupDeletedEventKey = 'wrytte.group_deleted';
   static const String groupDeletedAtKey = 'wrytte.deleted_at';
@@ -211,6 +213,7 @@ class ChatService {
         throw StateError('Matrix session did not match the current user.');
       }
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
+        if (_applyVoiceListenedEvent(event)) return;
         if (_applyLiveRedactionEvent(event)) {
           _refreshMessageStatusesForRoom(event.room);
           return;
@@ -973,11 +976,13 @@ class ChatService {
                 isDeletedForEveryone:
                     message.isDeletedForEveryone || local.isDeletedForEveryone,
                 isEdited: local.isEdited,
+                isVoiceListened: local.isVoiceListened,
               );
     }
 
     for (final event in sortedEvents) {
       _applyMatrixEditEventToMap(event, byId);
+      _applyVoiceListenedEventToMap(event, byId);
     }
 
     final messages =
@@ -1000,6 +1005,21 @@ class ChatService {
       content: edit.content,
       isEdited: true,
     );
+  }
+
+  void _applyVoiceListenedEventToMap(
+    mx.Event event,
+    Map<String, ChatMessage> messagesById,
+  ) {
+    if (event.type != voiceListenedEventType) return;
+    final targetId = event.content['voice_event_id']?.toString().trim() ?? '';
+    final original = messagesById[targetId];
+    if (original == null ||
+        !original.isVoiceNote ||
+        _isOwnMessage(original, event.senderId)) {
+      return;
+    }
+    messagesById[targetId] = original.copyWith(isVoiceListened: true);
   }
 
   Future<T> _withMatrixTokenRetry<T>(
@@ -1063,6 +1083,7 @@ class ChatService {
   }
 
   Future<void> _handleLiveSyncUpdate(mx.SyncUpdate update) async {
+    if (update.hasPresenceUpdate) _refreshAllMessageStatuses();
     if (!update.hasRoomUpdate) return;
     if (_handlingSync) return;
     _handlingSync = true;
@@ -2369,6 +2390,69 @@ class ChatService {
     _replaceCachedMessage(updated);
     await ChatLocalDb.instance.setMessageStarred(message.id, starred);
     _messageController.add(updated);
+  }
+
+  Future<void> markVoiceMessageListened(ChatMessage message) async {
+    if (!message.isVoiceNote || message.id.trim().isEmpty) return;
+    await _withMatrixTokenRetry('markVoiceMessageListened', () async {
+      await _waitForConnection();
+      final room = _roomById(message.conversationId.trim());
+      if (room == null || MatrixChatService.instance.isMatrixGroupRoom(room)) {
+        return;
+      }
+      final listenerId = room.client.userID;
+      if (listenerId == null || listenerId.isEmpty) return;
+      if (_isOwnMessage(message, listenerId)) return;
+
+      _markVoiceListenedLocally(room.id, message.id, listenerId: listenerId);
+      await room.sendEvent(
+        {
+          'voice_event_id': message.id,
+          'listener_user_id': listenerId,
+          'listened_at': DateTime.now().toUtc().toIso8601String(),
+        },
+        type: voiceListenedEventType,
+        displayPendingEvent: false,
+      );
+      apkLog(
+        'ChatService.voiceListened',
+        'receipt sent room_id="${room.id}" event_id="${message.id}"',
+      );
+    });
+  }
+
+  bool _applyVoiceListenedEvent(mx.Event event) {
+    if (event.type != voiceListenedEventType) return false;
+    final targetId = event.content['voice_event_id']?.toString().trim() ?? '';
+    if (targetId.isEmpty) return true;
+    _markVoiceListenedLocally(
+      event.room.id,
+      targetId,
+      listenerId: event.senderId,
+    );
+    return true;
+  }
+
+  void _markVoiceListenedLocally(
+    String roomId,
+    String eventId, {
+    required String listenerId,
+  }) {
+    final messages = _messagesCache[roomId];
+    if (messages == null) return;
+    final index = messages.indexWhere((message) => message.id == eventId);
+    if (index < 0) return;
+    final message = messages[index];
+    if (!message.isVoiceNote ||
+        message.isVoiceListened ||
+        _isOwnMessage(message, listenerId)) {
+      return;
+    }
+    final updated = message.copyWith(isVoiceListened: true);
+    messages[index] = updated;
+    unawaited(ChatLocalDb.instance.saveMessage(updated));
+    _messageController.add(updated);
+    _emitRoomMessages(roomId);
   }
 
   List<String> pinnedEventIdsForRoom(String roomId) {
@@ -5264,7 +5348,7 @@ class ChatService {
     if (currentUser == null || currentUser.isEmpty) return;
 
     final otherReceiptEventIds = _otherUserReceiptEventIds(room, currentUser);
-    final peerJoined = _directPeerJoined(room, currentUser);
+    final peerOnline = _directPeerOnline(room, currentUser);
     final readIndex = messages.lastIndexWhere(
       (message) => otherReceiptEventIds.contains(message.id),
     );
@@ -5281,7 +5365,7 @@ class ChatService {
       final nextStatus =
           readIndex >= i
               ? MessageStatus.read
-              : peerJoined
+              : peerOnline
               ? MessageStatus.delivered
               : MessageStatus.sent;
       if (_messageStatusRank(nextStatus) < _messageStatusRank(message.status)) {
@@ -5320,12 +5404,12 @@ class ChatService {
     return eventIds;
   }
 
-  bool _directPeerJoined(mx.Room room, String currentUser) {
+  bool _directPeerOnline(mx.Room room, String currentUser) {
     final directUserId = room.directChatMatrixID;
     if (directUserId == null || directUserId == currentUser) return false;
-    return room
-        .getParticipants([mx.Membership.join])
-        .any((user) => user.id == directUserId);
+    // ignore: deprecated_member_use
+    return room.client.presences[directUserId]?.presence ==
+        mx.PresenceType.online;
   }
 
   bool _isOwnMessage(ChatMessage message, String currentMatrixUserId) {

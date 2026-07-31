@@ -49,6 +49,8 @@ class MessageBubble extends StatelessWidget {
   final bool isHighlighted;
   final bool isDeleted;
   final bool isEdited;
+  final bool isVoiceListened;
+  final VoidCallback? onVoiceListened;
   final String? replyPreview;
   final String? replySender;
   final bool animateOnMount;
@@ -80,6 +82,8 @@ class MessageBubble extends StatelessWidget {
     this.isHighlighted = false,
     this.isDeleted = false,
     this.isEdited = false,
+    this.isVoiceListened = false,
+    this.onVoiceListened,
     this.replyPreview,
     this.replySender,
     this.animateOnMount = true,
@@ -152,6 +156,8 @@ class MessageBubble extends StatelessWidget {
                 audioUrl: audioUrl ?? '',
                 totalSeconds: voiceDuration ?? 0,
                 isMine: isMine,
+                isListened: isVoiceListened,
+                onListened: onVoiceListened,
                 timeWidget: timeWidget,
               )
             else if (attachmentType == 'image')
@@ -656,12 +662,16 @@ class _VoiceNotePlayer extends StatefulWidget {
   final String audioUrl;
   final int totalSeconds;
   final bool isMine;
+  final bool isListened;
+  final VoidCallback? onListened;
   final Widget timeWidget;
 
   const _VoiceNotePlayer({
     required this.audioUrl,
     required this.totalSeconds,
     required this.isMine,
+    required this.isListened,
+    this.onListened,
     required this.timeWidget,
   });
 
@@ -673,6 +683,7 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
   final FlutterSoundPlayer _player = FlutterSoundPlayer();
   bool _playerReady = false;
   bool _isPlaying = false;
+  bool _listenedReported = false;
   int _elapsed = 0; // seconds played so far
   Timer? _timer;
   StreamSubscription? _playerSub;
@@ -727,6 +738,10 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
           },
         );
       }
+      if (!_listenedReported && !widget.isListened) {
+        _listenedReported = true;
+        widget.onListened?.call();
+      }
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted && _elapsed < widget.totalSeconds) {
           setState(() => _elapsed++);
@@ -769,7 +784,10 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
                   ),
                   child: Icon(
                     _isPlaying ? Icons.pause : Icons.play_arrow,
-                    color: Colors.white,
+                    color:
+                        widget.isListened
+                            ? const Color(0xFF4CAF50)
+                            : Colors.white,
                     size: 22,
                   ),
                 ),

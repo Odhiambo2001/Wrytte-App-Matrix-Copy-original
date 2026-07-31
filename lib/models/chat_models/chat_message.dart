@@ -66,6 +66,7 @@ class ChatMessage {
   final bool isDeletedForMe;
   final bool isDeletedForEveryone;
   final bool isEdited;
+  final bool isVoiceListened;
 
   const ChatMessage({
     required this.id,
@@ -91,6 +92,7 @@ class ChatMessage {
     this.isDeletedForMe = false,
     this.isDeletedForEveryone = false,
     this.isEdited = false,
+    this.isVoiceListened = false,
   });
 
   // FROM JSON (Backend / local DB)
@@ -127,6 +129,7 @@ class ChatMessage {
       isDeletedForMe: _boolFromJson(json["isDeletedForMe"]),
       isDeletedForEveryone: _boolFromJson(json["isDeletedForEveryone"]),
       isEdited: _boolFromJson(json["isEdited"]),
+      isVoiceListened: _boolFromJson(json["isVoiceListened"]),
     );
   }
 
@@ -220,6 +223,7 @@ class ChatMessage {
       "isDeletedForMe": isDeletedForMe,
       "isDeletedForEveryone": isDeletedForEveryone,
       "isEdited": isEdited,
+      "isVoiceListened": isVoiceListened,
     };
   }
 
@@ -248,6 +252,7 @@ class ChatMessage {
     bool? isDeletedForMe,
     bool? isDeletedForEveryone,
     bool? isEdited,
+    bool? isVoiceListened,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -272,6 +277,7 @@ class ChatMessage {
       isDeletedForMe: isDeletedForMe ?? this.isDeletedForMe,
       isDeletedForEveryone: isDeletedForEveryone ?? this.isDeletedForEveryone,
       isEdited: isEdited ?? this.isEdited,
+      isVoiceListened: isVoiceListened ?? this.isVoiceListened,
     );
   }
 

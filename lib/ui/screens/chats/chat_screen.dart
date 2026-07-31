@@ -3532,6 +3532,11 @@ class _ChatScreenState extends State<ChatScreen> {
       showTail: showTail,
       status: isMine ? msg.status : null,
       isVoiceNote: msg.isVoiceNote,
+      isVoiceListened: msg.isVoiceListened,
+      onVoiceListened:
+          !_isGroupChat && !isMine
+              ? () => unawaited(_chat.markVoiceMessageListened(msg))
+              : null,
       isVideoNote: effectiveAttachmentType == 'video',
       voiceDuration: msg.voiceDuration,
       audioUrl: msg.attachmentUrl,

@@ -64,7 +64,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 14,
+      version: 15,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -88,6 +88,7 @@ class ChatLocalDb {
             isDeletedForMe   INTEGER NOT NULL DEFAULT 0,
             isDeletedForEveryone INTEGER NOT NULL DEFAULT 0,
             isEdited         INTEGER NOT NULL DEFAULT 0,
+            isVoiceListened  INTEGER NOT NULL DEFAULT 0,
             isPreviewOnly    INTEGER NOT NULL DEFAULT 0
           )
         ''');
@@ -267,6 +268,14 @@ class ChatLocalDb {
             db,
             'room_cache_state',
             'cachedMediaCount',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+        }
+        if (oldVersion < 15) {
+          await _addColumnIfMissing(
+            db,
+            'messages',
+            'isVoiceListened',
             'INTEGER NOT NULL DEFAULT 0',
           );
         }
@@ -525,6 +534,7 @@ class ChatLocalDb {
         'isDeletedForMe': m.isDeletedForMe ? 1 : 0,
         'isDeletedForEveryone': m.isDeletedForEveryone ? 1 : 0,
         'isEdited': m.isEdited ? 1 : 0,
+        'isVoiceListened': m.isVoiceListened ? 1 : 0,
         'isPreviewOnly': previewOnly ? 1 : 0,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
@@ -796,6 +806,7 @@ class ChatLocalDb {
       isDeletedForMe: (row['isDeletedForMe'] as int? ?? 0) == 1,
       isDeletedForEveryone: (row['isDeletedForEveryone'] as int? ?? 0) == 1,
       isEdited: (row['isEdited'] as int? ?? 0) == 1,
+      isVoiceListened: (row['isVoiceListened'] as int? ?? 0) == 1,
     );
   }
 
