@@ -56,8 +56,12 @@ class _PinnedEventsStripState extends State<PinnedEventsStrip> {
   }
 
   void _selectNext() {
-    if (widget.pinnedEventIds.length < 2) return;
-    _select((_selectedIndex + 1) % widget.pinnedEventIds.length);
+    final nextIndex =
+        widget.pinnedEventIds.length < 2
+            ? _selectedIndex
+            : (_selectedIndex + 1) % widget.pinnedEventIds.length;
+    _select(nextIndex);
+    widget.onOpenEvent?.call(widget.pinnedEventIds[nextIndex]);
   }
 
   String _preview(ChatMessage event) {
@@ -80,47 +84,40 @@ class _PinnedEventsStripState extends State<PinnedEventsStrip> {
     final visibleMarkers =
         widget.pinnedEventIds.length > 6 ? 6 : widget.pinnedEventIds.length;
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 5, 14, 7),
-      child: Row(
-        children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _selectNext,
-            child: Padding(
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _selectNext,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 5, 14, 7),
+        child: Row(
+          children: [
+            Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: List.generate(
                   visibleMarkers,
-                  (index) => GestureDetector(
-                    onTap: () => _select(index),
-                    child: Padding(
-                      padding: EdgeInsets.only(
-                        bottom: index == visibleMarkers - 1 ? 0 : 2,
-                      ),
-                      child: SizedBox(
-                        width: 3,
-                        height: 7,
-                        child: ColoredBox(
-                          color: Color(0xFF42A5F5).withValues(
-                            alpha: index == _selectedIndex ? 1 : 0.36,
-                          ),
-                        ),
+                  (index) => Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == visibleMarkers - 1 ? 0 : 2,
+                    ),
+                    child: SizedBox(
+                      width: 3,
+                      height: 7,
+                      child: ColoredBox(
+                        color: Color(
+                          0xFF42A5F5,
+                        ).withValues(alpha: index == _selectedIndex ? 1 : 0.36),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          const Icon(Icons.push_pin, size: 17, color: Color(0xFF42A5F5)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => widget.onOpenEvent?.call(_selectedId),
+            const SizedBox(width: 10),
+            const Icon(Icons.push_pin, size: 17, color: Color(0xFF42A5F5)),
+            const SizedBox(width: 8),
+            Expanded(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -146,13 +143,13 @@ class _PinnedEventsStripState extends State<PinnedEventsStrip> {
                 ],
               ),
             ),
-          ),
-          if (widget.pinnedEventIds.length > 6)
-            Text(
-              '+${widget.pinnedEventIds.length - 6}',
-              style: const TextStyle(color: Colors.white54, fontSize: 12),
-            ),
-        ],
+            if (widget.pinnedEventIds.length > 6)
+              Text(
+                '+${widget.pinnedEventIds.length - 6}',
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+          ],
+        ),
       ),
     );
   }

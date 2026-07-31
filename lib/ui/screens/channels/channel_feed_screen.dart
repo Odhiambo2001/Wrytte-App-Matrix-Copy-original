@@ -71,6 +71,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final Set<String> _pinUpdatesInFlight = {};
   final Map<String, DateTime> _lastPinUpdateAt = {};
   final Map<String, GlobalKey> _postKeys = {};
+  final Map<String, String> _pinActivityByEventId = {};
   List<String> _pinnedEventIds = [];
 
   // Incremental per-post counters. Counts start at 0 and only move when an
@@ -230,7 +231,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   void _refreshPinnedEvents() {
-    if (!mounted) return;
+    if (!mounted || _pinUpdatesInFlight.isNotEmpty) return;
     final pinned = _chat.pinnedEventIdsForRoom(widget.conversationId);
     if (!listEquals(pinned, _pinnedEventIds)) {
       setState(() => _pinnedEventIds = pinned);
@@ -627,6 +628,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 _channelPost(post),
+                                if (_pinActivityByEventId[post.id] != null)
+                                  _buildPinActivityNotice(
+                                    _pinActivityByEventId[post.id]!,
+                                  ),
                                 // Divider under every post, like the reference.
                                 Padding(
                                   padding: const EdgeInsets.only(
@@ -1277,15 +1282,33 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     }
     if (!_pinUpdatesInFlight.add(post.id)) return;
     _lastPinUpdateAt[post.id] = now;
+    final previousIds = List<String>.from(_pinnedEventIds);
+    final previousActivity = _pinActivityByEventId[post.id];
+    final optimisticIds = List<String>.from(previousIds)
+      ..removeWhere((id) => id == post.id);
+    if (pinned) optimisticIds.insert(0, post.id);
+    setState(() {
+      _pinnedEventIds = optimisticIds;
+      if (pinned) {
+        _pinActivityByEventId[post.id] = 'You pinned a post';
+      } else {
+        _pinActivityByEventId.remove(post.id);
+      }
+    });
     try {
       final ids = await _chat.setMessagePinnedForEveryone(post, pinned: pinned);
       if (!mounted) return;
       setState(() => _pinnedEventIds = ids);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(pinned ? 'Post pinned' : 'Post unpinned')),
-      );
     } catch (error) {
       if (!mounted) return;
+      setState(() {
+        _pinnedEventIds = previousIds;
+        if (previousActivity == null) {
+          _pinActivityByEventId.remove(post.id);
+        } else {
+          _pinActivityByEventId[post.id] = previousActivity;
+        }
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Could not ${pinned ? 'pin' : 'unpin'} post: $error'),
@@ -1294,6 +1317,27 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     } finally {
       _pinUpdatesInFlight.remove(post.id);
     }
+  }
+
+  Widget _buildPinActivityNotice(String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Center(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xFF202328).withValues(alpha: 0.78),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 6),
+            child: Text(
+              text,
+              style: const TextStyle(color: Colors.white60, fontSize: 13),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _toggleRepost(String postId) {

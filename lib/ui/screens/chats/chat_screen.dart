@@ -419,6 +419,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final Set<String> _pinUpdatesInFlight = {};
   final Map<String, DateTime> _lastPinUpdateAt = {};
   final Map<String, GlobalKey> _messageKeys = {};
+  String? _latestPinActivityNotice;
+  String? _pinActivityAnchorEventId;
   List<String> _pinnedEventIds = [];
   List<mx.User> _groupMembers = const [];
 
@@ -532,9 +534,11 @@ class _ChatScreenState extends State<ChatScreen> {
         _resolvedConversationId ?? widget.conversationId,
       );
       if (room == null) return;
-      final pinned = room.pinnedEventIds.toList();
-      if (!listEquals(pinned, _pinnedEventIds)) {
-        setState(() => _pinnedEventIds = pinned);
+      if (_pinUpdatesInFlight.isEmpty) {
+        final pinned = room.pinnedEventIds.toList();
+        if (!listEquals(pinned, _pinnedEventIds)) {
+          setState(() => _pinnedEventIds = pinned);
+        }
       }
       if (!_isGroupChat) {
         return;
@@ -2301,6 +2305,23 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (!_pinUpdatesInFlight.add(message.id)) return;
     _lastPinUpdateAt[message.id] = now;
+    final previousIds = List<String>.from(_pinnedEventIds);
+    final previousNotice = _latestPinActivityNotice;
+    final previousNoticeAnchor = _pinActivityAnchorEventId;
+    final optimisticIds = List<String>.from(previousIds)
+      ..removeWhere((id) => id == message.id);
+    if (pinned) optimisticIds.insert(0, message.id);
+    setState(() {
+      _pinnedEventIds = optimisticIds;
+      if (pinned) {
+        _latestPinActivityNotice = 'You pinned a message';
+        _pinActivityAnchorEventId =
+            _messages.isEmpty ? null : _messages.last.id;
+      } else {
+        _latestPinActivityNotice = null;
+        _pinActivityAnchorEventId = null;
+      }
+    });
     try {
       final ids = await _chat.setMessagePinnedForEveryone(
         message,
@@ -2308,11 +2329,13 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (!mounted) return;
       setState(() => _pinnedEventIds = ids);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(pinned ? 'Message pinned' : 'Message unpinned')),
-      );
     } catch (error) {
       if (!mounted) return;
+      setState(() {
+        _pinnedEventIds = previousIds;
+        _latestPinActivityNotice = previousNotice;
+        _pinActivityAnchorEventId = previousNoticeAnchor;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -3203,6 +3226,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               effectiveAttachmentType: effectiveAttachmentType,
                             ),
                           ),
+                          if (msg.id == _pinActivityAnchorEventId &&
+                              _latestPinActivityNotice != null)
+                            _buildPinActivityNotice(_latestPinActivityNotice!),
                         ],
                       );
                     },
@@ -3227,6 +3253,27 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildPinActivityNotice(String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Center(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xFF202328).withValues(alpha: 0.78),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 6),
+            child: Text(
+              text,
+              style: const TextStyle(color: Colors.white60, fontSize: 13),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
