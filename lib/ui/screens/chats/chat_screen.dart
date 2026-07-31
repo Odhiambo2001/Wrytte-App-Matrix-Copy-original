@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -414,6 +415,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, String> _groupMemberNames = {};
   final Map<String, String> _groupMemberAvatars = {};
   final Set<String> _groupSenderProfilesInFlight = {};
+  Set<String> _pinnedEventIds = {};
   List<mx.User> _groupMembers = const [];
 
   String? _resolvedConversationId;
@@ -517,13 +519,19 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _subscribeToRoomProfileUpdates() {
-    if (!_isGroupChat) return;
     _roomProfileSyncSub = MatrixChatService.instance.syncStream.listen((_) {
       if (!mounted) return;
       final room = MatrixChatService.instance.getRoomById(
         _resolvedConversationId ?? widget.conversationId,
       );
       if (room == null) return;
+      final pinned = room.pinnedEventIds.toSet();
+      if (!setEquals(pinned, _pinnedEventIds)) {
+        setState(() => _pinnedEventIds = pinned);
+      }
+      if (!_isGroupChat) {
+        return;
+      }
       final latestAvatar = _safeGroupRoomAvatarUrl(room);
       if (latestAvatar == _stableHeaderAvatarUrl) {
         // Name/topic/custom profile state may still have changed.
@@ -790,6 +798,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final realConvId = await _resolveConversationId();
     _chat.activateConversationRead(realConvId);
+    _pinnedEventIds = _chat.pinnedEventIdsForRoom(realConvId);
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
     if (realConvId != widget.conversationId) {
       if (widget.conversationId.startsWith('!')) {
@@ -2040,6 +2049,15 @@ class _ChatScreenState extends State<ChatScreen> {
     final canDeleteForEveryone = isMine || (isAdminInGroup && room.canRedact);
     final attachmentType = message.attachmentType?.trim();
     final hasAttachment = attachmentType != null && attachmentType.isNotEmpty;
+    final isPinned = _pinnedEventIds.contains(message.id);
+    final canPin =
+        !_isReadOnlySuggestedGroup &&
+        room != null &&
+        room.canChangeStateEvent(mx.EventTypes.RoomPinnedEvents) &&
+        !message.isDeleted &&
+        message.status != MessageStatus.sending &&
+        message.status != MessageStatus.failed &&
+        message.id.startsWith(r'$');
     final link = _firstLinkIn(message.content);
     await showModalBottomSheet<void>(
       context: context,
@@ -2111,14 +2129,14 @@ class _ChatScreenState extends State<ChatScreen> {
                     ).showSnackBar(const SnackBar(content: Text('Copied')));
                   },
                 ),
-              if (!_isReadOnlySuggestedGroup &&
-                  _isGroupChat &&
-                  isAdminInGroup &&
-                  !message.isDeleted)
+              if (canPin)
                 _messageActionTile(
-                  icon: Icons.push_pin_outlined,
-                  label: 'Pin',
-                  onTap: null,
+                  icon: isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                  label: isPinned ? 'Unpin' : 'Pin',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _setMessagePinned(message, pinned: !isPinned);
+                  },
                 ),
               if (!_isReadOnlySuggestedGroup && !hasAttachment && link != null)
                 _messageActionTile(
@@ -2261,6 +2279,32 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       },
     );
+  }
+
+  Future<void> _setMessagePinned(
+    ChatMessage message, {
+    required bool pinned,
+  }) async {
+    try {
+      final ids = await _chat.setMessagePinnedForEveryone(
+        message,
+        pinned: pinned,
+      );
+      if (!mounted) return;
+      setState(() => _pinnedEventIds = ids);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(pinned ? 'Message pinned' : 'Message unpinned')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not ${pinned ? 'pin' : 'unpin'} message: $error',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _reportGroupMessage(ChatMessage message) async {
@@ -3292,7 +3336,34 @@ class _ChatScreenState extends State<ChatScreen> {
               : null,
     );
 
-    if (!_isGroupChat || isMine) return bubble;
+    final decoratedBubble =
+        _pinnedEventIds.contains(msg.id)
+            ? Stack(
+              clipBehavior: Clip.none,
+              children: [
+                bubble,
+                Positioned(
+                  top: 5,
+                  left: isMine ? null : 7,
+                  right: isMine ? 7 : null,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF20252B).withValues(alpha: 0.9),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.push_pin,
+                      size: 13,
+                      color: Color(0xFFB8C0CA),
+                    ),
+                  ),
+                ),
+              ],
+            )
+            : bubble;
+
+    if (!_isGroupChat || isMine) return decoratedBubble;
 
     return Padding(
       padding: const EdgeInsets.only(left: 10, right: 10),
@@ -3322,7 +3393,7 @@ class _ChatScreenState extends State<ChatScreen> {
           else
             const SizedBox(width: 40),
           const SizedBox(width: 6),
-          Expanded(child: bubble),
+          Expanded(child: decoratedBubble),
         ],
       ),
     );

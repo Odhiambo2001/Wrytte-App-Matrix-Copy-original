@@ -2347,6 +2347,72 @@ class ChatService {
     _messageController.add(updated);
   }
 
+  Set<String> pinnedEventIdsForRoom(String roomId) {
+    final room = _roomById(roomId.trim());
+    if (room == null) return <String>{};
+    return room.pinnedEventIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+  }
+
+  Future<Set<String>> setMessagePinnedForEveryone(
+    ChatMessage message, {
+    required bool pinned,
+  }) async {
+    final roomId = message.conversationId.trim();
+    final eventId = message.id.trim();
+    if (!roomId.startsWith('!') || !eventId.startsWith(r'$')) {
+      throw StateError(
+        'Wait for this message to finish sending before pinning it.',
+      );
+    }
+
+    return _withMatrixTokenRetry('setMessagePinnedForEveryone', () async {
+      await _waitForConnection();
+      final room = _roomById(roomId);
+      if (room == null) {
+        throw StateError('Unknown Matrix room: $roomId');
+      }
+      if (!room.canChangeStateEvent(mx.EventTypes.RoomPinnedEvents)) {
+        throw StateError(
+          'You do not have permission to change pinned messages.',
+        );
+      }
+
+      // This is one shared state event, so preserve its complete ordered list.
+      var currentIds = room.pinnedEventIds;
+      try {
+        final latest = await room.client.getRoomStateWithKey(
+          roomId,
+          mx.EventTypes.RoomPinnedEvents,
+          '',
+        );
+        final rawPinned = latest['pinned'];
+        if (rawPinned is Iterable) {
+          currentIds = rawPinned.map((id) => id.toString()).toList();
+        }
+      } catch (_) {
+        // A room with no m.room.pinned_events state yet legitimately returns
+        // M_NOT_FOUND. The synced room value is also the best offline fallback.
+      }
+      final ids =
+          currentIds
+              .map((id) => id.trim())
+              .where((id) => id.isNotEmpty)
+              .toList();
+      ids.removeWhere((id) => id == eventId);
+      if (pinned) ids.add(eventId);
+      await room.setPinnedEvents(ids);
+      apkLog(
+        'ChatService.pinForEveryone',
+        '${pinned ? 'pinned' : 'unpinned'} event '
+            'room_id="$roomId" event_id="$eventId"',
+      );
+      return ids.toSet();
+    });
+  }
+
   Future<ChatMessage> editMessage({
     required ChatMessage message,
     required String newContent,

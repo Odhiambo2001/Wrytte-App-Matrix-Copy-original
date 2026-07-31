@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:matrix/matrix.dart' as mx;
@@ -65,6 +66,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final Set<String> _repostedPostIds = {};
   final Set<String> _likedPostIds = {};
   final Set<String> _bookmarkedPostIds = {};
+  Set<String> _pinnedEventIds = {};
 
   // Incremental per-post counters. Counts start at 0 and only move when an
   // interaction happens. When server-side reaction storage is added, seed
@@ -98,6 +100,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         widget.avatarUrl?.trim().isNotEmpty == true
             ? widget.avatarUrl!.trim()
             : null;
+    _pinnedEventIds = _chat.pinnedEventIdsForRoom(widget.conversationId);
     _loadPosts();
     _loadInteractionState();
     _resolveChannelAvatar();
@@ -121,7 +124,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     });
     try {
       _syncSubscription = MatrixClientService.instance.client.onSync.stream
-          .listen((_) => _refreshSubscriberCount());
+          .listen((_) {
+            _refreshSubscriberCount();
+            _refreshPinnedEvents();
+          });
     } catch (_) {
       // Matrix client not ready yet; fallbacks cover it.
     }
@@ -211,6 +217,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final count = _liveSubscriberCount();
     if (count != _subscriberCount) {
       setState(() => _subscriberCount = count);
+    }
+  }
+
+  void _refreshPinnedEvents() {
+    if (!mounted) return;
+    final pinned = _chat.pinnedEventIdsForRoom(widget.conversationId);
+    if (!setEquals(pinned, _pinnedEventIds)) {
+      setState(() => _pinnedEventIds = pinned);
     }
   }
 
@@ -672,105 +686,118 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final postContent = _mediaDisplayContent(post, hasImage || hasVideo);
     final viewLabel = _formatCount(_viewCounts[post.id] ?? 0);
     final viewCount = _viewCounts[post.id] ?? 0;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        GestureDetector(
-          onTap: _openChannelProfile,
-          child: UserAvatar(
-            imageUrl: _channelAvatarUrl,
-            localImagePath: widget.localAvatarPath,
-            cacheIdentity: _channelAvatarCacheIdentity,
-            name: widget.title,
-            size: 36,
+    final isPinned = _pinnedEventIds.contains(post.id);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: () => _openMoreOptions(post),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            onTap: _openChannelProfile,
+            child: UserAvatar(
+              imageUrl: _channelAvatarUrl,
+              localImagePath: widget.localAvatarPath,
+              cacheIdentity: _channelAvatarCacheIdentity,
+              name: widget.title,
+              size: 36,
+            ),
           ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Flexible(
-                    child: GestureDetector(
-                      onTap: _openChannelProfile,
-                      child: Text(
-                        widget.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Flexible(
+                      child: GestureDetector(
+                        onTap: _openChannelProfile,
+                        child: Text(
+                          widget.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Text.rich(
-                    TextSpan(
-                      children: [
-                        _dotSpan(size: 4),
-                        TextSpan(
-                          text: _postAge(post.timestamp),
-                          style: const TextStyle(
-                            color: Color(0xFF8C8F95),
-                            fontSize: 17,
-                          ),
-                        ),
-                        if (viewLabel != null) ...[
+                    if (isPinned) ...[
+                      const SizedBox(width: 6),
+                      const Icon(
+                        Icons.push_pin,
+                        size: 15,
+                        color: Color(0xFF8C8F95),
+                      ),
+                    ],
+                    Text.rich(
+                      TextSpan(
+                        children: [
                           _dotSpan(size: 4),
                           TextSpan(
-                            text:
-                                '$viewLabel ${viewCount == 1 ? 'view' : 'views'}',
+                            text: _postAge(post.timestamp),
                             style: const TextStyle(
                               color: Color(0xFF8C8F95),
                               fontSize: 17,
                             ),
                           ),
+                          if (viewLabel != null) ...[
+                            _dotSpan(size: 4),
+                            TextSpan(
+                              text:
+                                  '$viewLabel ${viewCount == 1 ? 'view' : 'views'}',
+                              style: const TextStyle(
+                                color: Color(0xFF8C8F95),
+                                fontSize: 17,
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (hasImage || hasVideo) ...[
+                  const SizedBox(height: 10),
+                  if (hasImage)
+                    ChannelPostImage(
+                      source: post.attachmentUrl!,
+                      mediaWidth: post.mediaWidth,
+                      mediaHeight: post.mediaHeight,
+                    )
+                  else
+                    ChannelPostVideo(
+                      source: post.attachmentUrl!,
+                      mediaWidth: post.mediaWidth,
+                      mediaHeight: post.mediaHeight,
+                    ),
+                ],
+                if (postContent.isNotEmpty) ...[
+                  SizedBox(height: hasImage || hasVideo ? 8 : 4),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Text(
+                      postContent,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        height: 1.18,
+                      ),
                     ),
                   ),
                 ],
-              ),
-              if (hasImage || hasVideo) ...[
-                const SizedBox(height: 10),
-                if (hasImage)
-                  ChannelPostImage(
-                    source: post.attachmentUrl!,
-                    mediaWidth: post.mediaWidth,
-                    mediaHeight: post.mediaHeight,
-                  )
-                else
-                  ChannelPostVideo(
-                    source: post.attachmentUrl!,
-                    mediaWidth: post.mediaWidth,
-                    mediaHeight: post.mediaHeight,
-                  ),
+                const SizedBox(height: 12),
+                _postActions(post),
               ],
-              if (postContent.isNotEmpty) ...[
-                SizedBox(height: hasImage || hasVideo ? 8 : 4),
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text(
-                    postContent,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      height: 1.18,
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 12),
-              _postActions(post),
-            ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -1046,6 +1073,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
   void _openMoreOptions(ChatMessage post) {
     final isMine = post.senderId.contains(widget.currentUserId);
+    final room = MatrixChatService.instance.getRoomById(widget.conversationId);
+    final canPin =
+        !widget.readOnlyUntilSubscribe &&
+        room != null &&
+        room.canChangeStateEvent(mx.EventTypes.RoomPinnedEvents) &&
+        !post.isDeleted &&
+        post.status != MessageStatus.sending &&
+        post.status != MessageStatus.failed &&
+        post.id.startsWith(r'$');
+    final isPinned = _pinnedEventIds.contains(post.id);
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF15171B),
@@ -1073,6 +1110,21 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   );
                 },
               ),
+              if (canPin)
+                ListTile(
+                  leading: Icon(
+                    isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                    color: Colors.white,
+                  ),
+                  title: Text(
+                    isPinned ? 'Unpin' : 'Pin',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _setPostPinned(post, pinned: !isPinned);
+                  },
+                ),
               if (isMine)
                 ListTile(
                   leading: const Icon(
@@ -1107,6 +1159,24 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         );
       },
     );
+  }
+
+  Future<void> _setPostPinned(ChatMessage post, {required bool pinned}) async {
+    try {
+      final ids = await _chat.setMessagePinnedForEveryone(post, pinned: pinned);
+      if (!mounted) return;
+      setState(() => _pinnedEventIds = ids);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(pinned ? 'Post pinned' : 'Post unpinned')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not ${pinned ? 'pin' : 'unpin'} post: $error'),
+        ),
+      );
+    }
   }
 
   void _toggleRepost(String postId) {

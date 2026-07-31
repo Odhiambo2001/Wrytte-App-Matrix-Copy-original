@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/components/user_avatar.dart';
@@ -54,6 +57,8 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
   String? _avatarUrl;
   String? _customHandle;
   String _description = '';
+  Set<String> _pinnedEventIds = {};
+  StreamSubscription? _syncSubscription;
 
   @override
   void initState() {
@@ -63,6 +68,22 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
     _avatarUrl = widget.avatarUrl;
     final room = MatrixChatService.instance.getRoomById(widget.conversationId);
     _description = room?.topic.trim() ?? '';
+    _pinnedEventIds = ChatService().pinnedEventIdsForRoom(
+      widget.conversationId,
+    );
+    _syncSubscription = MatrixChatService.instance.syncStream.listen((_) {
+      if (!mounted) return;
+      final pinned = ChatService().pinnedEventIdsForRoom(widget.conversationId);
+      if (!setEquals(pinned, _pinnedEventIds)) {
+        setState(() => _pinnedEventIds = pinned);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _syncSubscription?.cancel();
+    super.dispose();
   }
 
   /// "@carsandtrucks" style handle: the user-edited one if set,
@@ -665,6 +686,7 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
         post.attachmentType == 'video' &&
         (post.attachmentUrl?.trim().isNotEmpty ?? false);
     final postContent = _mediaDisplayContent(post, hasImage || hasVideo);
+    final isPinned = _pinnedEventIds.contains(post.id);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -679,11 +701,28 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                '$_title · ${_postAge(post.timestamp)}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Color(0xFF8C8F95), fontSize: 13),
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      '$_title · ${_postAge(post.timestamp)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF8C8F95),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  if (isPinned) ...[
+                    const SizedBox(width: 6),
+                    const Icon(
+                      Icons.push_pin,
+                      size: 14,
+                      color: Color(0xFF8C8F95),
+                    ),
+                  ],
+                ],
               ),
               if (hasImage || hasVideo) ...[
                 const SizedBox(height: 8),
