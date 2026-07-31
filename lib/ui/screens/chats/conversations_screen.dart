@@ -2368,7 +2368,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   String _sanitize(String s) =>
       String.fromCharCodes(s.runes.where((r) => r <= 0xD7FF || r >= 0xE000));
 
-  String _conversationPreview(String raw) {
+  String _conversationPreview(ChatConversation conversation) {
+    final raw = conversation.lastMessage;
+    final rawTrimmed = raw.trim();
+    if (conversation.lastMessageType == 'voice' ||
+        RegExp(
+          r'^voice_\d+\.aac$',
+          caseSensitive: false,
+        ).hasMatch(rawTrimmed)) {
+      return 'Voice message';
+    }
     var text = _sanitize(raw).trim();
     if (text.startsWith('> ')) {
       final parts = text.split('\n\n');
@@ -2454,7 +2463,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       name: name,
       hasMessage: hasMessage,
       senderName: senderName,
-      lastMessage: isDeleted ? '' : _conversationPreview(conv.lastMessage),
+      lastMessage: isDeleted ? '' : _conversationPreview(conv),
       time: hasMessage ? _formatTime(conv.lastMessageTime) : '',
       avatarUrl: avatar,
       avatarCacheIdentity:

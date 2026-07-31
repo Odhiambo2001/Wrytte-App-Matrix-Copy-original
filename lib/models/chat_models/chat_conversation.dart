@@ -110,10 +110,11 @@ class ChatConversation {
       id: message.conversationId,
       participants: [message.senderId, message.receiverId],
       otherUserId: otherId,
-      lastMessage: message.content,
+      lastMessage: message.isVoiceNote ? 'Voice message' : message.content,
       lastMessageSenderId: message.senderId,
       lastMessageTime: message.timestamp,
       unreadCount: isFromMe ? 0 : 1,
+      lastMessageType: message.attachmentType ?? 'text',
       conversationKind: ConversationKind.direct,
     );
   }
@@ -130,7 +131,10 @@ class ChatConversation {
         id: room.id,
         participants: [currentUserId],
         otherUserId: room.id,
-        lastMessage: last?.body ?? '',
+        lastMessage:
+            last?.messageType == mx.MessageTypes.Audio
+                ? 'Voice message'
+                : last?.body ?? '',
         lastMessageSenderId: last?.senderId ?? '',
         lastMessageTime: last?.originServerTs ?? DateTime.now(),
         unreadCount:
@@ -155,11 +159,16 @@ class ChatConversation {
       id: room.id,
       participants: [currentUserId, otherId],
       otherUserId: otherId,
-      lastMessage: last?.body ?? '',
+      lastMessage:
+          last?.messageType == mx.MessageTypes.Audio
+              ? 'Voice message'
+              : last?.body ?? '',
       lastMessageSenderId: last?.senderId ?? '',
       lastMessageTime: last?.originServerTs ?? DateTime.now(),
       unreadCount:
           last != null && !_sameUser(last.senderId, currentUserId) ? 1 : 0,
+      lastMessageType:
+          last?.messageType == mx.MessageTypes.Audio ? 'voice' : 'text',
       otherUserName: room.displayname,
       otherUserAvatar: room.avatar?.toString(),
       conversationKind: kind,
@@ -262,14 +271,17 @@ class ChatConversation {
       id: id,
       participants: participants,
       otherUserId: otherUserId,
-      lastMessage: isNewer ? message.content : lastMessage,
+      lastMessage:
+          isNewer
+              ? (message.isVoiceNote ? 'Voice message' : message.content)
+              : lastMessage,
       lastMessageSenderId: isNewer ? message.senderId : lastMessageSenderId,
       lastMessageTime: isNewer ? message.timestamp : lastMessageTime,
       unreadCount: unreadCount + (isFromMe ? 0 : 1),
       lastMessageType:
           preserveMarker
               ? lastMessageType
-              : (isNewer ? 'text' : lastMessageType),
+              : (isNewer ? message.attachmentType ?? 'text' : lastMessageType),
       conversationKind: conversationKind,
       isArchived: isArchived,
       isMuted: isMuted,

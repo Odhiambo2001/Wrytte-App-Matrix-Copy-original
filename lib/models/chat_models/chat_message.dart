@@ -160,6 +160,8 @@ class ChatMessage {
       content:
           event.redacted
               ? _redactedMessageText(event)
+              : attachmentType == 'voice'
+              ? 'Voice message'
               : _stripReplyFallback(_matrixEventBody(event)),
       timestamp: event.originServerTs,
       status: _statusFromMatrix(event.status),
