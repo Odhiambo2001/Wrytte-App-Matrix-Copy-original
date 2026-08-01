@@ -33,6 +33,7 @@ dependencies:
   clipboard: ^2.0.2
   flutter_contacts: ^1.1.9+2
   permission_handler: ^12.0.1
+  phone_numbers_parser: ^9.0.24
   flutter_libphonenumber: ^2.5.1
   libphonenumber_plugin: ^0.3.3
   device_info_plus: ^9.0.3

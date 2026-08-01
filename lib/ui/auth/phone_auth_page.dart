@@ -1,11 +1,11 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/ui/auth/country_picker_page.dart';
 import 'package:wrytte/ui/screens/terms_privacy_page.dart';
 import 'package:wrytte/utils/countries.dart';
+import 'package:wrytte/utils/country_phone_number.dart';
 import 'otp_verification_page.dart';
 
 class PhoneAuthPage extends StatefulWidget {
@@ -33,19 +33,17 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   bool _showDivider = false;
   bool _isAutoFilling = false;
 
-  /// Full phone number
-  String get _fullPhone {
-    if (_selectedCountry == null) return '';
-
-    final raw = _numberCtrl.text.trim();
-    final normalized = raw.startsWith('0') ? raw.substring(1) : raw;
-
-    return '${_selectedCountry!.dialCode}$normalized';
-  }
+  /// Valid, normalized international number (for example +254712345678).
+  String? get _fullPhone =>
+      _selectedCountry == null
+          ? null
+          : CountryPhoneNumber.international(
+            _numberCtrl.text,
+            _selectedCountry!.isoCode,
+          );
 
   /// Validation
-  bool get _isValid =>
-      _selectedCountry != null && _numberCtrl.text.trim().length >= 8;
+  bool get _isValid => _fullPhone != null;
 
   /// Pick country
   Future<void> _pickCountry() async {
@@ -58,6 +56,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
         _selectedCountry = result;
         _codeCtrl.text = '+${result.dialCode}'; // Keep the plus sign
         _showDivider = true;
+        _numberCtrl.clear();
       });
 
       // Move focus to number field after country selection
@@ -138,7 +137,10 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
 
   Future<void> _sendVerificationCode() async {
     try {
-      await _realNumberService.sendSmsCode(_fullPhone);
+      final phone = _fullPhone;
+      if (phone == null) return;
+
+      await _realNumberService.sendSmsCode(phone);
 
       if (!mounted) return;
 
@@ -147,7 +149,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
         MaterialPageRoute(
           builder:
               (_) => OtpVerificationPage(
-                phoneNumber: _fullPhone,
+                phoneNumber: phone,
                 isSignInFlow: widget.isSignInFlow,
               ),
         ),
@@ -363,9 +365,12 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                                     child: TextField(
                                       controller: _numberCtrl,
                                       focusNode: _numberFocusNode,
-                                      keyboardType: TextInputType.number,
+                                      keyboardType: TextInputType.phone,
                                       inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
+                                        if (_selectedCountry != null)
+                                          CountryPhoneNumberInputFormatter(
+                                            _selectedCountry!.isoCode,
+                                          ),
                                       ],
                                       style: const TextStyle(
                                         color: Colors.white,
