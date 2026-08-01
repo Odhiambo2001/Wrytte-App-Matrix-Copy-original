@@ -163,20 +163,41 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
     await showDialog<void>(
       context: context,
       builder:
-          (dialogContext) => AlertDialog(
+          (dialogContext) => Dialog(
             backgroundColor: const Color(0xFF23262C),
-            content: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white, fontSize: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
             ),
-            actionsAlignment: MainAxisAlignment.center,
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('OK'),
-              ),
-            ],
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+                  child: Text(
+                    message,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ),
+                const Divider(height: 1, color: Colors.white12),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: const RoundedRectangleBorder(
+                        borderRadius: BorderRadius.only(
+                          bottomLeft: Radius.circular(14),
+                          bottomRight: Radius.circular(14),
+                        ),
+                      ),
+                    ),
+                    child: const Text('OK'),
+                  ),
+                ),
+              ],
+            ),
           ),
     );
   }
