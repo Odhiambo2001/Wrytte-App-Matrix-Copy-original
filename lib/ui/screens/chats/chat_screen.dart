@@ -38,6 +38,7 @@ import 'package:wrytte/ui/widgets/pinned_events_strip.dart';
 import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
+import 'package:wrytte/utils/country_phone_number.dart';
 
 class ChatScreen extends StatefulWidget {
   final String conversationId;
@@ -673,23 +674,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _formatPhone(String phone) {
-    final digits = _stripInvalidNorthAmericaPrefix(
-      phone.replaceAll(RegExp(r'[^\d+]'), ''),
-    );
-    final digitsOnly = digits.replaceAll(RegExp(r'[^\d]'), '');
-    if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
-    if (digits.startsWith('+1') && digits.length == 12) {
-      return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
-    }
-    if (digits.isNotEmpty && !digits.startsWith('+')) return '+$digits';
-    return digits;
-  }
-
-  String _stripInvalidNorthAmericaPrefix(String phone) {
-    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
-    if (!phone.startsWith('+1')) return phone;
-    if (digits.length <= 11) return phone;
-    return '+${digits.substring(1)}';
+    return CountryPhoneNumber.formatInternationalDisplay(phone);
   }
 
   String _firstPhoneFrom(Iterable<String?> candidates) {

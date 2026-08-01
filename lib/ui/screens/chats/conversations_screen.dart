@@ -38,6 +38,7 @@ import 'package:wrytte/ui/screens/chats/widgets/top_bar.dart';
 import 'package:wrytte/ui/screens/firebase_new_chat_screen.dart';
 import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
+import 'package:wrytte/utils/country_phone_number.dart';
 import 'widgets/search_bar.dart' as local_widgets;
 import 'widgets/tab_bar_section.dart';
 
@@ -2312,16 +2313,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   String _formatPhone(String phone) {
-    final digits = _stripInvalidNorthAmericaPrefix(
-      phone.replaceAll(RegExp(r'[^\d+]'), ''),
-    );
-    final digitsOnly = digits.replaceAll(RegExp(r'[^\d]'), '');
-    if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
-    if (digits.startsWith('+1') && digits.length == 12) {
-      return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
-    }
-    if (digits.isNotEmpty && !digits.startsWith('+')) return '+$digits';
-    return digits;
+    return CountryPhoneNumber.formatInternationalDisplay(phone);
   }
 
   String _normalizePhone(String phone) {

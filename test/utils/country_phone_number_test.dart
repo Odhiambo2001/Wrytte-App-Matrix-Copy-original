@@ -37,6 +37,10 @@ void main() {
         CountryPhoneNumber.formatInternationalDisplay('13107353765'),
         '+1 (310) 735-3765',
       );
+      expect(
+        CountryPhoneNumber.formatInternationalDisplay('33749542126'),
+        '+33 7 49 54 21 26',
+      );
     });
 
     test('rejects incomplete and impossible numbers', () {
