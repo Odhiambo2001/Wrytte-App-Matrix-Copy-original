@@ -69,6 +69,7 @@ class _NewContactPageState extends State<NewContactPage> {
   CountryId? _selectedCountry;
   bool _showDivider = false;
   bool _isAutoFilling = false;
+  bool _hasInvalidCountryCode = false;
 
   // ── Sync toggle ───────────────────────────────────────────────
   bool _syncToPhone = true;
@@ -103,10 +104,12 @@ class _NewContactPageState extends State<NewContactPage> {
 
   bool get _canSave =>
       _firstNameCtrl.text.trim().isNotEmpty &&
-      _selectedCountry != null &&
-      (_isWrytteIdMode
-          ? _numberCtrl.text.trim().length >= 4
-          : _fullIdentifier.isNotEmpty);
+      _numberCtrl.text.trim().isNotEmpty &&
+      (_hasInvalidCountryCode ||
+          (_selectedCountry != null &&
+              (_isWrytteIdMode
+                  ? _numberCtrl.text.trim().length >= 4
+                  : _fullIdentifier.isNotEmpty)));
 
   String get _phoneDigits => _numberCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
 
@@ -212,6 +215,7 @@ class _NewContactPageState extends State<NewContactPage> {
     if (result != null) {
       setState(() {
         _selectedCountry = result;
+        _hasInvalidCountryCode = false;
         _codeCtrl.text = '+${result.dialCode}';
         _showDivider = true;
         _lookupState = _LookupState.idle;
@@ -239,27 +243,40 @@ class _NewContactPageState extends State<NewContactPage> {
     }
 
     final codeWithoutPlus = digitsOnly;
-
+    CountryId? detectedCountry;
     for (final country in countriesId) {
       if (country.dialCode == codeWithoutPlus) {
-        setState(() {
-          _selectedCountry = country;
-          _showDivider = true;
-          _lookupState = _LookupState.idle;
-          _resolvedUserId = null;
-          _isRegisteredOnWrytte = false;
-          _lookupError = null;
-        });
-
-        if (!_isAutoFilling && codeWithoutPlus.isNotEmpty) {
-          _isAutoFilling = true;
-          Future.delayed(const Duration(milliseconds: 100), () {
-            _numberFocusNode.requestFocus();
-            _isAutoFilling = false;
-          });
-        }
+        detectedCountry = country;
         break;
       }
+    }
+
+    if (detectedCountry == null && _numberCtrl.text.isNotEmpty) {
+      final digits = _phoneDigits;
+      _numberCtrl.value = TextEditingValue(
+        text: digits,
+        selection: TextSelection.collapsed(offset: digits.length),
+      );
+    }
+
+    _debounce?.cancel();
+    setState(() {
+      _selectedCountry = detectedCountry;
+      _hasInvalidCountryCode =
+          detectedCountry == null && codeWithoutPlus.isNotEmpty;
+      _showDivider = codeWithoutPlus.isNotEmpty;
+      _lookupState = _LookupState.idle;
+      _resolvedUserId = null;
+      _isRegisteredOnWrytte = false;
+      _lookupError = null;
+    });
+
+    if (detectedCountry != null && !_isAutoFilling) {
+      _isAutoFilling = true;
+      Future.delayed(const Duration(milliseconds: 100), () {
+        _numberFocusNode.requestFocus();
+        _isAutoFilling = false;
+      });
     }
   }
 
@@ -414,6 +431,10 @@ class _NewContactPageState extends State<NewContactPage> {
 
   Future<void> _save() async {
     if (!_canSave || _isSaving) return;
+    if (_hasInvalidCountryCode || _selectedCountry == null) {
+      await _showInvalidCountryCodeDialog();
+      return;
+    }
 
     setState(() {
       _isSaving = true;
@@ -573,6 +594,44 @@ class _NewContactPageState extends State<NewContactPage> {
         _saveError = _friendlyError(e.toString());
       });
     }
+  }
+
+  Future<void> _showInvalidCountryCodeDialog() async {
+    final code = _codeCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
+    await showDialog<void>(
+      context: context,
+      builder:
+          (dialogContext) => Dialog(
+            backgroundColor: _kCard,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+                  child: Text(
+                    'Country code +$code is invalid. Please correct it.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ),
+                const Divider(height: 1, color: _kDivider),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    child: const Text('OK'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+    );
   }
 
   Future<String?> _resolveReceiverIdForSave(String fallbackToken) async {
@@ -968,7 +1027,9 @@ class _NewContactPageState extends State<NewContactPage> {
                         vertical: 6,
                       ),
                       title: Text(
-                        _selectedCountry == null
+                        _hasInvalidCountryCode
+                            ? 'Invalid country code'
+                            : _selectedCountry == null
                             ? 'Country'
                             : _isWrytteIdMode
                             ? 'Wrytte ID number'
@@ -1056,7 +1117,9 @@ class _NewContactPageState extends State<NewContactPage> {
                                 else if (_selectedCountry != null)
                                   CountryPhoneNumberInputFormatter(
                                     _selectedCountry!.isoCode,
-                                  ),
+                                  )
+                                else
+                                  FilteringTextInputFormatter.digitsOnly,
                               ],
                               style: const TextStyle(
                                 color: Colors.white,

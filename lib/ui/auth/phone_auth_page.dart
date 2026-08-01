@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/ui/auth/country_picker_page.dart';
@@ -32,6 +33,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   Future<void>? _sendCodeFuture;
   bool _showDivider = false;
   bool _isAutoFilling = false;
+  bool _hasInvalidCountryCode = false;
 
   /// Valid, normalized international number (for example +254712345678).
   String? get _fullPhone =>
@@ -45,7 +47,8 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   /// Validation
   bool get _isValid => _fullPhone != null;
   bool get _canAttemptVerification =>
-      _selectedCountry != null && _numberCtrl.text.trim().isNotEmpty;
+      _codeCtrl.text.replaceAll(RegExp(r'[^\d]'), '').isNotEmpty &&
+      _numberCtrl.text.trim().isNotEmpty;
 
   /// Pick country
   Future<void> _pickCountry() async {
@@ -56,6 +59,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
     if (result != null) {
       setState(() {
         _selectedCountry = result;
+        _hasInvalidCountryCode = false;
         _codeCtrl.text = '+${result.dialCode}'; // Keep the plus sign
         _showDivider = true;
         _numberCtrl.clear();
@@ -79,26 +83,36 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       return;
     }
 
-    // Extract just the dial code for detection
-    final codeWithoutPlus = value.substring(1);
-
+    final codeWithoutPlus = value.substring(1).replaceAll(RegExp(r'[^\d]'), '');
+    Country? detectedCountry;
     for (final country in countries) {
       if (country.dialCode == codeWithoutPlus) {
-        setState(() {
-          _selectedCountry = country;
-          _showDivider = true;
-        });
-
-        // Auto-fill complete: move focus to number field
-        if (!_isAutoFilling && codeWithoutPlus.isNotEmpty) {
-          _isAutoFilling = true;
-          Future.delayed(const Duration(milliseconds: 100), () {
-            _numberFocusNode.requestFocus();
-            _isAutoFilling = false;
-          });
-        }
+        detectedCountry = country;
         break;
       }
+    }
+
+    if (detectedCountry == null && _numberCtrl.text.isNotEmpty) {
+      final digits = _numberCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
+      _numberCtrl.value = TextEditingValue(
+        text: digits,
+        selection: TextSelection.collapsed(offset: digits.length),
+      );
+    }
+
+    setState(() {
+      _selectedCountry = detectedCountry;
+      _hasInvalidCountryCode =
+          detectedCountry == null && codeWithoutPlus.isNotEmpty;
+      _showDivider = codeWithoutPlus.isNotEmpty;
+    });
+
+    if (detectedCountry != null && !_isAutoFilling) {
+      _isAutoFilling = true;
+      Future.delayed(const Duration(milliseconds: 100), () {
+        _numberFocusNode.requestFocus();
+        _isAutoFilling = false;
+      });
     }
   }
 
@@ -124,6 +138,10 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   /// Start verification
   Future<void> _startVerification() async {
     if (_isSending || _sendCodeFuture != null) return;
+    if (_hasInvalidCountryCode || _selectedCountry == null) {
+      await _showInvalidCountryCodeDialog();
+      return;
+    }
     if (!_isValid) {
       await _showInvalidPhoneDialog();
       return;
@@ -160,6 +178,17 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
         'The phone number you entered is not valid for ${country.name}.',
     };
 
+    await _showValidationDialog(message);
+  }
+
+  Future<void> _showInvalidCountryCodeDialog() async {
+    final code = _codeCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
+    await _showValidationDialog(
+      'Country code +$code is invalid. Please correct it.',
+    );
+  }
+
+  Future<void> _showValidationDialog(String message) async {
     await showDialog<void>(
       context: context,
       builder:
@@ -348,8 +377,10 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                             ListTile(
                               onTap: _pickCountry,
                               title: Text(
-                                _selectedCountry == null
-                                    ? "Country"
+                                _hasInvalidCountryCode
+                                    ? 'Invalid country code'
+                                    : _selectedCountry == null
+                                    ? 'Country'
                                     : "${_selectedCountry!.flag} ${_selectedCountry!.name}",
                                 style: const TextStyle(
                                   color: Colors.white,
@@ -437,7 +468,10 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                                         if (_selectedCountry != null)
                                           CountryPhoneNumberInputFormatter(
                                             _selectedCountry!.isoCode,
-                                          ),
+                                          )
+                                        else
+                                          FilteringTextInputFormatter
+                                              .digitsOnly,
                                       ],
                                       style: const TextStyle(
                                         color: Colors.white,
