@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
+import 'package:wrytte/utils/country_phone_number.dart';
 
 class OtpVerificationPage extends StatefulWidget {
   final String phoneNumber;
@@ -37,6 +38,8 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
   late Animation<double> _shakeAnimation;
 
   bool get _isValid => _otpController.text.length == 6;
+  String get _displayPhoneNumber =>
+      CountryPhoneNumber.formatInternationalDisplay(widget.phoneNumber);
 
   @override
   void initState() {
@@ -268,7 +271,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
               const SizedBox(height: 10),
 
               Text(
-                'We\'ve sent a code by SMS to phone\nnumber ${widget.phoneNumber}.',
+                'We\'ve sent a code by SMS to phone\nnumber $_displayPhoneNumber.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white54),
               ),
