@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/api_service.dart';
@@ -32,6 +34,8 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   Future<void>? _sendCodeFuture;
   bool _showDivider = false;
   bool _isAutoFilling = false;
+  Timer? _validationTimer;
+  String? _phoneError;
 
   /// Valid, normalized international number (for example +254712345678).
   String? get _fullPhone =>
@@ -57,11 +61,34 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
         _codeCtrl.text = '+${result.dialCode}'; // Keep the plus sign
         _showDivider = true;
         _numberCtrl.clear();
+        _phoneError = null;
       });
 
       // Move focus to number field after country selection
       _numberFocusNode.requestFocus();
     }
+  }
+
+  void _onPhoneChanged(String value) {
+    _validationTimer?.cancel();
+
+    if (value.trim().isEmpty) {
+      setState(() => _phoneError = null);
+      return;
+    }
+
+    // Avoid showing an error while the user is still entering the number.
+    setState(() => _phoneError = null);
+    _validationTimer = Timer(const Duration(milliseconds: 700), () {
+      if (!mounted) return;
+
+      setState(() {
+        _phoneError =
+            _isValid
+                ? null
+                : 'Enter a valid phone number for ${_selectedCountry!.name}.';
+      });
+    });
   }
 
   /// Detect country from typed code (Telegram behavior)
@@ -202,6 +229,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
 
   @override
   void dispose() {
+    _validationTimer?.cancel();
     _codeCtrl.dispose();
     _numberCtrl.dispose();
     _codeFocusNode.dispose();
@@ -393,7 +421,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                                               vertical: 8,
                                             ), // <-- ADD THIS to control height
                                       ),
-                                      onChanged: (_) => setState(() {}),
+                                      onChanged: _onPhoneChanged,
                                       enabled:
                                           _showDivider, // Disable until code is entered
                                     ),
@@ -403,6 +431,42 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                             ),
                           ],
                         ),
+                      ),
+
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        child:
+                            _phoneError == null
+                                ? const SizedBox.shrink()
+                                : Padding(
+                                  key: ValueKey(_phoneError),
+                                  padding: const EdgeInsets.only(
+                                    left: 16,
+                                    right: 16,
+                                    top: 8,
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Icon(
+                                        Icons.error_outline,
+                                        color: Color(0xFFFF6B6B),
+                                        size: 17,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          _phoneError!,
+                                          style: const TextStyle(
+                                            color: Color(0xFFFF6B6B),
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                       ),
 
                       const SizedBox(height: 25),
