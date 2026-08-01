@@ -6,6 +6,7 @@ import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/auth_entry_screen.dart';
+import 'package:wrytte/utils/country_phone_number.dart';
 
 class EditProfileScreen extends StatefulWidget {
   final UserProfile? initialProfile;
@@ -459,7 +460,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   ),
                                   const Spacer(),
                                   Text(
-                                    _profile?.phone ?? '',
+                                    CountryPhoneNumber.formatInternationalDisplay(
+                                      _profile?.phone ?? '',
+                                    ),
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 16,
