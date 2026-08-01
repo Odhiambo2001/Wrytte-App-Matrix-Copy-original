@@ -17,6 +17,7 @@ import 'package:wrytte/ui/screens/Country%20id%20picker%20page.dart';
 import 'package:wrytte/utils/countries_id.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
+import 'package:wrytte/utils/country_phone_number.dart';
 
 // ─────────────────────────────────────────────────────────────────
 // Colours
@@ -96,8 +97,8 @@ class _NewContactPageState extends State<NewContactPage> {
     if (_selectedCountry == null) return '';
     final raw = _numberCtrl.text.trim();
     if (_isWrytteIdMode) return raw;
-    final normalized = raw.startsWith('0') ? raw.substring(1) : raw;
-    return '+${_selectedCountry!.dialCode}$normalized';
+    return CountryPhoneNumber.international(raw, _selectedCountry!.isoCode) ??
+        '';
   }
 
   bool get _canSave =>
@@ -105,7 +106,7 @@ class _NewContactPageState extends State<NewContactPage> {
       _selectedCountry != null &&
       (_isWrytteIdMode
           ? _numberCtrl.text.trim().length >= 4
-          : _phoneDigits.length >= _kMinPhoneLookupDigits);
+          : _fullIdentifier.isNotEmpty);
 
   String get _phoneDigits => _numberCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
 
@@ -180,7 +181,10 @@ class _NewContactPageState extends State<NewContactPage> {
 
     _selectedCountry = country;
     _codeCtrl.text = '+${country.dialCode}';
-    _numberCtrl.text = national;
+    _numberCtrl.text = CountryPhoneNumber.formatNational(
+      national,
+      country.isoCode,
+    );
     _showDivider = true;
     return true;
   }
@@ -330,6 +334,9 @@ class _NewContactPageState extends State<NewContactPage> {
       debugPrint('Looking for identifier: $identifier');
 
       if (!mounted) return;
+      // A slower request for an older partial number must not overwrite the
+      // result for the number currently visible in the field.
+      if (_fullIdentifier != identifier) return;
 
       final lookupValue =
           result[identifier] ??
@@ -1039,9 +1046,17 @@ class _NewContactPageState extends State<NewContactPage> {
                             child: TextField(
                               controller: _numberCtrl,
                               focusNode: _numberFocusNode,
-                              keyboardType: TextInputType.number,
+                              keyboardType:
+                                  _isWrytteIdMode
+                                      ? TextInputType.number
+                                      : TextInputType.phone,
                               inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly,
+                                if (_isWrytteIdMode)
+                                  FilteringTextInputFormatter.digitsOnly
+                                else if (_selectedCountry != null)
+                                  CountryPhoneNumberInputFormatter(
+                                    _selectedCountry!.isoCode,
+                                  ),
                               ],
                               style: const TextStyle(
                                 color: Colors.white,
