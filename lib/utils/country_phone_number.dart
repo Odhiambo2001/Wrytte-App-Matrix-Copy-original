@@ -32,7 +32,22 @@ class CountryPhoneNumber {
 
   static String? international(String input, String countryAlpha2) {
     final number = tryParse(input, countryAlpha2);
-    return number?.isValid() == true ? number!.international : null;
+    if (number == null) return null;
+    if (number.isValid()) return number.international;
+
+    // Some calling codes belong to several regions. For example, Canada, the
+    // US, and multiple Caribbean territories all use +1. Parsing a local +1
+    // number strictly as Canada can therefore reject a valid US area code.
+    // Reparse the normalized international value so the package can infer the
+    // correct region, while retaining the calling-code guard in tryParse().
+    try {
+      final inferred = PhoneNumber.parse(number.international);
+      return inferred.isValid() ? inferred.international : null;
+    } on PhoneNumberException {
+      return null;
+    } on FormatException {
+      return null;
+    }
   }
 
   static String formatNational(String input, String countryAlpha2) {
@@ -43,6 +58,24 @@ class CountryPhoneNumber {
       return number.formatNsn();
     } on PhoneNumberException {
       return input;
+    }
+  }
+
+  /// Formats a stored international number for display, keeping its calling
+  /// code separate from the region-specific national grouping.
+  static String formatInternationalDisplay(String input) {
+    final compact = input.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (compact.isEmpty) return '';
+    final international = compact.startsWith('+') ? compact : '+$compact';
+
+    try {
+      final number = PhoneNumber.parse(international);
+      if (!number.isValid()) return international;
+      return '+${number.countryCode} ${number.formatNsn()}';
+    } on PhoneNumberException {
+      return international;
+    } on FormatException {
+      return international;
     }
   }
 }

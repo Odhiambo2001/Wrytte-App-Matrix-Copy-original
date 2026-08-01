@@ -27,6 +27,7 @@ import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'package:wrytte/ui/widgets/wrytte_persistent_image.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
+import 'package:wrytte/utils/country_phone_number.dart';
 import 'edit_profile_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -508,26 +509,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _formatPhone(String phone) {
-    final digits = _stripInvalidNorthAmericaPrefix(
-      phone.replaceAll(RegExp(r'[^\d+]'), ''),
-    );
-    final digitsOnly = digits.replaceAll(RegExp(r'[^\d]'), '');
-    if (digitsOnly.length < 7 || digitsOnly.length > 15) return '';
-    if (digits.startsWith('+256') && digits.length == 13) {
-      return '${digits.substring(0, 4)} ${digits.substring(4, 7)} ${digits.substring(7, 10)} ${digits.substring(10)}';
-    }
-    if (digits.startsWith('+1') && digits.length == 12) {
-      return '${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 8)} ${digits.substring(8)}';
-    }
-    if (digits.isNotEmpty && !digits.startsWith('+')) return '+$digits';
-    return digits;
-  }
-
-  String _stripInvalidNorthAmericaPrefix(String phone) {
-    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
-    if (!phone.startsWith('+1')) return phone;
-    if (digits.length <= 11) return phone;
-    return '+${digits.substring(1)}';
+    return CountryPhoneNumber.formatInternationalDisplay(phone);
   }
 
   Future<void> _launchLink(String url) async {

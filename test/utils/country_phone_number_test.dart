@@ -25,6 +25,20 @@ void main() {
       );
     });
 
+    test('accepts a valid NANP region when Canada and US share +1', () {
+      expect(
+        CountryPhoneNumber.international('(412) 448-9326', 'CA'),
+        '+14124489326',
+      );
+    });
+
+    test('formats a stored international number for profile display', () {
+      expect(
+        CountryPhoneNumber.formatInternationalDisplay('13107353765'),
+        '+1 (310) 735-3765',
+      );
+    });
+
     test('rejects incomplete and impossible numbers', () {
       expect(CountryPhoneNumber.international('123', 'US'), isNull);
       expect(CountryPhoneNumber.international('', 'US'), isNull);
