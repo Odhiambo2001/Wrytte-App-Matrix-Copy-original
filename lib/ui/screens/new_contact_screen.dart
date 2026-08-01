@@ -504,19 +504,25 @@ class _NewContactPageState extends State<NewContactPage> {
         }),
       );
 
-      // ── 2. Build a fallback local conversation ID ────────────────
-      final ids = [
-        _conversationKey(selfId),
-        _conversationKey(receiverId.isNotEmpty ? receiverId : _fullIdentifier),
-      ]..sort();
-      final localConversationId = 'si_${ids[0]}_${ids[1]}';
-
-      // Keep this chat local until the user actually sends a message.
-      // ChatScreen creates or reuses the Matrix room in its send path.
-      final conversationId = localConversationId;
+      // ── 2. Create or reuse this contact's verified Matrix DM room. ────────
+      // Never carry a group room ID into the personal chat: the room is
+      // resolved exclusively from the saved contact's Matrix user ID.
+      if (receiverId.isEmpty) {
+        throw StateError(
+          'A Matrix user ID is required to create this direct chat.',
+        );
+      }
+      final conversationId = await ChatService().getMatrixConversationId(
+        receiverId,
+      );
+      if (conversationId == null || !conversationId.startsWith('!')) {
+        throw StateError(
+          'Could not create a private chat with this contact. Try again.',
+        );
+      }
       apkLog(
         'NewContact.save',
-        'navigating with lazy conversation_id="$conversationId" receiver="$receiverId"',
+        'direct room ready conversation_id="$conversationId" receiver="$receiverId"',
       );
 
       if (!mounted) return;
@@ -682,11 +688,6 @@ class _NewContactPageState extends State<NewContactPage> {
       return trimmed.substring(1, trimmed.indexOf(':'));
     }
     return trimmed;
-  }
-
-  String _conversationKey(String value) {
-    final localpart = _matrixLocalpart(value) ?? value.trim();
-    return localpart.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
   }
 
   String _displayName(String firstName, String lastName, String fallback) {

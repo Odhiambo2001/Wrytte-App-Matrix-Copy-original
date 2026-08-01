@@ -2486,7 +2486,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           channelOnly ? _channelSubscriberCount(conv) : null,
       onLongPress: () async {
         if (isDeleted) {
-          await _removeDeletedGroupShell(conv, name);
+          await _removeDeletedRoomShell(
+            conv,
+            name,
+            isChannel: channelOnly || _isChannelConversation(conv),
+          );
           return;
         }
         showGeneralDialog(
@@ -2625,21 +2629,23 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     return conversation.participants.length;
   }
 
-  Future<void> _removeDeletedGroupShell(
+  Future<void> _removeDeletedRoomShell(
     ChatConversation conversation,
-    String groupName,
-  ) async {
+    String roomName, {
+    required bool isChannel,
+  }) async {
+    final roomKind = isChannel ? 'Channel' : 'Group';
     final confirmed = await showDialog<bool>(
       context: context,
       builder:
           (dialogContext) => AlertDialog(
             backgroundColor: const Color(0xFF23262C),
-            title: const Text(
-              'Delete Group',
-              style: TextStyle(color: Colors.white),
+            title: Text(
+              'Delete $roomKind',
+              style: const TextStyle(color: Colors.white),
             ),
             content: Text(
-              'Delete $groupName completely from this device?',
+              'Delete $roomName completely from this device?',
               style: const TextStyle(color: Colors.white70),
             ),
             actions: [
@@ -2680,8 +2686,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     );
     await MatrixChatService.instance.leaveGroup(conversation.id);
     apkLog(
-      'Groups.deleteShell',
-      'permanently removed room_id="${conversation.id}" alias="$alias"',
+      isChannel ? 'Channels.deleteShell' : 'Groups.deleteShell',
+      'permanently removed room_kind="${roomKind.toLowerCase()}" '
+      'room_id="${conversation.id}" alias="$alias"',
     );
     if (!mounted) return;
     await _loadLocalConversations();

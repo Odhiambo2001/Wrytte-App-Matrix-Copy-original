@@ -147,6 +147,8 @@ class MatrixChatService {
   bool get initialSyncComplete => _initialSyncComplete;
   Future<void>? _syncAndJoinFuture;
   final Map<String, Future<Room>> _directRoomFutures = {};
+  final Set<String> _knownPublicRoomIds = {};
+  final Set<String> _rejectedDirectRoomIds = {};
   final Set<String> _dismissedPublicGroupKeys = {};
   static const String _deletedGroupsAccountDataType =
       'com.wrytte.deleted_groups';
@@ -199,6 +201,7 @@ class MatrixChatService {
     _initialSyncComplete = false;
     _syncAndJoinFuture = null;
     _directRoomFutures.clear();
+    _rejectedDirectRoomIds.clear();
   }
 
   // ── Created-group registry ─────────────────────────────────────────────────
@@ -242,14 +245,74 @@ class MatrixChatService {
       return false;
     }
     if (room.directChatMatrixID != peer) return false;
-    if (isCreatedGroupRoom(room.id) ||
+    return !_isAuthoritativeNonDirectRoom(room);
+  }
+
+  bool _isAuthoritativeNonDirectRoom(Room room) {
+    return _rejectedDirectRoomIds.contains(room.id) ||
+        _knownPublicRoomIds.contains(room.id) ||
+        isCreatedGroupRoom(room.id) ||
+        isChannelRoom(room) ||
         room.joinRules == JoinRules.public ||
         room.canonicalAlias.trim().isNotEmpty ||
         room.getState('com.wrytte.group.info') != null ||
-        groupMemberCount(room) > 2) {
-      return false;
+        groupMemberCount(room) > 2;
+  }
+
+  Future<void> _refreshDirectRoomSafetyDirectory() async {
+    final publicRooms = await fetchPublicGroups();
+    _knownPublicRoomIds.addAll(
+      publicRooms
+          .map((room) => room.roomId.trim())
+          .where((roomId) => roomId.isNotEmpty),
+    );
+  }
+
+  Future<void> _repairInvalidDirectMappings(
+    Client client,
+    String matrixUserId,
+  ) async {
+    final repairedDirectChats = <String, List<String>>{
+      for (final entry in client.directChats.entries)
+        entry.key: List<String>.from(entry.value),
+    };
+    final mappedRoomIds = List<String>.from(
+      repairedDirectChats[matrixUserId] ?? const <String>[],
+    );
+    final invalidRoomIds = <String>{};
+    for (final roomId in mappedRoomIds) {
+      final room = getRoomById(roomId);
+      if (room == null || !_isAuthoritativeNonDirectRoom(room)) continue;
+      _rejectedDirectRoomIds.add(room.id);
+      invalidRoomIds.add(room.id);
     }
-    return true;
+    if (invalidRoomIds.isEmpty) return;
+
+    for (final roomIds in repairedDirectChats.values) {
+      roomIds.removeWhere(invalidRoomIds.contains);
+    }
+    repairedDirectChats.removeWhere((_, roomIds) => roomIds.isEmpty);
+    try {
+      await client.setAccountData(
+        client.userID!,
+        'm.direct',
+        repairedDirectChats,
+      );
+      for (final roomId in invalidRoomIds) {
+        final room = getRoomById(roomId);
+        apkLog(
+          'Matrix.direct',
+          'removed invalid m.direct mapping room_id="$roomId" '
+              'peer="$matrixUserId" room_kind="${room != null && isChannelRoom(room) ? 'channel' : 'group'}"',
+        );
+      }
+    } catch (error) {
+      apkLog(
+        'Matrix.direct',
+        'invalid m.direct cleanup failed room_ids="${invalidRoomIds.join(',')}" '
+            'peer="$matrixUserId" error="$error"',
+      );
+    }
   }
 
   Future<List<Room>> discoverAndRepairDirectRooms() async {
@@ -747,6 +810,7 @@ class MatrixChatService {
         cached != null &&
         cachedAt != null &&
         now.difference(cachedAt) < _publicGroupsCacheTtl) {
+      _knownPublicRoomIds.addAll(cached.map((group) => group.roomId.trim()));
       return cached;
     }
 
@@ -755,6 +819,17 @@ class MatrixChatService {
           limit == null
               ? await client.queryPublicRooms()
               : await client.queryPublicRooms(limit: limit);
+      // Keep the unfiltered directory IDs for DM safety. A room dismissed from
+      // discovery remains a public room and must never become a DM candidate.
+      if (limit == null) {
+        _knownPublicRoomIds
+          ..clear()
+          ..addAll(
+            response.chunk
+                .map((room) => room.roomId.trim())
+                .where((roomId) => roomId.isNotEmpty),
+          );
+      }
       final groups =
           response.chunk
               .map(
@@ -1460,6 +1535,8 @@ class MatrixChatService {
     }
 
     await ensureSyncedAndAutoJoinInvites();
+    await _refreshDirectRoomSafetyDirectory();
+    await _repairInvalidDirectMappings(client, matrixUserId);
 
     var room = _directRoomFor(matrixUserId, includeInvite: true);
     final inviteRoom = room;

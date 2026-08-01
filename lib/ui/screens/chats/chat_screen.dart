@@ -881,6 +881,14 @@ class _ChatScreenState extends State<ChatScreen> {
   bool get _suppliedRoomMatchesScreenKind {
     if (!widget.conversationId.startsWith('!')) return true;
     if (widget.conversationKind != ConversationKind.direct) return true;
+    final room = MatrixChatService.instance.getRoomById(widget.conversationId);
+    if (room != null) {
+      return _chat.isVerifiedDirectConversation(
+        widget.conversationId,
+        widget.receiverId,
+      );
+    }
+    if (_cachedConversationIsGroup(widget.conversationId)) return false;
     // The screen kind comes from the account-scoped persisted conversation
     // row. A Matrix client may remain "logged in" while the device is offline,
     // even though no live room state is available to verify the DM again.
