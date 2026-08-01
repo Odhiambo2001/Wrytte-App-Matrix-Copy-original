@@ -1,5 +1,8 @@
 import 'package:flutter/services.dart';
+import 'package:phone_numbers_parser/metadata.dart';
 import 'package:phone_numbers_parser/phone_numbers_parser.dart';
+
+enum PhoneNumberLengthStatus { valid, tooShort, tooLong, invalidLength }
 
 /// Country-aware parsing and formatting backed by `phone_numbers_parser`.
 class CountryPhoneNumber {
@@ -48,6 +51,51 @@ class CountryPhoneNumber {
     } on FormatException {
       return null;
     }
+  }
+
+  /// Compares the parsed national number with every length supported by the
+  /// selected region. E.164 additionally limits the complete number to 15
+  /// digits, including its country calling code.
+  static PhoneNumberLengthStatus lengthStatus(
+    String input,
+    String countryAlpha2,
+  ) {
+    final number = tryParse(input, countryAlpha2);
+    if (number == null) return PhoneNumberLengthStatus.invalidLength;
+    if (number.countryCode.length + number.nsn.length > 15) {
+      return PhoneNumberLengthStatus.tooLong;
+    }
+
+    final metadata = metadataLenghtsByIsoCode[number.isoCode];
+    if (metadata == null) return PhoneNumberLengthStatus.invalidLength;
+    final possibleLengths = <int>{
+      ...metadata.mobile,
+      ...metadata.fixedLine,
+      ...metadata.voip,
+      ...metadata.tollFree,
+      ...metadata.premiumRate,
+      ...metadata.sharedCost,
+      ...metadata.personalNumber,
+      ...metadata.uan,
+      ...metadata.pager,
+      ...metadata.voiceMail,
+    }..removeWhere((length) => length <= 0);
+    if (possibleLengths.isEmpty) {
+      return number.isValidLength()
+          ? PhoneNumberLengthStatus.valid
+          : PhoneNumberLengthStatus.invalidLength;
+    }
+
+    final length = number.nsn.length;
+    if (length < possibleLengths.reduce((a, b) => a < b ? a : b)) {
+      return PhoneNumberLengthStatus.tooShort;
+    }
+    if (length > possibleLengths.reduce((a, b) => a > b ? a : b)) {
+      return PhoneNumberLengthStatus.tooLong;
+    }
+    return possibleLengths.contains(length)
+        ? PhoneNumberLengthStatus.valid
+        : PhoneNumberLengthStatus.invalidLength;
   }
 
   static String formatNational(String input, String countryAlpha2) {

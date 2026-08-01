@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/api_service.dart';
@@ -34,8 +32,6 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   Future<void>? _sendCodeFuture;
   bool _showDivider = false;
   bool _isAutoFilling = false;
-  Timer? _validationTimer;
-  String? _phoneError;
 
   /// Valid, normalized international number (for example +254712345678).
   String? get _fullPhone =>
@@ -48,6 +44,8 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
 
   /// Validation
   bool get _isValid => _fullPhone != null;
+  bool get _canAttemptVerification =>
+      _selectedCountry != null && _numberCtrl.text.trim().isNotEmpty;
 
   /// Pick country
   Future<void> _pickCountry() async {
@@ -61,34 +59,11 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
         _codeCtrl.text = '+${result.dialCode}'; // Keep the plus sign
         _showDivider = true;
         _numberCtrl.clear();
-        _phoneError = null;
       });
 
       // Move focus to number field after country selection
       _numberFocusNode.requestFocus();
     }
-  }
-
-  void _onPhoneChanged(String value) {
-    _validationTimer?.cancel();
-
-    if (value.trim().isEmpty) {
-      setState(() => _phoneError = null);
-      return;
-    }
-
-    // Avoid showing an error while the user is still entering the number.
-    setState(() => _phoneError = null);
-    _validationTimer = Timer(const Duration(milliseconds: 700), () {
-      if (!mounted) return;
-
-      setState(() {
-        _phoneError =
-            _isValid
-                ? null
-                : 'Enter a valid phone number for ${_selectedCountry!.name}.';
-      });
-    });
   }
 
   /// Detect country from typed code (Telegram behavior)
@@ -148,7 +123,11 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
 
   /// Start verification
   Future<void> _startVerification() async {
-    if (!_isValid || _isSending || _sendCodeFuture != null) return;
+    if (_isSending || _sendCodeFuture != null) return;
+    if (!_isValid) {
+      await _showInvalidPhoneDialog();
+      return;
+    }
 
     setState(() => _isSending = true);
 
@@ -160,6 +139,46 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       _sendCodeFuture = null;
       if (mounted) setState(() => _isSending = false);
     }
+  }
+
+  Future<void> _showInvalidPhoneDialog() async {
+    final country = _selectedCountry;
+    if (country == null) return;
+
+    final lengthStatus = CountryPhoneNumber.lengthStatus(
+      _numberCtrl.text,
+      country.isoCode,
+    );
+    final message = switch (lengthStatus) {
+      PhoneNumberLengthStatus.tooShort =>
+        'The phone number you entered has an invalid length for ${country.name}.',
+      PhoneNumberLengthStatus.tooLong =>
+        'The phone number you entered is too long for ${country.name}.',
+      PhoneNumberLengthStatus.invalidLength =>
+        'The phone number you entered has an invalid length for ${country.name}.',
+      PhoneNumberLengthStatus.valid =>
+        'The phone number you entered is not valid for ${country.name}.',
+    };
+
+    await showDialog<void>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: const Color(0xFF23262C),
+            content: Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+            ),
+            actionsAlignment: MainAxisAlignment.center,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+    );
   }
 
   Future<void> _sendVerificationCode() async {
@@ -229,7 +248,6 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
 
   @override
   void dispose() {
-    _validationTimer?.cancel();
     _codeCtrl.dispose();
     _numberCtrl.dispose();
     _codeFocusNode.dispose();
@@ -421,7 +439,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                                               vertical: 8,
                                             ), // <-- ADD THIS to control height
                                       ),
-                                      onChanged: _onPhoneChanged,
+                                      onChanged: (_) => setState(() {}),
                                       enabled:
                                           _showDivider, // Disable until code is entered
                                     ),
@@ -431,42 +449,6 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                             ),
                           ],
                         ),
-                      ),
-
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 180),
-                        child:
-                            _phoneError == null
-                                ? const SizedBox.shrink()
-                                : Padding(
-                                  key: ValueKey(_phoneError),
-                                  padding: const EdgeInsets.only(
-                                    left: 16,
-                                    right: 16,
-                                    top: 8,
-                                  ),
-                                  child: Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      const Icon(
-                                        Icons.error_outline,
-                                        color: Color(0xFFFF6B6B),
-                                        size: 17,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          _phoneError!,
-                                          style: const TextStyle(
-                                            color: Color(0xFFFF6B6B),
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
                       ),
 
                       const SizedBox(height: 25),
@@ -513,17 +495,19 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                         width: double.infinity,
                         child: ElevatedButton(
                           onPressed:
-                              _isValid && !_isSending
+                              _canAttemptVerification && !_isSending
                                   ? _startVerification
                                   : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor:
-                                _isValid && !_isSending
+                                _canAttemptVerification && !_isSending
                                     ? const Color(0xFF4DA3FF)
                                     : const Color(0xFF23262C),
                             disabledBackgroundColor: const Color(0xFF23262C),
                             foregroundColor:
-                                _isValid ? Colors.white : Colors.grey,
+                                _canAttemptVerification
+                                    ? Colors.white
+                                    : Colors.grey,
                             disabledForegroundColor: Colors.grey,
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(

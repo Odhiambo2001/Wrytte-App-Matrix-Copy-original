@@ -51,5 +51,20 @@ void main() {
         isNull,
       );
     });
+
+    test('distinguishes country-specific short and long numbers', () {
+      expect(
+        CountryPhoneNumber.lengthStatus('7775856', 'US'),
+        PhoneNumberLengthStatus.tooShort,
+      );
+      expect(
+        CountryPhoneNumber.lengthStatus('777585696988885', 'US'),
+        PhoneNumberLengthStatus.tooLong,
+      );
+      expect(
+        CountryPhoneNumber.lengthStatus('3107353765', 'US'),
+        PhoneNumberLengthStatus.valid,
+      );
+    });
   });
 }
