@@ -14,6 +14,7 @@ import 'package:wrytte/services/contacts/user_search_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/Country%20id%20picker%20page.dart';
+import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/utils/countries_id.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
@@ -27,6 +28,7 @@ const _kCard = Color(0xFF23262C);
 const _kBlue = Color(0xFF4DA3FF);
 const _kDivider = Colors.white12;
 const _kMinPhoneLookupDigits = 8;
+const _kMaxPhoneLookupDigits = 13;
 const _kPhoneLookupDebounce = Duration(milliseconds: 500);
 
 // ─────────────────────────────────────────────────────────────────
@@ -77,8 +79,10 @@ class _NewContactPageState extends State<NewContactPage> {
   // ── Lookup ────────────────────────────────────────────────────
   final UserSearchService _searchService = UserSearchService();
   final ContactService _contactService = ContactService();
+  Future<List<Contact>>? _existingContactsFuture;
   Timer? _debounce;
   _LookupState _lookupState = _LookupState.idle;
+  Contact? _duplicateContact;
 
   /// The wrytteUserId returned by the lookup — needed for addFriend.
   String? _resolvedUserId;
@@ -103,6 +107,7 @@ class _NewContactPageState extends State<NewContactPage> {
   }
 
   bool get _canSave =>
+      _lookupState != _LookupState.duplicate &&
       _firstNameCtrl.text.trim().isNotEmpty &&
       _numberCtrl.text.trim().isNotEmpty &&
       (_hasInvalidCountryCode ||
@@ -219,6 +224,7 @@ class _NewContactPageState extends State<NewContactPage> {
         _codeCtrl.text = '+${result.dialCode}';
         _showDivider = true;
         _lookupState = _LookupState.idle;
+        _duplicateContact = null;
         _resolvedUserId = null;
         _isRegisteredOnWrytte = false;
         _lookupError = null;
@@ -266,6 +272,7 @@ class _NewContactPageState extends State<NewContactPage> {
           detectedCountry == null && codeWithoutPlus.isNotEmpty;
       _showDivider = codeWithoutPlus.isNotEmpty;
       _lookupState = _LookupState.idle;
+      _duplicateContact = null;
       _resolvedUserId = null;
       _isRegisteredOnWrytte = false;
       _lookupError = null;
@@ -302,6 +309,7 @@ class _NewContactPageState extends State<NewContactPage> {
   void _onNumberChanged() {
     setState(() {
       _lookupState = _LookupState.idle;
+      _duplicateContact = null;
       _resolvedUserId = null;
       _isRegisteredOnWrytte = false;
       _lookupError = null;
@@ -313,7 +321,8 @@ class _NewContactPageState extends State<NewContactPage> {
     if (_selectedCountry == null) return;
     if (_isWrytteIdMode) {
       if (_numberCtrl.text.trim().length < 4) return;
-    } else if (digits.length < _kMinPhoneLookupDigits) {
+    } else if (digits.length < _kMinPhoneLookupDigits ||
+        digits.length > _kMaxPhoneLookupDigits) {
       return;
     }
 
@@ -321,13 +330,33 @@ class _NewContactPageState extends State<NewContactPage> {
   }
 
   Future<void> _lookupUser() async {
-    final freshToken =
-        await AuthService.instance.getMatrixAccessToken() ?? widget.token;
     debugPrint('🔍 _lookupUser called, identifier: $_fullIdentifier');
     final identifier = _fullIdentifier;
     if (identifier.isEmpty) return;
+    if (!_isWrytteIdMode &&
+        (_phoneDigits.length < _kMinPhoneLookupDigits ||
+            _phoneDigits.length > _kMaxPhoneLookupDigits)) {
+      return;
+    }
 
     try {
+      if (!_isWrytteIdMode) {
+        final existingContact = await _findExistingContact(identifier);
+        if (!mounted || _fullIdentifier != identifier) return;
+        if (existingContact != null) {
+          setState(() {
+            _lookupState = _LookupState.duplicate;
+            _duplicateContact = existingContact;
+            _resolvedUserId = existingContact.wrytteUserId;
+            _isRegisteredOnWrytte = existingContact.isOnWrytte;
+            _lookupError = null;
+          });
+          return;
+        }
+      }
+
+      final freshToken =
+          await AuthService.instance.getMatrixAccessToken() ?? widget.token;
       final tokenPreviewLength =
           freshToken.length < 20 ? freshToken.length : 20;
       debugPrint(
@@ -389,6 +418,112 @@ class _NewContactPageState extends State<NewContactPage> {
         _lookupError = _friendlyLookupError(e.toString());
       });
     }
+  }
+
+  Future<Contact?> _findExistingContact(String identifier) async {
+    _existingContactsFuture ??= _loadExistingContacts();
+    final contacts = await _existingContactsFuture!;
+    final selectedIsoCode = _selectedCountry?.isoCode;
+    if (selectedIsoCode == null) return null;
+
+    for (final contact in contacts) {
+      for (final phone in contact.phones) {
+        if (_phonesMatch(phone, identifier, selectedIsoCode)) {
+          debugPrint(
+            '[NewContact.lookup] local contact match '
+            'name="${contact.formattedName}" phone="$phone"',
+          );
+          return contact;
+        }
+      }
+    }
+    debugPrint(
+      '[NewContact.lookup] no local match for "$identifier" '
+      'across ${contacts.length} contacts',
+    );
+    return null;
+  }
+
+  bool _phonesMatch(String storedPhone, String identifier, String isoCode) {
+    final candidate = storedPhone.trim();
+    final targetDigits = _digitsOnly(identifier);
+    final candidateDigits = _digitsOnly(candidate);
+    if (candidateDigits.isEmpty || targetDigits.isEmpty) return false;
+
+    // Stored Wrytte contacts are canonical E.164 numbers. Comparing their
+    // digits first avoids rejecting an exact match because of punctuation.
+    if (candidateDigits == targetDigits) return true;
+
+    final international = CountryPhoneNumber.international(candidate, isoCode);
+    if (international != null && _digitsOnly(international) == targetDigits) {
+      return true;
+    }
+
+    // The device-contact service preserves local entries with a synthetic
+    // leading '+'. Reparse their digits as a national number for the selected
+    // country (for example +3107353765 entered locally in a US contact).
+    final national = CountryPhoneNumber.international(candidateDigits, isoCode);
+    return national != null && _digitsOnly(national) == targetDigits;
+  }
+
+  Future<List<Contact>> _loadExistingContacts() async {
+    final contacts = <Contact>[];
+    final owner = await AuthService.instance.getCurrentUserId() ?? '';
+
+    // Read the local saved-contact database directly. The merged cache can be
+    // briefly stale immediately after a contact is created.
+    if (owner.isNotEmpty) {
+      try {
+        contacts.addAll(
+          await ContactLocalDb.loadSavedContacts(ownerUserId: owner),
+        );
+      } catch (e) {
+        debugPrint('[NewContact.lookup] local saved contacts unavailable: $e');
+      }
+
+      // Profile 2 identities are also a local saved-contact source. Backend
+      // contact rows may contain only a user ID while the hydrated phone is
+      // stored here and used by chat/profile surfaces.
+      try {
+        final identities = await ContactIdentityCache.instance.loadAll(
+          ownerUserId: owner,
+        );
+        contacts.addAll(
+          identities.values
+              .where(
+                (identity) =>
+                    identity.savedName?.trim().isNotEmpty == true &&
+                    identity.phone?.trim().isNotEmpty == true,
+              )
+              .map(
+                (identity) => Contact(
+                  displayName: identity.savedName,
+                  phones: [identity.phone!.trim()],
+                  isOnWrytte: true,
+                  wrytteUserId: identity.matrixUserId,
+                  isSaved: true,
+                ),
+              ),
+        );
+      } catch (e) {
+        debugPrint('[NewContact.lookup] saved identities unavailable: $e');
+      }
+    }
+
+    try {
+      contacts.addAll(await _contactService.getDeviceContacts());
+    } catch (e) {
+      debugPrint('[NewContact.lookup] device contacts unavailable: $e');
+    }
+
+    if (owner.isNotEmpty) {
+      try {
+        contacts.addAll(await _contactService.getMatrixContactsCached(owner));
+      } catch (e) {
+        debugPrint('[NewContact.lookup] saved contacts unavailable: $e');
+      }
+    }
+    return contacts;
   }
 
   Future<void> _prefillNameFromProfile(
@@ -643,6 +778,9 @@ class _NewContactPageState extends State<NewContactPage> {
     if (!_isWrytteIdMode && _phoneDigits.length < _kMinPhoneLookupDigits) {
       return null;
     }
+    if (!_isWrytteIdMode && _phoneDigits.length > _kMaxPhoneLookupDigits) {
+      return null;
+    }
     if (_isWrytteIdMode && _numberCtrl.text.trim().length < 4) return null;
 
     final freshToken =
@@ -808,6 +946,37 @@ class _NewContactPageState extends State<NewContactPage> {
   String _digitsOnly(String identifier) =>
       identifier.replaceAll(RegExp(r'[^\d]'), '');
 
+  Future<void> _openDuplicateContact() async {
+    final contact = _duplicateContact;
+    final userId = contact?.wrytteUserId?.trim() ?? '';
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    // A Wrytte contact has a profile page. Replace the unfinished New Contact
+    // page so Back returns naturally to the New Chat contact list.
+    if (contact != null && userId.isNotEmpty) {
+      final conversationId = await ChatService().findMatrixConversationId(
+        userId,
+      );
+      if (!mounted) return;
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder:
+              (_) => ProfileScreen(
+                uid: userId,
+                conversationId: conversationId,
+                savedNameHint: contact.formattedName,
+                initialAvatarUrl: contact.avatarUrl,
+              ),
+        ),
+      );
+      return;
+    }
+
+    // Device-only contacts do not have a Wrytte profile to open. Return to the
+    // saved contact list where the matching entry is available.
+    if (mounted) Navigator.of(context).pop();
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Status line below the number card
   // ─────────────────────────────────────────────────────────────
@@ -838,10 +1007,7 @@ class _NewContactPageState extends State<NewContactPage> {
             ),
             if (checkmark) ...[
               const SizedBox(width: 4),
-              const Text(
-                '✓',
-                style: TextStyle(color: Colors.green, fontSize: 13),
-              ),
+              const Text('✓', style: TextStyle(color: _kBlue, fontSize: 13)),
             ],
             if (trailing != null) trailing,
           ],
@@ -864,28 +1030,25 @@ class _NewContactPageState extends State<NewContactPage> {
       case _LookupState.duplicate:
         return Padding(
           padding: const EdgeInsets.only(top: 6),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Wrap(
+            spacing: 4,
+            runSpacing: 2,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              statusRow(
+              Text(
                 isWrytteId
-                    ? 'Wrytte number is already in your contacts.'
-                    : 'Phone number is already in your contacts.',
-                trailing: TextButton(
-                  onPressed: () {
-                    // TODO: navigate to existing contact
-                  },
-                  style: TextButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: const Text(
-                    ' View contact',
-                    style: TextStyle(color: _kBlue, fontSize: 13),
-                  ),
+                    ? 'This Wrytte number is already in your contacts.'
+                    : 'This phone number is already in your contacts.',
+                style: const TextStyle(color: Colors.white54, fontSize: 13),
+              ),
+              GestureDetector(
+                onTap: _openDuplicateContact,
+                child: const Text(
+                  'View contact',
+                  style: TextStyle(color: _kBlue, fontSize: 13),
                 ),
               ),
+              const Text('✓', style: TextStyle(color: _kBlue, fontSize: 13)),
             ],
           ),
         );
