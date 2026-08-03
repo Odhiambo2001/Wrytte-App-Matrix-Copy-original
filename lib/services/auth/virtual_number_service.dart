@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:phone_numbers_parser/metadata.dart';
 import 'package:phone_numbers_parser/phone_numbers_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
@@ -23,6 +24,7 @@ class VirtualNumberService {
   static const _expiryKey = 'pending_wrytte_id_expiry';
   static const _verifiedKey = 'pending_wrytte_id_verified';
   static const _autoDeleteKey = 'pending_wrytte_id_auto_delete';
+  static const _wryttePrefix = '00';
 
   /// Get a locally generated Wrytte ID candidate. Server-side uniqueness is
   /// enforced by the registration API/Matrix account creation.
@@ -30,7 +32,8 @@ class VirtualNumberService {
     required String regionCode,
   }) async {
     final normalizedRegion = regionCode.trim().toUpperCase();
-    final prefix = callingCodeForRegion(regionCode);
+    final isoCode = _isoCodeForRegion(normalizedRegion);
+    final bodyLength = _mobileBodyLength(isoCode);
     final preferences = await SharedPreferences.getInstance();
     final now = DateTime.now();
     final savedNumber = preferences.getString(_numberKey) ?? '';
@@ -44,8 +47,8 @@ class VirtualNumberService {
 
     if (savedNumber.isNotEmpty &&
         savedRegion == normalizedRegion &&
-        savedNumber.startsWith(prefix) &&
-        savedNumber.length == prefix.length + 9 &&
+        savedNumber.startsWith(_wryttePrefix) &&
+        savedNumber.length == _wryttePrefix.length + bodyLength &&
         preferences.getBool(_verifiedKey) == true &&
         savedExpiry != null &&
         (!autoDelete || savedExpiry.isAfter(now))) {
@@ -53,12 +56,18 @@ class VirtualNumberService {
     }
 
     await clearPendingWrytteId();
-    const bodyLength = 9;
     String? availableNumber;
     for (var attempt = 0; attempt < 100; attempt++) {
-      final number =
-          '$prefix${_generateIdentifierBody(bodyLength, excludedNumber: savedNumber, prefix: prefix)}';
-      final suffix = number.substring(prefix.length);
+      final body = _generateIdentifierBody(
+        bodyLength,
+        excludedNumber: savedNumber,
+        prefix: _wryttePrefix,
+      );
+      final phoneNumber = PhoneNumber(isoCode: isoCode, nsn: body);
+      if (!phoneNumber.isValid(type: PhoneNumberType.mobile)) continue;
+
+      final number = '$_wryttePrefix$body';
+      final suffix = number.substring(_wryttePrefix.length);
       final exists = await _candidateExists('W$suffix');
       if (!exists) {
         availableNumber = number;
@@ -85,6 +94,16 @@ class VirtualNumberService {
     // unauthenticated signup endpoint is available. /api/Users/Search cannot
     // be called here because a signup user has no backend token yet.
     return false;
+  }
+
+  /// Invalidates the cached candidate and guarantees the next generated
+  /// candidate is different from it.
+  Future<WrytteIdCandidate> refreshAvailableVpn({
+    required String regionCode,
+  }) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setBool(_verifiedKey, false);
+    return getAvailableVpn(regionCode: regionCode);
   }
 
   Future<void> clearPendingWrytteId() async {
@@ -114,23 +133,36 @@ class VirtualNumberService {
   /// Uses phone_numbers_parser metadata to resolve an ISO alpha-2 region to
   /// its international calling prefix.
   String callingCodeForRegion(String regionCode) {
-    final isoCode = isoCodeConversionMap[regionCode.trim().toUpperCase()];
-    final resolvedIsoCode = isoCode ?? IsoCode.US;
+    final resolvedIsoCode = _isoCodeForRegion(regionCode);
     return PhoneNumber(isoCode: resolvedIsoCode, nsn: '').countryCode;
   }
 
-  /// Wrytte IDs use the regional prefix followed by space-only groups.
+  /// Wrytte IDs use +00 and the detected region's national grouping. Any
+  /// punctuation in that region's phone format is normalized to spaces.
   String formatWrytteId(String number, {required String regionCode}) {
     final digits = number.replaceAll(RegExp(r'[^\d]'), '');
-    final prefix = callingCodeForRegion(regionCode);
     final body =
-        digits.startsWith(prefix) ? digits.substring(prefix.length) : digits;
-    final groups = <String>[];
-    for (var index = 0; index < body.length; index += 3) {
-      final end = (index + 3).clamp(0, body.length);
-      groups.add(body.substring(index, end));
-    }
-    return '+$prefix${groups.isEmpty ? '' : ' ${groups.join(' ')}'}';
+        digits.startsWith(_wryttePrefix)
+            ? digits.substring(_wryttePrefix.length)
+            : digits;
+    if (body.isEmpty) return '+$_wryttePrefix';
+
+    final regionalFormat =
+        PhoneNumber(
+          isoCode: _isoCodeForRegion(regionCode),
+          nsn: body,
+        ).formatNsn();
+    final spacesOnly = regionalFormat.replaceAll(RegExp(r'[^\d]+'), ' ').trim();
+    return '+$_wryttePrefix $spacesOnly';
+  }
+
+  IsoCode _isoCodeForRegion(String regionCode) =>
+      isoCodeConversionMap[regionCode.trim().toUpperCase()] ?? IsoCode.US;
+
+  int _mobileBodyLength(IsoCode isoCode) {
+    final example = metadataExamplesByIsoCode[isoCode]?.mobile ?? '';
+    if (example.isNotEmpty) return example.length;
+    return 9;
   }
 
   /// 2️ Send/store email verification code through the Firebase auth service.

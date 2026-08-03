@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
@@ -20,8 +18,6 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
   bool _fetchFailed = false;
 
   String _virtualNumber = "";
-  DateTime? _expiresAt;
-  Timer? _expiryTimer;
 
   @override
   void initState() {
@@ -29,14 +25,8 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     _fetchVpn();
   }
 
-  @override
-  void dispose() {
-    _expiryTimer?.cancel();
-    super.dispose();
-  }
-
   ///  STEP 1: Fetch VPN from backend
-  Future<void> _fetchVpn() async {
+  Future<void> _fetchVpn({bool refresh = false}) async {
     setState(() {
       _vpnLoading = true;
       _fetchFailed = false;
@@ -44,19 +34,20 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     });
 
     try {
-      final candidate = await _service.getAvailableVpn(
-        regionCode: widget.regionCode,
-      );
+      final candidate =
+          refresh
+              ? await _service.refreshAvailableVpn(
+                regionCode: widget.regionCode,
+              )
+              : await _service.getAvailableVpn(regionCode: widget.regionCode);
 
       if (!mounted) return;
 
       setState(() {
         _virtualNumber = candidate.number;
-        _expiresAt = candidate.expiresAt;
         _fetchFailed = false;
         _vpnLoading = false;
       });
-      _startExpiryTimer();
     } catch (e) {
       if (!mounted) return;
 
@@ -77,22 +68,9 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     }
   }
 
-  void _startExpiryTimer() {
-    _expiryTimer?.cancel();
-    final expiry = _expiresAt;
-    if (expiry == null) return;
-    final remaining = expiry.difference(DateTime.now());
-    if (remaining <= Duration.zero) {
-      _expireAndRefresh();
-      return;
-    }
-    _expiryTimer = Timer(remaining, _expireAndRefresh);
-  }
-
-  Future<void> _expireAndRefresh() async {
-    final expiredNumber = _virtualNumber;
-    await _service.expireCandidate(expiredNumber);
-    if (mounted) await _fetchVpn();
+  Future<void> _refreshVpn() async {
+    if (_vpnLoading) return;
+    await _fetchVpn(refresh: true);
   }
 
   Future<void> _openKFace() async {
@@ -193,16 +171,30 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                                     ),
                                   ),
                                 )
-                                : Text(
-                                  _service.formatWrytteId(
-                                    _virtualNumber,
-                                    regionCode: widget.regionCode,
-                                  ),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 15,
-                                    letterSpacing: 1.1,
-                                  ),
+                                : Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        _service.formatWrytteId(
+                                          _virtualNumber,
+                                          regionCode: widget.regionCode,
+                                        ),
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 15,
+                                          letterSpacing: 1.1,
+                                        ),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Refresh Wrytte ID',
+                                      onPressed: _refreshVpn,
+                                      icon: const Icon(
+                                        Icons.refresh,
+                                        color: Color(0xFF4DA3FF),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                       ),
 

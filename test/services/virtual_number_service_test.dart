@@ -11,10 +11,17 @@ void main() {
     expect(service.callingCodeForRegion('US'), '1');
   });
 
-  test('formats a Wrytte ID with spaces only after the regional prefix', () {
-    final formatted = service.formatWrytteId('254123456789', regionCode: 'KE');
+  test('formats a Kenyan Wrytte ID as +00 using Kenyan grouping', () {
+    final formatted = service.formatWrytteId('00748630243', regionCode: 'KE');
 
-    expect(formatted, '+254 123 456 789');
+    expect(formatted, '+00 748 630243');
+    expect(formatted, isNot(contains(RegExp(r'[()\-]'))));
+  });
+
+  test('formats a US Wrytte ID as +00 using spaces only', () {
+    final formatted = service.formatWrytteId('002125550123', regionCode: 'US');
+
+    expect(formatted, '+00 212 555 0123');
     expect(formatted, isNot(contains(RegExp(r'[()\-]'))));
   });
 
@@ -24,10 +31,10 @@ void main() {
       SharedPreferences.setMockInitialValues({});
 
       final candidate = await service.getAvailableVpn(regionCode: 'KE');
-      final body = candidate.number.substring(3);
+      final body = candidate.number.substring(2);
 
-      expect(candidate.number, startsWith('254'));
-      expect(candidate.number.length, 12);
+      expect(candidate.number, startsWith('00'));
+      expect(candidate.number.length, 11);
       expect(body.length, 9);
       expect(body.split('').toSet().length, greaterThan(1));
       expect(
@@ -55,6 +62,16 @@ void main() {
     },
   );
 
+  test('refresh generates a different Wrytte ID', () async {
+    SharedPreferences.setMockInitialValues({});
+
+    final first = await service.getAvailableVpn(regionCode: 'KE');
+    final refreshed = await service.refreshAvailableVpn(regionCode: 'KE');
+
+    expect(refreshed.number, isNot(first.number));
+    expect(refreshed.number, startsWith('00'));
+  });
+
   test('sends W plus suffix only and retries a taken candidate', () async {
     SharedPreferences.setMockInitialValues({});
     final searched = <String>[];
@@ -72,7 +89,7 @@ void main() {
       searched.every((value) => RegExp(r'^W\d{9}$').hasMatch(value)),
       isTrue,
     );
-    expect(candidate.number, startsWith('254'));
-    expect(candidate.number.substring(3), searched.last.substring(1));
+    expect(candidate.number, startsWith('00'));
+    expect(candidate.number.substring(2), searched.last.substring(1));
   });
 }
