@@ -94,7 +94,17 @@ class WrytteApp extends StatelessWidget {
         '/phone_auth': (context) => const ThemeWrapper(child: PhoneAuthPage()),
 
         '/virtual_phone':
-            (context) => const ThemeWrapper(child: VirtualNumberPage()),
+            (context) => ThemeWrapper(
+              child: VirtualNumberPage(
+                regionCode:
+                    WidgetsBinding
+                        .instance
+                        .platformDispatcher
+                        .locale
+                        .countryCode ??
+                    'US',
+              ),
+            ),
 
         '/sign_in': (context) => const ThemeWrapper(child: SignInPage()),
 

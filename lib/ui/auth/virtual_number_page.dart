@@ -1,12 +1,11 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/email_verification_page.dart';
-import 'package:wrytte/ui/screens/terms_privacy_page.dart';
 
 class VirtualNumberPage extends StatefulWidget {
-  const VirtualNumberPage({super.key});
+  final String regionCode;
+
+  const VirtualNumberPage({super.key, required this.regionCode});
 
   @override
   State<VirtualNumberPage> createState() => _VirtualNumberPageState();
@@ -19,7 +18,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
   final VirtualNumberService _service = VirtualNumberService();
 
   bool _isLoading = false;
-  bool _emailValid = false;
+  final bool _emailValid = false;
   bool _vpnLoading = true;
 
   String _virtualNumber = "";
@@ -45,7 +44,9 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     });
 
     try {
-      final phone = await _service.getAvailableVpn();
+      final phone = await _service.getAvailableVpn(
+        regionCode: widget.regionCode,
+      );
 
       if (!mounted) return;
 
@@ -70,15 +71,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     }
   }
 
-  ///  STEP 2: Validate email input
-  void _validateEmail(String? value) {
-    final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
-    setState(() {
-      _emailValid = value != null && emailRegex.hasMatch(value.trim());
-    });
-  }
-
-  ///  STEP 3: Send email verification code
+  /// Send email verification code.
   Future<void> _submit() async {
     if (!_emailValid || _isLoading || _virtualNumber.isEmpty) return;
 
@@ -111,21 +104,6 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  String _formatVirtualNumber(String number) {
-    if (number.length <= 2) return number;
-
-    String first = number.substring(0, 2);
-    String second =
-        number.length > 5 ? number.substring(2, 5) : number.substring(2);
-    String third =
-        number.length > 8
-            ? number.substring(5, 8)
-            : (number.length > 5 ? number.substring(5) : "");
-    String fourth = number.length > 8 ? number.substring(8) : "";
-
-    return [first, second, third, fourth].where((e) => e.isNotEmpty).join(" ");
   }
 
   @override
@@ -166,55 +144,12 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                       /// TITLE
                       const Center(
                         child: Text(
-                          "Wrytte ID number",
+                          "Wrytte ID",
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 20,
                             fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 8),
-
-                      const Center(
-                        child: Text(
-                          "Please enter your Email.",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white60,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            height: 1.1,
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 0),
-                      Center(
-                        child: GestureDetector(
-                          onTap: _vpnLoading ? null : _fetchVpn,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              Text(
-                                "Choose another ",
-                                style: TextStyle(
-                                  color: Colors.white60,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              Text(
-                                "Wrytte ID number",
-                                style: TextStyle(
-                                  color: Color(0xFF4DA3FF),
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ],
                           ),
                         ),
                       ),
@@ -232,21 +167,14 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                           horizontal: 16,
                           vertical: 10, // <-- REDUCED from 14 to 10
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ///  VIRTUAL NUMBER (FROM BACKEND)
+                        child:
                             _vpnLoading
                                 ? const Center(
                                   child: Padding(
-                                    padding: EdgeInsets.symmetric(
-                                      vertical: 4,
-                                    ), // <-- REDUCED from 8 to 4
+                                    padding: EdgeInsets.symmetric(vertical: 4),
                                     child: SizedBox(
-                                      height:
-                                          14, // <-- OPTIONAL: reduced from 16 to 14
-                                      width:
-                                          14, // <-- OPTIONAL: reduced from 16 to 14
+                                      height: 14,
+                                      width: 14,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
                                         color: Colors.white,
@@ -255,84 +183,16 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                                   ),
                                 )
                                 : Text(
-                                  "+${_formatVirtualNumber(_virtualNumber)}",
+                                  _service.formatWrytteId(
+                                    _virtualNumber,
+                                    regionCode: widget.regionCode,
+                                  ),
                                   style: const TextStyle(
                                     color: Colors.white,
-                                    fontSize:
-                                        15, // <-- OPTIONAL: reduced from 16 to 15
+                                    fontSize: 15,
                                     letterSpacing: 1.1,
                                   ),
                                 ),
-
-                            const SizedBox(
-                              height: 8,
-                            ), // <-- REDUCED from 12 to 8
-                            const Divider(color: Colors.white24),
-
-                            ///  EMAIL INPUT
-                            TextField(
-                              controller: _emailCtrl,
-                              focusNode: _focusNode,
-                              keyboardType: TextInputType.emailAddress,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize:
-                                    15, // <-- OPTIONAL: reduced from default to 15
-                              ),
-                              inputFormatters: [
-                                FilteringTextInputFormatter.deny(RegExp(r'\s')),
-                              ],
-                              decoration: const InputDecoration(
-                                hintText: "Enter your email",
-                                hintStyle: TextStyle(
-                                  color: Colors.white54,
-                                  fontSize:
-                                      15, // <-- OPTIONAL: reduced from default to 15
-                                ),
-                                border: InputBorder.none,
-                                isDense: true, // <-- ADD THIS for compact input
-                              ),
-                              onChanged: _validateEmail,
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 24),
-
-                      /// Terms Text
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 15),
-                        child: RichText(
-                          textAlign: TextAlign.center,
-                          text: TextSpan(
-                            style: const TextStyle(color: Colors.white),
-                            children: [
-                              const TextSpan(
-                                text:
-                                    "By entering your email and tapping “Next,” you agree to ",
-                              ),
-                              TextSpan(
-                                text:
-                                    "Wrytte’s Terms and Conditions and Privacy Policy",
-                                style: const TextStyle(
-                                  color: Color(0xFF4DA3FF),
-                                ),
-                                recognizer:
-                                    TapGestureRecognizer()
-                                      ..onTap = () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder:
-                                                (_) => const TermsPrivacyPage(),
-                                          ),
-                                        );
-                                      },
-                              ),
-                            ],
-                          ),
-                        ),
                       ),
 
                       const Spacer(),
@@ -376,7 +236,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                         ),
                       ),
 
-                      const SizedBox(height: 50),
+                      const SizedBox(height: 110),
                     ],
                   ),
                 ),

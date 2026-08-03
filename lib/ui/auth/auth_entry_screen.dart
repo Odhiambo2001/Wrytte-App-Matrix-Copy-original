@@ -3,8 +3,26 @@ import 'package:wrytte/ui/auth/phone_auth_page.dart';
 import 'package:wrytte/ui/auth/sign_in_page.dart';
 import 'package:wrytte/ui/auth/virtual_number_page.dart';
 
-class AuthEntryScreen extends StatelessWidget {
+class AuthEntryScreen extends StatefulWidget {
   const AuthEntryScreen({super.key});
+
+  @override
+  State<AuthEntryScreen> createState() => _AuthEntryScreenState();
+}
+
+class _AuthEntryScreenState extends State<AuthEntryScreen> {
+  late final String _signupRegionCode;
+
+  @override
+  void initState() {
+    super.initState();
+    // Capture the region once when the signup area is created. Both signup
+    // choices then use the same value for this visit.
+    _signupRegionCode =
+        WidgetsBinding.instance.platformDispatcher.locale.countryCode
+            ?.toUpperCase() ??
+        'US';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -15,7 +33,8 @@ class AuthEntryScreen extends StatelessWidget {
           physics: const BouncingScrollPhysics(),
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              minHeight: MediaQuery.of(context).size.height -
+              minHeight:
+                  MediaQuery.of(context).size.height -
                   MediaQuery.of(context).padding.top -
                   MediaQuery.of(context).padding.bottom,
             ),
@@ -49,12 +68,15 @@ class AuthEntryScreen extends StatelessWidget {
 
                       _buildButton(
                         context: context,
-                        text: "Wrytte ID number",
+                        text: "Wrytte ID",
                         onTap: () {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) => const VirtualNumberPage(),
+                              builder:
+                                  (_) => VirtualNumberPage(
+                                    regionCode: _signupRegionCode,
+                                  ),
                             ),
                           );
                         },
