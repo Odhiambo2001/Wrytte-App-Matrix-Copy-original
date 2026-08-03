@@ -3,7 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
 
 void main() {
-  final service = VirtualNumberService();
+  final service = VirtualNumberService(candidateExists: (_) async => false);
 
   test('uses phone metadata to resolve regional Wrytte ID prefixes', () {
     expect(service.callingCodeForRegion('KE'), '254');
@@ -54,4 +54,25 @@ void main() {
       );
     },
   );
+
+  test('sends W plus suffix only and retries a taken candidate', () async {
+    SharedPreferences.setMockInitialValues({});
+    final searched = <String>[];
+    final checkingService = VirtualNumberService(
+      candidateExists: (value) async {
+        searched.add(value);
+        return searched.length == 1;
+      },
+    );
+
+    final candidate = await checkingService.getAvailableVpn(regionCode: 'KE');
+
+    expect(searched, hasLength(2));
+    expect(
+      searched.every((value) => RegExp(r'^W\d{9}$').hasMatch(value)),
+      isTrue,
+    );
+    expect(candidate.number, startsWith('254'));
+    expect(candidate.number.substring(3), searched.last.substring(1));
+  });
 }

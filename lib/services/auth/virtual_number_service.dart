@@ -12,12 +12,17 @@ class WrytteIdCandidate {
 }
 
 class VirtualNumberService {
-  VirtualNumberService();
+  VirtualNumberService({Future<bool> Function(String)? candidateExists})
+    : _candidateExistsOverride = candidateExists;
+
+  final Future<bool> Function(String)? _candidateExistsOverride;
 
   static const candidateLifetime = Duration(minutes: 15);
   static const _numberKey = 'pending_wrytte_id_number';
   static const _regionKey = 'pending_wrytte_id_region';
   static const _expiryKey = 'pending_wrytte_id_expiry';
+  static const _verifiedKey = 'pending_wrytte_id_verified';
+  static const _autoDeleteKey = 'pending_wrytte_id_auto_delete';
 
   /// Get a locally generated Wrytte ID candidate. Server-side uniqueness is
   /// enforced by the registration API/Matrix account creation.
@@ -35,25 +40,51 @@ class VirtualNumberService {
         expiryMillis == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(expiryMillis);
+    final autoDelete = preferences.getBool(_autoDeleteKey) ?? true;
 
     if (savedNumber.isNotEmpty &&
         savedRegion == normalizedRegion &&
         savedNumber.startsWith(prefix) &&
         savedNumber.length == prefix.length + 9 &&
+        preferences.getBool(_verifiedKey) == true &&
         savedExpiry != null &&
-        savedExpiry.isAfter(now)) {
+        (!autoDelete || savedExpiry.isAfter(now))) {
       return WrytteIdCandidate(number: savedNumber, expiresAt: savedExpiry);
     }
 
     await clearPendingWrytteId();
     const bodyLength = 9;
-    final number =
-        '$prefix${_generateIdentifierBody(bodyLength, excludedNumber: savedNumber, prefix: prefix)}';
+    String? availableNumber;
+    for (var attempt = 0; attempt < 100; attempt++) {
+      final number =
+          '$prefix${_generateIdentifierBody(bodyLength, excludedNumber: savedNumber, prefix: prefix)}';
+      final suffix = number.substring(prefix.length);
+      final exists = await _candidateExists('W$suffix');
+      if (!exists) {
+        availableNumber = number;
+        break;
+      }
+    }
+    if (availableNumber == null) {
+      throw StateError('Could not find an available Wrytte ID.');
+    }
+    final number = availableNumber;
     final expiresAt = now.add(candidateLifetime);
     await preferences.setString(_numberKey, number);
     await preferences.setString(_regionKey, normalizedRegion);
     await preferences.setInt(_expiryKey, expiresAt.millisecondsSinceEpoch);
+    await preferences.setBool(_verifiedKey, true);
+    await preferences.setBool(_autoDeleteKey, true);
     return WrytteIdCandidate(number: number, expiresAt: expiresAt);
+  }
+
+  Future<bool> _candidateExists(String backendId) async {
+    final override = _candidateExistsOverride;
+    if (override != null) return override(backendId);
+    // Backend availability checking is intentionally disabled until an
+    // unauthenticated signup endpoint is available. /api/Users/Search cannot
+    // be called here because a signup user has no backend token yet.
+    return false;
   }
 
   Future<void> clearPendingWrytteId() async {
@@ -61,12 +92,22 @@ class VirtualNumberService {
     await preferences.remove(_numberKey);
     await preferences.remove(_regionKey);
     await preferences.remove(_expiryKey);
+    await preferences.remove(_verifiedKey);
+    await preferences.remove(_autoDeleteKey);
   }
 
   Future<void> expireCandidate(String number) async {
     final preferences = await SharedPreferences.getInstance();
-    if (preferences.getString(_numberKey) == number) {
+    if (preferences.getString(_numberKey) == number &&
+        preferences.getBool(_autoDeleteKey) != false) {
       await clearPendingWrytteId();
+    }
+  }
+
+  Future<void> disableAutoDelete(String number) async {
+    final preferences = await SharedPreferences.getInstance();
+    if (preferences.getString(_numberKey) == number) {
+      await preferences.setBool(_autoDeleteKey, false);
     }
   }
 

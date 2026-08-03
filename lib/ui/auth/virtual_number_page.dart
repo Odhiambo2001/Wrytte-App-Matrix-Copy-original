@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
-import 'package:wrytte/ui/auth/email_verification_page.dart';
+import 'package:wrytte/ui/auth/kface_intro_page.dart';
 
 class VirtualNumberPage extends StatefulWidget {
   final String regionCode;
@@ -14,14 +14,10 @@ class VirtualNumberPage extends StatefulWidget {
 }
 
 class _VirtualNumberPageState extends State<VirtualNumberPage> {
-  final TextEditingController _emailCtrl = TextEditingController();
-  final FocusNode _focusNode = FocusNode();
-
   final VirtualNumberService _service = VirtualNumberService();
 
-  bool _isLoading = false;
-  final bool _emailValid = false;
   bool _vpnLoading = true;
+  bool _fetchFailed = false;
 
   String _virtualNumber = "";
   DateTime? _expiresAt;
@@ -35,8 +31,6 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
 
   @override
   void dispose() {
-    _emailCtrl.dispose();
-    _focusNode.dispose();
     _expiryTimer?.cancel();
     super.dispose();
   }
@@ -45,6 +39,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
   Future<void> _fetchVpn() async {
     setState(() {
       _vpnLoading = true;
+      _fetchFailed = false;
       _virtualNumber = ""; // clear old number while loading
     });
 
@@ -58,13 +53,17 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
       setState(() {
         _virtualNumber = candidate.number;
         _expiresAt = candidate.expiresAt;
+        _fetchFailed = false;
         _vpnLoading = false;
       });
       _startExpiryTimer();
     } catch (e) {
       if (!mounted) return;
 
-      setState(() => _vpnLoading = false);
+      setState(() {
+        _vpnLoading = false;
+        _fetchFailed = true;
+      });
 
       debugPrint("Virtual number fetch error: $e");
 
@@ -96,39 +95,14 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     if (mounted) await _fetchVpn();
   }
 
-  /// Send email verification code.
-  Future<void> _submit() async {
-    if (!_emailValid || _isLoading || _virtualNumber.isEmpty) return;
-
-    setState(() => _isLoading = true);
-
-    try {
-      await _service.sendEmailCode(_emailCtrl.text.trim());
-
-      if (!mounted) return;
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder:
-              (_) => EmailVerificationPage(
-                email: _emailCtrl.text.trim(),
-                virtualNumber: _virtualNumber,
-              ),
-        ),
-      );
-    } catch (_) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Failed to send verification email"),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
+  Future<void> _openKFace() async {
+    if (_vpnLoading || _virtualNumber.isEmpty) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => KFaceIntroPage(wrytteId: _virtualNumber),
+      ),
+    );
   }
 
   @override
@@ -207,6 +181,18 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                                     ),
                                   ),
                                 )
+                                : _fetchFailed || _virtualNumber.isEmpty
+                                ? Center(
+                                  child: TextButton(
+                                    onPressed: _fetchVpn,
+                                    child: const Text(
+                                      'Retry',
+                                      style: TextStyle(
+                                        color: Color(0xFF4DA3FF),
+                                      ),
+                                    ),
+                                  ),
+                                )
                                 : Text(
                                   _service.formatWrytteId(
                                     _virtualNumber,
@@ -227,37 +213,23 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                         width: double.infinity,
                         child: ElevatedButton(
                           onPressed:
-                              _emailValid && !_isLoading && !_vpnLoading
-                                  ? _submit
+                              !_vpnLoading && _virtualNumber.isNotEmpty
+                                  ? _openKFace
                                   : null,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor:
-                                _emailValid
-                                    ? const Color(0xFF4DA3FF)
-                                    : const Color(0xFF23262C),
+                            backgroundColor: const Color(0xFF4DA3FF),
                             disabledBackgroundColor: const Color(0xFF23262C),
-                            foregroundColor:
-                                _emailValid ? Colors.white : Colors.grey,
+                            foregroundColor: Colors.white,
                             disabledForegroundColor: Colors.grey,
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(16),
                             ),
                           ),
-                          child:
-                              _isLoading
-                                  ? const SizedBox(
-                                    height: 20,
-                                    width: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                  : const Text(
-                                    "Next",
-                                    style: TextStyle(fontSize: 16),
-                                  ),
+                          child: const Text(
+                            "Next",
+                            style: TextStyle(fontSize: 16),
+                          ),
                         ),
                       ),
 
