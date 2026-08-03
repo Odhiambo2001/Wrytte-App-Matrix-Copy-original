@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/email_verification_page.dart';
@@ -22,6 +24,8 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
   bool _vpnLoading = true;
 
   String _virtualNumber = "";
+  DateTime? _expiresAt;
+  Timer? _expiryTimer;
 
   @override
   void initState() {
@@ -33,6 +37,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
   void dispose() {
     _emailCtrl.dispose();
     _focusNode.dispose();
+    _expiryTimer?.cancel();
     super.dispose();
   }
 
@@ -44,16 +49,18 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     });
 
     try {
-      final phone = await _service.getAvailableVpn(
+      final candidate = await _service.getAvailableVpn(
         regionCode: widget.regionCode,
       );
 
       if (!mounted) return;
 
       setState(() {
-        _virtualNumber = phone;
+        _virtualNumber = candidate.number;
+        _expiresAt = candidate.expiresAt;
         _vpnLoading = false;
       });
+      _startExpiryTimer();
     } catch (e) {
       if (!mounted) return;
 
@@ -69,6 +76,24 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
         ),
       );
     }
+  }
+
+  void _startExpiryTimer() {
+    _expiryTimer?.cancel();
+    final expiry = _expiresAt;
+    if (expiry == null) return;
+    final remaining = expiry.difference(DateTime.now());
+    if (remaining <= Duration.zero) {
+      _expireAndRefresh();
+      return;
+    }
+    _expiryTimer = Timer(remaining, _expireAndRefresh);
+  }
+
+  Future<void> _expireAndRefresh() async {
+    final expiredNumber = _virtualNumber;
+    await _service.expireCandidate(expiredNumber);
+    if (mounted) await _fetchVpn();
   }
 
   /// Send email verification code.

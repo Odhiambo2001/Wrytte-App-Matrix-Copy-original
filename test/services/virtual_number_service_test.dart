@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
 
 void main() {
@@ -16,4 +17,41 @@ void main() {
     expect(formatted, '+254 123 456 789');
     expect(formatted, isNot(contains(RegExp(r'[()\-]'))));
   });
+
+  test(
+    'creates a non-repeated Kenyan candidate with a 15-minute lifetime',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+
+      final candidate = await service.getAvailableVpn(regionCode: 'KE');
+      final body = candidate.number.substring(3);
+
+      expect(candidate.number, startsWith('254'));
+      expect(candidate.number.length, 12);
+      expect(body.length, 9);
+      expect(body.split('').toSet().length, greaterThan(1));
+      expect(
+        candidate.expiresAt.difference(DateTime.now()).inMinutes,
+        inInclusiveRange(14, 15),
+      );
+    },
+  );
+
+  test(
+    'reuses the live local candidate instead of generating another',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+
+      final first = await service.getAvailableVpn(regionCode: 'FR');
+      final second = await service.getAvailableVpn(regionCode: 'FR');
+
+      expect(first.number.length, 11);
+      expect(first.number.substring(2).length, 9);
+      expect(second.number, first.number);
+      expect(
+        second.expiresAt.millisecondsSinceEpoch,
+        first.expiresAt.millisecondsSinceEpoch,
+      );
+    },
+  );
 }

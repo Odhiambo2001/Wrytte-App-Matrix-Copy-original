@@ -1,16 +1,73 @@
 import 'dart:math';
 import 'package:phone_numbers_parser/phone_numbers_parser.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+
+class WrytteIdCandidate {
+  final String number;
+  final DateTime expiresAt;
+
+  const WrytteIdCandidate({required this.number, required this.expiresAt});
+}
 
 class VirtualNumberService {
   VirtualNumberService();
 
+  static const candidateLifetime = Duration(minutes: 15);
+  static const _numberKey = 'pending_wrytte_id_number';
+  static const _regionKey = 'pending_wrytte_id_region';
+  static const _expiryKey = 'pending_wrytte_id_expiry';
+
   /// Get a locally generated Wrytte ID candidate. Server-side uniqueness is
   /// enforced by the registration API/Matrix account creation.
-  Future<String> getAvailableVpn({required String regionCode}) async {
+  Future<WrytteIdCandidate> getAvailableVpn({
+    required String regionCode,
+  }) async {
+    final normalizedRegion = regionCode.trim().toUpperCase();
     final prefix = callingCodeForRegion(regionCode);
-    return '$prefix${_generateIdentifierBody()}';
+    final preferences = await SharedPreferences.getInstance();
+    final now = DateTime.now();
+    final savedNumber = preferences.getString(_numberKey) ?? '';
+    final savedRegion = preferences.getString(_regionKey) ?? '';
+    final expiryMillis = preferences.getInt(_expiryKey);
+    final savedExpiry =
+        expiryMillis == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(expiryMillis);
+
+    if (savedNumber.isNotEmpty &&
+        savedRegion == normalizedRegion &&
+        savedNumber.startsWith(prefix) &&
+        savedNumber.length == prefix.length + 9 &&
+        savedExpiry != null &&
+        savedExpiry.isAfter(now)) {
+      return WrytteIdCandidate(number: savedNumber, expiresAt: savedExpiry);
+    }
+
+    await clearPendingWrytteId();
+    const bodyLength = 9;
+    final number =
+        '$prefix${_generateIdentifierBody(bodyLength, excludedNumber: savedNumber, prefix: prefix)}';
+    final expiresAt = now.add(candidateLifetime);
+    await preferences.setString(_numberKey, number);
+    await preferences.setString(_regionKey, normalizedRegion);
+    await preferences.setInt(_expiryKey, expiresAt.millisecondsSinceEpoch);
+    return WrytteIdCandidate(number: number, expiresAt: expiresAt);
+  }
+
+  Future<void> clearPendingWrytteId() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.remove(_numberKey);
+    await preferences.remove(_regionKey);
+    await preferences.remove(_expiryKey);
+  }
+
+  Future<void> expireCandidate(String number) async {
+    final preferences = await SharedPreferences.getInstance();
+    if (preferences.getString(_numberKey) == number) {
+      await clearPendingWrytteId();
+    }
   }
 
   /// Uses phone_numbers_parser metadata to resolve an ISO alpha-2 region to
@@ -57,11 +114,20 @@ class VirtualNumberService {
     return user;
   }
 
-  String _generateIdentifierBody() {
+  String _generateIdentifierBody(
+    int length, {
+    required String excludedNumber,
+    required String prefix,
+  }) {
     final random = Random.secure();
-    final first = 100 + random.nextInt(900);
-    final second = 100 + random.nextInt(900);
-    final third = 100 + random.nextInt(900);
-    return '$first$second$third';
+    String candidate;
+    do {
+      candidate = List.generate(length, (_) => random.nextInt(10)).join();
+    } while (_allDigitsAreTheSame(candidate) ||
+        '$prefix$candidate' == excludedNumber);
+    return candidate;
   }
+
+  bool _allDigitsAreTheSame(String value) =>
+      value.split('').toSet().length == 1;
 }

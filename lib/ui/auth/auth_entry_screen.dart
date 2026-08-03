@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:wrytte/services/auth/device_region_service.dart';
+import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/phone_auth_page.dart';
 import 'package:wrytte/ui/auth/sign_in_page.dart';
 import 'package:wrytte/ui/auth/virtual_number_page.dart';
@@ -11,17 +13,13 @@ class AuthEntryScreen extends StatefulWidget {
 }
 
 class _AuthEntryScreenState extends State<AuthEntryScreen> {
-  late final String _signupRegionCode;
+  late final Future<String> _signupRegion;
 
   @override
   void initState() {
     super.initState();
-    // Capture the region once when the signup area is created. Both signup
-    // choices then use the same value for this visit.
-    _signupRegionCode =
-        WidgetsBinding.instance.platformDispatcher.locale.countryCode
-            ?.toUpperCase() ??
-        'US';
+    // Start one SIM/network/locale detection when signup is first displayed.
+    _signupRegion = DeviceRegionService.detectOnce();
   }
 
   @override
@@ -69,14 +67,15 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                       _buildButton(
                         context: context,
                         text: "Wrytte ID",
-                        onTap: () {
+                        onTap: () async {
+                          final regionCode = await _signupRegion;
+                          if (!context.mounted) return;
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder:
-                                  (_) => VirtualNumberPage(
-                                    regionCode: _signupRegionCode,
-                                  ),
+                                  (_) =>
+                                      VirtualNumberPage(regionCode: regionCode),
                             ),
                           );
                         },
@@ -87,7 +86,9 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                       _buildButton(
                         context: context,
                         text: "Phone number",
-                        onTap: () {
+                        onTap: () async {
+                          await VirtualNumberService().clearPendingWrytteId();
+                          if (!context.mounted) return;
                           Navigator.push(
                             context,
                             MaterialPageRoute(
