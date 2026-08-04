@@ -43,6 +43,8 @@ dependencies:
   flutter_sound: ^9.28.0
   flutter_webrtc: ^1.2.1
   camera: ^0.11.3
+  flutter_onnxruntime: ^1.8.3
+  image: ^4.8.0
   rxdart: ^0.28.0
   photo_manager: ^3.8.3
   photo_manager_image_provider: ^2.2.0
@@ -105,6 +107,7 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/models/retinaface_mv2.onnx
     - assets/images/wrytte_logo.png
     - assets/images/default_avatar.jpg
     - assets/images/video image1.jpg

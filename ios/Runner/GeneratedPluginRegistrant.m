@@ -84,6 +84,12 @@
 @import flutter_native_splash;
 #endif
 
+#if __has_include(<flutter_onnxruntime/FlutterOnnxruntimePlugin.h>)
+#import <flutter_onnxruntime/FlutterOnnxruntimePlugin.h>
+#else
+@import flutter_onnxruntime;
+#endif
+
 #if __has_include(<flutter_ringtone_player/FlutterRingtonePlayerPlugin.h>)
 #import <flutter_ringtone_player/FlutterRingtonePlayerPlugin.h>
 #else
@@ -202,6 +208,7 @@
   [FlutterLibphonenumberPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterLibphonenumberPlugin"]];
   [FlutterLocalNotificationsPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterLocalNotificationsPlugin"]];
   [FlutterNativeSplashPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterNativeSplashPlugin"]];
+  [FlutterOnnxruntimePlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterOnnxruntimePlugin"]];
   [FlutterRingtonePlayerPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterRingtonePlayerPlugin"]];
   [FlutterSecureStorageDarwinPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterSecureStorageDarwinPlugin"]];
   [FlutterSound registerWithRegistrar:[registry registrarForPlugin:@"FlutterSound"]];

@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:wrytte/ui/auth/kface_scan_page.dart';
 
 class KFaceIntroPage extends StatefulWidget {
   final String wrytteId;
@@ -62,7 +63,14 @@ class _KFaceIntroPageState extends State<KFaceIntroPage> {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: null,
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder:
+                            (_) => KFaceScanPage(wrytteId: widget.wrytteId),
+                      ),
+                    );
+                  },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF4285DF),
                     disabledBackgroundColor: const Color(0xFF23262C),
