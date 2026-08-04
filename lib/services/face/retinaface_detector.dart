@@ -48,8 +48,8 @@ class FaceDetection {
 /// Detection coordinates are returned in the original image's pixel space.
 class RetinaFaceDetector {
   RetinaFaceDetector({
-    this.inputSize = 320,
-    this.confidenceThreshold = 0.72,
+    this.inputSize = 640,
+    this.confidenceThreshold = 0.60,
     this.nmsThreshold = 0.40,
   });
 
@@ -92,11 +92,6 @@ class RetinaFaceDetector {
   }
 
   Future<List<FaceDetection>> detect(img.Image image) async {
-    final session = _session;
-    if (session == null) {
-      throw StateError('RetinaFaceDetector.initialize() must be called first.');
-    }
-
     final resized = img.copyResize(
       image,
       width: inputSize,
@@ -104,6 +99,35 @@ class RetinaFaceDetector {
       interpolation: img.Interpolation.linear,
     );
     final tensorData = _toBgrTensor(resized);
+    return _run(tensorData, image.width, image.height);
+  }
+
+  Future<List<FaceDetection>> detectBgr(Uint8List bgr) async {
+    if (bgr.length != inputSize * inputSize * 3) {
+      throw ArgumentError(
+        'RetinaFace requires ${inputSize}x$inputSize BGR bytes.',
+      );
+    }
+    final plane = inputSize * inputSize;
+    final tensorData = Float32List(plane * 3);
+    for (var pixel = 0; pixel < plane; pixel++) {
+      final offset = pixel * 3;
+      tensorData[pixel] = bgr[offset].toDouble() - 104.0;
+      tensorData[plane + pixel] = bgr[offset + 1].toDouble() - 117.0;
+      tensorData[(plane * 2) + pixel] = bgr[offset + 2].toDouble() - 123.0;
+    }
+    return _run(tensorData, inputSize, inputSize);
+  }
+
+  Future<List<FaceDetection>> _run(
+    Float32List tensorData,
+    int outputWidth,
+    int outputHeight,
+  ) async {
+    final session = _session;
+    if (session == null) {
+      throw StateError('RetinaFaceDetector.initialize() must be called first.');
+    }
     final input = await OrtValue.fromList(tensorData, [
       1,
       3,
@@ -116,7 +140,7 @@ class RetinaFaceDetector {
       final locations = _numbers(await outputs['loc']!.asFlattenedList());
       final scores = _numbers(await outputs['conf']!.asFlattenedList());
       final landmarks = _numbers(await outputs['landmarks']!.asFlattenedList());
-      return _decode(locations, scores, landmarks, image.width, image.height);
+      return _decode(locations, scores, landmarks, outputWidth, outputHeight);
     } finally {
       await input.dispose();
       if (outputs != null) {

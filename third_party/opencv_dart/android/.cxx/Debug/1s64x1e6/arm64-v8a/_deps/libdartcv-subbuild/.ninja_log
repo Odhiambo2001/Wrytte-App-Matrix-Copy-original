@@ -1,0 +1,21 @@
+# ninja log v5
+0	14	1785865254170730105	libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-mkdir	6e24b1e041abb20d
+0	14	1785865254170730105	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-mkdir	6e24b1e041abb20d
+14	2576	1785865256734709922	libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-download	bc82339917569f7d
+14	2576	1785865256734709922	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-download	bc82339917569f7d
+2576	2582	0	libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-update	ab4724f539cff585
+2576	2582	0	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-update	ab4724f539cff585
+2582	2584	1785865256742709858	libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-patch	9ddfb2e3926ec4dd
+2582	2584	1785865256742709858	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-patch	9ddfb2e3926ec4dd
+2585	2587	1785865256746709827	libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-configure	99976e2124c7dc95
+2585	2587	1785865256746709827	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-configure	99976e2124c7dc95
+2587	2590	1785865256746709827	libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-build	af82333635a55744
+2587	2590	1785865256746709827	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-build	af82333635a55744
+2590	2593	1785865256750709796	libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-install	4a70158f43642a29
+2590	2593	1785865256750709796	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-install	4a70158f43642a29
+2593	2596	1785865256754709764	libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-test	6e056313c6e7bc2
+2593	2596	1785865256754709764	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-test	6e056313c6e7bc2
+2596	2601	1785865256758709733	CMakeFiles/libdartcv-populate-complete	75fbe98c6bba7ca
+2596	2601	1785865256758709733	libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-done	75fbe98c6bba7ca
+2596	2601	1785865256758709733	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/CMakeFiles/libdartcv-populate-complete	75fbe98c6bba7ca
+2596	2601	1785865256758709733	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-subbuild/libdartcv-populate-prefix/src/libdartcv-populate-stamp/libdartcv-populate-done	75fbe98c6bba7ca

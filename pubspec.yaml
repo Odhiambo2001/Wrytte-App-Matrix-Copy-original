@@ -45,6 +45,9 @@ dependencies:
   camera: ^0.11.3
   flutter_onnxruntime: ^1.8.3
   image: ^4.8.0
+  opencv_dart:
+    path: third_party/opencv_dart
+  crypto: ^3.0.6
   rxdart: ^0.28.0
   photo_manager: ^3.8.3
   photo_manager_image_provider: ^2.2.0
@@ -68,6 +71,27 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+
+hooks:
+  user_defines:
+    dartcv4:
+      include_modules:
+        - core
+        - imgproc
+      exclude_modules:
+        - calib3d
+        - contrib
+        - dnn
+        - features2d
+        - flann
+        - freetype
+        - highgui
+        - imgcodecs
+        - objdetect
+        - photo
+        - stitching
+        - video
+        - videoio
 
 # ── App icon ──────────────────────────────────────────────────────────────────
 # Run: dart run flutter_launcher_icons
@@ -108,6 +132,10 @@ flutter:
 
   assets:
     - assets/models/retinaface_mv2.onnx
+    - assets/models/adaface_ir_101.onnx
+    - assets/ldpc/
+    - assets/ldpc/Weights_Var_MS/
+    - assets/ldpc/Biases_Var_MS/
     - assets/images/wrytte_logo.png
     - assets/images/default_avatar.jpg
     - assets/images/video image1.jpg

@@ -1,0 +1,21 @@
+# ninja log v5
+0	14	1785865256934708347	libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-mkdir	6b4d996c39ca5c6b
+0	14	1785865256934708347	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-mkdir	6b4d996c39ca5c6b
+14	130608	1785865387529677010	libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-download	21c00321035ac55c
+14	130608	1785865387529677010	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-download	21c00321035ac55c
+130608	130611	1785865387533676978	libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-update	f3cc818fcbb77c0c
+130608	130611	1785865387533676978	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-update	f3cc818fcbb77c0c
+130611	130614	1785865387537676947	libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-patch	412f00e65152d26a
+130611	130614	1785865387537676947	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-patch	412f00e65152d26a
+130614	130618	1785865387541676914	libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-configure	de0a8e2481fa2105
+130614	130618	1785865387541676914	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-configure	de0a8e2481fa2105
+130618	130620	1785865387541676914	libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-build	7fd0a14ca0e54b8e
+130618	130620	1785865387541676914	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-build	7fd0a14ca0e54b8e
+130620	130623	1785865387545676883	libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-install	9e1f36245bd1f38d
+130620	130623	1785865387545676883	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-install	9e1f36245bd1f38d
+130623	130626	1785865387549676851	libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-test	21bbe76fe192cf60
+130623	130626	1785865387549676851	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-test	21bbe76fe192cf60
+130626	130630	1785865387553676819	CMakeFiles/libopencv-populate-complete	9572c19ab5a5a3fd
+130626	130630	1785865387553676819	libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-done	9572c19ab5a5a3fd
+130626	130630	1785865387553676819	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/CMakeFiles/libopencv-populate-complete	9572c19ab5a5a3fd
+130626	130630	1785865387553676819	/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-done	9572c19ab5a5a3fd

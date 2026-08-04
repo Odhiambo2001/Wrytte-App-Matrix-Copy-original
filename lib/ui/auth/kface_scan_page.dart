@@ -7,7 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wrytte/services/face/camera_frame_converter.dart';
-import 'package:wrytte/services/face/retinaface_detector.dart';
+import 'package:wrytte/services/face/face_biometric_pipeline.dart';
+import 'package:wrytte/services/face/face_commitment_store.dart';
 
 class KFaceScanPage extends StatefulWidget {
   const KFaceScanPage({super.key, required this.wrytteId});
@@ -23,14 +24,14 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   static const _analysisThrottle = Duration(milliseconds: 200);
   static const double _bottomPanelHeight = 250;
   static const int _tickRingCount = 72;
-  static const int _scanDurationMilliseconds = 5000;
-
-  final RetinaFaceDetector _detector = RetinaFaceDetector();
+  final FaceBiometricPipeline _pipeline = FaceBiometricPipeline();
+  final FaceCommitmentStore _commitmentStore = const FaceCommitmentStore();
   CameraController? _controller;
   Future<void>? _initializeFuture;
 
   bool _isAnalyzing = false;
   bool _completed = false;
+  bool _finalizing = false;
   DateTime? _lastAnalysisAt;
   double _ringProgress = 0;
   String _status = 'Center your face inside the ring.';
@@ -46,7 +47,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
 
   Future<void> _initialize() async {
     try {
-      await _detector.initialize();
+      await _pipeline.initializeDetector();
       await _initializeCamera();
     } catch (error) {
       if (!mounted) return;
@@ -65,7 +66,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     _controller = null;
     _initializeFuture = null;
     unawaited(controller?.dispose());
-    unawaited(_detector.dispose());
+    unawaited(_pipeline.dispose());
     super.dispose();
   }
 
@@ -254,7 +255,6 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       final now = DateTime.now();
       final last = _lastAnalysisAt;
       if (last != null && now.difference(last) < _analysisThrottle) return;
-      final elapsed = last == null ? _analysisThrottle : now.difference(last);
       _lastAnalysisAt = now;
 
       _isAnalyzing = true;
@@ -263,12 +263,9 @@ class _KFaceScanPageState extends State<KFaceScanPage>
           frame,
           sensorOrientation: controller.description.sensorOrientation,
         );
-        final faces = await _detector.detect(image);
+        final analysis = await _pipeline.processFrame(image);
         if (!mounted) return;
-        final faceInsideRing = faces.any(
-          (face) => _isFaceInsideRing(face, image.width, image.height),
-        );
-        _updateProgress(faceInsideRing, elapsed);
+        _updateProgress(analysis);
       } catch (error, stackTrace) {
         debugPrint('[FaceDetect] $error\n$stackTrace');
       } finally {
@@ -277,41 +274,59 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     });
   }
 
-  bool _isFaceInsideRing(FaceDetection face, int width, int height) {
-    final centerX = width / 2;
-    final centerY = height / 2;
-    final radius = width * 0.375;
-
-    bool pointIsInside(double x, double y) {
-      final deltaX = x - centerX;
-      final deltaY = y - centerY;
-      return (deltaX * deltaX) + (deltaY * deltaY) <= radius * radius;
+  void _updateProgress(FrameAnalysis analysis) {
+    if (!analysis.faceInsideRing) {
+      _setStatus(
+        analysis.faceDetected
+            ? 'Center your whole face inside the ring.'
+            : 'Center your face inside the ring.',
+      );
+      return;
     }
-
-    return pointIsInside(face.left, face.top) &&
-        pointIsInside(face.right, face.top) &&
-        pointIsInside(face.left, face.bottom) &&
-        pointIsInside(face.right, face.bottom);
-  }
-
-  void _updateProgress(bool faceInsideRing, Duration elapsed) {
-    if (!faceInsideRing) {
-      _setStatus('Center your face inside the ring.');
+    if (!analysis.alignmentAccepted) {
+      _setStatus('Hold still and look directly at the camera.');
       return;
     }
 
-    final increment = elapsed.inMilliseconds / _scanDurationMilliseconds;
-    final next = (_ringProgress + increment).clamp(0.0, 1.0);
+    final next = (analysis.acceptedFrameCount /
+            FaceBiometricPipeline.framesToUse)
+        .clamp(0.0, 1.0);
     setState(() {
       _ringProgress = next;
       _status = 'Keep looking at the camera.';
       if (_ringProgress >= 1) {
         _completed = true;
-        _status = 'Face scan complete.';
+        _status = 'Creating your secure face key…';
       }
     });
     if (_completed) {
-      unawaited(_controller?.stopImageStream());
+      unawaited(_finishBiometricScan());
+    }
+  }
+
+  Future<void> _finishBiometricScan() async {
+    if (_finalizing) return;
+    _finalizing = true;
+    try {
+      await _controller?.stopImageStream();
+      final stored = await _commitmentStore.read(widget.wrytteId);
+      if (stored == null) {
+        final commitment = await _pipeline.enroll();
+        await _commitmentStore.write(widget.wrytteId, commitment);
+        _setStatus('Face enrollment complete.');
+      } else {
+        final recovery = await _pipeline.recover(stored);
+        _setStatus(
+          recovery.accepted
+              ? 'Face verified successfully.'
+              : 'Face verification failed. Start over and try again.',
+        );
+      }
+    } catch (error, stackTrace) {
+      debugPrint('[KFace] Finalization failed: $error\n$stackTrace');
+      _setStatus('Could not complete face verification. Try again.');
+    } finally {
+      _finalizing = false;
     }
   }
 
@@ -321,6 +336,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   }
 
   Future<void> _startOver() async {
+    _pipeline.reset();
     setState(() {
       _completed = false;
       _ringProgress = 0;
