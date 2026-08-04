@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
+import 'package:wrytte/services/auth/wrytte_library.dart';
 
 void main() {
   final service = VirtualNumberService(candidateExists: (_) async => false);
@@ -14,7 +15,7 @@ void main() {
   test('formats a Kenyan Wrytte ID as +00 using Kenyan grouping', () {
     final formatted = service.formatWrytteId('00748630243', regionCode: 'KE');
 
-    expect(formatted, '+00 748 630243');
+    expect(formatted, '+00 748 630 243');
     expect(formatted, isNot(contains(RegExp(r'[()\-]'))));
   });
 
@@ -23,6 +24,14 @@ void main() {
 
     expect(formatted, '+00 212 555 0123');
     expect(formatted, isNot(contains(RegExp(r'[()\-]'))));
+  });
+
+  test('Wrytte library resolves formats and supplied prefixes by ISO', () {
+    expect(WrytteLibrary.forRegion('KE')?.format, '3 3 3');
+    expect(WrytteLibrary.prefixesFor('KE'), ['700', '710', '720']);
+    expect(WrytteLibrary.forRegion('US')?.format, '3 3 4');
+    expect(WrytteLibrary.prefixesFor('US'), contains('212'));
+    expect(WrytteLibrary.prefixesFor('NZ'), contains('21'));
   });
 
   test(
@@ -36,6 +45,7 @@ void main() {
       expect(candidate.number, startsWith('00'));
       expect(candidate.number.length, 11);
       expect(body.length, 9);
+      expect(['700', '710', '720'], contains(body.substring(0, 3)));
       expect(body.split('').toSet().length, greaterThan(1));
       expect(
         candidate.expiresAt.difference(DateTime.now()).inMinutes,

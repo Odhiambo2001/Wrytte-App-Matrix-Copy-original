@@ -1,9 +1,9 @@
 import 'dart:math';
-import 'package:phone_numbers_parser/metadata.dart';
 import 'package:phone_numbers_parser/phone_numbers_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/auth/wrytte_library.dart';
 
 class WrytteIdCandidate {
   final String number;
@@ -33,7 +33,10 @@ class VirtualNumberService {
   }) async {
     final normalizedRegion = regionCode.trim().toUpperCase();
     final isoCode = _isoCodeForRegion(normalizedRegion);
-    final bodyLength = _mobileBodyLength(isoCode);
+    final rule = WrytteLibrary.forRegion(normalizedRegion);
+    final bodyLength =
+        rule?.maximumNationalLength ?? _fallbackMobileBodyLength(isoCode);
+    final prefixes = WrytteLibrary.prefixesFor(normalizedRegion);
     final preferences = await SharedPreferences.getInstance();
     final now = DateTime.now();
     final savedNumber = preferences.getString(_numberKey) ?? '';
@@ -58,13 +61,22 @@ class VirtualNumberService {
     await clearPendingWrytteId();
     String? availableNumber;
     for (var attempt = 0; attempt < 100; attempt++) {
-      final body = _generateIdentifierBody(
-        bodyLength,
-        excludedNumber: savedNumber,
-        prefix: _wryttePrefix,
-      );
-      final phoneNumber = PhoneNumber(isoCode: isoCode, nsn: body);
-      if (!phoneNumber.isValid(type: PhoneNumberType.mobile)) continue;
+      final selectedPrefix =
+          prefixes.isEmpty
+              ? ''
+              : prefixes[Random.secure().nextInt(prefixes.length)];
+      final randomLength = bodyLength - selectedPrefix.length;
+      if (randomLength < 1) continue;
+      final body =
+          '$selectedPrefix${_generateIdentifierBody(randomLength, excludedNumber: savedNumber, prefix: '$_wryttePrefix$selectedPrefix')}';
+
+      if (prefixes.isEmpty &&
+          !PhoneNumber(
+            isoCode: isoCode,
+            nsn: body,
+          ).isValid(type: PhoneNumberType.mobile)) {
+        continue;
+      }
 
       final number = '$_wryttePrefix$body';
       final suffix = number.substring(_wryttePrefix.length);
@@ -147,22 +159,34 @@ class VirtualNumberService {
             : digits;
     if (body.isEmpty) return '+$_wryttePrefix';
 
-    final regionalFormat =
-        PhoneNumber(
-          isoCode: _isoCodeForRegion(regionCode),
-          nsn: body,
-        ).formatNsn();
-    final spacesOnly = regionalFormat.replaceAll(RegExp(r'[^\d]+'), ' ').trim();
+    final rule = WrytteLibrary.forRegion(regionCode);
+    final spacesOnly =
+        rule == null
+            ? PhoneNumber(
+              isoCode: _isoCodeForRegion(regionCode),
+              nsn: body,
+            ).formatNsn().replaceAll(RegExp(r'[^\d]+'), ' ').trim()
+            : _formatUsingWrytteRule(body, rule);
     return '+$_wryttePrefix $spacesOnly';
   }
 
   IsoCode _isoCodeForRegion(String regionCode) =>
       isoCodeConversionMap[regionCode.trim().toUpperCase()] ?? IsoCode.US;
 
-  int _mobileBodyLength(IsoCode isoCode) {
-    final example = metadataExamplesByIsoCode[isoCode]?.mobile ?? '';
-    if (example.isNotEmpty) return example.length;
-    return 9;
+  int _fallbackMobileBodyLength(IsoCode isoCode) =>
+      PhoneNumber(isoCode: isoCode, nsn: '').countryCode == '1' ? 10 : 9;
+
+  String _formatUsingWrytteRule(String body, WrytteRegionRule rule) {
+    final groups = <String>[];
+    var offset = 0;
+    for (final token in rule.format.split(' ')) {
+      final size = int.parse(token.split('-').last);
+      final end = min(offset + size, body.length);
+      if (end > offset) groups.add(body.substring(offset, end));
+      offset = end;
+    }
+    if (offset < body.length) groups.add(body.substring(offset));
+    return groups.join(' ');
   }
 
   /// 2️ Send/store email verification code through the Firebase auth service.
