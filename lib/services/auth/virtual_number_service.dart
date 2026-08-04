@@ -180,7 +180,7 @@ class VirtualNumberService {
     final groups = <String>[];
     var offset = 0;
     for (final token in rule.format.split(' ')) {
-      final size = int.parse(token.split('-').last);
+      final size = int.parse(token);
       final end = min(offset + size, body.length);
       if (end > offset) groups.add(body.substring(offset, end));
       offset = end;

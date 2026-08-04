@@ -32,6 +32,12 @@ void main() {
     expect(WrytteLibrary.forRegion('US')?.format, '3 3 4');
     expect(WrytteLibrary.prefixesFor('US'), contains('212'));
     expect(WrytteLibrary.prefixesFor('NZ'), contains('21'));
+    expect(
+      WrytteLibrary.rules.values
+          .where((rule) => rule.format.isNotEmpty)
+          .every((rule) => RegExp(r'^\d+(?: \d+)*$').hasMatch(rule.format)),
+      isTrue,
+    );
   });
 
   test(

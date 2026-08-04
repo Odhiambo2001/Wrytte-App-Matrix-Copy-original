@@ -10,8 +10,7 @@ class WrytteRegionRule {
   });
 
   int get maximumNationalLength => format.split(' ').fold(0, (sum, part) {
-    final bounds = part.split('-');
-    return sum + int.parse(bounds.last);
+    return sum + int.parse(part);
   });
 }
 
@@ -102,7 +101,7 @@ abstract final class WrytteLibrary {
     'AS': WrytteRegionRule(isoCode: 'AS', format: '3 3 4', prefixes: []),
     'AT': WrytteRegionRule(
       isoCode: 'AT',
-      format: '1-4 3-7',
+      format: '4 7',
       prefixes: ['650', '660', '664'],
     ),
     'AU': WrytteRegionRule(isoCode: 'AU', format: '1 4 4', prefixes: []),
@@ -131,7 +130,7 @@ abstract final class WrytteLibrary {
     'BF': WrytteRegionRule(isoCode: 'BF', format: '4 4', prefixes: []),
     'BG': WrytteRegionRule(
       isoCode: 'BG',
-      format: '2-3 3-4',
+      format: '3 4',
       prefixes: ['87', '88', '89'],
     ),
     'BH': WrytteRegionRule(isoCode: 'BH', format: '4 4', prefixes: ['3', '6']),
@@ -341,7 +340,7 @@ abstract final class WrytteLibrary {
     ),
     'DE': WrytteRegionRule(
       isoCode: 'DE',
-      format: '2-5 3-8',
+      format: '5 8',
       prefixes: ['30', '40', '89'],
     ),
     'DJ': WrytteRegionRule(isoCode: 'DJ', format: '4 4', prefixes: []),
@@ -382,7 +381,7 @@ abstract final class WrytteLibrary {
     ),
     'FI': WrytteRegionRule(
       isoCode: 'FI',
-      format: '2-3 3-5',
+      format: '3 5',
       prefixes: ['40', '41', '44'],
     ),
     'FJ': WrytteRegionRule(isoCode: 'FJ', format: '3 4', prefixes: []),
@@ -493,12 +492,12 @@ abstract final class WrytteLibrary {
     ),
     'HU': WrytteRegionRule(
       isoCode: 'HU',
-      format: '1-2 3-4',
+      format: '2 4',
       prefixes: ['20', '30', '70'],
     ),
     'ID': WrytteRegionRule(
       isoCode: 'ID',
-      format: '2-4 3-6',
+      format: '4 6',
       prefixes: [
         '811',
         '812',
@@ -658,7 +657,7 @@ abstract final class WrytteLibrary {
       format: '3 4',
       prefixes: ['6', '7', '8'],
     ),
-    'IT': WrytteRegionRule(isoCode: 'IT', format: '2-4 5-8', prefixes: ['3']),
+    'IT': WrytteRegionRule(isoCode: 'IT', format: '4 8', prefixes: ['3']),
     'JE': WrytteRegionRule(isoCode: 'JE', format: '4 6', prefixes: []),
     'JM': WrytteRegionRule(
       isoCode: 'JM',
@@ -672,7 +671,7 @@ abstract final class WrytteLibrary {
     ),
     'JP': WrytteRegionRule(
       isoCode: 'JP',
-      format: '2-4 4-4',
+      format: '4 4',
       prefixes: ['070', '080', '090'],
     ),
     'KE': WrytteRegionRule(
@@ -729,7 +728,7 @@ abstract final class WrytteLibrary {
     'KN': WrytteRegionRule(isoCode: 'KN', format: '3 3 4', prefixes: ['869']),
     'KP': WrytteRegionRule(
       isoCode: 'KP',
-      format: '2-4 3-5',
+      format: '4 5',
       prefixes: ['191', '192', '195'],
     ),
     'KR': WrytteRegionRule(isoCode: 'KR', format: '2 4 4', prefixes: ['010']),
@@ -801,7 +800,7 @@ abstract final class WrytteLibrary {
     ),
     'MM': WrytteRegionRule(
       isoCode: 'MM',
-      format: '2-3 3-5',
+      format: '3 5',
       prefixes: ['92', '94', '95', '96', '97', '98', '99'],
     ),
     'MN': WrytteRegionRule(
@@ -928,7 +927,7 @@ abstract final class WrytteLibrary {
     ),
     'NR': WrytteRegionRule(isoCode: 'NR', format: '4', prefixes: []),
     'NU': WrytteRegionRule(isoCode: 'NU', format: '4', prefixes: []),
-    'NZ': WrytteRegionRule(isoCode: 'NZ', format: '1-2 3-5', prefixes: []),
+    'NZ': WrytteRegionRule(isoCode: 'NZ', format: '2 5', prefixes: []),
     'OM': WrytteRegionRule(
       isoCode: 'OM',
       format: '4 4',
@@ -944,7 +943,7 @@ abstract final class WrytteLibrary {
     'PG': WrytteRegionRule(isoCode: 'PG', format: '4 4', prefixes: []),
     'PH': WrytteRegionRule(
       isoCode: 'PH',
-      format: '2-3 3-4',
+      format: '3 4',
       prefixes: [
         '905',
         '906',
@@ -1004,7 +1003,7 @@ abstract final class WrytteLibrary {
     ),
     'PK': WrytteRegionRule(
       isoCode: 'PK',
-      format: '2-3 3-5',
+      format: '3 5',
       prefixes: [
         '300',
         '301',
@@ -1101,7 +1100,7 @@ abstract final class WrytteLibrary {
     ),
     'SE': WrytteRegionRule(
       isoCode: 'SE',
-      format: '2-3 3-4',
+      format: '3 4',
       prefixes: ['70', '72', '73'],
     ),
     'SG': WrytteRegionRule(isoCode: 'SG', format: '4 4', prefixes: ['8', '9']),
@@ -1231,7 +1230,7 @@ abstract final class WrytteLibrary {
     'VI': WrytteRegionRule(isoCode: 'VI', format: '3 3 4', prefixes: []),
     'VN': WrytteRegionRule(
       isoCode: 'VN',
-      format: '2-3 3-4',
+      format: '3 4',
       prefixes: [
         '32',
         '33',
@@ -1318,8 +1317,10 @@ abstract final class WrytteLibrary {
     ),
   };
 
-  static WrytteRegionRule? forRegion(String isoCode) =>
-      rules[isoCode.trim().toUpperCase()];
+  static WrytteRegionRule? forRegion(String isoCode) {
+    final rule = rules[isoCode.trim().toUpperCase()];
+    return rule == null || rule.format.isEmpty ? null : rule;
+  }
 
   static List<String> prefixesFor(String isoCode) {
     final normalized = isoCode.trim().toUpperCase();
