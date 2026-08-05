@@ -283,6 +283,15 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       );
       return;
     }
+    final liveness = analysis.liveness;
+    if (liveness != null && !liveness.isReal) {
+      _setStatus(
+        'Possible spoof detected. '
+        'V2 ${_percent(liveness.v2.realProbability)} real · '
+        'V1SE ${_percent(liveness.v1se.realProbability)} real',
+      );
+      return;
+    }
     if (!analysis.alignmentAccepted) {
       _setStatus('Hold still and look directly at the camera.');
       return;
@@ -293,7 +302,11 @@ class _KFaceScanPageState extends State<KFaceScanPage>
         .clamp(0.0, 1.0);
     setState(() {
       _ringProgress = next;
-      _status = 'Keep looking at the camera.';
+      _status =
+          liveness == null
+              ? 'Keep looking at the camera.'
+              : 'Live face · V2 ${_percent(liveness.v2.realProbability)} real · '
+                  'V1SE ${_percent(liveness.v1se.realProbability)} real';
       if (_ringProgress >= 1) {
         _completed = true;
         _status = 'Creating your secure face key…';
@@ -303,6 +316,9 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       unawaited(_finishBiometricScan());
     }
   }
+
+  String _percent(double probability) =>
+      '${(probability * 100).clamp(0, 100).toStringAsFixed(0)}%';
 
   Future<void> _finishBiometricScan() async {
     if (_finalizing) return;

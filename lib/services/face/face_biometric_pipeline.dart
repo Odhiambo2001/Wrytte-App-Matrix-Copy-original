@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import 'package:wrytte/services/face/adaface_embedder.dart';
 import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
+import 'package:wrytte/services/face/mini_fasnet_liveness.dart';
 import 'package:wrytte/services/face/opencv_face_preprocessor.dart';
 import 'package:wrytte/services/face/retinaface_detector.dart';
 
@@ -16,6 +17,7 @@ class FrameAnalysis {
     required this.cropSide,
     required this.wasResized,
     required this.acceptedFrameCount,
+    required this.liveness,
   });
 
   final bool faceDetected;
@@ -26,6 +28,7 @@ class FrameAnalysis {
   final int cropSide;
   final bool wasResized;
   final int acceptedFrameCount;
+  final DualLivenessResult? liveness;
 }
 
 class FaceBiometricPipeline {
@@ -35,11 +38,14 @@ class FaceBiometricPipeline {
   final AdaFaceEmbedder adaFace = AdaFaceEmbedder();
   final LdpcFuzzyCommitment ldpc = LdpcFuzzyCommitment();
   final OpenCvFacePreprocessor openCv = OpenCvFacePreprocessor();
+  final MiniFasNetLiveness liveness = MiniFasNetLiveness();
   final List<AlignedFace> _alignedFaces = [];
 
   int get acceptedFrameCount => _alignedFaces.length;
 
-  Future<void> initializeDetector() => retinaFace.initialize();
+  Future<void> initializeDetector() async {
+    await Future.wait([retinaFace.initialize(), liveness.initialize()]);
+  }
 
   Future<FrameAnalysis> processFrame(img.Image cameraFrame) async {
     final prepared = openCv.prepare(cameraFrame);
@@ -48,9 +54,27 @@ class FaceBiometricPipeline {
         faces.where(_isInsideRetinaRing).toList()
           ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
     AlignedFace? aligned;
+    DualLivenessResult? livenessResult;
     if (inside.isNotEmpty) {
-      aligned = openCv.align(prepared, inside.first.landmarks);
-      if (aligned != null) {
+      final selectedFace = inside.first;
+      final v2Crop = openCv.cropForMiniFasNet(
+        prepared,
+        selectedFace,
+        contextScale: MiniFasNetLiveness.v2CropScale,
+      );
+      final v1seCrop = openCv.cropForMiniFasNet(
+        prepared,
+        selectedFace,
+        contextScale: MiniFasNetLiveness.v1seCropScale,
+      );
+      livenessResult = await liveness.predict(
+        v2FaceBgr: v2Crop,
+        v1seFaceBgr: v1seCrop,
+      );
+      if (livenessResult.isReal) {
+        aligned = openCv.align(prepared, selectedFace.landmarks);
+      }
+      if (aligned != null && livenessResult.isReal) {
         _alignedFaces.add(aligned);
         _alignedFaces.sort((a, b) => b.sharpness.compareTo(a.sharpness));
         if (_alignedFaces.length > framesToUse) _alignedFaces.removeLast();
@@ -65,6 +89,7 @@ class FaceBiometricPipeline {
       cropSide: prepared.cropSide,
       wasResized: prepared.wasResized,
       acceptedFrameCount: _alignedFaces.length,
+      liveness: livenessResult,
     );
   }
 
@@ -96,6 +121,7 @@ class FaceBiometricPipeline {
 
   Future<void> dispose() async {
     await retinaFace.dispose();
+    await liveness.dispose();
     await adaFace.dispose();
   }
 

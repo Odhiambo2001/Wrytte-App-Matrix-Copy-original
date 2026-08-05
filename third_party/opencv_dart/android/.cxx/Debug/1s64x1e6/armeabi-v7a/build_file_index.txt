@@ -1,0 +1,3 @@
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/armeabi-v7a/_deps/libdartcv-src/CMakeLists.txt
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/armeabi-v7a/_deps/libdartcv-src/dartcv/CMakeLists.txt
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/src/CMakeLists.txt

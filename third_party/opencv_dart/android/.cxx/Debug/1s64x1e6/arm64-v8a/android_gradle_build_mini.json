@@ -1,0 +1,29 @@
+{
+  "buildFiles": [
+    "/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-src/CMakeLists.txt",
+    "/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a/_deps/libdartcv-src/dartcv/CMakeLists.txt",
+    "/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/src/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/home/victor/Android/Sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/home/victor/Android/Sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/arm64-v8a",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "dartcv::@f637654dea39b816c1ca": {
+      "artifactName": "dartcv",
+      "abi": "arm64-v8a",
+      "output": "/home/victor/Documents/Desktop/Wrytte-App-Matrix/build/opencv_dart/intermediates/cxx/Debug/1s64x1e6/obj/arm64-v8a/libdartcv.so",
+      "runtimeFiles": []
+    }
+  }
+}

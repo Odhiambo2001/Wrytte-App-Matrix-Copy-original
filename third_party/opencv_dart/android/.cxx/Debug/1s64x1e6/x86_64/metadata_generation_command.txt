@@ -1,0 +1,22 @@
+                        -H/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/src
+-DCMAKE_SYSTEM_NAME=Android
+-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+-DCMAKE_SYSTEM_VERSION=24
+-DANDROID_PLATFORM=android-24
+-DANDROID_ABI=x86_64
+-DCMAKE_ANDROID_ARCH_ABI=x86_64
+-DANDROID_NDK=/home/victor/Android/Sdk/ndk/27.0.12077973
+-DCMAKE_ANDROID_NDK=/home/victor/Android/Sdk/ndk/27.0.12077973
+-DCMAKE_TOOLCHAIN_FILE=/home/victor/Android/Sdk/ndk/27.0.12077973/build/cmake/android.toolchain.cmake
+-DCMAKE_MAKE_PROGRAM=/home/victor/Android/Sdk/cmake/3.22.1/bin/ninja
+-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=/home/victor/Documents/Desktop/Wrytte-App-Matrix/build/opencv_dart/intermediates/cxx/Debug/1s64x1e6/obj/x86_64
+-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=/home/victor/Documents/Desktop/Wrytte-App-Matrix/build/opencv_dart/intermediates/cxx/Debug/1s64x1e6/obj/x86_64
+-DCMAKE_BUILD_TYPE=Debug
+-B/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/x86_64
+-GNinja
+-DANDROID_ARM_NEON=TRUE
+-DANDROID_STL=c++_static
+-DCMAKE_INSTALL_PREFIX=/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/src/main/jniLibs
+-DDART_EXECUTABLE=/opt/flutter/bin/dart
+                        Build command args: []
+                        Version: 2

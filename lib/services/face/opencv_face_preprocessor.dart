@@ -8,6 +8,7 @@ import 'package:wrytte/services/face/retinaface_detector.dart';
 class RetinaFrame {
   const RetinaFrame({
     required this.bgr,
+    required this.originalBgr,
     required this.originalWidth,
     required this.originalHeight,
     required this.cropX,
@@ -17,6 +18,7 @@ class RetinaFrame {
   });
 
   final Uint8List bgr;
+  final Uint8List originalBgr;
   final int originalWidth;
   final int originalHeight;
   final int cropX;
@@ -82,6 +84,7 @@ class OpenCvFacePreprocessor {
               ), interpolation: cv.INTER_LINEAR));
       return RetinaFrame(
         bgr: Uint8List.fromList(output.data),
+        originalBgr: bgr,
         originalWidth: originalWidth,
         originalHeight: originalHeight,
         cropX: cropX,
@@ -91,6 +94,64 @@ class OpenCvFacePreprocessor {
       );
     } finally {
       resized?.dispose();
+      cropped.dispose();
+      roi.dispose();
+      source.dispose();
+    }
+  }
+
+  /// Reproduces the MiniFASNet repository's context crop from the original
+  /// camera frame, then resizes it to the models' 80x80 BGR input.
+  Uint8List cropForMiniFasNet(
+    RetinaFrame frame,
+    FaceDetection face, {
+    required double contextScale,
+  }) {
+    const outputSize = 80;
+    final retinaToOriginal = frame.cropSide / retinaSize;
+    // The reference first converts xyxy to integer xywh.
+    final mappedLeft = frame.cropX + (face.left * retinaToOriginal);
+    final mappedTop = frame.cropY + (face.top * retinaToOriginal);
+    final left = mappedLeft.toInt();
+    final top = mappedTop.toInt();
+    final boxWidth = math.max(1, (face.width * retinaToOriginal).toInt());
+    final boxHeight = math.max(1, (face.height * retinaToOriginal).toInt());
+    final scale = math.min(
+      contextScale,
+      math.min(
+        (frame.originalHeight - 1) / boxHeight,
+        (frame.originalWidth - 1) / boxWidth,
+      ),
+    );
+    final centerX = left + boxWidth / 2;
+    final centerY = top + boxHeight / 2;
+    final x1 = math.max(0, (centerX - (boxWidth * scale / 2)).toInt());
+    final y1 = math.max(0, (centerY - (boxHeight * scale / 2)).toInt());
+    final x2 = math.min(
+      frame.originalWidth - 1,
+      (centerX + (boxWidth * scale / 2)).toInt(),
+    );
+    final y2 = math.min(
+      frame.originalHeight - 1,
+      (centerY + (boxHeight * scale / 2)).toInt(),
+    );
+
+    final source = cv.Mat.fromList(
+      frame.originalHeight,
+      frame.originalWidth,
+      cv.MatType.CV_8UC3,
+      frame.originalBgr,
+    );
+    final roi = cv.Rect(x1, y1, x2 - x1 + 1, y2 - y1 + 1);
+    final cropped = cv.Mat.fromMat(source, copy: true, roi: roi);
+    final resized = cv.resize(cropped, (
+      outputSize,
+      outputSize,
+    ), interpolation: cv.INTER_LINEAR);
+    try {
+      return Uint8List.fromList(resized.data);
+    } finally {
+      resized.dispose();
       cropped.dispose();
       roi.dispose();
       source.dispose();

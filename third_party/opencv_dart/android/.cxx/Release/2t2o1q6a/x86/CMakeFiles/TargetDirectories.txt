@@ -1,0 +1,2 @@
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/x86/CMakeFiles/edit_cache.dir
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/x86/CMakeFiles/rebuild_cache.dir

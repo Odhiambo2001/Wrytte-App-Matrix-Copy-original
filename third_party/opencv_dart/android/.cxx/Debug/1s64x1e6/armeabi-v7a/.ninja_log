@@ -1,0 +1,11 @@
+# ninja log v5
+3	1910	1785894036031876361	_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir/core/version.cpp.o	5e482ddc3432203b
+1	1953	1785894036071875623	_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir/core/logging.cpp.o	ae22aa7e59402457
+3	2006	1785894036123874664	_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir/core/svd.cpp.o	23a94432342e073
+0	2094	1785894036211873041	_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir/core/exception.cpp.o	5770b2d4841b60aa
+3	2127	1785894036247872378	_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir/core/utils.cpp.o	31b187e0d42f891b
+0	2549	1785894036663864706	_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir/core/core.cpp.o	38ace1ef32e089fa
+3	2969	1785894037075857109	_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir/imgproc/imgproc.cpp.o	44f32863885c25c4
+0	3085	1785894037195854896	_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir/core/mat.cpp.o	241b8f35e9e5d512
+3	5765	1785894039815806581	_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir/core/stdvec.cpp.o	3cbd1e6d22fb450
+5765	5841	1785894039967803778	/home/victor/Documents/Desktop/Wrytte-App-Matrix/build/opencv_dart/intermediates/cxx/Debug/1s64x1e6/obj/armeabi-v7a/libdartcv.so	e569bda1ae090f39

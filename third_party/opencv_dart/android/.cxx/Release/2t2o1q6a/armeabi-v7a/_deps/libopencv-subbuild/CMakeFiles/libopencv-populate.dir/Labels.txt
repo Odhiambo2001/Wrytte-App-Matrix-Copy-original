@@ -1,0 +1,14 @@
+# Target labels
+ libopencv-populate
+# Source files and their labels
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/CMakeFiles/libopencv-populate
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/CMakeFiles/libopencv-populate.rule
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/CMakeFiles/libopencv-populate-complete.rule
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-build.rule
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-configure.rule
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-download.rule
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-install.rule
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-mkdir.rule
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-patch.rule
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-test.rule
+/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/armeabi-v7a/_deps/libopencv-subbuild/libopencv-populate-prefix/src/libopencv-populate-stamp/libopencv-populate-update.rule
