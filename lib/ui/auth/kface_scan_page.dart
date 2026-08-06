@@ -28,6 +28,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   final FaceCommitmentStore _commitmentStore = const FaceCommitmentStore();
   CameraController? _controller;
   Future<void>? _initializeFuture;
+  Future<void>? _finalizationFuture;
 
   bool _isAnalyzing = false;
   bool _completed = false;
@@ -66,7 +67,12 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     _controller = null;
     _initializeFuture = null;
     unawaited(controller?.dispose());
-    unawaited(_pipeline.dispose());
+    final finalization = _finalizationFuture;
+    unawaited(
+      finalization == null
+          ? _pipeline.dispose()
+          : finalization.whenComplete(_pipeline.dispose),
+    );
     super.dispose();
   }
 
@@ -313,7 +319,8 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       }
     });
     if (_completed) {
-      unawaited(_finishBiometricScan());
+      final finalization = _finalizationFuture ??= _finishBiometricScan();
+      unawaited(finalization);
     }
   }
 
@@ -352,6 +359,8 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   }
 
   Future<void> _startOver() async {
+    if (_finalizing) return;
+    _finalizationFuture = null;
     _pipeline.reset();
     setState(() {
       _completed = false;
