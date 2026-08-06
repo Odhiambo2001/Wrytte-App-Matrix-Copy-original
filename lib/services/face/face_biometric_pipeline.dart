@@ -1,5 +1,4 @@
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:wrytte/services/face/adaface_embedder.dart';
 import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
@@ -40,6 +39,7 @@ class FaceBiometricPipeline {
   final OpenCvFacePreprocessor openCv = OpenCvFacePreprocessor();
   final MiniFasNetLiveness liveness = MiniFasNetLiveness();
   final List<AlignedFace> _alignedFaces = [];
+  int _frameSequence = 0;
 
   int get acceptedFrameCount => _alignedFaces.length;
 
@@ -48,7 +48,15 @@ class FaceBiometricPipeline {
   }
 
   Future<FrameAnalysis> processFrame(img.Image cameraFrame) async {
+    final frameNumber = ++_frameSequence;
     final prepared = openCv.prepare(cameraFrame);
+    debugPrint(
+      '[KFace][Frame $frameNumber][RetinaCrop] original='
+      '${prepared.originalWidth}x${prepared.originalHeight} '
+      'square=x${prepared.cropX},y${prepared.cropY},'
+      '${prepared.cropSide}x${prepared.cropSide} output=640x640 '
+      'resized=${prepared.wasResized}',
+    );
     final faces = await retinaFace.detectBgr(prepared.bgr);
     final inside =
         faces.where(_isInsideRetinaRing).toList()
@@ -57,19 +65,31 @@ class FaceBiometricPipeline {
     DualLivenessResult? livenessResult;
     if (inside.isNotEmpty) {
       final selectedFace = inside.first;
-      final v2Crop = openCv.cropForMiniFasNet(
-        prepared,
-        selectedFace,
-        contextScale: MiniFasNetLiveness.v2CropScale,
-      );
-      final v1seCrop = openCv.cropForMiniFasNet(
-        prepared,
-        selectedFace,
-        contextScale: MiniFasNetLiveness.v1seCropScale,
+      final crops = openCv.cropForMiniFasNet(prepared, selectedFace);
+      debugPrint(
+        '[KFace][Frame $frameNumber][LivenessCrop] '
+        'face=${selectedFace.left.toStringAsFixed(1)},'
+        '${selectedFace.top.toStringAsFixed(1)},'
+        '${selectedFace.right.toStringAsFixed(1)},'
+        '${selectedFace.bottom.toStringAsFixed(1)} '
+        'V2(scale=2.7,box=${_boxLog(crops.v2Box)},output=80x80) '
+        'V1SE(scale=4.0,box=${_boxLog(crops.v1seBox)},output=80x80)',
       );
       livenessResult = await liveness.predict(
-        v2FaceBgr: v2Crop,
-        v1seFaceBgr: v1seCrop,
+        v2FaceBgr: crops.v2Bgr,
+        v1seFaceBgr: crops.v1seBgr,
+      );
+      debugPrint(
+        '[KFace][Frame $frameNumber][Liveness] '
+        'V2(real=${_prob(livenessResult.v2.realProbability)},'
+        'fake=${_prob(livenessResult.v2.fakeProbability)},'
+        'class=${livenessResult.v2.labelIndex},'
+        'decision=${livenessResult.v2.isReal ? 'REAL' : 'FAKE'}) '
+        'V1SE(real=${_prob(livenessResult.v1se.realProbability)},'
+        'fake=${_prob(livenessResult.v1se.fakeProbability)},'
+        'class=${livenessResult.v1se.labelIndex},'
+        'decision=${livenessResult.v1se.isReal ? 'REAL' : 'FAKE'}) '
+        'combined=${livenessResult.isReal ? 'PASS' : 'REJECT'}',
       );
       if (livenessResult.isReal) {
         aligned = openCv.align(prepared, selectedFace.landmarks);
@@ -93,28 +113,65 @@ class FaceBiometricPipeline {
     );
   }
 
+  static String _boxLog(MiniFasNetCropBox box) =>
+      '${box.left},${box.top},${box.right},${box.bottom} '
+      '${box.width}x${box.height}';
+
+  static String _prob(double value) =>
+      '${(value * 100).clamp(0, 100).toStringAsFixed(1)}%';
+
   Future<Float32List> createEmbedding() async {
     if (_alignedFaces.isEmpty) {
       throw StateError('No aligned faces were collected.');
     }
+    debugPrint('[KFace][Finalization][AdaFace] initialization=STARTED');
     await adaFace.initialize();
+    debugPrint('[KFace][Finalization][AdaFace] initialization=COMPLETED');
     final embeddings = <Float32List>[];
-    for (final face in _alignedFaces.take(framesToUse)) {
+    final faces = _alignedFaces.take(framesToUse).toList(growable: false);
+    for (var index = 0; index < faces.length; index++) {
+      debugPrint(
+        '[KFace][Finalization][AdaFace] embedding=${index + 1}/${faces.length} '
+        'status=STARTED',
+      );
+      final face = faces[index];
       embeddings.add(await adaFace.embed(face.bgr));
+      debugPrint(
+        '[KFace][Finalization][AdaFace] embedding=${index + 1}/${faces.length} '
+        'status=COMPLETED',
+      );
     }
-    return adaFace.average(embeddings);
+    debugPrint('[KFace][Finalization][AdaFace] averaging=STARTED');
+    final averaged = adaFace.average(embeddings);
+    debugPrint('[KFace][Finalization][AdaFace] averaging=COMPLETED');
+    return averaged;
   }
 
   Future<FuzzyCommitment> enroll() async {
     final embedding = await createEmbedding();
+    debugPrint(
+      '[KFace][Finalization][LDPC] mode=ENROLL initialization=STARTED',
+    );
     await ldpc.initialize();
-    return ldpc.enroll(embedding);
+    debugPrint('[KFace][Finalization][LDPC] mode=ENROLL processing=STARTED');
+    final commitment = ldpc.enroll(embedding);
+    debugPrint('[KFace][Finalization][LDPC] mode=ENROLL result=COMPLETED');
+    return commitment;
   }
 
   Future<LdpcRecoveryResult> recover(FuzzyCommitment commitment) async {
     final embedding = await createEmbedding();
+    debugPrint(
+      '[KFace][Finalization][LDPC] mode=RECOVER initialization=STARTED',
+    );
     await ldpc.initialize();
-    return ldpc.recover(embedding, commitment);
+    debugPrint('[KFace][Finalization][LDPC] mode=RECOVER processing=STARTED');
+    final recovery = ldpc.recover(embedding, commitment);
+    debugPrint(
+      '[KFace][Finalization][LDPC] mode=RECOVER '
+      'result=${recovery.accepted ? 'ACCEPTED' : 'REJECTED'}',
+    );
+    return recovery;
   }
 
   void reset() => _alignedFaces.clear();

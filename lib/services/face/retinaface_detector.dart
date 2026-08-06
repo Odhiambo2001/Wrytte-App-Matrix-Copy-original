@@ -1,8 +1,10 @@
 import 'dart:math' as math;
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import 'package:image/image.dart' as img;
+import 'package:wrytte/services/face/android_onnx_image_session.dart';
 
 class FaceLandmarks {
   const FaceLandmarks({
@@ -65,29 +67,30 @@ class RetinaFaceDetector {
   final double confidenceThreshold;
   final double nmsThreshold;
   OrtSession? _session;
+  AndroidOnnxImageSession? _androidSession;
+  late final Float32List _inputBuffer = Float32List(inputSize * inputSize * 3);
   late final List<_Prior> _priors = _createPriors();
 
-  bool get isReady => _session != null;
+  bool get isReady => _session != null || _androidSession != null;
 
   Future<void> initialize() async {
-    if (_session != null) return;
+    if (_session != null || _androidSession != null) return;
+    if (Platform.isAndroid) {
+      _androidSession = await AndroidOnnxImageSession.create(modelAsset);
+      _validateNames(_androidSession!.inputNames, _androidSession!.outputNames);
+      return;
+    }
     _session = await OnnxRuntime().createSessionFromAsset(
       modelAsset,
       options: OrtSessionOptions(intraOpNumThreads: 2),
     );
     final session = _session!;
-    if (!session.inputNames.contains('input') ||
-        !session.outputNames.toSet().containsAll(const {
-          'loc',
-          'conf',
-          'landmarks',
-        })) {
+    try {
+      _validateNames(session.inputNames, session.outputNames);
+    } catch (_) {
       await session.close();
       _session = null;
-      throw StateError(
-        'Unexpected RetinaFace tensors. Expected input and '
-        'loc/conf/landmarks outputs.',
-      );
+      rethrow;
     }
   }
 
@@ -108,8 +111,26 @@ class RetinaFaceDetector {
         'RetinaFace requires ${inputSize}x$inputSize BGR bytes.',
       );
     }
+    final android = _androidSession;
+    if (android != null) {
+      final outputs = await android.runBgr(
+        bgr: bgr,
+        width: inputSize,
+        height: inputSize,
+        mode: 'retina',
+      );
+      return _decode(
+        outputs['loc']!,
+        outputs['conf']!,
+        outputs['landmarks']!,
+        inputSize,
+        inputSize,
+      );
+    }
     final plane = inputSize * inputSize;
-    final tensorData = Float32List(plane * 3);
+    // Reuse the ~4.7 MiB RetinaFace tensor instead of allocating it for every
+    // camera frame. Frames are processed serially by the scan page.
+    final tensorData = _inputBuffer;
     for (var pixel = 0; pixel < plane; pixel++) {
       final offset = pixel * 3;
       tensorData[pixel] = bgr[offset].toDouble() - 104.0;
@@ -153,8 +174,23 @@ class RetinaFaceDetector {
 
   Future<void> dispose() async {
     final session = _session;
+    final android = _androidSession;
     _session = null;
-    await session?.close();
+    _androidSession = null;
+    await Future.wait([
+      if (session != null) session.close(),
+      if (android != null) android.close(),
+    ]);
+  }
+
+  static void _validateNames(List<String> inputs, List<String> outputs) {
+    if (!inputs.contains('input') ||
+        !outputs.toSet().containsAll(const {'loc', 'conf', 'landmarks'})) {
+      throw StateError(
+        'Unexpected RetinaFace tensors. Expected input and '
+        'loc/conf/landmarks outputs.',
+      );
+    }
   }
 
   Float32List _toBgrTensor(img.Image image) {

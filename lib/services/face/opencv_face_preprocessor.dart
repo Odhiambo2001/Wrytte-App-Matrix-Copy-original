@@ -51,6 +51,20 @@ class MiniFasNetCropBox {
   int get height => bottom - top + 1;
 }
 
+class MiniFasNetCrops {
+  const MiniFasNetCrops({
+    required this.v2Bgr,
+    required this.v1seBgr,
+    required this.v2Box,
+    required this.v1seBox,
+  });
+
+  final Uint8List v2Bgr;
+  final Uint8List v1seBgr;
+  final MiniFasNetCropBox v2Box;
+  final MiniFasNetCropBox v1seBox;
+}
+
 class OpenCvFacePreprocessor {
   static const retinaSize = 640;
   static const faceSize = 112;
@@ -119,11 +133,7 @@ class OpenCvFacePreprocessor {
 
   /// Reproduces the MiniFASNet repository's context crop from the original
   /// camera frame, then resizes it to the models' 80x80 BGR input.
-  Uint8List cropForMiniFasNet(
-    RetinaFrame frame,
-    FaceDetection face, {
-    required double contextScale,
-  }) {
+  MiniFasNetCrops cropForMiniFasNet(RetinaFrame frame, FaceDetection face) {
     const outputSize = 80;
     final retinaToOriginal = frame.cropSide / retinaSize;
     // The reference first converts xyxy to integer xywh.
@@ -133,15 +143,17 @@ class OpenCvFacePreprocessor {
     final top = mappedTop.toInt();
     final boxWidth = math.max(1, (face.width * retinaToOriginal).toInt());
     final boxHeight = math.max(1, (face.height * retinaToOriginal).toInt());
-    final cropBox = calculateMiniFasNetCropBox(
+    MiniFasNetCropBox box(double scale) => calculateMiniFasNetCropBox(
       sourceWidth: frame.originalWidth,
       sourceHeight: frame.originalHeight,
       x: left,
       y: top,
       boxWidth: boxWidth,
       boxHeight: boxHeight,
-      scale: contextScale,
+      scale: scale,
     );
+    final v2Box = box(2.7);
+    final v1seBox = box(4.0);
 
     final source = cv.Mat.fromList(
       frame.originalHeight,
@@ -149,23 +161,35 @@ class OpenCvFacePreprocessor {
       cv.MatType.CV_8UC3,
       frame.originalBgr,
     );
-    final roi = cv.Rect(
-      cropBox.left,
-      cropBox.top,
-      cropBox.width,
-      cropBox.height,
-    );
-    final cropped = cv.Mat.fromMat(source, copy: true, roi: roi);
-    final resized = cv.resize(cropped, (
-      outputSize,
-      outputSize,
-    ), interpolation: cv.INTER_LINEAR);
+    Uint8List resizeCrop(MiniFasNetCropBox cropBox) {
+      final roi = cv.Rect(
+        cropBox.left,
+        cropBox.top,
+        cropBox.width,
+        cropBox.height,
+      );
+      final cropped = cv.Mat.fromMat(source, copy: true, roi: roi);
+      final resized = cv.resize(cropped, (
+        outputSize,
+        outputSize,
+      ), interpolation: cv.INTER_LINEAR);
+      try {
+        return Uint8List.fromList(resized.data);
+      } finally {
+        resized.dispose();
+        cropped.dispose();
+        roi.dispose();
+      }
+    }
+
     try {
-      return Uint8List.fromList(resized.data);
+      return MiniFasNetCrops(
+        v2Bgr: resizeCrop(v2Box),
+        v1seBgr: resizeCrop(v1seBox),
+        v2Box: v2Box,
+        v1seBox: v1seBox,
+      );
     } finally {
-      resized.dispose();
-      cropped.dispose();
-      roi.dispose();
       source.dispose();
     }
   }

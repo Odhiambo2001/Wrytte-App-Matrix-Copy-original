@@ -1,7 +1,9 @@
 import 'dart:math' as math;
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
+import 'package:wrytte/services/face/android_onnx_image_session.dart';
 
 class AdaFaceEmbedder {
   static const modelAsset = 'assets/models/adaface_ir_101.onnx';
@@ -9,9 +11,14 @@ class AdaFaceEmbedder {
   static const embeddingSize = 512;
 
   OrtSession? _session;
+  AndroidOnnxImageSession? _androidSession;
 
   Future<void> initialize() async {
-    if (_session != null) return;
+    if (_session != null || _androidSession != null) return;
+    if (Platform.isAndroid) {
+      _androidSession = await AndroidOnnxImageSession.create(modelAsset);
+      return;
+    }
     _session = await OnnxRuntime().createSessionFromAsset(
       modelAsset,
       options: OrtSessionOptions(intraOpNumThreads: 2),
@@ -19,6 +26,19 @@ class AdaFaceEmbedder {
   }
 
   Future<Float32List> embed(Uint8List faceBgr) async {
+    final android = _androidSession;
+    if (android != null) {
+      if (faceBgr.length != faceSize * faceSize * 3) {
+        throw ArgumentError('AdaFace requires a 112x112 BGR face.');
+      }
+      final outputs = await android.runBgr(
+        bgr: faceBgr,
+        width: faceSize,
+        height: faceSize,
+        mode: 'adaface',
+      );
+      return normalize(outputs[android.outputNames.first]!);
+    }
     final session = _session;
     if (session == null) {
       throw StateError('AdaFaceEmbedder.initialize() must be called first.');
@@ -92,7 +112,12 @@ class AdaFaceEmbedder {
 
   Future<void> dispose() async {
     final session = _session;
+    final android = _androidSession;
     _session = null;
-    await session?.close();
+    _androidSession = null;
+    await Future.wait([
+      if (session != null) session.close(),
+      if (android != null) android.close(),
+    ]);
   }
 }

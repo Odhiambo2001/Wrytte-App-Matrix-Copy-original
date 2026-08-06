@@ -331,14 +331,25 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     if (_finalizing) return;
     _finalizing = true;
     try {
+      debugPrint('[KFace][Finalization] status=STARTED');
       await _controller?.stopImageStream();
+      debugPrint('[KFace][Finalization] camera_stream=STOPPED');
       final stored = await _commitmentStore.read(widget.wrytteId);
+      debugPrint(
+        '[KFace][Finalization] operation='
+        '${stored == null ? 'ENROLL' : 'VERIFY'}',
+      );
       if (stored == null) {
         final commitment = await _pipeline.enroll();
         await _commitmentStore.write(widget.wrytteId, commitment);
         _setStatus('Face enrollment complete.');
+        debugPrint('[KFace][Final] result=ENROLLED_SUCCESSFULLY');
       } else {
         final recovery = await _pipeline.recover(stored);
+        debugPrint(
+          '[KFace][Final] result='
+          '${recovery.accepted ? 'FACE_VERIFIED_SUCCESSFULLY' : 'FACE_VERIFICATION_FAILED'}',
+        );
         _setStatus(
           recovery.accepted
               ? 'Face verified successfully.'

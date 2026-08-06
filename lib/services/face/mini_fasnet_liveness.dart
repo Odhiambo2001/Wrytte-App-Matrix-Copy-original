@@ -1,7 +1,9 @@
 import 'dart:math' as math;
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
+import 'package:wrytte/services/face/android_onnx_image_session.dart';
 
 class MiniFasNetScore {
   const MiniFasNetScore({required this.probabilities});
@@ -47,9 +49,25 @@ class MiniFasNetLiveness {
 
   OrtSession? _v2Session;
   OrtSession? _v1seSession;
+  AndroidOnnxImageSession? _androidV2Session;
+  AndroidOnnxImageSession? _androidV1seSession;
+  final Float32List _v2InputBuffer = Float32List(inputSize * inputSize * 3);
+  final Float32List _v1seInputBuffer = Float32List(inputSize * inputSize * 3);
 
   Future<void> initialize() async {
-    if (_v2Session != null && _v1seSession != null) return;
+    if ((_v2Session != null && _v1seSession != null) ||
+        (_androidV2Session != null && _androidV1seSession != null)) {
+      return;
+    }
+    if (Platform.isAndroid) {
+      final sessions = await Future.wait([
+        AndroidOnnxImageSession.create(v2ModelAsset),
+        AndroidOnnxImageSession.create(v1seModelAsset),
+      ]);
+      _androidV2Session = sessions[0];
+      _androidV1seSession = sessions[1];
+      return;
+    }
     final sessions = await Future.wait([
       OnnxRuntime().createSessionFromAsset(
         v2ModelAsset,
@@ -75,24 +93,56 @@ class MiniFasNetLiveness {
     required Uint8List v2FaceBgr,
     required Uint8List v1seFaceBgr,
   }) async {
+    final androidV2 = _androidV2Session;
+    final androidV1se = _androidV1seSession;
+    if (androidV2 != null && androidV1se != null) {
+      final results = await Future.wait([
+        _runAndroid(androidV2, v2FaceBgr),
+        _runAndroid(androidV1se, v1seFaceBgr),
+      ]);
+      return DualLivenessResult(v2: results[0], v1se: results[1]);
+    }
     final v2 = _v2Session;
     final v1se = _v1seSession;
     if (v2 == null || v1se == null) {
       throw StateError('MiniFasNetLiveness.initialize() must be called first.');
     }
     final results = await Future.wait([
-      _run(v2, v2FaceBgr),
-      _run(v1se, v1seFaceBgr),
+      _run(v2, v2FaceBgr, _v2InputBuffer),
+      _run(v1se, v1seFaceBgr, _v1seInputBuffer),
     ]);
     return DualLivenessResult(v2: results[0], v1se: results[1]);
   }
 
-  Future<MiniFasNetScore> _run(OrtSession session, Uint8List faceBgr) async {
+  Future<MiniFasNetScore> _runAndroid(
+    AndroidOnnxImageSession session,
+    Uint8List faceBgr,
+  ) async {
+    if (faceBgr.length != inputSize * inputSize * 3) {
+      throw ArgumentError('MiniFASNet requires an 80x80 BGR face crop.');
+    }
+    final outputs = await session.runBgr(
+      bgr: faceBgr,
+      width: inputSize,
+      height: inputSize,
+      mode: 'mini_fas',
+    );
+    final logits = outputs[session.outputNames.first]!;
+    if (logits.length != 3) {
+      throw StateError('MiniFASNet returned ${logits.length} values, not 3.');
+    }
+    return MiniFasNetScore(probabilities: _softmax(logits));
+  }
+
+  Future<MiniFasNetScore> _run(
+    OrtSession session,
+    Uint8List faceBgr,
+    Float32List tensor,
+  ) async {
     if (faceBgr.length != inputSize * inputSize * 3) {
       throw ArgumentError('MiniFASNet requires an 80x80 BGR face crop.');
     }
     final plane = inputSize * inputSize;
-    final tensor = Float32List(plane * 3);
     for (var pixel = 0; pixel < plane; pixel++) {
       final source = pixel * 3;
       tensor[pixel] = faceBgr[source].toDouble();
@@ -138,11 +188,17 @@ class MiniFasNetLiveness {
   Future<void> dispose() async {
     final v2 = _v2Session;
     final v1se = _v1seSession;
+    final androidV2 = _androidV2Session;
+    final androidV1se = _androidV1seSession;
     _v2Session = null;
     _v1seSession = null;
+    _androidV2Session = null;
+    _androidV1seSession = null;
     await Future.wait([
       if (v2 != null) v2.close(),
       if (v1se != null) v1se.close(),
+      if (androidV2 != null) androidV2.close(),
+      if (androidV1se != null) androidV1se.close(),
     ]);
   }
 }
