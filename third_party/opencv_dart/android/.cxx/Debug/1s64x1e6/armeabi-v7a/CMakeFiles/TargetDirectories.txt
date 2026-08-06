@@ -1,7 +1,0 @@
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/armeabi-v7a/CMakeFiles/edit_cache.dir
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/armeabi-v7a/CMakeFiles/rebuild_cache.dir
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/armeabi-v7a/_deps/libdartcv-build/CMakeFiles/edit_cache.dir
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/armeabi-v7a/_deps/libdartcv-build/CMakeFiles/rebuild_cache.dir
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/armeabi-v7a/_deps/libdartcv-build/dartcv/CMakeFiles/dartcv.dir
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/armeabi-v7a/_deps/libdartcv-build/dartcv/CMakeFiles/edit_cache.dir
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Debug/1s64x1e6/armeabi-v7a/_deps/libdartcv-build/dartcv/CMakeFiles/rebuild_cache.dir

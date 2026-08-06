@@ -1,3 +1,0 @@
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/x86_64/_deps/libdartcv-src/CMakeLists.txt
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/x86_64/_deps/libdartcv-src/dartcv/CMakeLists.txt
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/src/CMakeLists.txt

@@ -42,3 +42,8 @@ android/file-system.probe
 build/
 
 .txt
+android/.gradle/
+android/.cxx/
+third_party/opencv_dart/android/.cxx/
+**/*.tar.gz
+third_party/opencv_dart/android/.gradle/

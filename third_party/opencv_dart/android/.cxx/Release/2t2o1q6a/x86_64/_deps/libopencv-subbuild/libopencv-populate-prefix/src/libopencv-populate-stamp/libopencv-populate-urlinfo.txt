@@ -1,3 +1,0 @@
-repository='external project URL'
-module='https://github.com/rainyl/opencv.full/releases/download/4.12.0.0/libopencv-android-x86_64.tar.gz'
-tag=''

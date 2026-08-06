@@ -1,3 +1,0 @@
-repository='https://github.com/rainyl/dartcv.git'
-module=''
-tag='origin'

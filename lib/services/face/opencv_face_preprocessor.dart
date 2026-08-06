@@ -34,6 +34,23 @@ class AlignedFace {
   final double sharpness;
 }
 
+class MiniFasNetCropBox {
+  const MiniFasNetCropBox({
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+  });
+
+  final int left;
+  final int top;
+  final int right;
+  final int bottom;
+
+  int get width => right - left + 1;
+  int get height => bottom - top + 1;
+}
+
 class OpenCvFacePreprocessor {
   static const retinaSize = 640;
   static const faceSize = 112;
@@ -116,24 +133,14 @@ class OpenCvFacePreprocessor {
     final top = mappedTop.toInt();
     final boxWidth = math.max(1, (face.width * retinaToOriginal).toInt());
     final boxHeight = math.max(1, (face.height * retinaToOriginal).toInt());
-    final scale = math.min(
-      contextScale,
-      math.min(
-        (frame.originalHeight - 1) / boxHeight,
-        (frame.originalWidth - 1) / boxWidth,
-      ),
-    );
-    final centerX = left + boxWidth / 2;
-    final centerY = top + boxHeight / 2;
-    final x1 = math.max(0, (centerX - (boxWidth * scale / 2)).toInt());
-    final y1 = math.max(0, (centerY - (boxHeight * scale / 2)).toInt());
-    final x2 = math.min(
-      frame.originalWidth - 1,
-      (centerX + (boxWidth * scale / 2)).toInt(),
-    );
-    final y2 = math.min(
-      frame.originalHeight - 1,
-      (centerY + (boxHeight * scale / 2)).toInt(),
+    final cropBox = calculateMiniFasNetCropBox(
+      sourceWidth: frame.originalWidth,
+      sourceHeight: frame.originalHeight,
+      x: left,
+      y: top,
+      boxWidth: boxWidth,
+      boxHeight: boxHeight,
+      scale: contextScale,
     );
 
     final source = cv.Mat.fromList(
@@ -142,7 +149,12 @@ class OpenCvFacePreprocessor {
       cv.MatType.CV_8UC3,
       frame.originalBgr,
     );
-    final roi = cv.Rect(x1, y1, x2 - x1 + 1, y2 - y1 + 1);
+    final roi = cv.Rect(
+      cropBox.left,
+      cropBox.top,
+      cropBox.width,
+      cropBox.height,
+    );
     final cropped = cv.Mat.fromMat(source, copy: true, roi: roi);
     final resized = cv.resize(cropped, (
       outputSize,
@@ -156,6 +168,66 @@ class OpenCvFacePreprocessor {
       roi.dispose();
       source.dispose();
     }
+  }
+
+  /// Exact port of Minivision CropImage._get_new_box().
+  ///
+  /// When the scaled crop crosses an edge, the opposite edge is shifted by
+  /// the same amount. This preserves the requested context instead of
+  /// shortening and stretching a clipped crop.
+  static MiniFasNetCropBox calculateMiniFasNetCropBox({
+    required int sourceWidth,
+    required int sourceHeight,
+    required int x,
+    required int y,
+    required int boxWidth,
+    required int boxHeight,
+    required double scale,
+  }) {
+    if (sourceWidth <= 1 || sourceHeight <= 1) {
+      throw ArgumentError('The source image must be at least 2x2 pixels.');
+    }
+    if (boxWidth <= 0 || boxHeight <= 0) {
+      throw ArgumentError('The face bounding box must have positive size.');
+    }
+
+    final boundedScale = math.min(
+      (sourceHeight - 1) / boxHeight,
+      math.min((sourceWidth - 1) / boxWidth, scale),
+    );
+    final newWidth = boxWidth * boundedScale;
+    final newHeight = boxHeight * boundedScale;
+    final centerX = x + boxWidth / 2;
+    final centerY = y + boxHeight / 2;
+
+    var left = centerX - newWidth / 2;
+    var top = centerY - newHeight / 2;
+    var right = centerX + newWidth / 2;
+    var bottom = centerY + newHeight / 2;
+
+    if (left < 0) {
+      right -= left;
+      left = 0;
+    }
+    if (top < 0) {
+      bottom -= top;
+      top = 0;
+    }
+    if (right > sourceWidth - 1) {
+      left -= right - sourceWidth + 1;
+      right = sourceWidth - 1;
+    }
+    if (bottom > sourceHeight - 1) {
+      top -= bottom - sourceHeight + 1;
+      bottom = sourceHeight - 1;
+    }
+
+    return MiniFasNetCropBox(
+      left: left.toInt(),
+      top: top.toInt(),
+      right: right.toInt(),
+      bottom: bottom.toInt(),
+    );
   }
 
   AlignedFace? align(RetinaFrame frame, FaceLandmarks landmarks) {

@@ -1,1 +1,0 @@
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/build/opencv_dart/intermediates/cxx/Release/2t2o1q6a/obj/armeabi-v7a

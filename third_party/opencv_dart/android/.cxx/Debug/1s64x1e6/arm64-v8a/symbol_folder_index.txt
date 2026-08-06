@@ -1,1 +1,0 @@
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/build/opencv_dart/intermediates/cxx/Debug/1s64x1e6/obj/arm64-v8a

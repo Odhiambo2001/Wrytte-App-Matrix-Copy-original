@@ -1,9 +1,0 @@
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/arm64-v8a/_deps/libdartcv-src/dartcv/core/core.h
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/arm64-v8a/_deps/libdartcv-src/dartcv/core/mat.h
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/arm64-v8a/_deps/libdartcv-src/dartcv/core/exception.h
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/arm64-v8a/_deps/libdartcv-src/dartcv/core/logging.h
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/arm64-v8a/_deps/libdartcv-src/dartcv/core/svd.h
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/arm64-v8a/_deps/libdartcv-src/dartcv/core/utils.h
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/arm64-v8a/_deps/libdartcv-src/dartcv/core/version.h
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/arm64-v8a/_deps/libdartcv-src/dartcv/core/stdvec.h
-/home/victor/Documents/Desktop/Wrytte-App-Matrix/third_party/opencv_dart/android/.cxx/Release/2t2o1q6a/arm64-v8a/_deps/libdartcv-src/dartcv/imgproc/imgproc.h
