@@ -96,6 +96,7 @@ class FaceCompleteness {
 class TargetFaceMetrics {
   const TargetFaceMetrics({
     required this.faceNumber,
+    required this.faceLabel,
     required this.visibleLandmarks,
     required this.distanceLabel,
     required this.boundingBoxVisibleFraction,
@@ -105,6 +106,7 @@ class TargetFaceMetrics {
   });
 
   final int faceNumber;
+  final String faceLabel;
   final int visibleLandmarks;
   final String distanceLabel;
   final double boundingBoxVisibleFraction;
@@ -133,6 +135,10 @@ class FaceBiometricPipeline {
   static const targetValueThreshold = 0.80;
   static const targetSizeGap = 0.15;
   static const _bboxVisibleThreshold = 0.9995;
+  static const fullBboxVisibleThreshold = 0.995;
+  static const fullGeometryThreshold = 0.80;
+  static const normalFaceSizeMinimum = 0.25;
+  static const normalFaceSizeMaximum = 0.65;
 
   final RetinaFaceDetector retinaFace = RetinaFaceDetector();
   final AdaFaceEmbedder adaFace = AdaFaceEmbedder();
@@ -178,7 +184,7 @@ class FaceBiometricPipeline {
     for (final face in orderedFaces) {
       perFaceResults.add((
         face: face,
-        completeness: _measureCompleteness(face),
+        completeness: measureFaceCompleteness(face),
         distance: measureFaceDistance(face),
         insideRing: _isInsideRetinaRing(face),
       ));
@@ -218,6 +224,7 @@ class FaceBiometricPipeline {
       targetMetrics.add(
         TargetFaceMetrics(
           faceNumber: index + 1,
+          faceLabel: result.completeness.label,
           visibleLandmarks: result.completeness.visibleLandmarks,
           distanceLabel: result.distance.label,
           boundingBoxVisibleFraction:
@@ -237,6 +244,7 @@ class FaceBiometricPipeline {
         );
     for (final metrics in targetMetrics) {
       final landmarksPass = metrics.visibleLandmarks == 5;
+      final fullFacePass = metrics.faceLabel == 'FULL';
       final distancePass = metrics.distanceLabel == 'NORMAL';
       final bboxPass =
           metrics.boundingBoxVisibleFraction >= _bboxVisibleThreshold;
@@ -248,6 +256,7 @@ class FaceBiometricPipeline {
       final selected = targetSelection.targetFaceNumber == metrics.faceNumber;
       debugPrint(
         '[KFace][Target][Frame $frameNumber][Face ${metrics.faceNumber}] '
+        'fullFace=$fullFacePass '
         'landmarks5of5=$landmarksPass '
         'distanceNormal=$distancePass '
         'bboxVisible1=$bboxPass '
@@ -274,7 +283,7 @@ class FaceBiometricPipeline {
     final completeness =
         selectedForCompleteness == null
             ? FaceCompleteness.none
-            : _measureCompleteness(selectedForCompleteness);
+            : measureFaceCompleteness(selectedForCompleteness);
     final faceDistance =
         selectedForCompleteness == null
             ? FaceDistance.none
@@ -377,6 +386,7 @@ class FaceBiometricPipeline {
   }
 
   static bool isTargetFaceEligible(TargetFaceMetrics face) =>
+      face.faceLabel == 'FULL' &&
       face.visibleLandmarks == 5 &&
       face.distanceLabel == 'NORMAL' &&
       face.boundingBoxVisibleFraction >= _bboxVisibleThreshold &&
@@ -423,7 +433,7 @@ class FaceBiometricPipeline {
     );
   }
 
-  static FaceCompleteness _measureCompleteness(FaceDetection face) {
+  static FaceCompleteness measureFaceCompleteness(FaceDetection face) {
     final size = OpenCvFacePreprocessor.retinaSize.toDouble();
     final rawLeft = face.rawLeft ?? face.left;
     final rawTop = face.rawTop ?? face.top;
@@ -477,14 +487,23 @@ class FaceBiometricPipeline {
     ];
     final geometryScore =
         geometryChecks.where((value) => value).length / geometryChecks.length;
-    final full =
-        bboxVisible >= 0.995 && visibleLandmarks == 5 && geometryScore == 1.0;
-    final partial = ((0.45 * bboxVisible) +
+    final completenessValue = ((0.45 * bboxVisible) +
             (0.35 * landmarkFraction) +
             (0.20 * geometryScore))
-        .clamp(0.001, 0.999);
+        .clamp(0.0, 1.0);
+    final distance = measureFaceDistance(face);
+    final full =
+        face.confidence >= targetConfidenceThreshold &&
+        bboxVisible >= fullBboxVisibleThreshold &&
+        visibleLandmarks == 5 &&
+        landmarkFraction == 1.0 &&
+        geometryScore >= fullGeometryThreshold &&
+        completenessValue >= targetValueThreshold &&
+        distance.label == 'NORMAL' &&
+        distance.sizeRatio >= normalFaceSizeMinimum &&
+        distance.sizeRatio <= normalFaceSizeMaximum;
     return FaceCompleteness(
-      value: full ? 1.0 : partial,
+      value: completenessValue,
       label: full ? 'FULL' : 'PARTIAL',
       detectionConfidence: face.confidence,
       boundingBoxVisibleFraction: bboxVisible,
@@ -514,9 +533,9 @@ class FaceBiometricPipeline {
     final heightRatio = rawHeight / inputSize;
     final sizeRatio = math.max(widthRatio, heightRatio);
     final label =
-        sizeRatio < 0.25
+        sizeRatio < normalFaceSizeMinimum
             ? 'FAR'
-            : sizeRatio > 0.65
+            : sizeRatio > normalFaceSizeMaximum
             ? 'CLOSE'
             : 'NORMAL';
     return FaceDistance(

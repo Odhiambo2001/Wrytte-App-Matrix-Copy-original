@@ -4,6 +4,7 @@ import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 void main() {
   TargetFaceMetrics face(
     int number, {
+    String faceLabel = 'FULL',
     int landmarks = 5,
     String distance = 'NORMAL',
     double bboxVisible = 1,
@@ -12,6 +13,7 @@ void main() {
     double value = 1,
   }) => TargetFaceMetrics(
     faceNumber: number,
+    faceLabel: faceLabel,
     visibleLandmarks: landmarks,
     distanceLabel: distance,
     boundingBoxVisibleFraction: bboxVisible,
@@ -49,11 +51,12 @@ void main() {
 
   test('rejects a face when any strict requirement fails', () {
     final cases = [
-      face(1, landmarks: 4),
-      face(2, distance: 'FAR'),
-      face(3, bboxVisible: 0.99),
-      face(4, confidence: 0.829),
-      face(5, value: 0.799),
+      face(1, faceLabel: 'PARTIAL'),
+      face(2, landmarks: 4),
+      face(3, distance: 'FAR'),
+      face(4, bboxVisible: 0.99),
+      face(5, confidence: 0.829),
+      face(6, value: 0.799),
     ];
     final result = FaceBiometricPipeline.selectTargetFace(cases);
     expect(result.targetFaceNumber, isNull);
