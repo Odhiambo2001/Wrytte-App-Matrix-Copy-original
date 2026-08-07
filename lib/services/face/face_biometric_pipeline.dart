@@ -93,8 +93,48 @@ class FaceCompleteness {
   );
 }
 
+class TargetFaceMetrics {
+  const TargetFaceMetrics({
+    required this.faceNumber,
+    required this.insideRing,
+    required this.visibleLandmarks,
+    required this.distanceLabel,
+    required this.boundingBoxVisibleFraction,
+    required this.faceSizeRatio,
+    required this.confidence,
+    required this.value,
+  });
+
+  final int faceNumber;
+  final bool insideRing;
+  final int visibleLandmarks;
+  final String distanceLabel;
+  final double boundingBoxVisibleFraction;
+  final double faceSizeRatio;
+  final double confidence;
+  final double value;
+}
+
+class TargetFaceSelection {
+  const TargetFaceSelection({
+    required this.targetFaceNumber,
+    required this.reason,
+    required this.qualifyingFaceNumbers,
+    required this.sizeGap,
+  });
+
+  final int? targetFaceNumber;
+  final String reason;
+  final List<int> qualifyingFaceNumbers;
+  final double? sizeGap;
+}
+
 class FaceBiometricPipeline {
   static const framesToUse = 20;
+  static const targetConfidenceThreshold = 0.83;
+  static const targetValueThreshold = 0.80;
+  static const targetSizeGap = 0.15;
+  static const _bboxVisibleThreshold = 0.9995;
 
   final RetinaFaceDetector retinaFace = RetinaFaceDetector();
   final AdaFaceEmbedder adaFace = AdaFaceEmbedder();
@@ -174,7 +214,67 @@ class FaceBiometricPipeline {
         'faceSizeRatio=${distance.sizeRatio.toStringAsFixed(3)}',
       );
     }
-    final selectedForCompleteness = _largestFace(faces);
+    final targetMetrics = <TargetFaceMetrics>[];
+    for (var index = 0; index < perFaceResults.length; index++) {
+      final result = perFaceResults[index];
+      targetMetrics.add(
+        TargetFaceMetrics(
+          faceNumber: index + 1,
+          insideRing: result.insideRing,
+          visibleLandmarks: result.completeness.visibleLandmarks,
+          distanceLabel: result.distance.label,
+          boundingBoxVisibleFraction:
+              result.completeness.boundingBoxVisibleFraction,
+          faceSizeRatio: result.distance.sizeRatio,
+          confidence: result.completeness.detectionConfidence,
+          value: result.completeness.value,
+        ),
+      );
+    }
+    final targetSelection = selectTargetFace(targetMetrics);
+    final maximumEligibleSize = targetMetrics
+        .where(isTargetFaceEligible)
+        .fold<double>(
+          0,
+          (maximum, face) => math.max(maximum, face.faceSizeRatio),
+        );
+    for (final metrics in targetMetrics) {
+      final landmarksPass = metrics.visibleLandmarks == 5;
+      final distancePass = metrics.distanceLabel == 'NORMAL';
+      final bboxPass =
+          metrics.boundingBoxVisibleFraction >= _bboxVisibleThreshold;
+      final confidencePass = metrics.confidence >= targetConfidenceThreshold;
+      final valuePass = metrics.value >= targetValueThreshold;
+      final ringPass = metrics.insideRing;
+      final maximumPass =
+          isTargetFaceEligible(metrics) &&
+          metrics.faceSizeRatio >= maximumEligibleSize;
+      final selected = targetSelection.targetFaceNumber == metrics.faceNumber;
+      debugPrint(
+        '[KFace][Target][Frame $frameNumber][Face ${metrics.faceNumber}] '
+        'landmarks5of5=$landmarksPass '
+        'distanceNormal=$distancePass '
+        'bboxVisible1=$bboxPass '
+        'confidence83=$confidencePass '
+        'value80=$valuePass '
+        'insideRing=$ringPass '
+        'maxFaceSize=$maximumPass '
+        'faceSizeRatio=${metrics.faceSizeRatio.toStringAsFixed(3)} '
+        'result=${selected ? 'TARGET' : 'REJECTED_DELETED'}',
+      );
+    }
+    debugPrint(
+      '[KFace][Target][Frame $frameNumber] '
+      'target=${targetSelection.targetFaceNumber == null ? 'NONE' : 'Face ${targetSelection.targetFaceNumber}'} '
+      'reason=${targetSelection.reason} '
+      'qualifying=${targetSelection.qualifyingFaceNumbers} '
+      'sizeGap=${targetSelection.sizeGap?.toStringAsFixed(3) ?? 'N/A'}',
+    );
+    final targetResult =
+        targetSelection.targetFaceNumber == null
+            ? null
+            : perFaceResults[targetSelection.targetFaceNumber! - 1];
+    final selectedForCompleteness = targetResult?.face ?? _largestFace(faces);
     final completeness =
         selectedForCompleteness == null
             ? FaceCompleteness.none
@@ -183,15 +283,12 @@ class FaceBiometricPipeline {
         selectedForCompleteness == null
             ? FaceDistance.none
             : measureFaceDistance(selectedForCompleteness);
-    final inside =
-        faces.where(_isInsideRetinaRing).toList()
-          ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
     AlignedFace? aligned;
     DualLivenessResult? livenessResult;
     var adaFaceComputed = false;
-    if (inside.isNotEmpty) {
-      final selectedFace = inside.first;
-      final selectedFaceNumber = orderedFaces.indexOf(selectedFace) + 1;
+    if (targetResult != null) {
+      final selectedFace = targetResult.face;
+      final selectedFaceNumber = targetSelection.targetFaceNumber!;
       final crops = openCv.cropForMiniFasNet(prepared, selectedFace);
       debugPrint(
         '[KFace][Frame $frameNumber][Face $selectedFaceNumber][LivenessCrop] '
@@ -231,7 +328,7 @@ class FaceBiometricPipeline {
     } else {
       debugPrint(
         '[KFace][Frame $frameNumber][Liveness] '
-        'status=NOT_RUN reason=NO_FACE_INSIDE_RING',
+        'status=NOT_RUN reason=NO_TARGET_FACE',
       );
     }
     stopwatch.stop();
@@ -258,7 +355,7 @@ class FaceBiometricPipeline {
     );
     return FrameAnalysis(
       faceDetected: faces.isNotEmpty,
-      faceInsideRing: inside.isNotEmpty,
+      faceInsideRing: targetResult != null,
       alignmentAccepted: aligned != null,
       originalWidth: prepared.originalWidth,
       originalHeight: prepared.originalHeight,
@@ -280,6 +377,54 @@ class FaceBiometricPipeline {
           next.width * next.height > current.width * current.height
               ? next
               : current,
+    );
+  }
+
+  static bool isTargetFaceEligible(TargetFaceMetrics face) =>
+      face.insideRing &&
+      face.visibleLandmarks == 5 &&
+      face.distanceLabel == 'NORMAL' &&
+      face.boundingBoxVisibleFraction >= _bboxVisibleThreshold &&
+      face.confidence >= targetConfidenceThreshold &&
+      face.value >= targetValueThreshold;
+
+  static TargetFaceSelection selectTargetFace(List<TargetFaceMetrics> faces) {
+    final qualifying =
+        faces.where(isTargetFaceEligible).toList()
+          ..sort((a, b) => b.faceSizeRatio.compareTo(a.faceSizeRatio));
+    final qualifyingNumbers = qualifying
+        .map((face) => face.faceNumber)
+        .toList(growable: false);
+    if (qualifying.isEmpty) {
+      return const TargetFaceSelection(
+        targetFaceNumber: null,
+        reason: 'NO_FACE_MET_ALL_REQUIREMENTS',
+        qualifyingFaceNumbers: [],
+        sizeGap: null,
+      );
+    }
+    if (qualifying.length == 1) {
+      return TargetFaceSelection(
+        targetFaceNumber: qualifying.first.faceNumber,
+        reason: 'ONLY_QUALIFYING_FACE',
+        qualifyingFaceNumbers: qualifyingNumbers,
+        sizeGap: null,
+      );
+    }
+    final gap = qualifying[0].faceSizeRatio - qualifying[1].faceSizeRatio;
+    if (gap < targetSizeGap) {
+      return TargetFaceSelection(
+        targetFaceNumber: null,
+        reason: 'AMBIGUOUS_SIZE_GAP_BELOW_0.15',
+        qualifyingFaceNumbers: qualifyingNumbers,
+        sizeGap: gap,
+      );
+    }
+    return TargetFaceSelection(
+      targetFaceNumber: qualifying.first.faceNumber,
+      reason: 'LARGEST_QUALIFYING_FACE_GAP_AT_LEAST_0.15',
+      qualifyingFaceNumbers: qualifyingNumbers,
+      sizeGap: gap,
     );
   }
 
