@@ -30,6 +30,10 @@ class FaceDetection {
     required this.bottom,
     required this.confidence,
     required this.landmarks,
+    this.rawLeft,
+    this.rawTop,
+    this.rawRight,
+    this.rawBottom,
   });
 
   final double left;
@@ -38,6 +42,10 @@ class FaceDetection {
   final double bottom;
   final double confidence;
   final FaceLandmarks landmarks;
+  final double? rawLeft;
+  final double? rawTop;
+  final double? rawRight;
+  final double? rawBottom;
 
   double get width => right - left;
   double get height => bottom - top;
@@ -235,6 +243,10 @@ class RetinaFaceDetector {
       final width = prior.width * math.exp(locations[locationOffset + 2] * 0.2);
       final height =
           prior.height * math.exp(locations[locationOffset + 3] * 0.2);
+      final rawLeft = (centerX - width / 2) * originalWidth;
+      final rawTop = (centerY - height / 2) * originalHeight;
+      final rawRight = (centerX + width / 2) * originalWidth;
+      final rawBottom = (centerY + height / 2) * originalHeight;
 
       math.Point<double> landmark(int point) {
         final offset = (index * 10) + (point * 2);
@@ -248,23 +260,15 @@ class RetinaFaceDetector {
 
       candidates.add(
         FaceDetection(
-          left: ((centerX - width / 2) * originalWidth).clamp(
-            0.0,
-            originalWidth.toDouble(),
-          ),
-          top: ((centerY - height / 2) * originalHeight).clamp(
-            0.0,
-            originalHeight.toDouble(),
-          ),
-          right: ((centerX + width / 2) * originalWidth).clamp(
-            0.0,
-            originalWidth.toDouble(),
-          ),
-          bottom: ((centerY + height / 2) * originalHeight).clamp(
-            0.0,
-            originalHeight.toDouble(),
-          ),
+          left: rawLeft.clamp(0.0, originalWidth.toDouble()),
+          top: rawTop.clamp(0.0, originalHeight.toDouble()),
+          right: rawRight.clamp(0.0, originalWidth.toDouble()),
+          bottom: rawBottom.clamp(0.0, originalHeight.toDouble()),
           confidence: confidence,
+          rawLeft: rawLeft,
+          rawTop: rawTop,
+          rawRight: rawRight,
+          rawBottom: rawBottom,
           landmarks: FaceLandmarks(
             leftEye: landmark(0),
             rightEye: landmark(1),

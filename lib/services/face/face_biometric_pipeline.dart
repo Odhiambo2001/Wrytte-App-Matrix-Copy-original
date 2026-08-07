@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:wrytte/services/face/adaface_embedder.dart';
@@ -17,6 +19,10 @@ class FrameAnalysis {
     required this.wasResized,
     required this.acceptedFrameCount,
     required this.liveness,
+    required this.completeness,
+    required this.faceDistance,
+    required this.adaFaceComputed,
+    required this.processingMilliseconds,
   });
 
   final bool faceDetected;
@@ -28,6 +34,63 @@ class FrameAnalysis {
   final bool wasResized;
   final int acceptedFrameCount;
   final DualLivenessResult? liveness;
+  final FaceCompleteness completeness;
+  final FaceDistance faceDistance;
+  final bool adaFaceComputed;
+  final int processingMilliseconds;
+}
+
+/// Apparent face distance derived from the RetinaFace bounding-box size.
+///
+/// This is not a physical distance measurement. A smaller face box indicates
+/// a face that appears farther from the camera, while a larger box indicates
+/// a face that appears closer.
+class FaceDistance {
+  const FaceDistance({
+    required this.label,
+    required this.widthRatio,
+    required this.heightRatio,
+    required this.sizeRatio,
+  });
+
+  final String label;
+  final double widthRatio;
+  final double heightRatio;
+  final double sizeRatio;
+
+  static const none = FaceDistance(
+    label: 'NONE',
+    widthRatio: 0,
+    heightRatio: 0,
+    sizeRatio: 0,
+  );
+}
+
+class FaceCompleteness {
+  const FaceCompleteness({
+    required this.value,
+    required this.label,
+    required this.detectionConfidence,
+    required this.boundingBoxVisibleFraction,
+    required this.visibleLandmarks,
+    required this.geometryScore,
+  });
+
+  final double value;
+  final String label;
+  final double detectionConfidence;
+  final double boundingBoxVisibleFraction;
+  final int visibleLandmarks;
+  final double geometryScore;
+
+  static const none = FaceCompleteness(
+    value: 0,
+    label: 'NONE',
+    detectionConfidence: 0,
+    boundingBoxVisibleFraction: 0,
+    visibleLandmarks: 0,
+    geometryScore: 0,
+  );
 }
 
 class FaceBiometricPipeline {
@@ -44,10 +107,15 @@ class FaceBiometricPipeline {
   int get acceptedFrameCount => _alignedFaces.length;
 
   Future<void> initializeDetector() async {
-    await Future.wait([retinaFace.initialize(), liveness.initialize()]);
+    await Future.wait([
+      retinaFace.initialize(),
+      liveness.initialize(),
+      adaFace.initialize(),
+    ]);
   }
 
   Future<FrameAnalysis> processFrame(img.Image cameraFrame) async {
+    final stopwatch = Stopwatch()..start();
     final frameNumber = ++_frameSequence;
     final prepared = openCv.prepare(cameraFrame);
     debugPrint(
@@ -58,16 +126,75 @@ class FaceBiometricPipeline {
       'resized=${prepared.wasResized}',
     );
     final faces = await retinaFace.detectBgr(prepared.bgr);
+    final orderedFaces = faces.toList(growable: false)
+      ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
+    final perFaceResults =
+        <
+          ({
+            FaceDetection face,
+            FaceCompleteness completeness,
+            FaceDistance distance,
+            bool insideRing,
+          })
+        >[];
+    for (final face in orderedFaces) {
+      perFaceResults.add((
+        face: face,
+        completeness: _measureCompleteness(face),
+        distance: measureFaceDistance(face),
+        insideRing: _isInsideRetinaRing(face),
+      ));
+    }
+    final facesInsideRing =
+        perFaceResults.where((result) => result.insideRing).length;
+    debugPrint(
+      '[KFace][RetinaTest][Frame $frameNumber][Faces] '
+      'detected=${perFaceResults.length} insideRing=$facesInsideRing '
+      'twoOrMoreInsideRing=${facesInsideRing >= 2}',
+    );
+    for (var index = 0; index < perFaceResults.length; index++) {
+      final result = perFaceResults[index];
+      final face = result.face;
+      final faceCompleteness = result.completeness;
+      final distance = result.distance;
+      debugPrint(
+        '[KFace][RetinaTest][Frame $frameNumber][Face ${index + 1}] '
+        'insideRing=${result.insideRing} '
+        'face=${faceCompleteness.label} '
+        'value=${faceCompleteness.value.toStringAsFixed(3)} '
+        'confidence=${faceCompleteness.detectionConfidence.toStringAsFixed(3)} '
+        'bbox=${face.left.toStringAsFixed(1)},${face.top.toStringAsFixed(1)},'
+        '${face.right.toStringAsFixed(1)},${face.bottom.toStringAsFixed(1)} '
+        'bboxVisible=${faceCompleteness.boundingBoxVisibleFraction.toStringAsFixed(3)} '
+        'landmarks=${faceCompleteness.visibleLandmarks}/5 '
+        'geometry=${faceCompleteness.geometryScore.toStringAsFixed(3)} '
+        'distance=${distance.label} '
+        'faceWidthRatio=${distance.widthRatio.toStringAsFixed(3)} '
+        'faceHeightRatio=${distance.heightRatio.toStringAsFixed(3)} '
+        'faceSizeRatio=${distance.sizeRatio.toStringAsFixed(3)}',
+      );
+    }
+    final selectedForCompleteness = _largestFace(faces);
+    final completeness =
+        selectedForCompleteness == null
+            ? FaceCompleteness.none
+            : _measureCompleteness(selectedForCompleteness);
+    final faceDistance =
+        selectedForCompleteness == null
+            ? FaceDistance.none
+            : measureFaceDistance(selectedForCompleteness);
     final inside =
         faces.where(_isInsideRetinaRing).toList()
           ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
     AlignedFace? aligned;
     DualLivenessResult? livenessResult;
+    var adaFaceComputed = false;
     if (inside.isNotEmpty) {
       final selectedFace = inside.first;
+      final selectedFaceNumber = orderedFaces.indexOf(selectedFace) + 1;
       final crops = openCv.cropForMiniFasNet(prepared, selectedFace);
       debugPrint(
-        '[KFace][Frame $frameNumber][LivenessCrop] '
+        '[KFace][Frame $frameNumber][Face $selectedFaceNumber][LivenessCrop] '
         'face=${selectedFace.left.toStringAsFixed(1)},'
         '${selectedFace.top.toStringAsFixed(1)},'
         '${selectedFace.right.toStringAsFixed(1)},'
@@ -80,7 +207,7 @@ class FaceBiometricPipeline {
         v1seFaceBgr: crops.v1seBgr,
       );
       debugPrint(
-        '[KFace][Frame $frameNumber][Liveness] '
+        '[KFace][Frame $frameNumber][Face $selectedFaceNumber][Liveness] '
         'V2(real=${_prob(livenessResult.v2.realProbability)},'
         'fake=${_prob(livenessResult.v2.fakeProbability)},'
         'class=${livenessResult.v2.labelIndex},'
@@ -95,11 +222,40 @@ class FaceBiometricPipeline {
         aligned = openCv.align(prepared, selectedFace.landmarks);
       }
       if (aligned != null && livenessResult.isReal) {
+        await adaFace.embed(aligned.bgr);
+        adaFaceComputed = true;
         _alignedFaces.add(aligned);
         _alignedFaces.sort((a, b) => b.sharpness.compareTo(a.sharpness));
         if (_alignedFaces.length > framesToUse) _alignedFaces.removeLast();
       }
+    } else {
+      debugPrint(
+        '[KFace][Frame $frameNumber][Liveness] '
+        'status=NOT_RUN reason=NO_FACE_INSIDE_RING',
+      );
     }
+    stopwatch.stop();
+    debugPrint(
+      '[KFace][RetinaTest][Frame $frameNumber] '
+      'face=${completeness.label} value=${completeness.value.toStringAsFixed(3)} '
+      'confidence=${completeness.detectionConfidence.toStringAsFixed(3)} '
+      'bboxVisible=${completeness.boundingBoxVisibleFraction.toStringAsFixed(3)} '
+      'landmarks=${completeness.visibleLandmarks}/5 '
+      'geometry=${completeness.geometryScore.toStringAsFixed(3)} '
+      'distance=${faceDistance.label} '
+      'faceWidthRatio=${faceDistance.widthRatio.toStringAsFixed(3)} '
+      'faceHeightRatio=${faceDistance.heightRatio.toStringAsFixed(3)} '
+      'faceSizeRatio=${faceDistance.sizeRatio.toStringAsFixed(3)} '
+      'frame=${completeness.label == "NONE" ? "RELEASED" : "PROCESSED"} '
+      'liveness=${livenessResult == null
+          ? 'NOT_RUN'
+          : livenessResult.isReal
+          ? 'PASS'
+          : 'REJECT'} '
+      'adaFace=${adaFaceComputed ? 'COMPLETED' : 'NOT_RUN'} '
+      'processingMs=${stopwatch.elapsedMilliseconds} '
+      'effectiveFps=${stopwatch.elapsedMilliseconds == 0 ? 'inf' : (1000 / stopwatch.elapsedMilliseconds).toStringAsFixed(2)}',
+    );
     return FrameAnalysis(
       faceDetected: faces.isNotEmpty,
       faceInsideRing: inside.isNotEmpty,
@@ -110,6 +266,124 @@ class FaceBiometricPipeline {
       wasResized: prepared.wasResized,
       acceptedFrameCount: _alignedFaces.length,
       liveness: livenessResult,
+      completeness: completeness,
+      faceDistance: faceDistance,
+      adaFaceComputed: adaFaceComputed,
+      processingMilliseconds: stopwatch.elapsedMilliseconds,
+    );
+  }
+
+  static FaceDetection? _largestFace(List<FaceDetection> faces) {
+    if (faces.isEmpty) return null;
+    return faces.reduce(
+      (current, next) =>
+          next.width * next.height > current.width * current.height
+              ? next
+              : current,
+    );
+  }
+
+  static FaceCompleteness _measureCompleteness(FaceDetection face) {
+    final size = OpenCvFacePreprocessor.retinaSize.toDouble();
+    final rawLeft = face.rawLeft ?? face.left;
+    final rawTop = face.rawTop ?? face.top;
+    final rawRight = face.rawRight ?? face.right;
+    final rawBottom = face.rawBottom ?? face.bottom;
+    final rawWidth = math.max(0.0, rawRight - rawLeft);
+    final rawHeight = math.max(0.0, rawBottom - rawTop);
+    final rawArea = rawWidth * rawHeight;
+    final visibleWidth = math.max(
+      0.0,
+      math.min(size, rawRight) - math.max(0.0, rawLeft),
+    );
+    final visibleHeight = math.max(
+      0.0,
+      math.min(size, rawBottom) - math.max(0.0, rawTop),
+    );
+    final bboxVisible =
+        rawArea <= 0
+            ? 0.0
+            : (visibleWidth * visibleHeight / rawArea).clamp(0.0, 1.0);
+
+    final points = [
+      face.landmarks.leftEye,
+      face.landmarks.rightEye,
+      face.landmarks.nose,
+      face.landmarks.leftMouth,
+      face.landmarks.rightMouth,
+    ];
+    final visibleLandmarks =
+        points
+            .where(
+              (point) =>
+                  point.x >= 0 &&
+                  point.x < size &&
+                  point.y >= 0 &&
+                  point.y < size,
+            )
+            .length;
+    final landmarkFraction = visibleLandmarks / 5.0;
+
+    final leftEye = face.landmarks.leftEye;
+    final rightEye = face.landmarks.rightEye;
+    final nose = face.landmarks.nose;
+    final leftMouth = face.landmarks.leftMouth;
+    final rightMouth = face.landmarks.rightMouth;
+    final geometryChecks = <bool>[
+      leftEye.x < rightEye.x,
+      leftMouth.x < rightMouth.x,
+      math.max(leftEye.y, rightEye.y) < nose.y,
+      nose.y < math.min(leftMouth.y, rightMouth.y),
+    ];
+    final geometryScore =
+        geometryChecks.where((value) => value).length / geometryChecks.length;
+    final full =
+        bboxVisible >= 0.995 && visibleLandmarks == 5 && geometryScore == 1.0;
+    final partial = ((0.45 * bboxVisible) +
+            (0.35 * landmarkFraction) +
+            (0.20 * geometryScore))
+        .clamp(0.001, 0.999);
+    return FaceCompleteness(
+      value: full ? 1.0 : partial,
+      label: full ? 'FULL' : 'PARTIAL',
+      detectionConfidence: face.confidence,
+      boundingBoxVisibleFraction: bboxVisible,
+      visibleLandmarks: visibleLandmarks,
+      geometryScore: geometryScore,
+    );
+  }
+
+  /// Classifies apparent camera distance using the larger normalized face-box
+  /// dimension. This remains stable for modest head rotation and supports the
+  /// portrait-shaped boxes commonly returned by RetinaFace.
+  ///
+  /// FAR:    face occupies less than 25% of the Retina input dimension.
+  /// NORMAL: face occupies 25% through 65%.
+  /// CLOSE:  face occupies more than 65%.
+  static FaceDistance measureFaceDistance(FaceDetection face) {
+    final inputSize = OpenCvFacePreprocessor.retinaSize.toDouble();
+    final rawWidth = math.max(
+      0.0,
+      (face.rawRight ?? face.right) - (face.rawLeft ?? face.left),
+    );
+    final rawHeight = math.max(
+      0.0,
+      (face.rawBottom ?? face.bottom) - (face.rawTop ?? face.top),
+    );
+    final widthRatio = rawWidth / inputSize;
+    final heightRatio = rawHeight / inputSize;
+    final sizeRatio = math.max(widthRatio, heightRatio);
+    final label =
+        sizeRatio < 0.25
+            ? 'FAR'
+            : sizeRatio > 0.65
+            ? 'CLOSE'
+            : 'NORMAL';
+    return FaceDistance(
+      label: label,
+      widthRatio: widthRatio,
+      heightRatio: heightRatio,
+      sizeRatio: sizeRatio,
     );
   }
 

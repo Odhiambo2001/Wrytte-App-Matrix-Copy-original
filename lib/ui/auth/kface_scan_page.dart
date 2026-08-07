@@ -21,7 +21,8 @@ class KFaceScanPage extends StatefulWidget {
 
 class _KFaceScanPageState extends State<KFaceScanPage>
     with WidgetsBindingObserver {
-  static const _analysisThrottle = Duration(milliseconds: 200);
+  static const _analysisThrottle = Duration(microseconds: 66667);
+  static const _continuousRetinaDiagnostic = true;
   static const double _bottomPanelHeight = 250;
   static const int _tickRingCount = 72;
   final FaceBiometricPipeline _pipeline = FaceBiometricPipeline();
@@ -281,6 +282,18 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   }
 
   void _updateProgress(FrameAnalysis analysis) {
+    final completeness = analysis.completeness;
+    if (completeness.label == 'NONE') {
+      _setStatus('No face detected.');
+      return;
+    }
+    if (completeness.label == 'PARTIAL') {
+      _setStatus(
+        'Keep your whole face visible · '
+        '${(completeness.value * 100).toStringAsFixed(0)}%',
+      );
+      return;
+    }
     if (!analysis.faceInsideRing) {
       _setStatus(
         analysis.faceDetected
@@ -313,7 +326,9 @@ class _KFaceScanPageState extends State<KFaceScanPage>
               ? 'Keep looking at the camera.'
               : 'Live face · V2 ${_percent(liveness.v2.realProbability)} real · '
                   'V1SE ${_percent(liveness.v1se.realProbability)} real';
-      if (_ringProgress >= 1) {
+      // Diagnostic switch: keep the production 20-frame stopping rule in the
+      // source, but bypass it while continuous RetinaFace testing is active.
+      if (!_continuousRetinaDiagnostic && _ringProgress >= 1) {
         _completed = true;
         _status = 'Creating your secure face key…';
       }
@@ -339,6 +354,8 @@ class _KFaceScanPageState extends State<KFaceScanPage>
         '[KFace][Finalization] operation='
         '${stored == null ? 'ENROLL' : 'VERIFY'}',
       );
+      // LDPC enrollment/recovery is deliberately not reached while
+      // _continuousRetinaDiagnostic is true. Its production code is retained.
       if (stored == null) {
         final commitment = await _pipeline.enroll();
         await _commitmentStore.write(widget.wrytteId, commitment);
