@@ -68,7 +68,6 @@ class FaceDistance {
 
 class FaceCompleteness {
   const FaceCompleteness({
-    required this.value,
     required this.label,
     required this.detectionConfidence,
     required this.boundingBoxVisibleFraction,
@@ -76,7 +75,6 @@ class FaceCompleteness {
     required this.geometryScore,
   });
 
-  final double value;
   final String label;
   final double detectionConfidence;
   final double boundingBoxVisibleFraction;
@@ -84,7 +82,6 @@ class FaceCompleteness {
   final double geometryScore;
 
   static const none = FaceCompleteness(
-    value: 0,
     label: 'NONE',
     detectionConfidence: 0,
     boundingBoxVisibleFraction: 0,
@@ -102,7 +99,6 @@ class TargetFaceMetrics {
     required this.boundingBoxVisibleFraction,
     required this.faceSizeRatio,
     required this.confidence,
-    required this.value,
   });
 
   final int faceNumber;
@@ -112,7 +108,6 @@ class TargetFaceMetrics {
   final double boundingBoxVisibleFraction;
   final double faceSizeRatio;
   final double confidence;
-  final double value;
 }
 
 class TargetFaceSelection {
@@ -132,10 +127,8 @@ class TargetFaceSelection {
 class FaceBiometricPipeline {
   static const framesToUse = 20;
   static const targetConfidenceThreshold = 0.83;
-  static const targetValueThreshold = 0.80;
   static const targetSizeGap = 0.15;
-  static const _bboxVisibleThreshold = 0.9995;
-  static const fullBboxVisibleThreshold = 0.995;
+  static const fullBboxVisibleThreshold = 0.90;
   static const fullGeometryThreshold = 0.80;
   static const normalFaceSizeMinimum = 0.25;
   static const normalFaceSizeMaximum = 0.65;
@@ -205,7 +198,6 @@ class FaceBiometricPipeline {
         '[KFace][RetinaTest][Frame $frameNumber][Face ${index + 1}] '
         'insideRing=${result.insideRing} '
         'face=${faceCompleteness.label} '
-        'value=${faceCompleteness.value.toStringAsFixed(3)} '
         'confidence=${faceCompleteness.detectionConfidence.toStringAsFixed(3)} '
         'bbox=${face.left.toStringAsFixed(1)},${face.top.toStringAsFixed(1)},'
         '${face.right.toStringAsFixed(1)},${face.bottom.toStringAsFixed(1)} '
@@ -231,7 +223,6 @@ class FaceBiometricPipeline {
               result.completeness.boundingBoxVisibleFraction,
           faceSizeRatio: result.distance.sizeRatio,
           confidence: result.completeness.detectionConfidence,
-          value: result.completeness.value,
         ),
       );
     }
@@ -247,9 +238,8 @@ class FaceBiometricPipeline {
       final fullFacePass = metrics.faceLabel == 'FULL';
       final distancePass = metrics.distanceLabel == 'NORMAL';
       final bboxPass =
-          metrics.boundingBoxVisibleFraction >= _bboxVisibleThreshold;
+          metrics.boundingBoxVisibleFraction >= fullBboxVisibleThreshold;
       final confidencePass = metrics.confidence >= targetConfidenceThreshold;
-      final valuePass = metrics.value >= targetValueThreshold;
       final maximumPass =
           isTargetFaceEligible(metrics) &&
           metrics.faceSizeRatio >= maximumEligibleSize;
@@ -259,9 +249,8 @@ class FaceBiometricPipeline {
         'fullFace=$fullFacePass '
         'landmarks5of5=$landmarksPass '
         'distanceNormal=$distancePass '
-        'bboxVisible1=$bboxPass '
+        'bboxVisible90=$bboxPass '
         'confidence83=$confidencePass '
-        'value80=$valuePass '
         'insideTransparentPane=$bboxPass '
         'maxFaceSize=$maximumPass '
         'faceSizeRatio=${metrics.faceSizeRatio.toStringAsFixed(3)} '
@@ -339,7 +328,7 @@ class FaceBiometricPipeline {
     stopwatch.stop();
     debugPrint(
       '[KFace][RetinaTest][Frame $frameNumber] '
-      'face=${completeness.label} value=${completeness.value.toStringAsFixed(3)} '
+      'face=${completeness.label} '
       'confidence=${completeness.detectionConfidence.toStringAsFixed(3)} '
       'bboxVisible=${completeness.boundingBoxVisibleFraction.toStringAsFixed(3)} '
       'landmarks=${completeness.visibleLandmarks}/5 '
@@ -389,9 +378,8 @@ class FaceBiometricPipeline {
       face.faceLabel == 'FULL' &&
       face.visibleLandmarks == 5 &&
       face.distanceLabel == 'NORMAL' &&
-      face.boundingBoxVisibleFraction >= _bboxVisibleThreshold &&
-      face.confidence >= targetConfidenceThreshold &&
-      face.value >= targetValueThreshold;
+      face.boundingBoxVisibleFraction >= fullBboxVisibleThreshold &&
+      face.confidence >= targetConfidenceThreshold;
 
   static TargetFaceSelection selectTargetFace(List<TargetFaceMetrics> faces) {
     final qualifying =
@@ -472,8 +460,6 @@ class FaceBiometricPipeline {
                   point.y < size,
             )
             .length;
-    final landmarkFraction = visibleLandmarks / 5.0;
-
     final leftEye = face.landmarks.leftEye;
     final rightEye = face.landmarks.rightEye;
     final nose = face.landmarks.nose;
@@ -487,23 +473,16 @@ class FaceBiometricPipeline {
     ];
     final geometryScore =
         geometryChecks.where((value) => value).length / geometryChecks.length;
-    final completenessValue = ((0.45 * bboxVisible) +
-            (0.35 * landmarkFraction) +
-            (0.20 * geometryScore))
-        .clamp(0.0, 1.0);
     final distance = measureFaceDistance(face);
     final full =
         face.confidence >= targetConfidenceThreshold &&
         bboxVisible >= fullBboxVisibleThreshold &&
         visibleLandmarks == 5 &&
-        landmarkFraction == 1.0 &&
         geometryScore >= fullGeometryThreshold &&
-        completenessValue >= targetValueThreshold &&
         distance.label == 'NORMAL' &&
         distance.sizeRatio >= normalFaceSizeMinimum &&
         distance.sizeRatio <= normalFaceSizeMaximum;
     return FaceCompleteness(
-      value: completenessValue,
       label: full ? 'FULL' : 'PARTIAL',
       detectionConfidence: face.confidence,
       boundingBoxVisibleFraction: bboxVisible,

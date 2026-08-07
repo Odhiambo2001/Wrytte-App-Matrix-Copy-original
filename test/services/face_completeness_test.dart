@@ -38,11 +38,10 @@ void main() {
   test('classifies a face as full only when every boundary passes', () {
     final result = FaceBiometricPipeline.measureFaceCompleteness(face());
     expect(result.label, 'FULL');
-    expect(result.value, 1);
     expect(result.geometryScore, 1);
   });
 
-  test('classifies geometry 0.75 as partial even with value 0.95', () {
+  test('classifies geometry 0.75 as partial', () {
     final result = FaceBiometricPipeline.measureFaceCompleteness(
       face(
         landmarks: const FaceLandmarks(
@@ -55,7 +54,6 @@ void main() {
       ),
     );
     expect(result.geometryScore, 0.75);
-    expect(result.value, closeTo(0.95, 0.000001));
     expect(result.label, 'PARTIAL');
   });
 
@@ -73,11 +71,11 @@ void main() {
     expect(result.label, 'PARTIAL');
   });
 
-  test('classifies bbox visibility below 0.995 as partial', () {
+  test('classifies bbox visibility below 0.90 as partial', () {
     final result = FaceBiometricPipeline.measureFaceCompleteness(
-      face(left: 0, rawLeft: -20, rawRight: 420),
+      face(left: 0, rawLeft: -60, rawRight: 420),
     );
-    expect(result.boundingBoxVisibleFraction, lessThan(0.995));
+    expect(result.boundingBoxVisibleFraction, lessThan(0.90));
     expect(result.label, 'PARTIAL');
   });
 }

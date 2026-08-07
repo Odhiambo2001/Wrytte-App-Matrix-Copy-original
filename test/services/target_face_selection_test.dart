@@ -10,7 +10,6 @@ void main() {
     double bboxVisible = 1,
     double size = 0.4,
     double confidence = 0.9,
-    double value = 1,
   }) => TargetFaceMetrics(
     faceNumber: number,
     faceLabel: faceLabel,
@@ -19,7 +18,6 @@ void main() {
     boundingBoxVisibleFraction: bboxVisible,
     faceSizeRatio: size,
     confidence: confidence,
-    value: value,
   );
 
   test('selects the only face that meets every requirement', () {
@@ -54,9 +52,8 @@ void main() {
       face(1, faceLabel: 'PARTIAL'),
       face(2, landmarks: 4),
       face(3, distance: 'FAR'),
-      face(4, bboxVisible: 0.99),
+      face(4, bboxVisible: 0.89),
       face(5, confidence: 0.829),
-      face(6, value: 0.799),
     ];
     final result = FaceBiometricPipeline.selectTargetFace(cases);
     expect(result.targetFaceNumber, isNull);

@@ -288,10 +288,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       return;
     }
     if (completeness.label == 'PARTIAL') {
-      _setStatus(
-        'Keep your whole face visible · '
-        '${(completeness.value * 100).toStringAsFixed(0)}%',
-      );
+      _setStatus('Keep your whole face visible.');
       return;
     }
     if (!analysis.targetFaceSelected) {
