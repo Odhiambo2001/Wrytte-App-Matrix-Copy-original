@@ -294,7 +294,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       );
       return;
     }
-    if (!analysis.faceInsideRing) {
+    if (!analysis.targetFaceSelected) {
       _setStatus(
         analysis.faceDetected
             ? 'Center your whole face inside the ring.'

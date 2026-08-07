@@ -11,7 +11,7 @@ import 'package:wrytte/services/face/retinaface_detector.dart';
 class FrameAnalysis {
   const FrameAnalysis({
     required this.faceDetected,
-    required this.faceInsideRing,
+    required this.targetFaceSelected,
     required this.alignmentAccepted,
     required this.originalWidth,
     required this.originalHeight,
@@ -26,7 +26,7 @@ class FrameAnalysis {
   });
 
   final bool faceDetected;
-  final bool faceInsideRing;
+  final bool targetFaceSelected;
   final bool alignmentAccepted;
   final int originalWidth;
   final int originalHeight;
@@ -96,7 +96,6 @@ class FaceCompleteness {
 class TargetFaceMetrics {
   const TargetFaceMetrics({
     required this.faceNumber,
-    required this.insideRing,
     required this.visibleLandmarks,
     required this.distanceLabel,
     required this.boundingBoxVisibleFraction,
@@ -106,7 +105,6 @@ class TargetFaceMetrics {
   });
 
   final int faceNumber;
-  final bool insideRing;
   final int visibleLandmarks;
   final String distanceLabel;
   final double boundingBoxVisibleFraction;
@@ -220,7 +218,6 @@ class FaceBiometricPipeline {
       targetMetrics.add(
         TargetFaceMetrics(
           faceNumber: index + 1,
-          insideRing: result.insideRing,
           visibleLandmarks: result.completeness.visibleLandmarks,
           distanceLabel: result.distance.label,
           boundingBoxVisibleFraction:
@@ -245,7 +242,6 @@ class FaceBiometricPipeline {
           metrics.boundingBoxVisibleFraction >= _bboxVisibleThreshold;
       final confidencePass = metrics.confidence >= targetConfidenceThreshold;
       final valuePass = metrics.value >= targetValueThreshold;
-      final ringPass = metrics.insideRing;
       final maximumPass =
           isTargetFaceEligible(metrics) &&
           metrics.faceSizeRatio >= maximumEligibleSize;
@@ -257,7 +253,7 @@ class FaceBiometricPipeline {
         'bboxVisible1=$bboxPass '
         'confidence83=$confidencePass '
         'value80=$valuePass '
-        'insideRing=$ringPass '
+        'insideTransparentPane=$bboxPass '
         'maxFaceSize=$maximumPass '
         'faceSizeRatio=${metrics.faceSizeRatio.toStringAsFixed(3)} '
         'result=${selected ? 'TARGET' : 'REJECTED_DELETED'}',
@@ -355,7 +351,7 @@ class FaceBiometricPipeline {
     );
     return FrameAnalysis(
       faceDetected: faces.isNotEmpty,
-      faceInsideRing: targetResult != null,
+      targetFaceSelected: targetResult != null,
       alignmentAccepted: aligned != null,
       originalWidth: prepared.originalWidth,
       originalHeight: prepared.originalHeight,
@@ -381,7 +377,6 @@ class FaceBiometricPipeline {
   }
 
   static bool isTargetFaceEligible(TargetFaceMetrics face) =>
-      face.insideRing &&
       face.visibleLandmarks == 5 &&
       face.distanceLabel == 'NORMAL' &&
       face.boundingBoxVisibleFraction >= _bboxVisibleThreshold &&
