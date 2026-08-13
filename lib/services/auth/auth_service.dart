@@ -978,8 +978,21 @@ class AuthService {
       debugPrint('[AuthService] Firebase sign-out error: $e');
     }
     try {
+      final secureValues = await _storage.readAll();
+      final kfaceCommitments = Map<String, String>.fromEntries(
+        secureValues.entries.where(
+          (entry) => entry.key.startsWith('kface_ldpc_'),
+        ),
+      );
       await _storage.deleteAll();
-      apkLog('Auth.logout', 'secure storage deleted');
+      for (final entry in kfaceCommitments.entries) {
+        await _storage.write(key: entry.key, value: entry.value);
+      }
+      apkLog(
+        'Auth.logout',
+        'secure session storage deleted; preserved '
+            '${kfaceCommitments.length} KFace commitment(s)',
+      );
     } catch (e) {
       apkLog('Auth.logout', 'secure storage delete FAILED: $e');
       debugPrint('[AuthService] secure storage clear failed: $e');

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 
@@ -32,10 +33,17 @@ class _SignInPageState extends State<SignInPage> {
       if (!mounted) return;
 
       final digits = input.replaceAll(RegExp(r'[^\d]'), '');
+      if (digits.startsWith('00')) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) => KFaceIntroPage(wrytteId: digits),
+          ),
+        );
+        return;
+      }
       final phone =
-          digits.startsWith('00')
-              ? '+$digits'
-              : CountryPhoneNumber.normalizeInternational(input);
+          CountryPhoneNumber.normalizeInternational(input);
       if (phone == null) {
         throw const FormatException('Invalid international phone number');
       }

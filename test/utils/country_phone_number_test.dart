@@ -59,6 +59,18 @@ void main() {
       expect(value.text, '254 712');
     });
 
+    test('formats a Wrytte ID progressively in three-digit groups', () {
+      final formatter = InternationalPhoneNumberInputFormatter();
+      final value = formatter.formatEditUpdate(
+        const TextEditingValue(),
+        const TextEditingValue(
+          text: '00700297347',
+          selection: TextSelection.collapsed(offset: 11),
+        ),
+      );
+      expect(value.text, '00 700 297 347');
+    });
+
     test('rejects incomplete and impossible numbers', () {
       expect(CountryPhoneNumber.international('123', 'US'), isNull);
       expect(CountryPhoneNumber.international('', 'US'), isNull);

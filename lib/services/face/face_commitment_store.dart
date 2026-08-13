@@ -10,7 +10,21 @@ class FaceCommitmentStore {
   final FlutterSecureStorage _storage;
 
   Future<FuzzyCommitment?> read(String identity) async {
-    final value = await _storage.read(key: _key(identity));
+    final canonicalKey = _key(identity);
+    var value = await _storage.read(key: canonicalKey);
+    if (value == null || value.isEmpty) {
+      // Migrate commitments enrolled before Wrytte IDs were canonicalized.
+      for (final legacyIdentity in _legacyIdentities(identity)) {
+        final legacyKey = _legacyKey(legacyIdentity);
+        if (legacyKey == canonicalKey) continue;
+        value = await _storage.read(key: legacyKey);
+        if (value != null && value.isNotEmpty) {
+          await _storage.write(key: canonicalKey, value: value);
+          await _storage.delete(key: legacyKey);
+          break;
+        }
+      }
+    }
     if (value == null || value.isEmpty) return null;
     return FuzzyCommitment.fromJson(jsonDecode(value) as Map<String, dynamic>);
   }
@@ -22,6 +36,26 @@ class FaceCommitmentStore {
     );
   }
 
-  String _key(String identity) =>
+  String _key(String identity) => _legacyKey(_canonicalIdentity(identity));
+
+  String _legacyKey(String identity) =>
       'kface_ldpc_${base64Url.encode(utf8.encode(identity)).replaceAll('=', '')}';
+
+  String _canonicalIdentity(String identity) =>
+      identity.replaceAll(RegExp(r'[^\d]'), '');
+
+  Iterable<String> _legacyIdentities(String identity) sync* {
+    yield identity;
+    final digits = _canonicalIdentity(identity);
+    yield digits;
+    yield '+$digits';
+    if (digits.startsWith('00') && digits.length > 2) {
+      final body = digits.substring(2);
+      final groups = <String>[];
+      for (var offset = 0; offset < body.length; offset += 3) {
+        groups.add(body.substring(offset, (offset + 3).clamp(0, body.length)));
+      }
+      yield '+00 ${groups.join(' ')}';
+    }
+  }
 }

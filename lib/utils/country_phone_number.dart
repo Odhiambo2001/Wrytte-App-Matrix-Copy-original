@@ -152,12 +152,29 @@ class InternationalPhoneNumberInputFormatter extends TextInputFormatter {
     final digits = newValue.text.replaceAll(RegExp(r'[^\d]'), '');
     if (digits.isEmpty) return const TextEditingValue();
 
-    final display = CountryPhoneNumber.formatInternationalDisplay('+$digits');
-    final formatted = display.startsWith('+') ? display.substring(1) : display;
+    final formatted =
+        digits.startsWith('00')
+            ? _formatWrytteId(digits)
+            : _withoutLeadingPlus(
+              CountryPhoneNumber.formatInternationalDisplay('+$digits'),
+            );
     return TextEditingValue(
       text: formatted,
       selection: TextSelection.collapsed(offset: formatted.length),
     );
+  }
+
+  static String _withoutLeadingPlus(String value) =>
+      value.startsWith('+') ? value.substring(1) : value;
+
+  static String _formatWrytteId(String digits) {
+    final body = digits.length > 2 ? digits.substring(2) : '';
+    final groups = <String>['00'];
+    for (var offset = 0; offset < body.length; offset += 3) {
+      final end = (offset + 3).clamp(0, body.length);
+      groups.add(body.substring(offset, end));
+    }
+    return groups.join(' ');
   }
 }
 
