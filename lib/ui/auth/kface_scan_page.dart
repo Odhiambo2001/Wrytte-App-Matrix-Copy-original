@@ -347,7 +347,11 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       final stored = await _commitmentStore.read(widget.wrytteId);
       debugPrint(
         '[KFace][Finalization] operation='
-        '${stored == null ? 'ENROLL' : stored.kdfSalt.isEmpty ? 'MIGRATE_TO_HKDF' : 'VERIFY'}',
+        '${stored == null
+            ? 'ENROLL'
+            : stored.kdfSalt.isEmpty
+            ? 'MIGRATE_TO_HKDF'
+            : 'VERIFY'}',
       );
       if (stored == null || stored.kdfSalt.isEmpty) {
         if (stored != null) {
@@ -627,16 +631,12 @@ class _FullScreenCamera extends StatelessWidget {
                 : previewSize.height / previewSize.width;
 
         return SizedBox.expand(
-          child: Transform(
-            alignment: Alignment.center,
-            transform: Matrix4.diagonal3Values(-1, 1, 1),
-            child: FittedBox(
-              fit: BoxFit.contain,
-              child: SizedBox(
-                width: 1000,
-                height: 1000 / previewAspect,
-                child: CameraPreview(camera),
-              ),
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: SizedBox(
+              width: 1000,
+              height: 1000 / previewAspect,
+              child: CameraPreview(camera),
             ),
           ),
         );
