@@ -126,6 +126,40 @@ class CountryPhoneNumber {
       return international;
     }
   }
+
+  /// Normalizes a complete international number to E.164.
+  static String? normalizeInternational(String input) {
+    final digits = input.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.isEmpty) return null;
+    try {
+      final number = PhoneNumber.parse('+$digits');
+      return number.isValid() ? number.international : null;
+    } on PhoneNumberException {
+      return null;
+    } on FormatException {
+      return null;
+    }
+  }
+}
+
+/// Formats a phone number entered with its international calling code.
+/// Incomplete input and Wrytte IDs beginning with +00 remain editable.
+class InternationalPhoneNumberInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digits = newValue.text.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.isEmpty) return const TextEditingValue();
+
+    final display = CountryPhoneNumber.formatInternationalDisplay('+$digits');
+    final formatted = display.startsWith('+') ? display.substring(1) : display;
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
 }
 
 /// Re-formats complete number groups while retaining useful partial input.

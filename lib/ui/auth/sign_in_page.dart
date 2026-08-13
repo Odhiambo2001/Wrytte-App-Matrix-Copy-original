@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
+import 'package:wrytte/utils/country_phone_number.dart';
 
 class SignInPage extends StatefulWidget {
   const SignInPage({super.key});
@@ -31,7 +31,14 @@ class _SignInPageState extends State<SignInPage> {
     try {
       if (!mounted) return;
 
-      final phone = _normalizePhone(input);
+      final digits = input.replaceAll(RegExp(r'[^\d]'), '');
+      final phone =
+          digits.startsWith('00')
+              ? '+$digits'
+              : CountryPhoneNumber.normalizeInternational(input);
+      if (phone == null) {
+        throw const FormatException('Invalid international phone number');
+      }
 
       Navigator.push(
         context,
@@ -47,15 +54,6 @@ class _SignInPageState extends State<SignInPage> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  String _normalizePhone(String input) {
-    var cleaned = input.trim().replaceAll(RegExp(r'[^\d+]'), '');
-    if (cleaned.startsWith('00') && cleaned.length > 4) {
-      cleaned = '+${cleaned.substring(2)}';
-    }
-    if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';
-    return cleaned;
   }
 
   @override
@@ -134,7 +132,7 @@ class _SignInPageState extends State<SignInPage> {
                           focusNode: _focusNode,
                           keyboardType: TextInputType.number,
                           inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly,
+                            InternationalPhoneNumberInputFormatter(),
                           ],
                           style: const TextStyle(
                             color: Colors.white,
