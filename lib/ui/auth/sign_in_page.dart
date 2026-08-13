@@ -34,6 +34,9 @@ class _SignInPageState extends State<SignInPage> {
 
       final digits = input.replaceAll(RegExp(r'[^\d]'), '');
       if (digits.startsWith('00')) {
+        _focusNode.unfocus();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        if (!mounted) return;
         await Navigator.push(
           context,
           MaterialPageRoute<void>(

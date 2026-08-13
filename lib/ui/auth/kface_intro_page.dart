@@ -18,10 +18,16 @@ class _KFaceIntroPageState extends State<KFaceIntroPage> {
     return Scaffold(
       backgroundColor: const Color(0xFF111217),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(28, 10, 28, 18),
-          child: Column(
-            children: [
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(28, 10, 28, 18),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight - 28),
+                child: IntrinsicHeight(
+                  child: Column(
+                    children: [
               Align(
                 alignment: Alignment.centerLeft,
                 child: IconButton(
@@ -86,9 +92,13 @@ class _KFaceIntroPageState extends State<KFaceIntroPage> {
                   ),
                 ),
               ),
-              const Spacer(),
-            ],
-          ),
+                      const Spacer(),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
