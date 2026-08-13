@@ -118,7 +118,6 @@ class CountryPhoneNumber {
 
     try {
       final number = PhoneNumber.parse(international);
-      if (!number.isValid()) return international;
       return '+${number.countryCode} ${number.formatNsn()}';
     } on PhoneNumberException {
       return international;

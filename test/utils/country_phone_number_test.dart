@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 
@@ -41,6 +42,21 @@ void main() {
         CountryPhoneNumber.formatInternationalDisplay('33749542126'),
         '+33 7 49 54 21 26',
       );
+    });
+
+    test('formats an international number progressively while typing', () {
+      final formatter = InternationalPhoneNumberInputFormatter();
+      var value = const TextEditingValue();
+      for (final input in <String>['2', '25', '254', '2547', '25471', '254712']) {
+        value = formatter.formatEditUpdate(
+          value,
+          TextEditingValue(
+            text: input,
+            selection: TextSelection.collapsed(offset: input.length),
+          ),
+        );
+      }
+      expect(value.text, '254 712');
     });
 
     test('rejects incomplete and impossible numbers', () {
