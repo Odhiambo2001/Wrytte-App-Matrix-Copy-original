@@ -26,7 +26,7 @@ class ChatLocalDb {
     final normalized = ownerUserId?.trim();
     final nextOwner =
         normalized == null || normalized.isEmpty ? null : normalized;
-    if (_boundOwnerId == nextOwner) return;
+    if (_boundOwnerId == nextOwner && (_db == null || _db!.isOpen)) return;
     _boundOwnerId = nextOwner;
     if (_db != null && _ownerId != await _currentOwnerId()) {
       await _db!.close();
@@ -37,6 +37,10 @@ class ChatLocalDb {
 
   Future<Database> get db async {
     final ownerId = await _currentOwnerId();
+    if (_db != null && !_db!.isOpen) {
+      _db = null;
+      _ownerId = null;
+    }
     if (_db != null && _ownerId != ownerId) {
       await _db!.close();
       _db = null;
@@ -1778,6 +1782,7 @@ class ChatLocalDb {
     final current = _db;
     _db = null;
     _ownerId = null;
+    _boundOwnerId = null;
     await current?.close();
 
     final dbPath = await getDatabasesPath();

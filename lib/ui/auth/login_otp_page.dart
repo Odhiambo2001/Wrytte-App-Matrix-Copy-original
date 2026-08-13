@@ -120,7 +120,9 @@ class _LoginOtpPageState extends State<LoginOtpPage>
         ),
         (_) => false,
       );
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('[LoginOtp] post-verification login failed: $e');
+      debugPrintStack(stackTrace: stackTrace);
       _shakeController.forward(from: 0);
       setState(() {
         _isLoading = false;

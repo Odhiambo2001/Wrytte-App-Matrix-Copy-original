@@ -343,11 +343,19 @@ class AuthService {
       writes.add(_storage.write(key: _secretKey, value: secret.trim()));
     }
     await Future.wait(writes);
-    await ChatLocalDb.instance.bindOwner(userId);
-    // Populate the owner-scoped in-memory timeline before any Matrix network
-    // bootstrap. The authenticated UI can therefore paint persisted DMs,
-    // groups, and channel posts immediately.
-    await ChatService().hydrateLocalConversations(syncReadMarkers: false);
+    try {
+      await ChatLocalDb.instance.bindOwner(userId);
+      // Populate the owner-scoped in-memory timeline before any Matrix network
+      // bootstrap. A disposable cache failure must not invalidate an already
+      // successful backend login.
+      await ChatService().hydrateLocalConversations(syncReadMarkers: false);
+    } catch (error, stackTrace) {
+      apkLog(
+        'Auth.login',
+        'local chat cache hydration skipped error="$error"',
+      );
+      debugPrintStack(stackTrace: stackTrace);
+    }
     await _archiveProfile(
       phone: normalizedPhone,
       userId: userId,
