@@ -306,32 +306,34 @@ class _LoginOtpPageState extends State<LoginOtpPage>
 
               const SizedBox(height: 40),
 
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  TextButton(
-                    onPressed: _canResend && !_isLoading ? _resendCode : null,
-                    child:
-                        _isLoading
-                            ? const SizedBox(
-                              height: 14,
-                              width: 14,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white54,
-                              ),
-                            )
-                            : const Text(
-                              "Resend SMS",
-                              style: TextStyle(color: Colors.white54),
-                            ),
+              if (_isLoading)
+                const Center(
+                  child: SizedBox(
+                    height: 22,
+                    width: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white54,
+                    ),
                   ),
-                  const Text(
-                    "Activate via call",
-                    style: TextStyle(color: Colors.white54),
-                  ),
-                ],
-              ),
+                )
+              else
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    TextButton(
+                      onPressed: _canResend ? _resendCode : null,
+                      child: const Text(
+                        "Resend SMS",
+                        style: TextStyle(color: Colors.white54),
+                      ),
+                    ),
+                    const Text(
+                      "Activate via call",
+                      style: TextStyle(color: Colors.white54),
+                    ),
+                  ],
+                ),
             ],
           ),
         ),
