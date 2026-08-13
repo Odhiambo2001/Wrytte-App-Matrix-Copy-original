@@ -18,7 +18,7 @@ class KFaceKeyPage extends StatelessWidget {
       backgroundColor: const Color(0xFF05090A),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(28, 62, 28, 24),
+          padding: const EdgeInsets.fromLTRB(20, 36, 20, 18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -27,12 +27,12 @@ class KFaceKeyPage extends StatelessWidget {
                   displayId,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 22,
+                    fontSize: 18,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-              const SizedBox(height: 78),
+              const SizedBox(height: 48),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -40,7 +40,7 @@ class KFaceKeyPage extends StatelessWidget {
                     'Key:',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 18,
+                      fontSize: 15,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -52,10 +52,12 @@ class KFaceKeyPage extends StatelessWidget {
                         const SnackBar(content: Text('Key copied')),
                       );
                     },
-                    icon: const Icon(Icons.copy_outlined, size: 21),
-                    label: const Text('Copy'),
+                    icon: const Icon(Icons.copy_outlined, size: 18),
+                    label: const Text('Copy', style: TextStyle(fontSize: 13)),
                     style: TextButton.styleFrom(
                       foregroundColor: const Color(0xFF989DA5),
+                      minimumSize: const Size(0, 36),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
                     ),
                   ),
                 ],
@@ -64,15 +66,15 @@ class KFaceKeyPage extends StatelessWidget {
                 keyHash,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 18,
-                  height: 1.45,
+                  fontSize: 14,
+                  height: 1.35,
                   fontWeight: FontWeight.w600,
                 ),
               ),
               const Spacer(),
               SizedBox(
                 width: double.infinity,
-                height: 56,
+                height: 46,
                 child: ElevatedButton(
                   onPressed:
                       () => Navigator.of(
@@ -82,12 +84,12 @@ class KFaceKeyPage extends StatelessWidget {
                     backgroundColor: const Color(0xFF24282D),
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(13),
                     ),
                   ),
                   child: const Text(
                     'Log out',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                   ),
                 ),
               ),
