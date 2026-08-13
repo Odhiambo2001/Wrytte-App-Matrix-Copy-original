@@ -47,3 +47,5 @@ android/.cxx/
 third_party/opencv_dart/android/.cxx/
 **/*.tar.gz
 third_party/opencv_dart/android/.gradle/
+
+model_backups/
