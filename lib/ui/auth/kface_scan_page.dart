@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:wrytte/services/face/camera_frame_converter.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/face_commitment_store.dart';
+import 'package:wrytte/ui/auth/kface_key_page.dart';
 
 class KFaceScanPage extends StatefulWidget {
   const KFaceScanPage({super.key, required this.wrytteId});
@@ -22,7 +23,6 @@ class KFaceScanPage extends StatefulWidget {
 class _KFaceScanPageState extends State<KFaceScanPage>
     with WidgetsBindingObserver {
   static const _analysisThrottle = Duration(microseconds: 66667);
-  static const _continuousRetinaDiagnostic = true;
   static const double _bottomPanelHeight = 250;
   static const int _tickRingCount = 72;
   final FaceBiometricPipeline _pipeline = FaceBiometricPipeline();
@@ -323,9 +323,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
               ? 'Keep looking at the camera.'
               : 'Live face · V2 ${_percent(liveness.v2.realProbability)} real · '
                   'V1SE ${_percent(liveness.v1se.realProbability)} real';
-      // Diagnostic switch: keep the production 20-frame stopping rule in the
-      // source, but bypass it while continuous RetinaFace testing is active.
-      if (!_continuousRetinaDiagnostic && _ringProgress >= 1) {
+      if (_ringProgress >= 1) {
         _completed = true;
         _status = 'Creating your secure face key…';
       }
@@ -349,15 +347,19 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       final stored = await _commitmentStore.read(widget.wrytteId);
       debugPrint(
         '[KFace][Finalization] operation='
-        '${stored == null ? 'ENROLL' : 'VERIFY'}',
+        '${stored == null ? 'ENROLL' : stored.kdfSalt.isEmpty ? 'MIGRATE_TO_HKDF' : 'VERIFY'}',
       );
-      // LDPC enrollment/recovery is deliberately not reached while
-      // _continuousRetinaDiagnostic is true. Its production code is retained.
-      if (stored == null) {
-        final commitment = await _pipeline.enroll();
-        await _commitmentStore.write(widget.wrytteId, commitment);
+      if (stored == null || stored.kdfSalt.isEmpty) {
+        if (stored != null) {
+          debugPrint(
+            '[KFace][Finalization][KDF] migration=LEGACY_SHA256_TO_HKDF',
+          );
+        }
+        final enrollment = await _pipeline.enroll();
+        await _commitmentStore.write(widget.wrytteId, enrollment.commitment);
         _setStatus('Face enrollment complete.');
         debugPrint('[KFace][Final] result=ENROLLED_SUCCESSFULLY');
+        await _openKeyPage(enrollment.derivedKey);
       } else {
         final recovery = await _pipeline.recover(stored);
         debugPrint(
@@ -369,6 +371,9 @@ class _KFaceScanPageState extends State<KFaceScanPage>
               ? 'Face verified successfully.'
               : 'Face verification failed. Start over and try again.',
         );
+        if (recovery.accepted && recovery.derivedKey != null) {
+          await _openKeyPage(recovery.derivedKey!);
+        }
       }
     } catch (error, stackTrace) {
       debugPrint('[KFace] Finalization failed: $error\n$stackTrace');
@@ -376,6 +381,16 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     } finally {
       _finalizing = false;
     }
+  }
+
+  Future<void> _openKeyPage(String keyHash) async {
+    if (!mounted) return;
+    await Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder:
+            (_) => KFaceKeyPage(wrytteId: widget.wrytteId, keyHash: keyHash),
+      ),
+    );
   }
 
   void _setStatus(String next) {

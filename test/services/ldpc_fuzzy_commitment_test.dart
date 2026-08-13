@@ -20,6 +20,10 @@ void main() {
     expect(recovery.hashMatched, isTrue);
     expect(recovery.accepted, isTrue);
     expect(recovery.recoveredHash, commitment.keyHash);
+    expect(
+      recovery.derivedKey,
+      ldpc.deriveEnrollmentKey(embedding, commitment),
+    );
   });
 
   test('packed commitment metadata round-trips without losing bits', () async {
@@ -32,6 +36,38 @@ void main() {
     expect(restored.helper, orderedEquals(commitment.helper));
     expect(restored.nonce, orderedEquals(commitment.nonce));
     expect(restored.keyHash, commitment.keyHash);
+    expect(restored.kdfSalt, orderedEquals(commitment.kdfSalt));
+  });
+
+  test('quantization matches NumPy ties-to-even Gray coding', () {
+    final embedding = Float32List(LdpcFuzzyCommitment.embeddingDimension);
+    // After scaling and mapping, these produce levels 0, 3.5 and 7.
+    embedding[0] = -0.2;
+    embedding[1] = 0;
+    embedding[2] = 0.2;
+    final bits = LdpcFuzzyCommitment().embeddingToBitVector(embedding);
+
+    expect(bits.sublist(0, 9), orderedEquals([0, 0, 0, 1, 1, 0, 1, 0, 0]));
+    expect(bits, hasLength(1536));
+  });
+
+  test('recovery rejects a valid syndrome when stored hash differs', () async {
+    final ldpc = LdpcFuzzyCommitment();
+    await ldpc.initialize();
+    final embedding = _normalizedEmbedding();
+    final enrolled = ldpc.enroll(embedding);
+    final altered = FuzzyCommitment(
+      helper: enrolled.helper,
+      nonce: enrolled.nonce,
+      keyHash: List.filled(32, '00').join(),
+      kdfSalt: enrolled.kdfSalt,
+      quantScale: enrolled.quantScale,
+    );
+
+    final recovery = ldpc.recover(embedding, altered);
+    expect(recovery.syndromePassed, isTrue);
+    expect(recovery.hashMatched, isFalse);
+    expect(recovery.accepted, isFalse);
   });
 }
 

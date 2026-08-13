@@ -31,6 +31,17 @@ void main() {
     expect(result.label, 'NORMAL');
   });
 
+  test('includes 0.30 and 0.60 boundaries in normal', () {
+    expect(
+      FaceBiometricPipeline.measureFaceDistance(face(100, 192)).label,
+      'NORMAL',
+    );
+    expect(
+      FaceBiometricPipeline.measureFaceDistance(face(100, 384)).label,
+      'NORMAL',
+    );
+  });
+
   test('classifies a large RetinaFace box as close', () {
     final result = FaceBiometricPipeline.measureFaceDistance(face(400, 430));
     expect(result.label, 'CLOSE');

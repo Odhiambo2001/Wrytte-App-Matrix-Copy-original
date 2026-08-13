@@ -41,7 +41,7 @@ void main() {
     expect(result.geometryScore, 1);
   });
 
-  test('classifies geometry 0.75 as partial', () {
+  test('does not use geometry for full or partial classification', () {
     final result = FaceBiometricPipeline.measureFaceCompleteness(
       face(
         landmarks: const FaceLandmarks(
@@ -54,7 +54,7 @@ void main() {
       ),
     );
     expect(result.geometryScore, 0.75);
-    expect(result.label, 'PARTIAL');
+    expect(result.label, 'FULL');
   });
 
   test('classifies confidence below 0.83 as partial', () {

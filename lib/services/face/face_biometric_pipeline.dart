@@ -124,14 +124,23 @@ class TargetFaceSelection {
   final double? sizeGap;
 }
 
+class BiometricEnrollmentResult {
+  const BiometricEnrollmentResult({
+    required this.commitment,
+    required this.derivedKey,
+  });
+
+  final FuzzyCommitment commitment;
+  final String derivedKey;
+}
+
 class FaceBiometricPipeline {
-  static const framesToUse = 20;
+  static const framesToUse = 10;
   static const targetConfidenceThreshold = 0.83;
-  static const targetSizeGap = 0.15;
+  static const targetSizeGap = 0.20;
   static const fullBboxVisibleThreshold = 0.90;
-  static const fullGeometryThreshold = 0.80;
-  static const normalFaceSizeMinimum = 0.25;
-  static const normalFaceSizeMaximum = 0.65;
+  static const normalFaceSizeMinimum = 0.30;
+  static const normalFaceSizeMaximum = 0.60;
 
   final RetinaFaceDetector retinaFace = RetinaFaceDetector();
   final AdaFaceEmbedder adaFace = AdaFaceEmbedder();
@@ -227,12 +236,10 @@ class FaceBiometricPipeline {
       );
     }
     final targetSelection = selectTargetFace(targetMetrics);
-    final maximumEligibleSize = targetMetrics
-        .where(isTargetFaceEligible)
-        .fold<double>(
-          0,
-          (maximum, face) => math.max(maximum, face.faceSizeRatio),
-        );
+    final maximumDetectedSize = targetMetrics.fold<double>(
+      0,
+      (maximum, face) => math.max(maximum, face.faceSizeRatio),
+    );
     for (final metrics in targetMetrics) {
       final landmarksPass = metrics.visibleLandmarks == 5;
       final fullFacePass = metrics.faceLabel == 'FULL';
@@ -240,9 +247,7 @@ class FaceBiometricPipeline {
       final bboxPass =
           metrics.boundingBoxVisibleFraction >= fullBboxVisibleThreshold;
       final confidencePass = metrics.confidence >= targetConfidenceThreshold;
-      final maximumPass =
-          isTargetFaceEligible(metrics) &&
-          metrics.faceSizeRatio >= maximumEligibleSize;
+      final maximumPass = metrics.faceSizeRatio >= maximumDetectedSize;
       final selected = targetSelection.targetFaceNumber == metrics.faceNumber;
       debugPrint(
         '[KFace][Target][Frame $frameNumber][Face ${metrics.faceNumber}] '
@@ -262,7 +267,7 @@ class FaceBiometricPipeline {
       'target=${targetSelection.targetFaceNumber == null ? 'NONE' : 'Face ${targetSelection.targetFaceNumber}'} '
       'reason=${targetSelection.reason} '
       'qualifying=${targetSelection.qualifyingFaceNumbers} '
-      'sizeGap=${targetSelection.sizeGap?.toStringAsFixed(3) ?? 'N/A'}',
+      'bboxSizeGap=${targetSelection.sizeGap?.toStringAsFixed(3) ?? 'N/A'}',
     );
     final targetResult =
         targetSelection.targetFaceNumber == null
@@ -396,7 +401,7 @@ class FaceBiometricPipeline {
         sizeGap: null,
       );
     }
-    if (qualifying.length == 1) {
+    if (faces.length == 1 && qualifying.length == 1) {
       return TargetFaceSelection(
         targetFaceNumber: qualifying.first.faceNumber,
         reason: 'ONLY_QUALIFYING_FACE',
@@ -404,18 +409,54 @@ class FaceBiometricPipeline {
         sizeGap: null,
       );
     }
-    final gap = qualifying[0].faceSizeRatio - qualifying[1].faceSizeRatio;
-    if (gap < targetSizeGap) {
+    if (faces.length != 2) {
       return TargetFaceSelection(
         targetFaceNumber: null,
-        reason: 'AMBIGUOUS_SIZE_GAP_BELOW_0.15',
+        reason: 'REQUIRES_EXACTLY_ONE_OR_TWO_FACES',
+        qualifyingFaceNumbers: qualifyingNumbers,
+        sizeGap: null,
+      );
+    }
+    if (faces.every((face) => face.distanceLabel == 'NORMAL')) {
+      return TargetFaceSelection(
+        targetFaceNumber: null,
+        reason: 'BOTH_FACES_NORMAL',
+        qualifyingFaceNumbers: qualifyingNumbers,
+        sizeGap: null,
+      );
+    }
+    if (qualifying.length != 1) {
+      return TargetFaceSelection(
+        targetFaceNumber: null,
+        reason: 'NO_UNIQUE_FULL_NORMAL_FACE',
+        qualifyingFaceNumbers: qualifyingNumbers,
+        sizeGap: null,
+      );
+    }
+    final target = qualifying.first;
+    final other = faces.firstWhere(
+      (face) => face.faceNumber != target.faceNumber,
+    );
+    final gap = target.faceSizeRatio - other.faceSizeRatio;
+    if (other.distanceLabel != 'FAR') {
+      return TargetFaceSelection(
+        targetFaceNumber: null,
+        reason: 'SECOND_FACE_NOT_FAR',
+        qualifyingFaceNumbers: qualifyingNumbers,
+        sizeGap: gap,
+      );
+    }
+    if (gap + 1e-9 < targetSizeGap) {
+      return TargetFaceSelection(
+        targetFaceNumber: null,
+        reason: 'NORMAL_FAR_SIZE_GAP_BELOW_0.20',
         qualifyingFaceNumbers: qualifyingNumbers,
         sizeGap: gap,
       );
     }
     return TargetFaceSelection(
-      targetFaceNumber: qualifying.first.faceNumber,
-      reason: 'LARGEST_QUALIFYING_FACE_GAP_AT_LEAST_0.15',
+      targetFaceNumber: target.faceNumber,
+      reason: 'NORMAL_TARGET_FAR_OTHER_GAP_AT_LEAST_0.20',
       qualifyingFaceNumbers: qualifyingNumbers,
       sizeGap: gap,
     );
@@ -478,7 +519,6 @@ class FaceBiometricPipeline {
         face.confidence >= targetConfidenceThreshold &&
         bboxVisible >= fullBboxVisibleThreshold &&
         visibleLandmarks == 5 &&
-        geometryScore >= fullGeometryThreshold &&
         distance.label == 'NORMAL' &&
         distance.sizeRatio >= normalFaceSizeMinimum &&
         distance.sizeRatio <= normalFaceSizeMaximum;
@@ -495,9 +535,9 @@ class FaceBiometricPipeline {
   /// dimension. This remains stable for modest head rotation and supports the
   /// portrait-shaped boxes commonly returned by RetinaFace.
   ///
-  /// FAR:    face occupies less than 25% of the Retina input dimension.
-  /// NORMAL: face occupies 25% through 65%.
-  /// CLOSE:  face occupies more than 65%.
+  /// FAR:    face occupies less than 30% of the Retina input dimension.
+  /// NORMAL: face occupies 30% through 60%.
+  /// CLOSE:  face occupies more than 60%.
   static FaceDistance measureFaceDistance(FaceDetection face) {
     final inputSize = OpenCvFacePreprocessor.retinaSize.toDouble();
     final rawWidth = math.max(
@@ -559,20 +599,46 @@ class FaceBiometricPipeline {
     return averaged;
   }
 
-  Future<FuzzyCommitment> enroll() async {
+  Future<BiometricEnrollmentResult> enroll() async {
     final embedding = await createEmbedding();
+    final biometricBits = ldpc.embeddingToBitVector(embedding);
+    debugPrint(
+      '[KFace][Finalization][Quantization] dimensions=${embedding.length} '
+      'scale=${LdpcFuzzyCommitment.quantScale} '
+      'bitsPerDimension=${LdpcFuzzyCommitment.quantBits} '
+      'outputBits=${biometricBits.length} ldpcUsedBits=${LdpcFuzzyCommitment.codeN}',
+    );
     debugPrint(
       '[KFace][Finalization][LDPC] mode=ENROLL initialization=STARTED',
     );
     await ldpc.initialize();
     debugPrint('[KFace][Finalization][LDPC] mode=ENROLL processing=STARTED');
     final commitment = ldpc.enroll(embedding);
+    final derivedKey = ldpc.deriveEnrollmentKey(embedding, commitment);
+    debugPrint(
+      '[KFace][Finalization][KDF] algorithm=${LdpcFuzzyCommitment.kdfAlgorithm} '
+      'saltBytes=${commitment.kdfSalt.length} '
+      'info=${LdpcFuzzyCommitment.kdfInfo} outputBytes=32 status=COMPLETED',
+    );
     debugPrint('[KFace][Finalization][LDPC] mode=ENROLL result=COMPLETED');
-    return commitment;
+    return BiometricEnrollmentResult(
+      commitment: commitment,
+      derivedKey: derivedKey,
+    );
   }
 
   Future<LdpcRecoveryResult> recover(FuzzyCommitment commitment) async {
     final embedding = await createEmbedding();
+    final biometricBits = ldpc.embeddingToBitVector(
+      embedding,
+      scale: commitment.quantScale,
+    );
+    debugPrint(
+      '[KFace][Finalization][Quantization] dimensions=${embedding.length} '
+      'scale=${commitment.quantScale} '
+      'bitsPerDimension=${LdpcFuzzyCommitment.quantBits} '
+      'outputBits=${biometricBits.length} ldpcUsedBits=${LdpcFuzzyCommitment.codeN}',
+    );
     debugPrint(
       '[KFace][Finalization][LDPC] mode=RECOVER initialization=STARTED',
     );
@@ -582,6 +648,10 @@ class FaceBiometricPipeline {
     debugPrint(
       '[KFace][Finalization][LDPC] mode=RECOVER '
       'result=${recovery.accepted ? 'ACCEPTED' : 'REJECTED'}',
+    );
+    debugPrint(
+      '[KFace][Finalization][KDF] algorithm=${LdpcFuzzyCommitment.kdfAlgorithm} '
+      'status=${recovery.derivedKey == null ? 'NOT_DERIVED' : 'COMPLETED'}',
     );
     return recovery;
   }

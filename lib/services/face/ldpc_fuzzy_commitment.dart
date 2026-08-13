@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -9,12 +10,14 @@ class FuzzyCommitment {
     required this.helper,
     required this.nonce,
     required this.keyHash,
+    required this.kdfSalt,
     this.quantScale = LdpcFuzzyCommitment.quantScale,
   });
 
   final Uint8List helper;
   final Uint8List nonce;
   final String keyHash;
+  final Uint8List kdfSalt;
   final int quantScale;
 
   Map<String, dynamic> toJson() => {
@@ -23,6 +26,8 @@ class FuzzyCommitment {
     'nonce': _pack(nonce),
     'nonceLength': nonce.length,
     'keyHash': keyHash,
+    'kdfSalt': base64Encode(kdfSalt),
+    'kdf': LdpcFuzzyCommitment.kdfAlgorithm,
     'quantScale': quantScale,
   };
 
@@ -31,6 +36,10 @@ class FuzzyCommitment {
       helper: _unpack(json['helper'] as String, json['helperLength'] as int),
       nonce: _unpack(json['nonce'] as String, json['nonceLength'] as int),
       keyHash: json['keyHash'] as String,
+      kdfSalt:
+          json['kdfSalt'] == null
+              ? Uint8List(0)
+              : base64Decode(json['kdfSalt'] as String),
       quantScale: json['quantScale'] as int? ?? LdpcFuzzyCommitment.quantScale,
     );
   }
@@ -47,6 +56,7 @@ class LdpcRecoveryResult {
     required this.syndromePassed,
     required this.hashMatched,
     required this.recoveredHash,
+    required this.derivedKey,
     required this.preDecodeErrors,
     required this.postDecodeErrors,
   });
@@ -55,17 +65,24 @@ class LdpcRecoveryResult {
   final bool syndromePassed;
   final bool hashMatched;
   final String? recoveredHash;
+  final String? derivedKey;
   final int preDecodeErrors;
   final int postDecodeErrors;
 }
 
 class LdpcFuzzyCommitment {
+  static const baseGraphColumns = 52;
+  static const baseGraphRows = 42;
   static const quantScale = 5;
   static const quantBits = 3;
   static const embeddingDimension = 512;
   static const bitVectorLength = embeddingDimension * quantBits;
   static const codeN = 832;
   static const codeK = 160;
+  static const kdfAlgorithm = 'HKDF-SHA-256';
+  static const kdfInfo = 'wrytte/kface/application-key/v1';
+  static const kdfSaltLength = 32;
+  static const derivedKeyLength = 32;
   static const _codeM = 672;
   static const _z = 16;
   static const _iterations = 25;
@@ -123,16 +140,26 @@ class LdpcFuzzyCommitment {
     final result = Uint8List(bitVectorLength);
     for (var index = 0; index < embedding.length; index++) {
       final scaled = (embedding[index] * scale).clamp(-1.0, 1.0);
-      final quantized = (((scaled + 1.0) / 2.0) * levels).round().clamp(
-        0,
-        levels,
-      );
+      final quantized = _roundHalfToEven(
+        ((scaled + 1.0) / 2.0) * levels,
+      ).clamp(0, levels);
       final gray = quantized ^ (quantized >> 1);
       for (var bit = 0; bit < quantBits; bit++) {
         result[index * quantBits + (quantBits - 1 - bit)] = (gray >> bit) & 1;
       }
     }
     return result;
+  }
+
+  /// Matches NumPy's `round`, which uses ties-to-even rather than Dart's
+  /// default half-away-from-zero rounding.
+  static int _roundHalfToEven(double value) {
+    final lower = value.floor();
+    final fraction = value - lower;
+    if ((fraction - 0.5).abs() <= 1e-12) {
+      return lower.isEven ? lower : lower + 1;
+    }
+    return fraction < 0.5 ? lower : lower + 1;
   }
 
   FuzzyCommitment enroll(Float32List embedding) {
@@ -149,7 +176,20 @@ class LdpcFuzzyCommitment {
       helper: helper,
       nonce: nonce,
       keyHash: sha256.convert(_packBits(message)).toString(),
+      kdfSalt: _secureRandomBytes(kdfSaltLength),
     );
+  }
+
+  String deriveEnrollmentKey(
+    Float32List embedding,
+    FuzzyCommitment commitment,
+  ) {
+    if (commitment.kdfSalt.isEmpty) {
+      throw StateError('This enrollment predates HKDF key derivation.');
+    }
+    final bits = embeddingToBitVector(embedding, scale: commitment.quantScale);
+    final message = Uint8List.fromList(bits.sublist(0, codeK));
+    return _hex(_hkdfSha256(_packBits(message), commitment.kdfSalt));
   }
 
   LdpcRecoveryResult recover(
@@ -181,15 +221,46 @@ class LdpcFuzzyCommitment {
             ? sha256.convert(_packBits(candidateMessage)).toString()
             : null;
     final hashMatched = recoveredHash == commitment.keyHash;
+    final accepted = syndromePassed && hashMatched;
+    final derivedKey =
+        accepted && commitment.kdfSalt.isNotEmpty
+            ? _hex(_hkdfSha256(_packBits(candidateMessage), commitment.kdfSalt))
+            : null;
     return LdpcRecoveryResult(
-      accepted: syndromePassed && hashMatched,
+      accepted: accepted,
       syndromePassed: syndromePassed,
       hashMatched: hashMatched,
       recoveredHash: recoveredHash,
+      derivedKey: derivedKey,
       preDecodeErrors: preDecodeErrors,
       postDecodeErrors: postDecodeErrors,
     );
   }
+
+  static Uint8List _secureRandomBytes(int length) {
+    final random = Random.secure();
+    return Uint8List.fromList(
+      List<int>.generate(length, (_) => random.nextInt(256)),
+    );
+  }
+
+  static Uint8List _hkdfSha256(Uint8List inputKey, Uint8List salt) {
+    final extract = Hmac(sha256, salt).convert(inputKey).bytes;
+    final info = utf8.encode(kdfInfo);
+    final output = <int>[];
+    var previous = <int>[];
+    var counter = 1;
+    while (output.length < derivedKeyLength) {
+      previous =
+          Hmac(sha256, extract).convert([...previous, ...info, counter]).bytes;
+      output.addAll(previous);
+      counter++;
+    }
+    return Uint8List.fromList(output.sublist(0, derivedKeyLength));
+  }
+
+  static String _hex(Uint8List bytes) =>
+      bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
 
   Uint8List _encode(Uint8List message) {
     final generator = _generator!;
