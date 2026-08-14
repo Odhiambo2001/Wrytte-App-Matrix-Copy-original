@@ -134,23 +134,45 @@ class BiometricEnrollmentResult {
   final String derivedKey;
 }
 
+class _AcceptedFaceEmbedding {
+  const _AcceptedFaceEmbedding({
+    required this.sharpness,
+    required this.embedding,
+  });
+
+  final double sharpness;
+  final Float32List embedding;
+}
+
 class FaceBiometricPipeline {
   static const framesToUse = 10;
   static const targetConfidenceThreshold = 0.83;
   static const targetSizeGap = 0.20;
   static const fullBboxVisibleThreshold = 0.90;
-  static const normalFaceSizeMinimum = 0.45;
-  static const normalFaceSizeMaximum = 0.70 ;
+  static const normalFaceSizeMinimum = 0.37;
+  static const normalFaceSizeMaximum = 0.68;
+
+  // --- Strict FPS gate -------------------------------------------------
+  // Caps processing throughput at exactly this many frames per second.
+  // Frames arriving faster than the interval below are dropped before any
+  // detection/liveness/embedding work runs, so cost is effectively zero
+  // for throttled frames.
+  static const int targetFps = 15;
+  static const Duration _minFrameInterval = Duration(
+    microseconds: 1000000 ~/ targetFps,
+  );
+  DateTime? _lastFrameProcessedAt;
+  // -----------------------------------------------------------------------
 
   final RetinaFaceDetector retinaFace = RetinaFaceDetector();
   final AdaFaceEmbedder adaFace = AdaFaceEmbedder();
   final LdpcFuzzyCommitment ldpc = LdpcFuzzyCommitment();
   final OpenCvFacePreprocessor openCv = OpenCvFacePreprocessor();
   final MiniFasNetLiveness liveness = MiniFasNetLiveness();
-  final List<AlignedFace> _alignedFaces = [];
+  final List<_AcceptedFaceEmbedding> _acceptedEmbeddings = [];
   int _frameSequence = 0;
 
-  int get acceptedFrameCount => _alignedFaces.length;
+  int get acceptedFrameCount => _acceptedEmbeddings.length;
 
   Future<void> initializeDetector() async {
     await Future.wait([
@@ -161,9 +183,38 @@ class FaceBiometricPipeline {
   }
 
   Future<FrameAnalysis> processFrame(img.Image cameraFrame) async {
+    final now = DateTime.now();
+    if (_lastFrameProcessedAt != null &&
+        now.difference(_lastFrameProcessedAt!) < _minFrameInterval) {
+      debugPrint(
+        '[KFace][FPS] throttled target=${targetFps}fps '
+        'minIntervalMs=${_minFrameInterval.inMilliseconds} '
+        'sinceLastMs=${now.difference(_lastFrameProcessedAt!).inMilliseconds}',
+      );
+      return FrameAnalysis(
+        faceDetected: false,
+        targetFaceSelected: false,
+        alignmentAccepted: false,
+        originalWidth: cameraFrame.width,
+        originalHeight: cameraFrame.height,
+        cropSide: 0,
+        wasResized: false,
+        acceptedFrameCount: _acceptedEmbeddings.length,
+        liveness: null,
+        completeness: FaceCompleteness.none,
+        faceDistance: FaceDistance.none,
+        adaFaceComputed: false,
+        processingMilliseconds: 0,
+      );
+    }
+    _lastFrameProcessedAt = now;
+
     final stopwatch = Stopwatch()..start();
+    final phaseStopwatch = Stopwatch()..start();
     final frameNumber = ++_frameSequence;
     final prepared = openCv.prepare(cameraFrame);
+    try {
+      final preprocessingMs = phaseStopwatch.elapsedMilliseconds;
     debugPrint(
       '[KFace][Frame $frameNumber][RetinaCrop] original='
       '${prepared.originalWidth}x${prepared.originalHeight} '
@@ -171,7 +222,14 @@ class FaceBiometricPipeline {
       '${prepared.cropSide}x${prepared.cropSide} output=640x640 '
       'resized=${prepared.wasResized}',
     );
+    phaseStopwatch
+      ..reset()
+      ..start();
     final faces = await retinaFace.detectBgr(prepared.bgr);
+    final retinaFaceMs = phaseStopwatch.elapsedMilliseconds;
+    phaseStopwatch
+      ..reset()
+      ..start();
     final orderedFaces = faces.toList(growable: false)
       ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
     final perFaceResults =
@@ -282,13 +340,24 @@ class FaceBiometricPipeline {
         selectedForCompleteness == null
             ? FaceDistance.none
             : measureFaceDistance(selectedForCompleteness);
+    final faceEvaluationMs = phaseStopwatch.elapsedMilliseconds;
     AlignedFace? aligned;
     DualLivenessResult? livenessResult;
     var adaFaceComputed = false;
+    var livenessCropMs = 0;
+    var livenessInferenceMs = 0;
+    var alignmentMs = 0;
+    var adaFaceMs = 0;
+    var parallelLivenessAdaFaceWallMs = 0;
+    var embeddingStorageMs = 0;
     if (targetResult != null) {
       final selectedFace = targetResult.face;
       final selectedFaceNumber = targetSelection.targetFaceNumber!;
+      phaseStopwatch
+        ..reset()
+        ..start();
       final crops = openCv.cropForMiniFasNet(prepared, selectedFace);
+      livenessCropMs = phaseStopwatch.elapsedMilliseconds;
       debugPrint(
         '[KFace][Frame $frameNumber][Face $selectedFaceNumber][LivenessCrop] '
         'face=${selectedFace.left.toStringAsFixed(1)},'
@@ -298,10 +367,46 @@ class FaceBiometricPipeline {
         'V2(scale=2.7,box=${_boxLog(crops.v2Box)},output=80x80) '
         'V1SE(scale=4.0,box=${_boxLog(crops.v1seBox)},output=80x80)',
       );
-      livenessResult = await liveness.predict(
-        v2FaceBgr: crops.v2Bgr,
-        v1seFaceBgr: crops.v1seBgr,
-      );
+      final parallelStageTimer = Stopwatch()..start();
+      final livenessFuture = () async {
+        final timer = Stopwatch()..start();
+        final result = await liveness.predict(
+          v2FaceBgr: crops.v2Bgr,
+          v1seFaceBgr: crops.v1seBgr,
+        );
+        timer.stop();
+        return (result: result, elapsedMs: timer.elapsedMilliseconds);
+      }();
+
+      // Alignment is independent of the liveness decision. Start liveness,
+      // align immediately, and then run AdaFace while liveness is still in
+      // flight. A computed embedding is retained only after liveness passes.
+      phaseStopwatch
+        ..reset()
+        ..start();
+      aligned = openCv.align(prepared, selectedFace.landmarks);
+      alignmentMs = phaseStopwatch.elapsedMilliseconds;
+
+      Future<({Float32List embedding, int elapsedMs})>? adaFaceFuture;
+      if (aligned != null) {
+        final alignedFace = aligned;
+        adaFaceFuture = () async {
+          final timer = Stopwatch()..start();
+          final embedding = await adaFace.embed(alignedFace.bgr);
+          timer.stop();
+          return (embedding: embedding, elapsedMs: timer.elapsedMilliseconds);
+        }();
+      }
+
+      final timedLiveness = await livenessFuture;
+      livenessResult = timedLiveness.result;
+      livenessInferenceMs = timedLiveness.elapsedMs;
+      final timedAdaFace = await adaFaceFuture;
+      final embedding = timedAdaFace?.embedding;
+      adaFaceMs = timedAdaFace?.elapsedMs ?? 0;
+      adaFaceComputed = embedding != null;
+      parallelStageTimer.stop();
+      parallelLivenessAdaFaceWallMs = parallelStageTimer.elapsedMilliseconds;
       debugPrint(
         '[KFace][Frame $frameNumber][Face $selectedFaceNumber][Liveness] '
         'V2(real=${_prob(livenessResult.v2.realProbability)},'
@@ -314,15 +419,26 @@ class FaceBiometricPipeline {
         'decision=${livenessResult.v1se.isReal ? 'REAL' : 'FAKE'}) '
         'combined=${livenessResult.isReal ? 'PASS' : 'REJECT'}',
       );
-      if (livenessResult.isReal) {
-        aligned = openCv.align(prepared, selectedFace.landmarks);
-      }
-      if (aligned != null && livenessResult.isReal) {
-        await adaFace.embed(aligned.bgr);
-        adaFaceComputed = true;
-        _alignedFaces.add(aligned);
-        _alignedFaces.sort((a, b) => b.sharpness.compareTo(a.sharpness));
-        if (_alignedFaces.length > framesToUse) _alignedFaces.removeLast();
+      if (aligned != null && embedding != null && livenessResult.isReal) {
+        phaseStopwatch
+          ..reset()
+          ..start();
+        _acceptedEmbeddings.add(
+          _AcceptedFaceEmbedding(
+            sharpness: aligned.sharpness,
+            embedding: embedding,
+          ),
+        );
+        _acceptedEmbeddings.sort((a, b) => b.sharpness.compareTo(a.sharpness));
+        if (_acceptedEmbeddings.length > framesToUse) {
+          _acceptedEmbeddings.removeLast();
+        }
+        embeddingStorageMs = phaseStopwatch.elapsedMilliseconds;
+      } else if (embedding != null && !livenessResult.isReal) {
+        debugPrint(
+          '[KFace][Frame $frameNumber][AdaFace] '
+          'status=DISCARDED reason=LIVENESS_REJECTED',
+        );
       }
     } else {
       debugPrint(
@@ -331,6 +447,42 @@ class FaceBiometricPipeline {
       );
     }
     stopwatch.stop();
+    phaseStopwatch.stop();
+    final measuredMs =
+        preprocessingMs +
+        retinaFaceMs +
+        faceEvaluationMs +
+        livenessCropMs +
+        parallelLivenessAdaFaceWallMs +
+        embeddingStorageMs;
+    final unaccountedMs = math.max(
+      0,
+      stopwatch.elapsedMilliseconds - measuredMs,
+    );
+    final openCvMs = preprocessingMs + livenessCropMs + alignmentMs;
+    debugPrint(
+      '[KFace][Timing][Frame $frameNumber] '
+      'preprocessMs=$preprocessingMs '
+      'retinaFaceMs=$retinaFaceMs '
+      'faceEvaluationAndTargetSelectionMs=$faceEvaluationMs '
+      'livenessCropMs=$livenessCropMs '
+      'livenessInferenceMs=$livenessInferenceMs '
+      'alignmentMs=$alignmentMs '
+      'adaFaceMs=$adaFaceMs '
+      'parallelLivenessAdaFaceWallMs=$parallelLivenessAdaFaceWallMs '
+      'embeddingStorageMs=$embeddingStorageMs '
+      'unaccountedAndLoggingMs=$unaccountedMs '
+      'totalMs=${stopwatch.elapsedMilliseconds}',
+    );
+    debugPrint(
+      '[KFace][Timing][OpenCV][Frame $frameNumber] '
+      'preprocessMs=$preprocessingMs '
+      'livenessCropMs=$livenessCropMs '
+      'alignmentMs=$alignmentMs '
+      'totalMs=$openCvMs '
+      'fps=${openCvMs == 0 ? 'inf' : (1000 / openCvMs).toStringAsFixed(2)} '
+      'target15Fps=${openCvMs <= 67 ? 'PASS' : 'MISS'}',
+    );
     debugPrint(
       '[KFace][RetinaTest][Frame $frameNumber] '
       'face=${completeness.label} '
@@ -352,21 +504,24 @@ class FaceBiometricPipeline {
       'processingMs=${stopwatch.elapsedMilliseconds} '
       'effectiveFps=${stopwatch.elapsedMilliseconds == 0 ? 'inf' : (1000 / stopwatch.elapsedMilliseconds).toStringAsFixed(2)}',
     );
-    return FrameAnalysis(
-      faceDetected: faces.isNotEmpty,
-      targetFaceSelected: targetResult != null,
-      alignmentAccepted: aligned != null,
-      originalWidth: prepared.originalWidth,
-      originalHeight: prepared.originalHeight,
-      cropSide: prepared.cropSide,
-      wasResized: prepared.wasResized,
-      acceptedFrameCount: _alignedFaces.length,
-      liveness: livenessResult,
-      completeness: completeness,
-      faceDistance: faceDistance,
-      adaFaceComputed: adaFaceComputed,
-      processingMilliseconds: stopwatch.elapsedMilliseconds,
-    );
+      return FrameAnalysis(
+        faceDetected: faces.isNotEmpty,
+        targetFaceSelected: targetResult != null,
+        alignmentAccepted: aligned != null,
+        originalWidth: prepared.originalWidth,
+        originalHeight: prepared.originalHeight,
+        cropSide: prepared.cropSide,
+        wasResized: prepared.wasResized,
+        acceptedFrameCount: _acceptedEmbeddings.length,
+        liveness: livenessResult,
+        completeness: completeness,
+        faceDistance: faceDistance,
+        adaFaceComputed: adaFaceComputed,
+        processingMilliseconds: stopwatch.elapsedMilliseconds,
+      );
+    } finally {
+      prepared.dispose();
+    }
   }
 
   static FaceDetection? _largestFace(List<FaceDetection> faces) {
@@ -573,26 +728,17 @@ class FaceBiometricPipeline {
       '${(value * 100).clamp(0, 100).toStringAsFixed(1)}%';
 
   Future<Float32List> createEmbedding() async {
-    if (_alignedFaces.isEmpty) {
-      throw StateError('No aligned faces were collected.');
+    if (_acceptedEmbeddings.isEmpty) {
+      throw StateError('No AdaFace embeddings were collected.');
     }
-    debugPrint('[KFace][Finalization][AdaFace] initialization=STARTED');
-    await adaFace.initialize();
-    debugPrint('[KFace][Finalization][AdaFace] initialization=COMPLETED');
-    final embeddings = <Float32List>[];
-    final faces = _alignedFaces.take(framesToUse).toList(growable: false);
-    for (var index = 0; index < faces.length; index++) {
-      debugPrint(
-        '[KFace][Finalization][AdaFace] embedding=${index + 1}/${faces.length} '
-        'status=STARTED',
-      );
-      final face = faces[index];
-      embeddings.add(await adaFace.embed(face.bgr));
-      debugPrint(
-        '[KFace][Finalization][AdaFace] embedding=${index + 1}/${faces.length} '
-        'status=COMPLETED',
-      );
-    }
+    final embeddings = _acceptedEmbeddings
+        .take(framesToUse)
+        .map((sample) => sample.embedding)
+        .toList(growable: false);
+    debugPrint(
+      '[KFace][Finalization][AdaFace] reused=${embeddings.length} '
+      'duplicateInference=REMOVED',
+    );
     debugPrint('[KFace][Finalization][AdaFace] averaging=STARTED');
     final averaged = adaFace.average(embeddings);
     debugPrint('[KFace][Finalization][AdaFace] averaging=COMPLETED');
@@ -656,7 +802,10 @@ class FaceBiometricPipeline {
     return recovery;
   }
 
-  void reset() => _alignedFaces.clear();
+  void reset() {
+    _acceptedEmbeddings.clear();
+    _lastFrameProcessedAt = null;
+  }
 
   Future<void> dispose() async {
     await retinaFace.dispose();

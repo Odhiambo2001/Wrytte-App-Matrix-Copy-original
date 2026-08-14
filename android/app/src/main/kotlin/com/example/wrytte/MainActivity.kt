@@ -147,6 +147,27 @@ class MainActivity: FlutterActivity() {
                     floats.put(plane + pixel, (green / 127.5f) - 1f)
                     floats.put((plane * 2) + pixel, (blue / 127.5f) - 1f)
                 }
+                "retina_rgb" -> {
+                    val rgbRed = blue
+                    val rgbBlue = red
+                    floats.put(pixel, rgbBlue - 104f)
+                    floats.put(plane + pixel, green - 117f)
+                    floats.put((plane * 2) + pixel, rgbRed - 123f)
+                }
+                "mini_fas_rgb" -> {
+                    val rgbRed = blue
+                    val rgbBlue = red
+                    floats.put(pixel, rgbBlue.toFloat())
+                    floats.put(plane + pixel, green.toFloat())
+                    floats.put((plane * 2) + pixel, rgbRed.toFloat())
+                }
+                "adaface_rgb" -> {
+                    val rgbRed = blue
+                    val rgbBlue = red
+                    floats.put(pixel, (rgbRed / 127.5f) - 1f)
+                    floats.put(plane + pixel, (green / 127.5f) - 1f)
+                    floats.put((plane * 2) + pixel, (rgbBlue / 127.5f) - 1f)
+                }
                 else -> error("Unknown preprocessing mode: $mode")
             }
         }

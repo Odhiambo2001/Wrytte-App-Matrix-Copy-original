@@ -15,6 +15,8 @@ class RetinaFrame {
     required this.cropY,
     required this.cropSide,
     required this.wasResized,
+    required this.originalMat,
+    required this.retinaMat,
   });
 
   final Uint8List bgr;
@@ -25,6 +27,13 @@ class RetinaFrame {
   final int cropY;
   final int cropSide;
   final bool wasResized;
+  final cv.Mat originalMat;
+  final cv.Mat retinaMat;
+
+  void dispose() {
+    retinaMat.dispose();
+    originalMat.dispose();
+  }
 }
 
 class AlignedFace {
@@ -79,16 +88,11 @@ class OpenCvFacePreprocessor {
   RetinaFrame prepare(img.Image image) {
     final originalWidth = image.width;
     final originalHeight = image.height;
-    final bgr = Uint8List(originalWidth * originalHeight * 3);
-    var offset = 0;
-    for (var y = 0; y < originalHeight; y++) {
-      for (var x = 0; x < originalWidth; x++) {
-        final pixel = image.getPixel(x, y);
-        bgr[offset++] = pixel.b.toInt();
-        bgr[offset++] = pixel.g.toInt();
-        bgr[offset++] = pixel.r.toInt();
-      }
-    }
+    // Keep the camera image's native RGB layout. Crop, resize and affine warp
+    // are channel-agnostic; the Android tensor builder performs the final
+    // channel placement next to ONNX Runtime. This removes a full-frame RGB
+    // to BGR traversal and allocation from every analyzed frame.
+    final bgr = image.toUint8List();
 
     final source = cv.Mat.fromList(
       originalHeight,
@@ -103,8 +107,11 @@ class OpenCvFacePreprocessor {
     final cropX = (originalWidth - cropSide) ~/ 2;
     final cropY = (originalHeight - cropSide) ~/ 2;
     final roi = cv.Rect(cropX, cropY, cropSide, cropSide);
-    final cropped = cv.Mat.fromMat(source, copy: true, roi: roi);
+    // ROI matrices are lightweight views. resize reads them synchronously, so
+    // copying the complete square before resizing is unnecessary.
+    final cropped = cv.Mat.fromMat(source, roi: roi);
     cv.Mat? resized;
+    var retainCroppedAsRetinaMat = false;
     try {
       final output =
           cropSide == retinaSize
@@ -113,6 +120,7 @@ class OpenCvFacePreprocessor {
                 retinaSize,
                 retinaSize,
               ), interpolation: cv.INTER_LINEAR));
+      retainCroppedAsRetinaMat = resized == null;
       return RetinaFrame(
         bgr: Uint8List.fromList(output.data),
         originalBgr: bgr,
@@ -122,12 +130,16 @@ class OpenCvFacePreprocessor {
         cropY: cropY,
         cropSide: cropSide,
         wasResized: cropSide != retinaSize,
+        originalMat: source,
+        retinaMat: output,
       );
-    } finally {
+    } catch (_) {
       resized?.dispose();
-      cropped.dispose();
-      roi.dispose();
       source.dispose();
+      rethrow;
+    } finally {
+      if (!retainCroppedAsRetinaMat) cropped.dispose();
+      roi.dispose();
     }
   }
 
@@ -155,12 +167,7 @@ class OpenCvFacePreprocessor {
     final v2Box = box(2.7);
     final v1seBox = box(4.0);
 
-    final source = cv.Mat.fromList(
-      frame.originalHeight,
-      frame.originalWidth,
-      cv.MatType.CV_8UC3,
-      frame.originalBgr,
-    );
+    final source = frame.originalMat;
     Uint8List resizeCrop(MiniFasNetCropBox cropBox) {
       final roi = cv.Rect(
         cropBox.left,
@@ -168,7 +175,7 @@ class OpenCvFacePreprocessor {
         cropBox.width,
         cropBox.height,
       );
-      final cropped = cv.Mat.fromMat(source, copy: true, roi: roi);
+      final cropped = cv.Mat.fromMat(source, roi: roi);
       final resized = cv.resize(cropped, (
         outputSize,
         outputSize,
@@ -182,16 +189,12 @@ class OpenCvFacePreprocessor {
       }
     }
 
-    try {
-      return MiniFasNetCrops(
-        v2Bgr: resizeCrop(v2Box),
-        v1seBgr: resizeCrop(v1seBox),
-        v2Box: v2Box,
-        v1seBox: v1seBox,
-      );
-    } finally {
-      source.dispose();
-    }
+    return MiniFasNetCrops(
+      v2Bgr: resizeCrop(v2Box),
+      v1seBgr: resizeCrop(v1seBox),
+      v2Box: v2Box,
+      v1seBox: v1seBox,
+    );
   }
 
   /// Exact port of Minivision CropImage._get_new_box().
@@ -265,12 +268,7 @@ class OpenCvFacePreprocessor {
     final matrixValues = _umeyama(sourcePoints, _reference);
     if (matrixValues == null) return null;
 
-    final source = cv.Mat.fromList(
-      retinaSize,
-      retinaSize,
-      cv.MatType.CV_8UC3,
-      frame.bgr,
-    );
+    final source = frame.retinaMat;
     final matrix = cv.Mat.fromList(2, 3, cv.MatType.CV_32FC1, matrixValues);
     final aligned = cv.warpAffine(
       source,
@@ -293,7 +291,6 @@ class OpenCvFacePreprocessor {
       gray.dispose();
       aligned.dispose();
       matrix.dispose();
-      source.dispose();
     }
   }
 

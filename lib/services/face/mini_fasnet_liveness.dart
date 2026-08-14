@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 import 'dart:io';
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import 'package:wrytte/services/face/android_onnx_image_session.dart';
 
@@ -97,8 +96,8 @@ class MiniFasNetLiveness {
     final androidV1se = _androidV1seSession;
     if (androidV2 != null && androidV1se != null) {
       final results = await Future.wait([
-        _runAndroid(androidV2, v2FaceBgr),
-        _runAndroid(androidV1se, v1seFaceBgr),
+        _runAndroid(androidV2, v2FaceBgr, 'MiniFASNetV2'),
+        _runAndroid(androidV1se, v1seFaceBgr, 'MiniFASNetV1SE'),
       ]);
       return DualLivenessResult(v2: results[0], v1se: results[1]);
     }
@@ -108,8 +107,8 @@ class MiniFasNetLiveness {
       throw StateError('MiniFasNetLiveness.initialize() must be called first.');
     }
     final results = await Future.wait([
-      _run(v2, v2FaceBgr, _v2InputBuffer),
-      _run(v1se, v1seFaceBgr, _v1seInputBuffer),
+      _run(v2, v2FaceBgr, _v2InputBuffer, 'MiniFASNetV2'),
+      _run(v1se, v1seFaceBgr, _v1seInputBuffer, 'MiniFASNetV1SE'),
     ]);
     return DualLivenessResult(v2: results[0], v1se: results[1]);
   }
@@ -117,7 +116,9 @@ class MiniFasNetLiveness {
   Future<MiniFasNetScore> _runAndroid(
     AndroidOnnxImageSession session,
     Uint8List faceBgr,
+    String modelName,
   ) async {
+    final stopwatch = Stopwatch()..start();
     if (faceBgr.length != inputSize * inputSize * 3) {
       throw ArgumentError('MiniFASNet requires an 80x80 BGR face crop.');
     }
@@ -125,29 +126,37 @@ class MiniFasNetLiveness {
       bgr: faceBgr,
       width: inputSize,
       height: inputSize,
-      mode: 'mini_fas',
+      mode: 'mini_fas_rgb',
     );
     final logits = outputs[session.outputNames.first]!;
     if (logits.length != 3) {
       throw StateError('MiniFASNet returned ${logits.length} values, not 3.');
     }
-    return MiniFasNetScore(probabilities: _softmax(logits));
+    final score = MiniFasNetScore(probabilities: _softmax(logits));
+    stopwatch.stop();
+    debugPrint(
+      '[KFace][Timing][LivenessModel] model=$modelName '
+      'inferenceAndPostprocessMs=${stopwatch.elapsedMilliseconds}',
+    );
+    return score;
   }
 
   Future<MiniFasNetScore> _run(
     OrtSession session,
     Uint8List faceBgr,
     Float32List tensor,
+    String modelName,
   ) async {
+    final stopwatch = Stopwatch()..start();
     if (faceBgr.length != inputSize * inputSize * 3) {
       throw ArgumentError('MiniFASNet requires an 80x80 BGR face crop.');
     }
     final plane = inputSize * inputSize;
     for (var pixel = 0; pixel < plane; pixel++) {
       final source = pixel * 3;
-      tensor[pixel] = faceBgr[source].toDouble();
+      tensor[pixel] = faceBgr[source + 2].toDouble();
       tensor[plane + pixel] = faceBgr[source + 1].toDouble();
-      tensor[(plane * 2) + pixel] = faceBgr[source + 2].toDouble();
+      tensor[(plane * 2) + pixel] = faceBgr[source].toDouble();
     }
     final input = await OrtValue.fromList(tensor, [1, 3, inputSize, inputSize]);
     Map<String, OrtValue>? outputs;
@@ -158,7 +167,13 @@ class MiniFasNetLiveness {
       if (logits.length != 3) {
         throw StateError('MiniFASNet returned ${logits.length} values, not 3.');
       }
-      return MiniFasNetScore(probabilities: _softmax(logits));
+      final score = MiniFasNetScore(probabilities: _softmax(logits));
+      stopwatch.stop();
+      debugPrint(
+        '[KFace][Timing][LivenessModel] model=$modelName '
+        'tensorInferenceAndPostprocessMs=${stopwatch.elapsedMilliseconds}',
+      );
+      return score;
     } finally {
       await input.dispose();
       if (outputs != null) {

@@ -266,13 +266,30 @@ class _KFaceScanPageState extends State<KFaceScanPage>
 
       _isAnalyzing = true;
       try {
+        final cameraFrameStopwatch = Stopwatch()..start();
         final image = CameraFrameConverter.convert(
           frame,
           sensorOrientation: controller.description.sensorOrientation,
         );
+        final cameraConversionMs = cameraFrameStopwatch.elapsedMilliseconds;
+        cameraFrameStopwatch
+          ..reset()
+          ..start();
         final analysis = await _pipeline.processFrame(image);
+        final biometricPipelineMs = cameraFrameStopwatch.elapsedMilliseconds;
         if (!mounted) return;
+        cameraFrameStopwatch
+          ..reset()
+          ..start();
         _updateProgress(analysis);
+        final uiUpdateMs = cameraFrameStopwatch.elapsedMilliseconds;
+        debugPrint(
+          '[KFace][Timing][CameraFrame] '
+          'cameraConversionMs=$cameraConversionMs '
+          'biometricPipelineMs=$biometricPipelineMs '
+          'uiUpdateMs=$uiUpdateMs '
+          'totalMs=${cameraConversionMs + biometricPipelineMs + uiUpdateMs}',
+        );
       } catch (error, stackTrace) {
         debugPrint('[FaceDetect] $error\n$stackTrace');
       } finally {

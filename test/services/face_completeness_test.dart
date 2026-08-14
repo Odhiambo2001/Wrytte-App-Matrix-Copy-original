@@ -10,7 +10,7 @@ void main() {
     double left = 180,
     double top = 160,
     double right = 420,
-    double bottom = 440,
+    double bottom = 450,
     double? rawLeft,
     double? rawTop,
     double? rawRight,

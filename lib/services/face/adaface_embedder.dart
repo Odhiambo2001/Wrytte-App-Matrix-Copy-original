@@ -35,7 +35,7 @@ class AdaFaceEmbedder {
         bgr: faceBgr,
         width: faceSize,
         height: faceSize,
-        mode: 'adaface',
+        mode: 'adaface_rgb',
       );
       return normalize(outputs[android.outputNames.first]!);
     }
@@ -51,10 +51,10 @@ class AdaFaceEmbedder {
     final inputData = Float32List(plane * 3);
     for (var pixel = 0; pixel < plane; pixel++) {
       final source = pixel * 3;
-      // BGR -> RGB and (value / 255 - .5) / .5.
-      inputData[pixel] = (faceBgr[source + 2] / 127.5) - 1.0;
+      // RGB and (value / 255 - .5) / .5.
+      inputData[pixel] = (faceBgr[source] / 127.5) - 1.0;
       inputData[plane + pixel] = (faceBgr[source + 1] / 127.5) - 1.0;
-      inputData[(plane * 2) + pixel] = (faceBgr[source] / 127.5) - 1.0;
+      inputData[(plane * 2) + pixel] = (faceBgr[source + 2] / 127.5) - 1.0;
     }
 
     final input = await OrtValue.fromList(inputData, [

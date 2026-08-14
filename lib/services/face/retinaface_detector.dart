@@ -125,7 +125,7 @@ class RetinaFaceDetector {
         bgr: bgr,
         width: inputSize,
         height: inputSize,
-        mode: 'retina',
+        mode: 'retina_rgb',
       );
       return _decode(
         outputs['loc']!,
@@ -141,9 +141,9 @@ class RetinaFaceDetector {
     final tensorData = _inputBuffer;
     for (var pixel = 0; pixel < plane; pixel++) {
       final offset = pixel * 3;
-      tensorData[pixel] = bgr[offset].toDouble() - 104.0;
+      tensorData[pixel] = bgr[offset + 2].toDouble() - 104.0;
       tensorData[plane + pixel] = bgr[offset + 1].toDouble() - 117.0;
-      tensorData[(plane * 2) + pixel] = bgr[offset + 2].toDouble() - 123.0;
+      tensorData[(plane * 2) + pixel] = bgr[offset].toDouble() - 123.0;
     }
     return _run(tensorData, inputSize, inputSize);
   }
