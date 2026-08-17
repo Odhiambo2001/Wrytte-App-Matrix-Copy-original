@@ -3,7 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as hashes;
-import 'package:cryptography/cryptography.dart';
+import 'package:sodium/sodium.dart';
 
 class LocalSignatureEnrollment {
   const LocalSignatureEnrollment({required this.publicKeyBase64});
@@ -29,23 +29,29 @@ class LocalSignatureVerification {
 /// from the successfully recovered, domain-separated HKDF output and exists
 /// only for the duration of signing a fresh challenge.
 class LocalFaceSignatureService {
-  LocalFaceSignatureService({Ed25519? algorithm})
-    : _algorithm = algorithm ?? Ed25519();
+  LocalFaceSignatureService({Future<Sodium>? sodium})
+    : _sodium = Future<Sodium>.value(sodium ?? SodiumInit.init());
 
   static const signingSeedInfo = 'wrytte/kface/ed25519-signing-seed/v1';
   static const challengeDomain = 'wrytte/kface/local-login-challenge/v1';
 
-  final Ed25519 _algorithm;
+  final Future<Sodium> _sodium;
 
   Future<LocalSignatureEnrollment> enroll(String hkdfKeyHex) async {
+    final sodium = await _sodium;
     final seed = _deriveSigningSeed(hkdfKeyHex);
+    final secureSeed = sodium.secureCopy(seed);
+    KeyPair? keyPair;
     try {
-      final keyPair = await _algorithm.newKeyPairFromSeed(seed);
-      final publicKey = await keyPair.extractPublicKey();
+      // libsodium crypto_sign_seed_keypair(). The secret key is held in
+      // protected native memory and securely erased by dispose().
+      keyPair = sodium.crypto.sign.seedKeyPair(secureSeed);
       return LocalSignatureEnrollment(
-        publicKeyBase64: base64Encode(publicKey.bytes),
+        publicKeyBase64: base64Encode(keyPair.publicKey),
       );
     } finally {
+      keyPair?.dispose();
+      secureSeed.dispose();
       seed.fillRange(0, seed.length, 0);
     }
   }
@@ -55,39 +61,49 @@ class LocalFaceSignatureService {
     required String hkdfKeyHex,
     required String enrolledPublicKeyBase64,
   }) async {
+    final sodium = await _sodium;
     final enrolledPublicBytes = base64Decode(enrolledPublicKeyBase64);
-    if (enrolledPublicBytes.length != 32) {
+    if (enrolledPublicBytes.length != sodium.crypto.sign.publicKeyBytes) {
       throw const FormatException('Invalid enrolled Ed25519 public key.');
     }
 
     final seed = _deriveSigningSeed(hkdfKeyHex);
+    final secureSeed = sodium.secureCopy(seed);
     final challenge = _createChallenge(identity);
+    KeyPair? recoveredKeyPair;
+    Uint8List? signature;
     try {
       // The corresponding public key is intentionally not persisted at login.
-      // Only the reconstructed private key is used to sign this challenge.
-      final recoveredKeyPair = await _algorithm.newKeyPairFromSeed(seed);
-      final signature = await _algorithm.sign(
-        challenge,
-        keyPair: recoveredKeyPair,
+      // libsodium reconstructs the protected secret key from the seed, signs
+      // with crypto_sign_detached(), then verifies with the enrolled signup
+      // key through crypto_sign_verify_detached().
+      recoveredKeyPair = sodium.crypto.sign.seedKeyPair(secureSeed);
+      signature = sodium.crypto.sign.detached(
+        message: challenge,
+        secretKey: recoveredKeyPair.secretKey,
       );
-      final verified = await _algorithm.verify(
-        challenge,
-        signature: Signature(
-          signature.bytes,
-          publicKey: SimplePublicKey(
-            enrolledPublicBytes,
-            type: KeyPairType.ed25519,
-          ),
-        ),
+      final verified = sodium.crypto.sign.verifyDetached(
+        message: challenge,
+        signature: signature,
+        publicKey: enrolledPublicBytes,
       );
       return LocalSignatureVerification(
         verified: verified,
         challengeBytes: challenge.length,
-        signatureBytes: signature.bytes.length,
+        signatureBytes: signature.length,
       );
     } finally {
+      signature?.fillRange(0, signature.length, 0);
+      recoveredKeyPair?.publicKey.fillRange(
+        0,
+        recoveredKeyPair.publicKey.length,
+        0,
+      );
+      recoveredKeyPair?.dispose();
+      secureSeed.dispose();
       seed.fillRange(0, seed.length, 0);
       challenge.fillRange(0, challenge.length, 0);
+      enrolledPublicBytes.fillRange(0, enrolledPublicBytes.length, 0);
     }
   }
 

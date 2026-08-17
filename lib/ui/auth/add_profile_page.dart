@@ -8,11 +8,15 @@ import 'package:wrytte/ui/screens/home_screen.dart';
 class AddProfilePage extends StatefulWidget {
   final bool isNewUser;
   final Future<bool>? biometricSetup;
+  final DateTime? navigationRequestedAt;
+  final int? firstFrameToNavigationRequestMs;
 
   const AddProfilePage({
     super.key,
     this.isNewUser = false,
     this.biometricSetup,
+    this.navigationRequestedAt,
+    this.firstFrameToNavigationRequestMs,
   });
 
   @override
@@ -42,6 +46,22 @@ class _AddProfilePageState extends State<AddProfilePage> {
     _nicknameController.addListener(_onTextChanged);
     _loadUserData();
     _waitForBiometricSetup();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final requestedAt = widget.navigationRequestedAt;
+      if (requestedAt == null) return;
+      final requestToFirstRenderMs =
+          DateTime.now().difference(requestedAt).inMilliseconds;
+      final firstFrameToRequestMs = widget.firstFrameToNavigationRequestMs;
+      final firstFrameToFirstRenderMs =
+          firstFrameToRequestMs == null
+              ? null
+              : firstFrameToRequestMs + requestToFirstRenderMs;
+      debugPrint(
+        '[KFace][Timing][Navigation] destination=PROFILE '
+        'event=FIRST_RENDER requestToFirstRenderMs=$requestToFirstRenderMs '
+        'firstFrameToFirstRenderMs=$firstFrameToFirstRenderMs',
+      );
+    });
   }
 
   Future<void> _waitForBiometricSetup() async {

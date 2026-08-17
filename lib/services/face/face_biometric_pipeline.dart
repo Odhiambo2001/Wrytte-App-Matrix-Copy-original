@@ -136,10 +136,11 @@ class BiometricEnrollmentResult {
 }
 
 class _AcceptedAlignedFace {
-  const _AcceptedAlignedFace({required this.sharpness, required this.bgr});
+  _AcceptedAlignedFace({required this.sharpness, required this.bgr});
 
   final double sharpness;
   final Uint8List bgr;
+  Future<Float32List>? embedding;
 }
 
 class _SerialStageGate {
@@ -182,10 +183,21 @@ class FaceBiometricPipeline {
   final List<_AcceptedAlignedFace> _acceptedFaces = [];
   final _retinaStageGate = _SerialStageGate();
   final _downstreamStageGate = _SerialStageGate();
+  final _adaFaceStageGate = _SerialStageGate();
+  final List<Future<Float32List>> _adaFaceJobs = [];
   int _frameSequence = 0;
   bool _collectionComplete = false;
+  bool _runAdaFaceDuringCollection = false;
 
   int get acceptedFrameCount => _acceptedFaces.length;
+
+  void configureAdaFacePipeline({required bool runDuringCollection}) {
+    _runAdaFaceDuringCollection = runDuringCollection;
+    debugPrint(
+      '[KFace][Pipeline] adafaceMode='
+      '${runDuringCollection ? 'PIPELINED_DURING_SCAN' : 'DEFERRED_UNTIL_PROFILE'}',
+    );
+  }
 
   Future<void> initializeDetector() async {
     await Future.wait([
@@ -374,7 +386,8 @@ class FaceBiometricPipeline {
         '[KFace][Pipeline][Frame $frameNumber] '
         'retinaQueueMs=${retinaQueueTimer.elapsedMilliseconds} '
         'downstreamQueueMs=$downstreamQueueMs '
-        'stages=RETINA_THEN_LIVENESS adaface=DEFERRED_UNTIL_PROFILE',
+        'stages=RETINA_THEN_LIVENESS '
+        'adaface=${_runAdaFaceDuringCollection ? 'PIPELINED' : 'DEFERRED_UNTIL_PROFILE'}',
       );
       AlignedFace? aligned;
       DualLivenessResult? livenessResult;
@@ -416,9 +429,9 @@ class FaceBiometricPipeline {
           return (result: result, elapsedMs: timer.elapsedMilliseconds);
         }();
 
-        // Alignment is independent of the liveness decision, so perform it while
-        // the liveness models run. AdaFace is intentionally deferred until the
-        // profile page is visible and locked.
+        // Alignment is independent of the liveness decision, so perform it
+        // while the liveness models run. On login, the aligned result enters a
+        // separate AdaFace lane while RetinaFace continues with the next frame.
         phaseStopwatch
           ..reset()
           ..start();
@@ -446,12 +459,30 @@ class FaceBiometricPipeline {
           phaseStopwatch
             ..reset()
             ..start();
-          _acceptedFaces.add(
-            _AcceptedAlignedFace(
-              sharpness: aligned.sharpness,
-              bgr: aligned.bgr,
-            ),
+          final acceptedIndex = _acceptedFaces.length + 1;
+          final acceptedFace = _AcceptedAlignedFace(
+            sharpness: aligned.sharpness,
+            bgr: aligned.bgr,
           );
+          if (_runAdaFaceDuringCollection) {
+            final job = _computePipelinedAdaFace(
+              acceptedFace,
+              frameNumber: frameNumber,
+              acceptedIndex: acceptedIndex,
+            );
+            acceptedFace.embedding = job;
+            _adaFaceJobs.add(job);
+            unawaited(
+              job.then<void>((_) {}).catchError((Object error) {
+                debugPrint(
+                  '[KFace][Pipeline][AdaFace] frame=$frameNumber '
+                  'embedding=$acceptedIndex/$framesToUse status=FAILED '
+                  'error=$error',
+                );
+              }),
+            );
+          }
+          _acceptedFaces.add(acceptedFace);
           _acceptedFaces.sort((a, b) => b.sharpness.compareTo(a.sharpness));
           if (_acceptedFaces.length > framesToUse) {
             _acceptedFaces.removeLast();
@@ -460,7 +491,7 @@ class FaceBiometricPipeline {
           alignedFaceStorageMs = phaseStopwatch.elapsedMilliseconds;
           debugPrint(
             '[KFace][Frame $frameNumber][AdaFace] '
-            'status=DEFERRED_UNTIL_PROFILE_PAGE',
+            'status=${_runAdaFaceDuringCollection ? 'QUEUED_DURING_SCAN' : 'DEFERRED_UNTIL_PROFILE_PAGE'}',
           );
         }
       } else {
@@ -491,7 +522,7 @@ class FaceBiometricPipeline {
         'livenessCropMs=$livenessCropMs '
         'livenessInferenceMs=$livenessInferenceMs '
         'alignmentMs=$alignmentMs '
-        'adaFaceMs=DEFERRED '
+        'adaFaceMs=${_runAdaFaceDuringCollection ? 'PIPELINED_ASYNC' : 'DEFERRED'} '
         'livenessAndAlignmentWallMs=$livenessAndAlignmentWallMs '
         'alignedFaceStorageMs=$alignedFaceStorageMs '
         'unaccountedAndLoggingMs=$unaccountedMs '
@@ -523,7 +554,7 @@ class FaceBiometricPipeline {
             : livenessResult.isReal
             ? 'PASS'
             : 'REJECT'} '
-        'adaFace=DEFERRED_UNTIL_PROFILE '
+        'adaFace=${_runAdaFaceDuringCollection ? 'PIPELINED_ASYNC' : 'DEFERRED_UNTIL_PROFILE'} '
         'processingMs=${stopwatch.elapsedMilliseconds} '
         'effectiveFps=${stopwatch.elapsedMilliseconds == 0 ? 'inf' : (1000 / stopwatch.elapsedMilliseconds).toStringAsFixed(2)}',
       );
@@ -752,12 +783,41 @@ class FaceBiometricPipeline {
   static String _prob(double value) =>
       '${(value * 100).clamp(0, 100).toStringAsFixed(1)}%';
 
+  Future<Float32List> _computePipelinedAdaFace(
+    _AcceptedAlignedFace face, {
+    required int frameNumber,
+    required int acceptedIndex,
+  }) async {
+    final queueTimer = Stopwatch()..start();
+    final release = await _adaFaceStageGate.acquire();
+    queueTimer.stop();
+    final inferenceTimer = Stopwatch()..start();
+    try {
+      debugPrint(
+        '[KFace][Pipeline][AdaFace] frame=$frameNumber '
+        'embedding=$acceptedIndex/$framesToUse status=STARTED '
+        'queueMs=${queueTimer.elapsedMilliseconds}',
+      );
+      final embedding = await adaFace.embed(face.bgr);
+      inferenceTimer.stop();
+      debugPrint(
+        '[KFace][Pipeline][AdaFace] frame=$frameNumber '
+        'embedding=$acceptedIndex/$framesToUse status=COMPLETED '
+        'inferenceMs=${inferenceTimer.elapsedMilliseconds}',
+      );
+      return embedding;
+    } finally {
+      release();
+    }
+  }
+
   Future<Float32List> createEmbedding() async {
     if (_acceptedFaces.length < framesToUse) {
       throw StateError('Five liveness-approved aligned faces are required.');
     }
     debugPrint(
-      '[KFace][Finalization][AdaFace] status=STARTED_AFTER_PROFILE '
+      '[KFace][Finalization][AdaFace] '
+      'status=${_runAdaFaceDuringCollection ? 'AWAITING_PIPELINED_EMBEDDINGS' : 'STARTED_AFTER_PROFILE'} '
       'faces=$framesToUse',
     );
     final embeddings = <Float32List>[];
@@ -765,13 +825,15 @@ class FaceBiometricPipeline {
         .take(framesToUse)
         .toList(growable: false);
     for (var index = 0; index < selectedFaces.length; index++) {
+      final existing = selectedFaces[index].embedding;
       final timer = Stopwatch()..start();
-      final embedding = await adaFace.embed(selectedFaces[index].bgr);
+      final embedding =
+          await (existing ?? adaFace.embed(selectedFaces[index].bgr));
       timer.stop();
       embeddings.add(embedding);
       debugPrint(
         '[KFace][Finalization][AdaFace] embedding=${index + 1}/$framesToUse '
-        'inferenceMs=${timer.elapsedMilliseconds}',
+        '${existing == null ? 'inferenceMs' : 'remainingWaitMs'}=${timer.elapsedMilliseconds}',
       );
     }
     debugPrint('[KFace][Finalization][AdaFace] averaging=STARTED');
@@ -844,6 +906,9 @@ class FaceBiometricPipeline {
   }
 
   Future<void> dispose() async {
+    await Future.wait(
+      _adaFaceJobs.map((job) => job.then<void>((_) {}).catchError((_) {})),
+    );
     await retinaFace.dispose();
     await liveness.dispose();
     await adaFace.dispose();

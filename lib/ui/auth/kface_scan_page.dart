@@ -66,6 +66,9 @@ class _KFaceScanPageState extends State<KFaceScanPage>
         _storedCommitment = await _commitmentStore.read(widget.wrytteId);
         _enrollmentFlow =
             _storedCommitment == null || _storedCommitment!.kdfSalt.isEmpty;
+        _pipeline.configureAdaFacePipeline(
+          runDuringCollection: !_enrollmentFlow,
+        );
         await _pipeline.initializeDetector();
         _faceModelsReady = true;
         debugPrint(
@@ -397,6 +400,13 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       }
     });
     if (_completed) {
+      final firstFrameToGreenMs =
+          _firstFrameToKeyStopwatch?.elapsedMilliseconds;
+      debugPrint(
+        '[KFace][Timing][Navigation] '
+        'destination=${_enrollmentFlow ? 'PROFILE' : 'ACCESS_RESULT'} '
+        'event=FIFTH_FRAME_COMPLETED firstFrameToGreenMs=$firstFrameToGreenMs',
+      );
       final finalization = _finalizationFuture ??= _finishBiometricScan();
       unawaited(finalization);
       if (_enrollmentFlow) {
@@ -443,6 +453,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
         _setStatus('Face enrollment complete.');
         debugPrint(
           '[KFace][Finalization][Signature] mode=ENROLL algorithm=Ed25519 '
+          'provider=libsodium api=crypto_sign_seed_keypair '
           'publicKey=STORED_LOCAL privateKey=DISCARDED',
         );
         debugPrint('[KFace][Final] result=ENROLLED_SUCCESSFULLY');
@@ -466,6 +477,8 @@ class _KFaceScanPageState extends State<KFaceScanPage>
             signatureVerified = verification.verified;
             debugPrint(
               '[KFace][Finalization][Signature] mode=LOGIN algorithm=Ed25519 '
+              'provider=libsodium '
+              'api=crypto_sign_detached+crypto_sign_verify_detached '
               'challengeBytes=${verification.challengeBytes} '
               'signatureBytes=${verification.signatureBytes} '
               'publicKey=ENROLLED_LOCAL privateKey=RECONSTRUCTED_AND_DISCARDED '
@@ -500,11 +513,22 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   Future<void> _openSignupProfilePage(Future<bool> biometricSetup) async {
     if (!mounted || _profileOpened) return;
     _profileOpened = true;
+    final requestedAt = DateTime.now();
+    final firstFrameToRequestMs =
+        _firstFrameToKeyStopwatch?.elapsedMilliseconds;
+    debugPrint(
+      '[KFace][Timing][Navigation] destination=PROFILE event=REQUESTED '
+      'firstFrameToRequestMs=$firstFrameToRequestMs',
+    );
     await Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder:
-            (_) =>
-                AddProfilePage(isNewUser: true, biometricSetup: biometricSetup),
+            (_) => AddProfilePage(
+              isNewUser: true,
+              biometricSetup: biometricSetup,
+              navigationRequestedAt: requestedAt,
+              firstFrameToNavigationRequestMs: firstFrameToRequestMs,
+            ),
       ),
     );
   }

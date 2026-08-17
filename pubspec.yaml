@@ -49,7 +49,7 @@ dependencies:
   opencv_dart:
     path: third_party/opencv_dart
   crypto: ^3.0.6
-  cryptography: ^2.7.0
+  sodium: 4.0.2+1
   rxdart: ^0.28.0
   photo_manager: ^3.8.3
   photo_manager_image_provider: ^2.2.0
