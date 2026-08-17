@@ -162,8 +162,8 @@ class FaceBiometricPipeline {
   static const targetConfidenceThreshold = 0.83;
   static const targetSizeGap = 0.20;
   static const fullBboxVisibleThreshold = 0.90;
-  static const normalFaceSizeMinimum = 0.38;
-  static const normalFaceSizeMaximum = 0.68;
+  static const normalFaceSizeMinimum = 0.35;
+  static const normalFaceSizeMaximum = 0.70;
 
   // --- Strict FPS gate -------------------------------------------------
   // Caps processing throughput at exactly this many frames per second.
@@ -736,9 +736,9 @@ class FaceBiometricPipeline {
   /// dimension. This remains stable for modest head rotation and supports the
   /// portrait-shaped boxes commonly returned by RetinaFace.
   ///
-  /// FAR:    face occupies less than 38% of the Retina input dimension.
-  /// NORMAL: face occupies 38% through 68%.
-  /// CLOSE:  face occupies more than 68%.
+  /// FAR:    face occupies less than 35% of the Retina input dimension.
+  /// NORMAL: face occupies 35% through 70%.
+  /// CLOSE:  face occupies more than 70%.
   static FaceDistance measureFaceDistance(FaceDetection face) {
     final inputSize = OpenCvFacePreprocessor.retinaSize.toDouble();
     final rawWidth = math.max(
