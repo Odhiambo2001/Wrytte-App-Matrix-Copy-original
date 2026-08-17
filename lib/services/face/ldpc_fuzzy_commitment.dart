@@ -11,6 +11,7 @@ class FuzzyCommitment {
     required this.nonce,
     required this.keyHash,
     required this.kdfSalt,
+    this.signingPublicKey,
     this.quantScale = LdpcFuzzyCommitment.quantScale,
   });
 
@@ -18,6 +19,7 @@ class FuzzyCommitment {
   final Uint8List nonce;
   final String keyHash;
   final Uint8List kdfSalt;
+  final String? signingPublicKey;
   final int quantScale;
 
   Map<String, dynamic> toJson() => {
@@ -28,6 +30,7 @@ class FuzzyCommitment {
     'keyHash': keyHash,
     'kdfSalt': base64Encode(kdfSalt),
     'kdf': LdpcFuzzyCommitment.kdfAlgorithm,
+    if (signingPublicKey != null) 'signingPublicKey': signingPublicKey,
     'quantScale': quantScale,
   };
 
@@ -40,9 +43,19 @@ class FuzzyCommitment {
           json['kdfSalt'] == null
               ? Uint8List(0)
               : base64Decode(json['kdfSalt'] as String),
+      signingPublicKey: json['signingPublicKey'] as String?,
       quantScale: json['quantScale'] as int? ?? LdpcFuzzyCommitment.quantScale,
     );
   }
+
+  FuzzyCommitment withSigningPublicKey(String publicKey) => FuzzyCommitment(
+    helper: helper,
+    nonce: nonce,
+    keyHash: keyHash,
+    kdfSalt: kdfSalt,
+    signingPublicKey: publicKey,
+    quantScale: quantScale,
+  );
 
   static String _pack(Uint8List bits) => base64Encode(_packBits(bits));
 

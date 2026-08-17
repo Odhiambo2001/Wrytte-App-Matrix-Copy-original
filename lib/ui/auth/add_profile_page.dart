@@ -7,8 +7,13 @@ import 'package:wrytte/ui/screens/home_screen.dart';
 
 class AddProfilePage extends StatefulWidget {
   final bool isNewUser;
+  final Future<bool>? biometricSetup;
 
-  const AddProfilePage({super.key, this.isNewUser = false});
+  const AddProfilePage({
+    super.key,
+    this.isNewUser = false,
+    this.biometricSetup,
+  });
 
   @override
   State<AddProfilePage> createState() => _AddProfilePageState();
@@ -16,20 +21,48 @@ class AddProfilePage extends StatefulWidget {
 
 class _AddProfilePageState extends State<AddProfilePage> {
   final TextEditingController _nicknameController = TextEditingController();
+  final FocusNode _nicknameFocusNode = FocusNode();
 
   bool _syncContacts = true;
   bool _isValid = false;
   bool _isSaving = false;
   bool _isLoading = true;
+  late bool _biometricReady;
+  bool _biometricFailed = false;
 
   String? _currentUserId;
+
+  bool get _profileReady => _biometricReady && !_isLoading;
 
   @override
   void initState() {
     super.initState();
+    _biometricReady = widget.biometricSetup == null;
     UserProfileService.instance.setFirstSignupMode(widget.isNewUser);
     _nicknameController.addListener(_onTextChanged);
     _loadUserData();
+    _waitForBiometricSetup();
+  }
+
+  Future<void> _waitForBiometricSetup() async {
+    final setup = widget.biometricSetup;
+    if (setup == null) return;
+    var ready = false;
+    try {
+      ready = await setup;
+    } catch (error) {
+      debugPrint('[AddProfilePage] biometric setup failed: $error');
+    }
+    if (!mounted) return;
+    setState(() {
+      _biometricReady = ready;
+      _biometricFailed = !ready;
+    });
+    if (ready) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _nicknameFocusNode.requestFocus();
+      });
+    }
   }
 
   @override
@@ -37,6 +70,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
     _nicknameController
       ..removeListener(_onTextChanged)
       ..dispose();
+    _nicknameFocusNode.dispose();
     super.dispose();
   }
 
@@ -114,7 +148,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
   }
 
   Future<void> _saveAndGoHome() async {
-    if (!_isValid || _isSaving) return;
+    if (!_profileReady || !_isValid || _isSaving) return;
 
     final name = _nicknameController.text.trim();
     final uid = _currentUserId ?? await AuthService.instance.getCurrentUserId();
@@ -177,7 +211,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
+    if (_isLoading && widget.biometricSetup == null) {
       return const Scaffold(
         backgroundColor: Color(0xFF08090B),
         body: Center(
@@ -199,7 +233,10 @@ class _AddProfilePageState extends State<AddProfilePage> {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: (_isValid && !_isSaving) ? _saveAndGoHome : null,
+                  onPressed:
+                      (_profileReady && _isValid && !_isSaving)
+                          ? _saveAndGoHome
+                          : null,
                   child:
                       _isSaving
                           ? const SizedBox(
@@ -213,7 +250,10 @@ class _AddProfilePageState extends State<AddProfilePage> {
                           : Text(
                             'Done',
                             style: TextStyle(
-                              color: _isValid ? Colors.white : Colors.grey,
+                              color:
+                                  _profileReady && _isValid
+                                      ? Colors.white
+                                      : Colors.grey,
                               fontWeight: FontWeight.bold,
                               fontSize: 16,
                             ),
@@ -225,9 +265,12 @@ class _AddProfilePageState extends State<AddProfilePage> {
 
               // ── Avatar placeholder ───────────────────────────────────────
               GestureDetector(
-                onTap: () {
-                  // TODO: open image picker
-                },
+                onTap:
+                    _profileReady
+                        ? () {
+                          // TODO: open image picker
+                        }
+                        : null,
                 child: const CircleAvatar(
                   radius: 50,
                   backgroundColor: Color(0xFF1F4F7F),
@@ -247,12 +290,16 @@ class _AddProfilePageState extends State<AddProfilePage> {
               // ── Name field ───────────────────────────────────────────────
               TextField(
                 controller: _nicknameController,
-                autofocus: true,
+                focusNode: _nicknameFocusNode,
+                enabled: _profileReady,
+                autofocus: _profileReady,
                 style: const TextStyle(color: Colors.white),
                 textCapitalization: TextCapitalization.words,
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) {
-                  if (_isValid && !_isSaving) _saveAndGoHome();
+                  if (_profileReady && _isValid && !_isSaving) {
+                    _saveAndGoHome();
+                  }
                 },
                 decoration: InputDecoration(
                   hintText: 'Enter Name',
@@ -272,6 +319,27 @@ class _AddProfilePageState extends State<AddProfilePage> {
 
               const SizedBox(height: 10),
 
+              if (!_profileReady)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _biometricFailed
+                        ? 'Secure face setup failed. Return and scan again.'
+                        : _biometricReady
+                        ? 'Preparing your profile…'
+                        : 'Finishing secure face setup…',
+                    style: TextStyle(
+                      color:
+                          _biometricFailed
+                              ? Colors.redAccent
+                              : const Color(0xFF2AABEE),
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+
+              if (!_profileReady) const SizedBox(height: 10),
+
               const Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
@@ -289,8 +357,10 @@ class _AddProfilePageState extends State<AddProfilePage> {
                     value: _syncContacts,
                     activeColor: const Color(0xFF2AABEE),
                     onChanged:
-                        (value) =>
-                            setState(() => _syncContacts = value ?? true),
+                        _profileReady
+                            ? (value) =>
+                                setState(() => _syncContacts = value ?? true)
+                            : null,
                   ),
                   const Text(
                     'Sync contacts',

@@ -31,12 +31,14 @@ void main() {
     await ldpc.initialize();
     final commitment = ldpc.enroll(_normalizedEmbedding());
 
-    final restored = FuzzyCommitment.fromJson(commitment.toJson());
+    final withPublicKey = commitment.withSigningPublicKey('public-key');
+    final restored = FuzzyCommitment.fromJson(withPublicKey.toJson());
 
     expect(restored.helper, orderedEquals(commitment.helper));
     expect(restored.nonce, orderedEquals(commitment.nonce));
     expect(restored.keyHash, commitment.keyHash);
     expect(restored.kdfSalt, orderedEquals(commitment.kdfSalt));
+    expect(restored.signingPublicKey, 'public-key');
   });
 
   test('quantization matches NumPy ties-to-even Gray coding', () {

@@ -9,7 +9,10 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:wrytte/services/face/camera_frame_converter.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/face_commitment_store.dart';
-import 'package:wrytte/ui/auth/kface_key_page.dart';
+import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
+import 'package:wrytte/services/face/local_face_signature_service.dart';
+import 'package:wrytte/ui/auth/add_profile_page.dart';
+import 'package:wrytte/ui/auth/kface_access_result_page.dart';
 
 class KFaceScanPage extends StatefulWidget {
   const KFaceScanPage({super.key, required this.wrytteId});
@@ -27,14 +30,20 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   static const int _tickRingCount = 72;
   final FaceBiometricPipeline _pipeline = FaceBiometricPipeline();
   final FaceCommitmentStore _commitmentStore = const FaceCommitmentStore();
+  final LocalFaceSignatureService _signatureService =
+      LocalFaceSignatureService();
   CameraController? _controller;
   Future<void>? _initializeFuture;
-  Future<void>? _finalizationFuture;
+  Future<bool>? _finalizationFuture;
   Stopwatch? _firstFrameToKeyStopwatch;
 
   int _inFlightFrames = 0;
   bool _completed = false;
   bool _finalizing = false;
+  bool _enrollmentFlow = false;
+  bool _profileOpened = false;
+  bool _accessResultOpened = false;
+  FuzzyCommitment? _storedCommitment;
   DateTime? _lastAnalysisAt;
   double _ringProgress = 0;
   String _status = 'Center your face inside the ring.';
@@ -50,6 +59,9 @@ class _KFaceScanPageState extends State<KFaceScanPage>
 
   Future<void> _initialize() async {
     try {
+      _storedCommitment = await _commitmentStore.read(widget.wrytteId);
+      _enrollmentFlow =
+          _storedCommitment == null || _storedCommitment!.kdfSalt.isEmpty;
       await _pipeline.initializeDetector();
       await _initializeCamera();
     } catch (error) {
@@ -359,20 +371,23 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     if (_completed) {
       final finalization = _finalizationFuture ??= _finishBiometricScan();
       unawaited(finalization);
+      if (_enrollmentFlow) {
+        unawaited(_openSignupProfilePage(finalization));
+      }
     }
   }
 
   String _percent(double probability) =>
       '${(probability * 100).clamp(0, 100).toStringAsFixed(0)}%';
 
-  Future<void> _finishBiometricScan() async {
-    if (_finalizing) return;
+  Future<bool> _finishBiometricScan() async {
+    if (_finalizing) return false;
     _finalizing = true;
     try {
       debugPrint('[KFace][Finalization] status=STARTED');
       await _stopImageStreamAfterPendingFrames();
       debugPrint('[KFace][Finalization] camera_stream=STOPPED');
-      final stored = await _commitmentStore.read(widget.wrytteId);
+      final stored = _storedCommitment;
       debugPrint(
         '[KFace][Finalization] operation='
         '${stored == null
@@ -388,33 +403,82 @@ class _KFaceScanPageState extends State<KFaceScanPage>
           );
         }
         final enrollment = await _pipeline.enroll();
+        final signatureEnrollment = await _signatureService.enroll(
+          enrollment.derivedKey,
+        );
+        final commitment = enrollment.commitment.withSigningPublicKey(
+          signatureEnrollment.publicKeyBase64,
+        );
+        await _commitmentStore.write(widget.wrytteId, commitment);
+        _storedCommitment = commitment;
         _logFirstFrameToKeyDuration();
-        await _commitmentStore.write(widget.wrytteId, enrollment.commitment);
         _setStatus('Face enrollment complete.');
+        debugPrint(
+          '[KFace][Finalization][Signature] mode=ENROLL algorithm=Ed25519 '
+          'publicKey=STORED_LOCAL privateKey=DISCARDED',
+        );
         debugPrint('[KFace][Final] result=ENROLLED_SUCCESSFULLY');
-        await _openKeyPage(enrollment.derivedKey);
+        return true;
       } else {
         final recovery = await _pipeline.recover(stored);
+        var signatureVerified = false;
+        if (recovery.accepted && recovery.derivedKey != null) {
+          final publicKey = stored.signingPublicKey;
+          if (publicKey == null || publicKey.isEmpty) {
+            debugPrint(
+              '[KFace][Finalization][Signature] mode=LOGIN result=REJECTED '
+              'reason=NO_ENROLLED_PUBLIC_KEY',
+            );
+          } else {
+            final verification = await _signatureService.verifyRecoveredKey(
+              identity: widget.wrytteId,
+              hkdfKeyHex: recovery.derivedKey!,
+              enrolledPublicKeyBase64: publicKey,
+            );
+            signatureVerified = verification.verified;
+            debugPrint(
+              '[KFace][Finalization][Signature] mode=LOGIN algorithm=Ed25519 '
+              'challengeBytes=${verification.challengeBytes} '
+              'signatureBytes=${verification.signatureBytes} '
+              'publicKey=ENROLLED_LOCAL privateKey=RECONSTRUCTED_AND_DISCARDED '
+              'result=${signatureVerified ? 'VERIFIED' : 'REJECTED'}',
+            );
+          }
+        }
+        final accepted = recovery.accepted && signatureVerified;
         _logFirstFrameToKeyDuration();
         debugPrint(
           '[KFace][Final] result='
-          '${recovery.accepted ? 'FACE_VERIFIED_SUCCESSFULLY' : 'FACE_VERIFICATION_FAILED'}',
+          '${accepted ? 'FACE_AND_SIGNATURE_VERIFIED_SUCCESSFULLY' : 'FACE_VERIFICATION_FAILED'}',
         );
         _setStatus(
-          recovery.accepted
+          accepted
               ? 'Face verified successfully.'
               : 'Face verification failed. Start over and try again.',
         );
-        if (recovery.accepted && recovery.derivedKey != null) {
-          await _openKeyPage(recovery.derivedKey!);
-        }
+        _openAccessResultPage(accepted);
+        return accepted;
       }
     } catch (error, stackTrace) {
       debugPrint('[KFace] Finalization failed: $error\n$stackTrace');
       _setStatus('Could not complete face verification. Try again.');
+      if (!_enrollmentFlow) _openAccessResultPage(false);
+      return false;
     } finally {
       _finalizing = false;
     }
+  }
+
+  Future<void> _openSignupProfilePage(Future<bool> biometricSetup) async {
+    if (!mounted || _profileOpened) return;
+    _profileOpened = true;
+    await Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder:
+            (_) =>
+                AddProfilePage(isNewUser: true, biometricSetup: biometricSetup),
+      ),
+    );
   }
 
   void _logFirstFrameToKeyDuration() {
@@ -440,12 +504,19 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     }
   }
 
-  Future<void> _openKeyPage(String keyHash) async {
-    if (!mounted) return;
-    await Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(
-        builder:
-            (_) => KFaceKeyPage(wrytteId: widget.wrytteId, keyHash: keyHash),
+  void _openAccessResultPage(bool accepted) {
+    if (!mounted || _accessResultOpened) return;
+    _accessResultOpened = true;
+    unawaited(
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder:
+              (_) => KFaceAccessResultPage(
+                accepted: accepted,
+                retryPageBuilder:
+                    (_) => KFaceScanPage(wrytteId: widget.wrytteId),
+              ),
+        ),
       ),
     );
   }
