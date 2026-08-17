@@ -31,13 +31,13 @@ void main() {
     expect(result.label, 'NORMAL');
   });
 
-  test('includes 0.45 and 0.70 boundaries in normal', () {
+  test('includes 0.38 and 0.68 boundaries in normal', () {
     expect(
-      FaceBiometricPipeline.measureFaceDistance(face(100, 288)).label,
+      FaceBiometricPipeline.measureFaceDistance(face(100, 243.2)).label,
       'NORMAL',
     );
     expect(
-      FaceBiometricPipeline.measureFaceDistance(face(100, 448)).label,
+      FaceBiometricPipeline.measureFaceDistance(face(100, 435.2)).label,
       'NORMAL',
     );
   });

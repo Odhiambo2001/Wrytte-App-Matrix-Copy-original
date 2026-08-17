@@ -60,8 +60,10 @@ class MiniFasNetLiveness {
     }
     if (Platform.isAndroid) {
       final sessions = await Future.wait([
-        AndroidOnnxImageSession.create(v2ModelAsset),
-        AndroidOnnxImageSession.create(v1seModelAsset),
+        // Each model runs concurrently, so one thread per session avoids four
+        // inference workers competing with RetinaFace and AdaFace.
+        AndroidOnnxImageSession.create(v2ModelAsset, threads: 1),
+        AndroidOnnxImageSession.create(v1seModelAsset, threads: 1),
       ]);
       _androidV2Session = sessions[0];
       _androidV1seSession = sessions[1];
@@ -70,11 +72,11 @@ class MiniFasNetLiveness {
     final sessions = await Future.wait([
       OnnxRuntime().createSessionFromAsset(
         v2ModelAsset,
-        options: OrtSessionOptions(intraOpNumThreads: 2),
+        options: OrtSessionOptions(intraOpNumThreads: 1),
       ),
       OnnxRuntime().createSessionFromAsset(
         v1seModelAsset,
-        options: OrtSessionOptions(intraOpNumThreads: 2),
+        options: OrtSessionOptions(intraOpNumThreads: 1),
       ),
     ]);
     _v2Session = sessions[0];
@@ -185,11 +187,15 @@ class MiniFasNetLiveness {
   }
 
   static List<double> _softmax(List<double> logits) {
-    final maximum = logits.reduce(math.max);
-    final exponentials =
-        logits.map((value) => math.exp(value - maximum)).toList();
-    final total = exponentials.fold<double>(0, (sum, value) => sum + value);
-    return exponentials.map((value) => value / total).toList(growable: false);
+    if (logits.length != 3) {
+      throw ArgumentError('MiniFASNet softmax requires exactly 3 logits.');
+    }
+    final maximum = math.max(logits[0], math.max(logits[1], logits[2]));
+    final first = math.exp(logits[0] - maximum);
+    final second = math.exp(logits[1] - maximum);
+    final third = math.exp(logits[2] - maximum);
+    final total = first + second + third;
+    return <double>[first / total, second / total, third / total];
   }
 
   static void _validate(OrtSession session, String modelName) {

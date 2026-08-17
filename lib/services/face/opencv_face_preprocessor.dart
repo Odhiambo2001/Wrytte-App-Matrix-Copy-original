@@ -1,6 +1,8 @@
+import 'dart:ffi' as ffi;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:ffi/ffi.dart';
 import 'package:image/image.dart' as img;
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:wrytte/services/face/retinaface_detector.dart';
@@ -17,6 +19,7 @@ class RetinaFrame {
     required this.wasResized,
     required this.originalMat,
     required this.retinaMat,
+    required this.sourceBuffer,
   });
 
   final Uint8List bgr;
@@ -29,10 +32,12 @@ class RetinaFrame {
   final bool wasResized;
   final cv.Mat originalMat;
   final cv.Mat retinaMat;
+  final ffi.Pointer<ffi.Uint8> sourceBuffer;
 
   void dispose() {
     retinaMat.dispose();
     originalMat.dispose();
+    calloc.free(sourceBuffer);
   }
 }
 
@@ -85,6 +90,12 @@ class OpenCvFacePreprocessor {
     math.Point(70.7299, 92.3655),
   ];
 
+  ffi.Pointer<ffi.Uint8> _copyToOwnedSourceBuffer(Uint8List bytes) {
+    final buffer = calloc<ffi.Uint8>(bytes.length);
+    buffer.asTypedList(bytes.length).setAll(0, bytes);
+    return buffer;
+  }
+
   RetinaFrame prepare(img.Image image) {
     final originalWidth = image.width;
     final originalHeight = image.height;
@@ -94,11 +105,12 @@ class OpenCvFacePreprocessor {
     // to BGR traversal and allocation from every analyzed frame.
     final bgr = image.toUint8List();
 
-    final source = cv.Mat.fromList(
+    final sourceBytes = _copyToOwnedSourceBuffer(bgr);
+    final source = cv.Mat.fromBuffer(
       originalHeight,
       originalWidth,
       cv.MatType.CV_8UC3,
-      bgr,
+      sourceBytes.cast<ffi.Void>(),
     );
     final cropSide =
         originalWidth >= retinaSize && originalHeight >= retinaSize
@@ -122,7 +134,9 @@ class OpenCvFacePreprocessor {
               ), interpolation: cv.INTER_LINEAR));
       retainCroppedAsRetinaMat = resized == null;
       return RetinaFrame(
-        bgr: Uint8List.fromList(output.data),
+        // data already returns an owned Dart Uint8List. Wrapping it in
+        // fromList duplicated the complete 640x640 image on every frame.
+        bgr: output.data,
         originalBgr: bgr,
         originalWidth: originalWidth,
         originalHeight: originalHeight,
@@ -132,10 +146,12 @@ class OpenCvFacePreprocessor {
         wasResized: cropSide != retinaSize,
         originalMat: source,
         retinaMat: output,
+        sourceBuffer: sourceBytes,
       );
     } catch (_) {
       resized?.dispose();
       source.dispose();
+      calloc.free(sourceBytes);
       rethrow;
     } finally {
       if (!retainCroppedAsRetinaMat) cropped.dispose();
@@ -181,6 +197,8 @@ class OpenCvFacePreprocessor {
         outputSize,
       ), interpolation: cv.INTER_LINEAR);
       try {
+        // The Mat is disposed below, so retain an owned Dart copy for the
+        // asynchronous native ONNX call. This copy is only 80x80x3 bytes.
         return Uint8List.fromList(resized.data);
       } finally {
         resized.dispose();
@@ -283,6 +301,8 @@ class OpenCvFacePreprocessor {
       final (_, standardDeviation) = cv.meanStdDev(laplacian);
       final sharpness = standardDeviation.val1 * standardDeviation.val1;
       return AlignedFace(
+        // The aligned Mat is disposed below. AdaFace executes asynchronously,
+        // so it requires an owned 112x112x3 copy.
         bgr: Uint8List.fromList(aligned.data),
         sharpness: sharpness,
       );

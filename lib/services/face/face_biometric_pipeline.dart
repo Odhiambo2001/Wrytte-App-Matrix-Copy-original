@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -144,12 +145,24 @@ class _AcceptedFaceEmbedding {
   final Float32List embedding;
 }
 
+class _SerialStageGate {
+  Future<void> _tail = Future<void>.value();
+
+  Future<void Function()> acquire() async {
+    final previous = _tail;
+    final release = Completer<void>();
+    _tail = release.future;
+    await previous;
+    return release.complete;
+  }
+}
+
 class FaceBiometricPipeline {
-  static const framesToUse = 10;
+  static const framesToUse = 5;
   static const targetConfidenceThreshold = 0.83;
   static const targetSizeGap = 0.20;
   static const fullBboxVisibleThreshold = 0.90;
-  static const normalFaceSizeMinimum = 0.37;
+  static const normalFaceSizeMinimum = 0.38;
   static const normalFaceSizeMaximum = 0.68;
 
   // --- Strict FPS gate -------------------------------------------------
@@ -170,7 +183,10 @@ class FaceBiometricPipeline {
   final OpenCvFacePreprocessor openCv = OpenCvFacePreprocessor();
   final MiniFasNetLiveness liveness = MiniFasNetLiveness();
   final List<_AcceptedFaceEmbedding> _acceptedEmbeddings = [];
+  final _retinaStageGate = _SerialStageGate();
+  final _downstreamStageGate = _SerialStageGate();
   int _frameSequence = 0;
+  bool _collectionComplete = false;
 
   int get acceptedFrameCount => _acceptedEmbeddings.length;
 
@@ -209,6 +225,11 @@ class FaceBiometricPipeline {
     }
     _lastFrameProcessedAt = now;
 
+    final retinaQueueTimer = Stopwatch()..start();
+    final releaseRetinaStage = await _retinaStageGate.acquire();
+    retinaQueueTimer.stop();
+    var retinaStageReleased = false;
+    void Function()? releaseDownstreamStage;
     final stopwatch = Stopwatch()..start();
     final phaseStopwatch = Stopwatch()..start();
     final frameNumber = ++_frameSequence;
@@ -341,6 +362,23 @@ class FaceBiometricPipeline {
             ? FaceDistance.none
             : measureFaceDistance(selectedForCompleteness);
     final faceEvaluationMs = phaseStopwatch.elapsedMilliseconds;
+    releaseRetinaStage();
+    retinaStageReleased = true;
+    var downstreamQueueMs = 0;
+    var runDownstream = false;
+    if (targetResult != null) {
+      final downstreamQueueTimer = Stopwatch()..start();
+      releaseDownstreamStage = await _downstreamStageGate.acquire();
+      downstreamQueueTimer.stop();
+      downstreamQueueMs = downstreamQueueTimer.elapsedMilliseconds;
+      runDownstream = !_collectionComplete;
+    }
+    debugPrint(
+      '[KFace][Pipeline][Frame $frameNumber] '
+      'retinaQueueMs=${retinaQueueTimer.elapsedMilliseconds} '
+      'downstreamQueueMs=$downstreamQueueMs '
+      'stages=RETINA_THEN_PARALLEL_LIVENESS_ADAFACE',
+    );
     AlignedFace? aligned;
     DualLivenessResult? livenessResult;
     var adaFaceComputed = false;
@@ -350,7 +388,9 @@ class FaceBiometricPipeline {
     var adaFaceMs = 0;
     var parallelLivenessAdaFaceWallMs = 0;
     var embeddingStorageMs = 0;
-    if (targetResult != null) {
+    // RetinaFace must first select a target that satisfies every target-face
+    // rule. Invalid/no-target frames never reach liveness or AdaFace.
+    if (targetResult != null && runDownstream) {
       final selectedFace = targetResult.face;
       final selectedFaceNumber = targetSelection.targetFaceNumber!;
       phaseStopwatch
@@ -368,6 +408,9 @@ class FaceBiometricPipeline {
         'V1SE(scale=4.0,box=${_boxLog(crops.v1seBox)},output=80x80)',
       );
       final parallelStageTimer = Stopwatch()..start();
+      // MiniFASNetV2 and MiniFASNetV1SE are executed in parallel inside
+      // predict(). This downstream stage also overlaps the next frame's
+      // serialized RetinaFace stage through the two independent stage gates.
       final livenessFuture = () async {
         final timer = Stopwatch()..start();
         final result = await liveness.predict(
@@ -433,6 +476,7 @@ class FaceBiometricPipeline {
         if (_acceptedEmbeddings.length > framesToUse) {
           _acceptedEmbeddings.removeLast();
         }
+        _collectionComplete = _acceptedEmbeddings.length >= framesToUse;
         embeddingStorageMs = phaseStopwatch.elapsedMilliseconds;
       } else if (embedding != null && !livenessResult.isReal) {
         debugPrint(
@@ -520,6 +564,8 @@ class FaceBiometricPipeline {
         processingMilliseconds: stopwatch.elapsedMilliseconds,
       );
     } finally {
+      releaseDownstreamStage?.call();
+      if (!retinaStageReleased) releaseRetinaStage();
       prepared.dispose();
     }
   }
@@ -690,9 +736,9 @@ class FaceBiometricPipeline {
   /// dimension. This remains stable for modest head rotation and supports the
   /// portrait-shaped boxes commonly returned by RetinaFace.
   ///
-  /// FAR:    face occupies less than 30% of the Retina input dimension.
-  /// NORMAL: face occupies 30% through 60%.
-  /// CLOSE:  face occupies more than 60%.
+  /// FAR:    face occupies less than 38% of the Retina input dimension.
+  /// NORMAL: face occupies 38% through 68%.
+  /// CLOSE:  face occupies more than 68%.
   static FaceDistance measureFaceDistance(FaceDetection face) {
     final inputSize = OpenCvFacePreprocessor.retinaSize.toDouble();
     final rawWidth = math.max(
@@ -805,6 +851,7 @@ class FaceBiometricPipeline {
   void reset() {
     _acceptedEmbeddings.clear();
     _lastFrameProcessedAt = null;
+    _collectionComplete = false;
   }
 
   Future<void> dispose() async {

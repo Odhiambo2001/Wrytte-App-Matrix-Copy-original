@@ -30,8 +30,9 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   CameraController? _controller;
   Future<void>? _initializeFuture;
   Future<void>? _finalizationFuture;
+  Stopwatch? _firstFrameToKeyStopwatch;
 
-  bool _isAnalyzing = false;
+  int _inFlightFrames = 0;
   bool _completed = false;
   bool _finalizing = false;
   DateTime? _lastAnalysisAt;
@@ -87,7 +88,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       unawaited(controller.dispose());
       _controller = null;
       _initializeFuture = null;
-      _isAnalyzing = false;
+      _inFlightFrames = 0;
       if (mounted) setState(() {});
       return;
     }
@@ -257,14 +258,24 @@ class _KFaceScanPageState extends State<KFaceScanPage>
 
     _setStatus('Center your face inside the ring.');
     await controller.startImageStream((frame) async {
-      if (_isAnalyzing || _completed) return;
+      // Reserve one of the five collection slots for every admitted frame.
+      // This preserves the two-stage overlap (Retina frame N+1 while
+      // liveness/AdaFace process frame N), but prevents a sixth frame from
+      // entering the pipeline while the fifth frame is still downstream.
+      final reservedFrameCount = _pipeline.acceptedFrameCount + _inFlightFrames;
+      if (_inFlightFrames >= 2 ||
+          reservedFrameCount >= FaceBiometricPipeline.framesToUse ||
+          _completed) {
+        return;
+      }
 
       final now = DateTime.now();
       final last = _lastAnalysisAt;
       if (last != null && now.difference(last) < _analysisThrottle) return;
       _lastAnalysisAt = now;
 
-      _isAnalyzing = true;
+      _inFlightFrames++;
+      _firstFrameToKeyStopwatch ??= Stopwatch()..start();
       try {
         final cameraFrameStopwatch = Stopwatch()..start();
         final image = CameraFrameConverter.convert(
@@ -277,7 +288,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
           ..start();
         final analysis = await _pipeline.processFrame(image);
         final biometricPipelineMs = cameraFrameStopwatch.elapsedMilliseconds;
-        if (!mounted) return;
+        if (!mounted || _completed) return;
         cameraFrameStopwatch
           ..reset()
           ..start();
@@ -293,7 +304,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       } catch (error, stackTrace) {
         debugPrint('[FaceDetect] $error\n$stackTrace');
       } finally {
-        _isAnalyzing = false;
+        _inFlightFrames = math.max(0, _inFlightFrames - 1);
       }
     });
   }
@@ -359,7 +370,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     _finalizing = true;
     try {
       debugPrint('[KFace][Finalization] status=STARTED');
-      await _controller?.stopImageStream();
+      await _stopImageStreamAfterPendingFrames();
       debugPrint('[KFace][Finalization] camera_stream=STOPPED');
       final stored = await _commitmentStore.read(widget.wrytteId);
       debugPrint(
@@ -377,12 +388,14 @@ class _KFaceScanPageState extends State<KFaceScanPage>
           );
         }
         final enrollment = await _pipeline.enroll();
+        _logFirstFrameToKeyDuration();
         await _commitmentStore.write(widget.wrytteId, enrollment.commitment);
         _setStatus('Face enrollment complete.');
         debugPrint('[KFace][Final] result=ENROLLED_SUCCESSFULLY');
         await _openKeyPage(enrollment.derivedKey);
       } else {
         final recovery = await _pipeline.recover(stored);
+        _logFirstFrameToKeyDuration();
         debugPrint(
           '[KFace][Final] result='
           '${recovery.accepted ? 'FACE_VERIFIED_SUCCESSFULLY' : 'FACE_VERIFICATION_FAILED'}',
@@ -401,6 +414,29 @@ class _KFaceScanPageState extends State<KFaceScanPage>
       _setStatus('Could not complete face verification. Try again.');
     } finally {
       _finalizing = false;
+    }
+  }
+
+  void _logFirstFrameToKeyDuration() {
+    final timer = _firstFrameToKeyStopwatch;
+    if (timer == null || !timer.isRunning) return;
+    timer.stop();
+    debugPrint(
+      '[KFace][Timing][Total] firstFrameToKeyMs=${timer.elapsedMilliseconds} '
+      'targetUnder15Seconds=${timer.elapsedMilliseconds < 15000 ? 'PASS' : 'MISS'}',
+    );
+  }
+
+  Future<void> _stopImageStreamAfterPendingFrames() async {
+    // Finalization can begin inside the fifth image-stream callback. Give its
+    // finally block (and any older admitted callback) time to release before
+    // detaching CameraX's ImageReader surfaces.
+    while (_inFlightFrames > 0) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    final controller = _controller;
+    if (controller != null && controller.value.isStreamingImages) {
+      await controller.stopImageStream();
     }
   }
 
@@ -423,6 +459,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     if (_finalizing) return;
     _finalizationFuture = null;
     _pipeline.reset();
+    _firstFrameToKeyStopwatch = null;
     setState(() {
       _completed = false;
       _ringProgress = 0;

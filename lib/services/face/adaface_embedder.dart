@@ -107,7 +107,11 @@ class AdaFaceEmbedder {
     }
     final norm = math.sqrt(squaredNorm);
     if (norm < 1e-10) throw StateError('Embedding has near-zero norm.');
-    return Float32List.fromList(values.map((value) => value / norm).toList());
+    final normalized = Float32List(values.length);
+    for (var index = 0; index < values.length; index++) {
+      normalized[index] = values[index] / norm;
+    }
+    return normalized;
   }
 
   Future<void> dispose() async {

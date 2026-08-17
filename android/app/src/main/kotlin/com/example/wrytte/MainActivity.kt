@@ -10,6 +10,7 @@ import androidx.core.view.WindowCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.FlutterInjector
+import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.nio.ByteBuffer
@@ -23,6 +24,7 @@ class MainActivity: FlutterActivity() {
     private data class NativeOrtSession(
         val session: OrtSession,
         var inputBuffer: ByteBuffer? = null,
+        val outputBuffers: ConcurrentHashMap<String, FloatArray> = ConcurrentHashMap(),
     )
 
     private val deviceRegionChannel = "com.example.wrytte/device_region"
@@ -51,8 +53,14 @@ class MainActivity: FlutterActivity() {
             result.success(region)
         }
 
+        // ONNX sessions belong to independent, stage-gated models. A serial
+        // task queue silently turned Dart Future.wait calls into sequential
+        // native inference. Allow different sessions (RetinaFace, AdaFace and
+        // both MiniFAS models) to execute at the same time.
         val backgroundQueue =
-            flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue()
+            flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue(
+                BinaryMessenger.TaskQueueOptions().setIsSerial(false),
+            )
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             onnxImageChannel,
@@ -181,7 +189,16 @@ class MainActivity: FlutterActivity() {
                 return session.outputNames.associateWith { name ->
                     val tensor = outputs[name].get() as OnnxTensor
                     val buffer: FloatBuffer = tensor.floatBuffer
-                    FloatArray(buffer.remaining()).also(buffer::get)
+                    val valueCount = buffer.remaining()
+                    val values = nativeSession.outputBuffers.compute(name) { _, current ->
+                        if (current == null || current.size != valueCount) {
+                            FloatArray(valueCount)
+                        } else {
+                            current
+                        }
+                    }!!
+                    buffer.get(values, 0, valueCount)
+                    values
                 }
             }
         }
