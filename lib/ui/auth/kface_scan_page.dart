@@ -36,10 +36,12 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   Future<void>? _initializeFuture;
   Future<bool>? _finalizationFuture;
   Stopwatch? _firstFrameToKeyStopwatch;
+  Stopwatch? _cameraStartupStopwatch;
 
   int _inFlightFrames = 0;
   bool _completed = false;
   bool _finalizing = false;
+  bool _faceModelsReady = false;
   bool _enrollmentFlow = false;
   bool _profileOpened = false;
   bool _accessResultOpened = false;
@@ -59,11 +61,19 @@ class _KFaceScanPageState extends State<KFaceScanPage>
 
   Future<void> _initialize() async {
     try {
-      _storedCommitment = await _commitmentStore.read(widget.wrytteId);
-      _enrollmentFlow =
-          _storedCommitment == null || _storedCommitment!.kdfSalt.isEmpty;
-      await _pipeline.initializeDetector();
-      await _initializeCamera();
+      _cameraStartupStopwatch = Stopwatch()..start();
+      final processingReady = () async {
+        _storedCommitment = await _commitmentStore.read(widget.wrytteId);
+        _enrollmentFlow =
+            _storedCommitment == null || _storedCommitment!.kdfSalt.isEmpty;
+        await _pipeline.initializeDetector();
+        _faceModelsReady = true;
+        debugPrint(
+          '[KFace][Startup] modelsReadyMs='
+          '${_cameraStartupStopwatch?.elapsedMilliseconds}',
+        );
+      }();
+      await _initializeCamera(processingReady: processingReady);
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -109,7 +119,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     }
   }
 
-  Future<void> _initializeCamera() async {
+  Future<void> _initializeCamera({Future<void>? processingReady}) async {
     final previousController = _controller;
     _controller = null;
     _initializeFuture = null;
@@ -160,13 +170,30 @@ class _KFaceScanPageState extends State<KFaceScanPage>
         return;
       }
       setState(() {});
+      debugPrint(
+        '[KFace][Startup] cameraPreviewReadyMs='
+        '${_cameraStartupStopwatch?.elapsedMilliseconds}',
+      );
 
-      await _safeLockPortrait(controller);
-      await _safeSetExposureLocked(controller);
-      await _safeSetMinZoom(controller);
+      final cameraConfiguration = () async {
+        await _safeLockPortrait(controller);
+        await _safeSetAutomaticExposure(controller);
+        await _safeSetMinZoom(controller);
+      }();
+      await cameraConfiguration;
 
       if (!mounted) return;
       await _startFaceTracking();
+      debugPrint(
+        '[KFace][Startup] cameraStreamStartedMs='
+        '${_cameraStartupStopwatch?.elapsedMilliseconds}',
+      );
+      if (processingReady != null) await processingReady;
+      _cameraStartupStopwatch?.stop();
+      debugPrint(
+        '[KFace][Startup] faceAnalysisReadyMs='
+        '${_cameraStartupStopwatch?.elapsedMilliseconds}',
+      );
       setState(() {});
     } on CameraException catch (error) {
       if (!mounted) return;
@@ -229,15 +256,12 @@ class _KFaceScanPageState extends State<KFaceScanPage>
     }
   }
 
-  Future<void> _safeSetExposureLocked(CameraController controller) async {
+  Future<void> _safeSetAutomaticExposure(CameraController controller) async {
     try {
       await controller.setExposureMode(ExposureMode.auto);
-      await Future<void>.delayed(const Duration(seconds: 1));
       final maxExposure = await controller.getMaxExposureOffset();
       const targetOffset = 0.5;
       await controller.setExposureOffset(targetOffset.clamp(0.0, maxExposure));
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      await controller.setExposureMode(ExposureMode.locked);
     } catch (error, stackTrace) {
       debugPrint('[Camera] setExposureMode failed: $error\n$stackTrace');
     }
@@ -270,6 +294,10 @@ class _KFaceScanPageState extends State<KFaceScanPage>
 
     _setStatus('Center your face inside the ring.');
     await controller.startImageStream((frame) async {
+      // Start CameraX immediately so preview and frame delivery do not wait
+      // for large ONNX sessions. Frames are dropped at zero conversion cost
+      // until all face models are ready; the next fresh frame is then scanned.
+      if (!_faceModelsReady) return;
       // Reserve one of the five collection slots for every admitted frame.
       // This preserves the two-stage overlap (Retina frame N+1 while
       // liveness/AdaFace process frame N), but prevents a sixth frame from

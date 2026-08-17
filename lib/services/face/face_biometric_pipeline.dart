@@ -135,14 +135,11 @@ class BiometricEnrollmentResult {
   final String derivedKey;
 }
 
-class _AcceptedFaceEmbedding {
-  const _AcceptedFaceEmbedding({
-    required this.sharpness,
-    required this.embedding,
-  });
+class _AcceptedAlignedFace {
+  const _AcceptedAlignedFace({required this.sharpness, required this.bgr});
 
   final double sharpness;
-  final Float32List embedding;
+  final Uint8List bgr;
 }
 
 class _SerialStageGate {
@@ -182,13 +179,13 @@ class FaceBiometricPipeline {
   final LdpcFuzzyCommitment ldpc = LdpcFuzzyCommitment();
   final OpenCvFacePreprocessor openCv = OpenCvFacePreprocessor();
   final MiniFasNetLiveness liveness = MiniFasNetLiveness();
-  final List<_AcceptedFaceEmbedding> _acceptedEmbeddings = [];
+  final List<_AcceptedAlignedFace> _acceptedFaces = [];
   final _retinaStageGate = _SerialStageGate();
   final _downstreamStageGate = _SerialStageGate();
   int _frameSequence = 0;
   bool _collectionComplete = false;
 
-  int get acceptedFrameCount => _acceptedEmbeddings.length;
+  int get acceptedFrameCount => _acceptedFaces.length;
 
   Future<void> initializeDetector() async {
     await Future.wait([
@@ -215,7 +212,7 @@ class FaceBiometricPipeline {
         originalHeight: cameraFrame.height,
         cropSide: 0,
         wasResized: false,
-        acceptedFrameCount: _acceptedEmbeddings.length,
+        acceptedFrameCount: _acceptedFaces.length,
         liveness: null,
         completeness: FaceCompleteness.none,
         faceDistance: FaceDistance.none,
@@ -236,318 +233,300 @@ class FaceBiometricPipeline {
     final prepared = openCv.prepare(cameraFrame);
     try {
       final preprocessingMs = phaseStopwatch.elapsedMilliseconds;
-    debugPrint(
-      '[KFace][Frame $frameNumber][RetinaCrop] original='
-      '${prepared.originalWidth}x${prepared.originalHeight} '
-      'square=x${prepared.cropX},y${prepared.cropY},'
-      '${prepared.cropSide}x${prepared.cropSide} output=640x640 '
-      'resized=${prepared.wasResized}',
-    );
-    phaseStopwatch
-      ..reset()
-      ..start();
-    final faces = await retinaFace.detectBgr(prepared.bgr);
-    final retinaFaceMs = phaseStopwatch.elapsedMilliseconds;
-    phaseStopwatch
-      ..reset()
-      ..start();
-    final orderedFaces = faces.toList(growable: false)
-      ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
-    final perFaceResults =
-        <
-          ({
-            FaceDetection face,
-            FaceCompleteness completeness,
-            FaceDistance distance,
-            bool insideRing,
-          })
-        >[];
-    for (final face in orderedFaces) {
-      perFaceResults.add((
-        face: face,
-        completeness: measureFaceCompleteness(face),
-        distance: measureFaceDistance(face),
-        insideRing: _isInsideRetinaRing(face),
-      ));
-    }
-    final facesInsideRing =
-        perFaceResults.where((result) => result.insideRing).length;
-    debugPrint(
-      '[KFace][RetinaTest][Frame $frameNumber][Faces] '
-      'detected=${perFaceResults.length} insideRing=$facesInsideRing '
-      'twoOrMoreInsideRing=${facesInsideRing >= 2}',
-    );
-    for (var index = 0; index < perFaceResults.length; index++) {
-      final result = perFaceResults[index];
-      final face = result.face;
-      final faceCompleteness = result.completeness;
-      final distance = result.distance;
       debugPrint(
-        '[KFace][RetinaTest][Frame $frameNumber][Face ${index + 1}] '
-        'insideRing=${result.insideRing} '
-        'face=${faceCompleteness.label} '
-        'confidence=${faceCompleteness.detectionConfidence.toStringAsFixed(3)} '
-        'bbox=${face.left.toStringAsFixed(1)},${face.top.toStringAsFixed(1)},'
-        '${face.right.toStringAsFixed(1)},${face.bottom.toStringAsFixed(1)} '
-        'bboxVisible=${faceCompleteness.boundingBoxVisibleFraction.toStringAsFixed(3)} '
-        'landmarks=${faceCompleteness.visibleLandmarks}/5 '
-        'geometry=${faceCompleteness.geometryScore.toStringAsFixed(3)} '
-        'distance=${distance.label} '
-        'faceWidthRatio=${distance.widthRatio.toStringAsFixed(3)} '
-        'faceHeightRatio=${distance.heightRatio.toStringAsFixed(3)} '
-        'faceSizeRatio=${distance.sizeRatio.toStringAsFixed(3)}',
+        '[KFace][Frame $frameNumber][RetinaCrop] original='
+        '${prepared.originalWidth}x${prepared.originalHeight} '
+        'square=x${prepared.cropX},y${prepared.cropY},'
+        '${prepared.cropSide}x${prepared.cropSide} output=640x640 '
+        'resized=${prepared.wasResized}',
       );
-    }
-    final targetMetrics = <TargetFaceMetrics>[];
-    for (var index = 0; index < perFaceResults.length; index++) {
-      final result = perFaceResults[index];
-      targetMetrics.add(
-        TargetFaceMetrics(
-          faceNumber: index + 1,
-          faceLabel: result.completeness.label,
-          visibleLandmarks: result.completeness.visibleLandmarks,
-          distanceLabel: result.distance.label,
-          boundingBoxVisibleFraction:
-              result.completeness.boundingBoxVisibleFraction,
-          faceSizeRatio: result.distance.sizeRatio,
-          confidence: result.completeness.detectionConfidence,
-        ),
-      );
-    }
-    final targetSelection = selectTargetFace(targetMetrics);
-    final maximumDetectedSize = targetMetrics.fold<double>(
-      0,
-      (maximum, face) => math.max(maximum, face.faceSizeRatio),
-    );
-    for (final metrics in targetMetrics) {
-      final landmarksPass = metrics.visibleLandmarks == 5;
-      final fullFacePass = metrics.faceLabel == 'FULL';
-      final distancePass = metrics.distanceLabel == 'NORMAL';
-      final bboxPass =
-          metrics.boundingBoxVisibleFraction >= fullBboxVisibleThreshold;
-      final confidencePass = metrics.confidence >= targetConfidenceThreshold;
-      final maximumPass = metrics.faceSizeRatio >= maximumDetectedSize;
-      final selected = targetSelection.targetFaceNumber == metrics.faceNumber;
-      debugPrint(
-        '[KFace][Target][Frame $frameNumber][Face ${metrics.faceNumber}] '
-        'fullFace=$fullFacePass '
-        'landmarks5of5=$landmarksPass '
-        'distanceNormal=$distancePass '
-        'bboxVisible90=$bboxPass '
-        'confidence83=$confidencePass '
-        'insideTransparentPane=$bboxPass '
-        'maxFaceSize=$maximumPass '
-        'faceSizeRatio=${metrics.faceSizeRatio.toStringAsFixed(3)} '
-        'result=${selected ? 'TARGET' : 'REJECTED_DELETED'}',
-      );
-    }
-    debugPrint(
-      '[KFace][Target][Frame $frameNumber] '
-      'target=${targetSelection.targetFaceNumber == null ? 'NONE' : 'Face ${targetSelection.targetFaceNumber}'} '
-      'reason=${targetSelection.reason} '
-      'qualifying=${targetSelection.qualifyingFaceNumbers} '
-      'bboxSizeGap=${targetSelection.sizeGap?.toStringAsFixed(3) ?? 'N/A'}',
-    );
-    final targetResult =
-        targetSelection.targetFaceNumber == null
-            ? null
-            : perFaceResults[targetSelection.targetFaceNumber! - 1];
-    final selectedForCompleteness = targetResult?.face ?? _largestFace(faces);
-    final completeness =
-        selectedForCompleteness == null
-            ? FaceCompleteness.none
-            : measureFaceCompleteness(selectedForCompleteness);
-    final faceDistance =
-        selectedForCompleteness == null
-            ? FaceDistance.none
-            : measureFaceDistance(selectedForCompleteness);
-    final faceEvaluationMs = phaseStopwatch.elapsedMilliseconds;
-    releaseRetinaStage();
-    retinaStageReleased = true;
-    var downstreamQueueMs = 0;
-    var runDownstream = false;
-    if (targetResult != null) {
-      final downstreamQueueTimer = Stopwatch()..start();
-      releaseDownstreamStage = await _downstreamStageGate.acquire();
-      downstreamQueueTimer.stop();
-      downstreamQueueMs = downstreamQueueTimer.elapsedMilliseconds;
-      runDownstream = !_collectionComplete;
-    }
-    debugPrint(
-      '[KFace][Pipeline][Frame $frameNumber] '
-      'retinaQueueMs=${retinaQueueTimer.elapsedMilliseconds} '
-      'downstreamQueueMs=$downstreamQueueMs '
-      'stages=RETINA_THEN_PARALLEL_LIVENESS_ADAFACE',
-    );
-    AlignedFace? aligned;
-    DualLivenessResult? livenessResult;
-    var adaFaceComputed = false;
-    var livenessCropMs = 0;
-    var livenessInferenceMs = 0;
-    var alignmentMs = 0;
-    var adaFaceMs = 0;
-    var parallelLivenessAdaFaceWallMs = 0;
-    var embeddingStorageMs = 0;
-    // RetinaFace must first select a target that satisfies every target-face
-    // rule. Invalid/no-target frames never reach liveness or AdaFace.
-    if (targetResult != null && runDownstream) {
-      final selectedFace = targetResult.face;
-      final selectedFaceNumber = targetSelection.targetFaceNumber!;
       phaseStopwatch
         ..reset()
         ..start();
-      final crops = openCv.cropForMiniFasNet(prepared, selectedFace);
-      livenessCropMs = phaseStopwatch.elapsedMilliseconds;
-      debugPrint(
-        '[KFace][Frame $frameNumber][Face $selectedFaceNumber][LivenessCrop] '
-        'face=${selectedFace.left.toStringAsFixed(1)},'
-        '${selectedFace.top.toStringAsFixed(1)},'
-        '${selectedFace.right.toStringAsFixed(1)},'
-        '${selectedFace.bottom.toStringAsFixed(1)} '
-        'V2(scale=2.7,box=${_boxLog(crops.v2Box)},output=80x80) '
-        'V1SE(scale=4.0,box=${_boxLog(crops.v1seBox)},output=80x80)',
-      );
-      final parallelStageTimer = Stopwatch()..start();
-      // MiniFASNetV2 and MiniFASNetV1SE are executed in parallel inside
-      // predict(). This downstream stage also overlaps the next frame's
-      // serialized RetinaFace stage through the two independent stage gates.
-      final livenessFuture = () async {
-        final timer = Stopwatch()..start();
-        final result = await liveness.predict(
-          v2FaceBgr: crops.v2Bgr,
-          v1seFaceBgr: crops.v1seBgr,
-        );
-        timer.stop();
-        return (result: result, elapsedMs: timer.elapsedMilliseconds);
-      }();
-
-      // Alignment is independent of the liveness decision. Start liveness,
-      // align immediately, and then run AdaFace while liveness is still in
-      // flight. A computed embedding is retained only after liveness passes.
+      final faces = await retinaFace.detectBgr(prepared.bgr);
+      final retinaFaceMs = phaseStopwatch.elapsedMilliseconds;
       phaseStopwatch
         ..reset()
         ..start();
-      aligned = openCv.align(prepared, selectedFace.landmarks);
-      alignmentMs = phaseStopwatch.elapsedMilliseconds;
-
-      Future<({Float32List embedding, int elapsedMs})>? adaFaceFuture;
-      if (aligned != null) {
-        final alignedFace = aligned;
-        adaFaceFuture = () async {
-          final timer = Stopwatch()..start();
-          final embedding = await adaFace.embed(alignedFace.bgr);
-          timer.stop();
-          return (embedding: embedding, elapsedMs: timer.elapsedMilliseconds);
-        }();
+      final orderedFaces = faces.toList(growable: false)
+        ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
+      final perFaceResults =
+          <
+            ({
+              FaceDetection face,
+              FaceCompleteness completeness,
+              FaceDistance distance,
+              bool insideRing,
+            })
+          >[];
+      for (final face in orderedFaces) {
+        perFaceResults.add((
+          face: face,
+          completeness: measureFaceCompleteness(face),
+          distance: measureFaceDistance(face),
+          insideRing: _isInsideRetinaRing(face),
+        ));
       }
-
-      final timedLiveness = await livenessFuture;
-      livenessResult = timedLiveness.result;
-      livenessInferenceMs = timedLiveness.elapsedMs;
-      final timedAdaFace = await adaFaceFuture;
-      final embedding = timedAdaFace?.embedding;
-      adaFaceMs = timedAdaFace?.elapsedMs ?? 0;
-      adaFaceComputed = embedding != null;
-      parallelStageTimer.stop();
-      parallelLivenessAdaFaceWallMs = parallelStageTimer.elapsedMilliseconds;
+      final facesInsideRing =
+          perFaceResults.where((result) => result.insideRing).length;
       debugPrint(
-        '[KFace][Frame $frameNumber][Face $selectedFaceNumber][Liveness] '
-        'V2(real=${_prob(livenessResult.v2.realProbability)},'
-        'fake=${_prob(livenessResult.v2.fakeProbability)},'
-        'class=${livenessResult.v2.labelIndex},'
-        'decision=${livenessResult.v2.isReal ? 'REAL' : 'FAKE'}) '
-        'V1SE(real=${_prob(livenessResult.v1se.realProbability)},'
-        'fake=${_prob(livenessResult.v1se.fakeProbability)},'
-        'class=${livenessResult.v1se.labelIndex},'
-        'decision=${livenessResult.v1se.isReal ? 'REAL' : 'FAKE'}) '
-        'combined=${livenessResult.isReal ? 'PASS' : 'REJECT'}',
+        '[KFace][RetinaTest][Frame $frameNumber][Faces] '
+        'detected=${perFaceResults.length} insideRing=$facesInsideRing '
+        'twoOrMoreInsideRing=${facesInsideRing >= 2}',
       );
-      if (aligned != null && embedding != null && livenessResult.isReal) {
+      for (var index = 0; index < perFaceResults.length; index++) {
+        final result = perFaceResults[index];
+        final face = result.face;
+        final faceCompleteness = result.completeness;
+        final distance = result.distance;
+        debugPrint(
+          '[KFace][RetinaTest][Frame $frameNumber][Face ${index + 1}] '
+          'insideRing=${result.insideRing} '
+          'face=${faceCompleteness.label} '
+          'confidence=${faceCompleteness.detectionConfidence.toStringAsFixed(3)} '
+          'bbox=${face.left.toStringAsFixed(1)},${face.top.toStringAsFixed(1)},'
+          '${face.right.toStringAsFixed(1)},${face.bottom.toStringAsFixed(1)} '
+          'bboxVisible=${faceCompleteness.boundingBoxVisibleFraction.toStringAsFixed(3)} '
+          'landmarks=${faceCompleteness.visibleLandmarks}/5 '
+          'geometry=${faceCompleteness.geometryScore.toStringAsFixed(3)} '
+          'distance=${distance.label} '
+          'faceWidthRatio=${distance.widthRatio.toStringAsFixed(3)} '
+          'faceHeightRatio=${distance.heightRatio.toStringAsFixed(3)} '
+          'faceSizeRatio=${distance.sizeRatio.toStringAsFixed(3)}',
+        );
+      }
+      final targetMetrics = <TargetFaceMetrics>[];
+      for (var index = 0; index < perFaceResults.length; index++) {
+        final result = perFaceResults[index];
+        targetMetrics.add(
+          TargetFaceMetrics(
+            faceNumber: index + 1,
+            faceLabel: result.completeness.label,
+            visibleLandmarks: result.completeness.visibleLandmarks,
+            distanceLabel: result.distance.label,
+            boundingBoxVisibleFraction:
+                result.completeness.boundingBoxVisibleFraction,
+            faceSizeRatio: result.distance.sizeRatio,
+            confidence: result.completeness.detectionConfidence,
+          ),
+        );
+      }
+      final targetSelection = selectTargetFace(targetMetrics);
+      final maximumDetectedSize = targetMetrics.fold<double>(
+        0,
+        (maximum, face) => math.max(maximum, face.faceSizeRatio),
+      );
+      for (final metrics in targetMetrics) {
+        final landmarksPass = metrics.visibleLandmarks == 5;
+        final fullFacePass = metrics.faceLabel == 'FULL';
+        final distancePass = metrics.distanceLabel == 'NORMAL';
+        final bboxPass =
+            metrics.boundingBoxVisibleFraction >= fullBboxVisibleThreshold;
+        final confidencePass = metrics.confidence >= targetConfidenceThreshold;
+        final maximumPass = metrics.faceSizeRatio >= maximumDetectedSize;
+        final selected = targetSelection.targetFaceNumber == metrics.faceNumber;
+        debugPrint(
+          '[KFace][Target][Frame $frameNumber][Face ${metrics.faceNumber}] '
+          'fullFace=$fullFacePass '
+          'landmarks5of5=$landmarksPass '
+          'distanceNormal=$distancePass '
+          'bboxVisible90=$bboxPass '
+          'confidence83=$confidencePass '
+          'insideTransparentPane=$bboxPass '
+          'maxFaceSize=$maximumPass '
+          'faceSizeRatio=${metrics.faceSizeRatio.toStringAsFixed(3)} '
+          'result=${selected ? 'TARGET' : 'REJECTED_DELETED'}',
+        );
+      }
+      debugPrint(
+        '[KFace][Target][Frame $frameNumber] '
+        'target=${targetSelection.targetFaceNumber == null ? 'NONE' : 'Face ${targetSelection.targetFaceNumber}'} '
+        'reason=${targetSelection.reason} '
+        'qualifying=${targetSelection.qualifyingFaceNumbers} '
+        'bboxSizeGap=${targetSelection.sizeGap?.toStringAsFixed(3) ?? 'N/A'}',
+      );
+      final targetResult =
+          targetSelection.targetFaceNumber == null
+              ? null
+              : perFaceResults[targetSelection.targetFaceNumber! - 1];
+      final selectedForCompleteness = targetResult?.face ?? _largestFace(faces);
+      final completeness =
+          selectedForCompleteness == null
+              ? FaceCompleteness.none
+              : measureFaceCompleteness(selectedForCompleteness);
+      final faceDistance =
+          selectedForCompleteness == null
+              ? FaceDistance.none
+              : measureFaceDistance(selectedForCompleteness);
+      final faceEvaluationMs = phaseStopwatch.elapsedMilliseconds;
+      releaseRetinaStage();
+      retinaStageReleased = true;
+      var downstreamQueueMs = 0;
+      var runDownstream = false;
+      if (targetResult != null) {
+        final downstreamQueueTimer = Stopwatch()..start();
+        releaseDownstreamStage = await _downstreamStageGate.acquire();
+        downstreamQueueTimer.stop();
+        downstreamQueueMs = downstreamQueueTimer.elapsedMilliseconds;
+        runDownstream = !_collectionComplete;
+      }
+      debugPrint(
+        '[KFace][Pipeline][Frame $frameNumber] '
+        'retinaQueueMs=${retinaQueueTimer.elapsedMilliseconds} '
+        'downstreamQueueMs=$downstreamQueueMs '
+        'stages=RETINA_THEN_LIVENESS adaface=DEFERRED_UNTIL_PROFILE',
+      );
+      AlignedFace? aligned;
+      DualLivenessResult? livenessResult;
+      var livenessCropMs = 0;
+      var livenessInferenceMs = 0;
+      var alignmentMs = 0;
+      var livenessAndAlignmentWallMs = 0;
+      var alignedFaceStorageMs = 0;
+      // RetinaFace must first select a target that satisfies every target-face
+      // rule. Invalid/no-target frames never reach liveness or AdaFace.
+      if (targetResult != null && runDownstream) {
+        final selectedFace = targetResult.face;
+        final selectedFaceNumber = targetSelection.targetFaceNumber!;
         phaseStopwatch
           ..reset()
           ..start();
-        _acceptedEmbeddings.add(
-          _AcceptedFaceEmbedding(
-            sharpness: aligned.sharpness,
-            embedding: embedding,
-          ),
-        );
-        _acceptedEmbeddings.sort((a, b) => b.sharpness.compareTo(a.sharpness));
-        if (_acceptedEmbeddings.length > framesToUse) {
-          _acceptedEmbeddings.removeLast();
-        }
-        _collectionComplete = _acceptedEmbeddings.length >= framesToUse;
-        embeddingStorageMs = phaseStopwatch.elapsedMilliseconds;
-      } else if (embedding != null && !livenessResult.isReal) {
+        final crops = openCv.cropForMiniFasNet(prepared, selectedFace);
+        livenessCropMs = phaseStopwatch.elapsedMilliseconds;
         debugPrint(
-          '[KFace][Frame $frameNumber][AdaFace] '
-          'status=DISCARDED reason=LIVENESS_REJECTED',
+          '[KFace][Frame $frameNumber][Face $selectedFaceNumber][LivenessCrop] '
+          'face=${selectedFace.left.toStringAsFixed(1)},'
+          '${selectedFace.top.toStringAsFixed(1)},'
+          '${selectedFace.right.toStringAsFixed(1)},'
+          '${selectedFace.bottom.toStringAsFixed(1)} '
+          'V2(scale=2.7,box=${_boxLog(crops.v2Box)},output=80x80) '
+          'V1SE(scale=4.0,box=${_boxLog(crops.v1seBox)},output=80x80)',
+        );
+        final parallelStageTimer = Stopwatch()..start();
+        // MiniFASNetV2 and MiniFASNetV1SE are executed in parallel inside
+        // predict(). This downstream stage also overlaps the next frame's
+        // serialized RetinaFace stage through the two independent stage gates.
+        final livenessFuture = () async {
+          final timer = Stopwatch()..start();
+          final result = await liveness.predict(
+            v2FaceBgr: crops.v2Bgr,
+            v1seFaceBgr: crops.v1seBgr,
+          );
+          timer.stop();
+          return (result: result, elapsedMs: timer.elapsedMilliseconds);
+        }();
+
+        // Alignment is independent of the liveness decision, so perform it while
+        // the liveness models run. AdaFace is intentionally deferred until the
+        // profile page is visible and locked.
+        phaseStopwatch
+          ..reset()
+          ..start();
+        aligned = openCv.align(prepared, selectedFace.landmarks);
+        alignmentMs = phaseStopwatch.elapsedMilliseconds;
+
+        final timedLiveness = await livenessFuture;
+        livenessResult = timedLiveness.result;
+        livenessInferenceMs = timedLiveness.elapsedMs;
+        parallelStageTimer.stop();
+        livenessAndAlignmentWallMs = parallelStageTimer.elapsedMilliseconds;
+        debugPrint(
+          '[KFace][Frame $frameNumber][Face $selectedFaceNumber][Liveness] '
+          'V2(real=${_prob(livenessResult.v2.realProbability)},'
+          'fake=${_prob(livenessResult.v2.fakeProbability)},'
+          'class=${livenessResult.v2.labelIndex},'
+          'decision=${livenessResult.v2.isReal ? 'REAL' : 'FAKE'}) '
+          'V1SE(real=${_prob(livenessResult.v1se.realProbability)},'
+          'fake=${_prob(livenessResult.v1se.fakeProbability)},'
+          'class=${livenessResult.v1se.labelIndex},'
+          'decision=${livenessResult.v1se.isReal ? 'REAL' : 'FAKE'}) '
+          'combined=${livenessResult.isReal ? 'PASS' : 'REJECT'}',
+        );
+        if (aligned != null && livenessResult.isReal) {
+          phaseStopwatch
+            ..reset()
+            ..start();
+          _acceptedFaces.add(
+            _AcceptedAlignedFace(
+              sharpness: aligned.sharpness,
+              bgr: aligned.bgr,
+            ),
+          );
+          _acceptedFaces.sort((a, b) => b.sharpness.compareTo(a.sharpness));
+          if (_acceptedFaces.length > framesToUse) {
+            _acceptedFaces.removeLast();
+          }
+          _collectionComplete = _acceptedFaces.length >= framesToUse;
+          alignedFaceStorageMs = phaseStopwatch.elapsedMilliseconds;
+          debugPrint(
+            '[KFace][Frame $frameNumber][AdaFace] '
+            'status=DEFERRED_UNTIL_PROFILE_PAGE',
+          );
+        }
+      } else {
+        debugPrint(
+          '[KFace][Frame $frameNumber][Liveness] '
+          'status=NOT_RUN reason=NO_TARGET_FACE',
         );
       }
-    } else {
-      debugPrint(
-        '[KFace][Frame $frameNumber][Liveness] '
-        'status=NOT_RUN reason=NO_TARGET_FACE',
+      stopwatch.stop();
+      phaseStopwatch.stop();
+      final measuredMs =
+          preprocessingMs +
+          retinaFaceMs +
+          faceEvaluationMs +
+          livenessCropMs +
+          livenessAndAlignmentWallMs +
+          alignedFaceStorageMs;
+      final unaccountedMs = math.max(
+        0,
+        stopwatch.elapsedMilliseconds - measuredMs,
       );
-    }
-    stopwatch.stop();
-    phaseStopwatch.stop();
-    final measuredMs =
-        preprocessingMs +
-        retinaFaceMs +
-        faceEvaluationMs +
-        livenessCropMs +
-        parallelLivenessAdaFaceWallMs +
-        embeddingStorageMs;
-    final unaccountedMs = math.max(
-      0,
-      stopwatch.elapsedMilliseconds - measuredMs,
-    );
-    final openCvMs = preprocessingMs + livenessCropMs + alignmentMs;
-    debugPrint(
-      '[KFace][Timing][Frame $frameNumber] '
-      'preprocessMs=$preprocessingMs '
-      'retinaFaceMs=$retinaFaceMs '
-      'faceEvaluationAndTargetSelectionMs=$faceEvaluationMs '
-      'livenessCropMs=$livenessCropMs '
-      'livenessInferenceMs=$livenessInferenceMs '
-      'alignmentMs=$alignmentMs '
-      'adaFaceMs=$adaFaceMs '
-      'parallelLivenessAdaFaceWallMs=$parallelLivenessAdaFaceWallMs '
-      'embeddingStorageMs=$embeddingStorageMs '
-      'unaccountedAndLoggingMs=$unaccountedMs '
-      'totalMs=${stopwatch.elapsedMilliseconds}',
-    );
-    debugPrint(
-      '[KFace][Timing][OpenCV][Frame $frameNumber] '
-      'preprocessMs=$preprocessingMs '
-      'livenessCropMs=$livenessCropMs '
-      'alignmentMs=$alignmentMs '
-      'totalMs=$openCvMs '
-      'fps=${openCvMs == 0 ? 'inf' : (1000 / openCvMs).toStringAsFixed(2)} '
-      'target15Fps=${openCvMs <= 67 ? 'PASS' : 'MISS'}',
-    );
-    debugPrint(
-      '[KFace][RetinaTest][Frame $frameNumber] '
-      'face=${completeness.label} '
-      'confidence=${completeness.detectionConfidence.toStringAsFixed(3)} '
-      'bboxVisible=${completeness.boundingBoxVisibleFraction.toStringAsFixed(3)} '
-      'landmarks=${completeness.visibleLandmarks}/5 '
-      'geometry=${completeness.geometryScore.toStringAsFixed(3)} '
-      'distance=${faceDistance.label} '
-      'faceWidthRatio=${faceDistance.widthRatio.toStringAsFixed(3)} '
-      'faceHeightRatio=${faceDistance.heightRatio.toStringAsFixed(3)} '
-      'faceSizeRatio=${faceDistance.sizeRatio.toStringAsFixed(3)} '
-      'frame=${completeness.label == "NONE" ? "RELEASED" : "PROCESSED"} '
-      'liveness=${livenessResult == null
-          ? 'NOT_RUN'
-          : livenessResult.isReal
-          ? 'PASS'
-          : 'REJECT'} '
-      'adaFace=${adaFaceComputed ? 'COMPLETED' : 'NOT_RUN'} '
-      'processingMs=${stopwatch.elapsedMilliseconds} '
-      'effectiveFps=${stopwatch.elapsedMilliseconds == 0 ? 'inf' : (1000 / stopwatch.elapsedMilliseconds).toStringAsFixed(2)}',
-    );
+      final openCvMs = preprocessingMs + livenessCropMs + alignmentMs;
+      debugPrint(
+        '[KFace][Timing][Frame $frameNumber] '
+        'preprocessMs=$preprocessingMs '
+        'retinaFaceMs=$retinaFaceMs '
+        'faceEvaluationAndTargetSelectionMs=$faceEvaluationMs '
+        'livenessCropMs=$livenessCropMs '
+        'livenessInferenceMs=$livenessInferenceMs '
+        'alignmentMs=$alignmentMs '
+        'adaFaceMs=DEFERRED '
+        'livenessAndAlignmentWallMs=$livenessAndAlignmentWallMs '
+        'alignedFaceStorageMs=$alignedFaceStorageMs '
+        'unaccountedAndLoggingMs=$unaccountedMs '
+        'totalMs=${stopwatch.elapsedMilliseconds}',
+      );
+      debugPrint(
+        '[KFace][Timing][OpenCV][Frame $frameNumber] '
+        'preprocessMs=$preprocessingMs '
+        'livenessCropMs=$livenessCropMs '
+        'alignmentMs=$alignmentMs '
+        'totalMs=$openCvMs '
+        'fps=${openCvMs == 0 ? 'inf' : (1000 / openCvMs).toStringAsFixed(2)} '
+        'target15Fps=${openCvMs <= 67 ? 'PASS' : 'MISS'}',
+      );
+      debugPrint(
+        '[KFace][RetinaTest][Frame $frameNumber] '
+        'face=${completeness.label} '
+        'confidence=${completeness.detectionConfidence.toStringAsFixed(3)} '
+        'bboxVisible=${completeness.boundingBoxVisibleFraction.toStringAsFixed(3)} '
+        'landmarks=${completeness.visibleLandmarks}/5 '
+        'geometry=${completeness.geometryScore.toStringAsFixed(3)} '
+        'distance=${faceDistance.label} '
+        'faceWidthRatio=${faceDistance.widthRatio.toStringAsFixed(3)} '
+        'faceHeightRatio=${faceDistance.heightRatio.toStringAsFixed(3)} '
+        'faceSizeRatio=${faceDistance.sizeRatio.toStringAsFixed(3)} '
+        'frame=${completeness.label == "NONE" ? "RELEASED" : "PROCESSED"} '
+        'liveness=${livenessResult == null
+            ? 'NOT_RUN'
+            : livenessResult.isReal
+            ? 'PASS'
+            : 'REJECT'} '
+        'adaFace=DEFERRED_UNTIL_PROFILE '
+        'processingMs=${stopwatch.elapsedMilliseconds} '
+        'effectiveFps=${stopwatch.elapsedMilliseconds == 0 ? 'inf' : (1000 / stopwatch.elapsedMilliseconds).toStringAsFixed(2)}',
+      );
       return FrameAnalysis(
         faceDetected: faces.isNotEmpty,
         targetFaceSelected: targetResult != null,
@@ -556,11 +535,11 @@ class FaceBiometricPipeline {
         originalHeight: prepared.originalHeight,
         cropSide: prepared.cropSide,
         wasResized: prepared.wasResized,
-        acceptedFrameCount: _acceptedEmbeddings.length,
+        acceptedFrameCount: _acceptedFaces.length,
         liveness: livenessResult,
         completeness: completeness,
         faceDistance: faceDistance,
-        adaFaceComputed: adaFaceComputed,
+        adaFaceComputed: false,
         processingMilliseconds: stopwatch.elapsedMilliseconds,
       );
     } finally {
@@ -774,17 +753,27 @@ class FaceBiometricPipeline {
       '${(value * 100).clamp(0, 100).toStringAsFixed(1)}%';
 
   Future<Float32List> createEmbedding() async {
-    if (_acceptedEmbeddings.isEmpty) {
-      throw StateError('No AdaFace embeddings were collected.');
+    if (_acceptedFaces.length < framesToUse) {
+      throw StateError('Five liveness-approved aligned faces are required.');
     }
-    final embeddings = _acceptedEmbeddings
-        .take(framesToUse)
-        .map((sample) => sample.embedding)
-        .toList(growable: false);
     debugPrint(
-      '[KFace][Finalization][AdaFace] reused=${embeddings.length} '
-      'duplicateInference=REMOVED',
+      '[KFace][Finalization][AdaFace] status=STARTED_AFTER_PROFILE '
+      'faces=$framesToUse',
     );
+    final embeddings = <Float32List>[];
+    final selectedFaces = _acceptedFaces
+        .take(framesToUse)
+        .toList(growable: false);
+    for (var index = 0; index < selectedFaces.length; index++) {
+      final timer = Stopwatch()..start();
+      final embedding = await adaFace.embed(selectedFaces[index].bgr);
+      timer.stop();
+      embeddings.add(embedding);
+      debugPrint(
+        '[KFace][Finalization][AdaFace] embedding=${index + 1}/$framesToUse '
+        'inferenceMs=${timer.elapsedMilliseconds}',
+      );
+    }
     debugPrint('[KFace][Finalization][AdaFace] averaging=STARTED');
     final averaged = adaFace.average(embeddings);
     debugPrint('[KFace][Finalization][AdaFace] averaging=COMPLETED');
@@ -849,7 +838,7 @@ class FaceBiometricPipeline {
   }
 
   void reset() {
-    _acceptedEmbeddings.clear();
+    _acceptedFaces.clear();
     _lastFrameProcessedAt = null;
     _collectionComplete = false;
   }

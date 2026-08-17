@@ -319,26 +319,16 @@ class _AddProfilePageState extends State<AddProfilePage> {
 
               const SizedBox(height: 10),
 
-              if (!_profileReady)
+              if (_biometricFailed)
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: Text(
-                    _biometricFailed
-                        ? 'Secure face setup failed. Return and scan again.'
-                        : _biometricReady
-                        ? 'Preparing your profile…'
-                        : 'Finishing secure face setup…',
-                    style: TextStyle(
-                      color:
-                          _biometricFailed
-                              ? Colors.redAccent
-                              : const Color(0xFF2AABEE),
-                      fontSize: 13,
-                    ),
+                  child: const Text(
+                    'Secure face setup failed. Return and scan again.',
+                    style: TextStyle(color: Colors.redAccent, fontSize: 13),
                   ),
                 ),
 
-              if (!_profileReady) const SizedBox(height: 10),
+              if (_biometricFailed) const SizedBox(height: 10),
 
               const Align(
                 alignment: Alignment.centerLeft,
