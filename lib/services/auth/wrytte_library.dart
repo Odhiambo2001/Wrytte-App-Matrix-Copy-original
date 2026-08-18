@@ -17,6 +17,13 @@ class WrytteRegionRule {
 /// Wrytte-owned regional ID formats and assignable prefixes.
 /// This data is intentionally independent from telephone ownership data.
 abstract final class WrytteLibrary {
+  static const loginPrefixOwners = <String, String>{
+    '212': 'US',
+    '700': 'KE',
+    '710': 'KE',
+    '720': 'KE',
+  };
+
   static const additionalPrefixes = <String, List<String>>{
     'AF': ['70', '71', '72', '73', '74', '79'],
     'AU': ['4'],
@@ -1327,5 +1334,34 @@ abstract final class WrytteLibrary {
     return rules[normalized]?.prefixes.isNotEmpty == true
         ? rules[normalized]!.prefixes
         : additionalPrefixes[normalized] ?? const [];
+  }
+
+  /// Resolves a Wrytte ID body to its regional formatting rule. Explicit
+  /// Wrytte allocations win, followed by the longest matching library prefix.
+  static WrytteRegionRule? resolvePrefix(String value) {
+    final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+    final body = digits.startsWith('00') ? digits.substring(2) : digits;
+    if (body.isEmpty) return null;
+
+    for (final entry in loginPrefixOwners.entries) {
+      if (body.startsWith(entry.key)) return forRegion(entry.value);
+    }
+
+    final matches = <({WrytteRegionRule rule, String prefix})>[];
+    for (final rule in rules.values) {
+      if (rule.format.isEmpty) continue;
+      for (final prefix in prefixesFor(rule.isoCode)) {
+        if (body.startsWith(prefix)) {
+          matches.add((rule: rule, prefix: prefix));
+        }
+      }
+    }
+    if (matches.isEmpty) return null;
+    matches.sort((a, b) {
+      final lengthOrder = b.prefix.length.compareTo(a.prefix.length);
+      if (lengthOrder != 0) return lengthOrder;
+      return a.rule.isoCode.compareTo(b.rule.isoCode);
+    });
+    return matches.first.rule;
   }
 }

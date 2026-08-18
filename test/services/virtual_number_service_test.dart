@@ -32,6 +32,10 @@ void main() {
     expect(WrytteLibrary.forRegion('US')?.format, '3 3 4');
     expect(WrytteLibrary.prefixesFor('US'), contains('212'));
     expect(WrytteLibrary.prefixesFor('NZ'), contains('21'));
+    expect(WrytteLibrary.resolvePrefix('2125550123')?.isoCode, 'US');
+    expect(WrytteLibrary.resolvePrefix('700297347')?.isoCode, 'KE');
+    expect(WrytteLibrary.resolvePrefix('710297347')?.isoCode, 'KE');
+    expect(WrytteLibrary.resolvePrefix('720297347')?.isoCode, 'KE');
     expect(
       WrytteLibrary.rules.values
           .where((rule) => rule.format.isNotEmpty)

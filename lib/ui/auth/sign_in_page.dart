@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
@@ -34,6 +35,11 @@ class _SignInPageState extends State<SignInPage> {
 
       final digits = input.replaceAll(RegExp(r'[^\d]'), '');
       if (digits.startsWith('00')) {
+        final rule = WrytteLibrary.resolvePrefix(digits);
+        final bodyLength = digits.length - 2;
+        if (rule == null || bodyLength != rule.maximumNationalLength) {
+          throw const FormatException('Incomplete or unknown Wrytte ID');
+        }
         _focusNode.unfocus();
         await Future<void>.delayed(const Duration(milliseconds: 100));
         if (!mounted) return;
@@ -45,8 +51,7 @@ class _SignInPageState extends State<SignInPage> {
         );
         return;
       }
-      final phone =
-          CountryPhoneNumber.normalizeInternational(input);
+      final phone = CountryPhoneNumber.normalizeInternational(input);
       if (phone == null) {
         throw const FormatException('Invalid international phone number');
       }
@@ -164,12 +169,21 @@ class _SignInPageState extends State<SignInPage> {
                             isDense: true,
                           ),
                           onChanged: (value) {
+                            final digits = value.replaceAll(
+                              RegExp(r'[^\d]'),
+                              '',
+                            );
+                            final wrytteRule =
+                                digits.startsWith('00')
+                                    ? WrytteLibrary.resolvePrefix(digits)
+                                    : null;
                             setState(() {
                               _isValid =
-                                  value
-                                      .replaceAll(RegExp(r'[^\d]'), '')
-                                      .length >=
-                                  _minLoginDigits;
+                                  digits.startsWith('00')
+                                      ? wrytteRule != null &&
+                                          digits.length - 2 ==
+                                              wrytteRule.maximumNationalLength
+                                      : digits.length >= _minLoginDigits;
                               _errorMessage = null;
                             });
                           },

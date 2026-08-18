@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:phone_numbers_parser/metadata.dart';
 import 'package:phone_numbers_parser/phone_numbers_parser.dart';
 
@@ -168,11 +169,26 @@ class InternationalPhoneNumberInputFormatter extends TextInputFormatter {
       value.startsWith('+') ? value.substring(1) : value;
 
   static String _formatWrytteId(String digits) {
-    final body = digits.length > 2 ? digits.substring(2) : '';
+    final suppliedBody = digits.length > 2 ? digits.substring(2) : '';
+    final rule = WrytteLibrary.resolvePrefix(suppliedBody);
+    final body =
+        rule == null
+            ? suppliedBody
+            : suppliedBody.substring(
+              0,
+              suppliedBody.length.clamp(0, rule.maximumNationalLength),
+            );
     final groups = <String>['00'];
-    for (var offset = 0; offset < body.length; offset += 3) {
-      final end = (offset + 3).clamp(0, body.length);
-      groups.add(body.substring(offset, end));
+    final sizes =
+        rule == null
+            ? List<int>.filled((body.length / 3).ceil(), 3)
+            : rule.format.split(' ').map(int.parse);
+    var offset = 0;
+    for (final size in sizes) {
+      final end = (offset + size).clamp(0, body.length);
+      if (end > offset) groups.add(body.substring(offset, end));
+      offset = end;
+      if (offset >= body.length) break;
     }
     return groups.join(' ');
   }

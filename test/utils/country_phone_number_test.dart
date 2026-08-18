@@ -47,7 +47,14 @@ void main() {
     test('formats an international number progressively while typing', () {
       final formatter = InternationalPhoneNumberInputFormatter();
       var value = const TextEditingValue();
-      for (final input in <String>['2', '25', '254', '2547', '25471', '254712']) {
+      for (final input in <String>[
+        '2',
+        '25',
+        '254',
+        '2547',
+        '25471',
+        '254712',
+      ]) {
         value = formatter.formatEditUpdate(
           value,
           TextEditingValue(
@@ -69,6 +76,30 @@ void main() {
         ),
       );
       expect(value.text, '00 700 297 347');
+    });
+
+    test('formats and limits a US Wrytte ID resolved from prefix 212', () {
+      final formatter = InternationalPhoneNumberInputFormatter();
+      final value = formatter.formatEditUpdate(
+        const TextEditingValue(),
+        const TextEditingValue(
+          text: '002125550123999',
+          selection: TextSelection.collapsed(offset: 15),
+        ),
+      );
+      expect(value.text, '00 212 555 0123');
+    });
+
+    test('formats and limits a Kenyan Wrytte ID resolved from prefix 710', () {
+      final formatter = InternationalPhoneNumberInputFormatter();
+      final value = formatter.formatEditUpdate(
+        const TextEditingValue(),
+        const TextEditingValue(
+          text: '0071012345699',
+          selection: TextSelection.collapsed(offset: 13),
+        ),
+      );
+      expect(value.text, '00 710 123 456');
     });
 
     test('rejects incomplete and impossible numbers', () {
