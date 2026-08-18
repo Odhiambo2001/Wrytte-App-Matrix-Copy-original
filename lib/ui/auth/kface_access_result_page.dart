@@ -12,7 +12,7 @@ class KFaceAccessResultPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = accepted ? const Color(0xFF23C875) : const Color(0xFFE85D68);
+    final accent = accepted ? const Color(0xFF4285DF) : const Color(0xFFE85D68);
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
       body: SafeArea(
@@ -70,10 +70,7 @@ class KFaceAccessResultPage extends StatelessWidget {
                             MaterialPageRoute<void>(builder: retryPageBuilder),
                           ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor:
-                        accepted
-                            ? const Color(0xFF23C875)
-                            : const Color(0xFF4285DF),
+                    backgroundColor: const Color(0xFF4285DF),
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(28),

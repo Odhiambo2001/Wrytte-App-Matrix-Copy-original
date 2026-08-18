@@ -7,6 +7,8 @@ import 'package:wrytte/services/face/android_onnx_image_session.dart';
 class MiniFasNetScore {
   const MiniFasNetScore({required this.probabilities});
 
+  static const double realThreshold = 0.50;
+
   /// Class 1 is Real; classes 0 and 2 are presentation attacks.
   final List<double> probabilities;
 
@@ -20,7 +22,9 @@ class MiniFasNetScore {
     return best;
   }
 
-  bool get isReal => labelIndex == 1;
+  /// A model passes only when its class-1 (Real) probability is strictly
+  /// greater than 50%. Exactly 50% is rejected.
+  bool get isReal => realProbability > realThreshold;
 }
 
 class DualLivenessResult {
@@ -29,7 +33,7 @@ class DualLivenessResult {
   final MiniFasNetScore v2;
   final MiniFasNetScore v1se;
 
-  /// Conservative two-model rule: neither model may classify the face fake.
+  /// Both models must independently report more than 50% Real.
   bool get isReal => v2.isReal && v1se.isReal;
   double get combinedRealProbability =>
       math.min(v2.realProbability, v1se.realProbability);

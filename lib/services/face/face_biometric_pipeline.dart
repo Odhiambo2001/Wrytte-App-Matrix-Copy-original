@@ -160,8 +160,8 @@ class FaceBiometricPipeline {
   static const targetConfidenceThreshold = 0.83;
   static const targetSizeGap = 0.20;
   static const fullBboxVisibleThreshold = 0.90;
-  static const normalFaceSizeMinimum = 0.35;
-  static const normalFaceSizeMaximum = 0.70;
+  static const normalFaceSizeMinimum = 0.34;
+  static const normalFaceSizeMaximum = 0.72;
 
   // --- Strict FPS gate -------------------------------------------------
   // Caps processing throughput at exactly this many frames per second.

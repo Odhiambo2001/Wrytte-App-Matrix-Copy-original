@@ -10,6 +10,7 @@ class AddProfilePage extends StatefulWidget {
   final Future<bool>? biometricSetup;
   final DateTime? navigationRequestedAt;
   final int? firstFrameToNavigationRequestMs;
+  final bool lockNameAndDone;
 
   const AddProfilePage({
     super.key,
@@ -17,6 +18,7 @@ class AddProfilePage extends StatefulWidget {
     this.biometricSetup,
     this.navigationRequestedAt,
     this.firstFrameToNavigationRequestMs,
+    this.lockNameAndDone = false,
   });
 
   @override
@@ -37,6 +39,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
   String? _currentUserId;
 
   bool get _profileReady => _biometricReady && !_isLoading;
+  bool get _nameAndDoneEnabled => _profileReady && !widget.lockNameAndDone;
 
   @override
   void initState() {
@@ -78,7 +81,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
       _biometricReady = ready;
       _biometricFailed = !ready;
     });
-    if (ready) {
+    if (ready && !widget.lockNameAndDone) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _nicknameFocusNode.requestFocus();
       });
@@ -168,7 +171,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
   }
 
   Future<void> _saveAndGoHome() async {
-    if (!_profileReady || !_isValid || _isSaving) return;
+    if (!_nameAndDoneEnabled || !_isValid || _isSaving) return;
 
     final name = _nicknameController.text.trim();
     final uid = _currentUserId ?? await AuthService.instance.getCurrentUserId();
@@ -254,7 +257,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed:
-                      (_profileReady && _isValid && !_isSaving)
+                      (_nameAndDoneEnabled && _isValid && !_isSaving)
                           ? _saveAndGoHome
                           : null,
                   child:
@@ -271,7 +274,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
                             'Done',
                             style: TextStyle(
                               color:
-                                  _profileReady && _isValid
+                                  _nameAndDoneEnabled && _isValid
                                       ? Colors.white
                                       : Colors.grey,
                               fontWeight: FontWeight.bold,
@@ -311,13 +314,13 @@ class _AddProfilePageState extends State<AddProfilePage> {
               TextField(
                 controller: _nicknameController,
                 focusNode: _nicknameFocusNode,
-                enabled: _profileReady,
-                autofocus: _profileReady,
+                enabled: _nameAndDoneEnabled,
+                autofocus: _nameAndDoneEnabled,
                 style: const TextStyle(color: Colors.white),
                 textCapitalization: TextCapitalization.words,
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) {
-                  if (_profileReady && _isValid && !_isSaving) {
+                  if (_nameAndDoneEnabled && _isValid && !_isSaving) {
                     _saveAndGoHome();
                   }
                 },

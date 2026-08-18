@@ -526,6 +526,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
             (_) => AddProfilePage(
               isNewUser: true,
               biometricSetup: biometricSetup,
+              lockNameAndDone: true,
               navigationRequestedAt: requestedAt,
               firstFrameToNavigationRequestMs: firstFrameToRequestMs,
             ),
