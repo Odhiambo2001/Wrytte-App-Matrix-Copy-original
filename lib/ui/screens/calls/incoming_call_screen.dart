@@ -27,7 +27,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
   // ── Pulse animation on the accept button ──────────────────────────────────
   late final AnimationController _pulseCtrl;
-  late final Animation<double>   _pulseAnim;
+  late final Animation<double> _pulseAnim;
 
   // ── Auto-dismiss timer (missed call after 60 s) ───────────────────────────
   Timer? _autoMissTimer;
@@ -41,12 +41,14 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
 
-    _pulseAnim = Tween<double>(begin: 1.0, end: 1.12).animate(
-      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
-    );
+    _pulseAnim = Tween<double>(
+      begin: 1.0,
+      end: 1.12,
+    ).animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
 
     // Auto-dismiss after 60 s (missed call)
-    _autoMissTimer = Timer(const Duration(seconds: 60), () {
+    _autoMissTimer = Timer(const Duration(seconds: 60), () async {
+      await _callService.rejectCall(widget.call.callId);
       if (mounted) Navigator.of(context).pop();
     });
   }
@@ -66,21 +68,34 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   }
 
   Future<void> _accept() async {
-    await _callService.acceptCall(widget.call);
+    try {
+      await _callService.acceptCall(widget.call);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not answer call: $error'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
     if (!mounted) return;
 
     // Replace this screen with the active call screen
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => CallScreen(
-          remoteUserId:     widget.call.callerId,
-          remoteUserName:   widget.call.callerName,
-          remoteUserAvatar: widget.call.callerAvatar.isEmpty
-              ? null
-              : widget.call.callerAvatar,
-          type:     widget.call.type,
-          isCaller: false,
-        ),
+        builder:
+            (_) => CallScreen(
+              remoteUserId: widget.call.callerId,
+              remoteUserName: widget.call.callerName,
+              remoteUserAvatar:
+                  widget.call.callerAvatar.isEmpty
+                      ? null
+                      : widget.call.callerAvatar,
+              type: widget.call.type,
+              isCaller: false,
+            ),
       ),
     );
   }
@@ -154,9 +169,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                 // ── Avatar ────────────────────────────────────────────────
                 UserAvatar(
                   size: 160,
-                  imageUrl: widget.call.callerAvatar.isEmpty
-                      ? null
-                      : widget.call.callerAvatar,
+                  imageUrl:
+                      widget.call.callerAvatar.isEmpty
+                          ? null
+                          : widget.call.callerAvatar,
                   name: widget.call.callerName,
                 ),
 
@@ -164,9 +180,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
                 // ── Call type label ───────────────────────────────────────
                 Text(
-                  isVideo
-                      ? 'Incoming video call…'
-                      : 'Incoming voice call…',
+                  isVideo ? 'Incoming video call…' : 'Incoming voice call…',
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.55),
                     fontSize: 16,
@@ -216,9 +230,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 // ── Action button (decline / accept) ──────────────────────────────────────────
 
 class _ActionButton extends StatelessWidget {
-  final IconData   icon;
-  final Color      color;
-  final String     label;
+  final IconData icon;
+  final Color color;
+  final String label;
   final VoidCallback onTap;
 
   const _ActionButton({

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
-// At the top of call_service.dart, add this import:
 import 'package:webrtc_interface/webrtc_interface.dart' as webrtc_iface;
 import 'package:matrix/matrix.dart' as mx;
 import 'package:permission_handler/permission_handler.dart';
@@ -59,6 +58,8 @@ class CallService {
   StreamSubscription? _groupStreamRemovedSub;
   StreamSubscription? _groupEventSub;
   final Set<String> _attachedCallIds = {};
+  final Map<String, List<StreamSubscription<dynamic>>> _sessionSubscriptions =
+      {};
 
   final _incomingCallController = StreamController<CallData>.broadcast();
   final _callStatusController = StreamController<CallStatus>.broadcast();
@@ -84,6 +85,15 @@ class CallService {
       call,
     ) {
       final session = call.session;
+      if (_activeSession != null &&
+          _activeSession!.callId != session.callId &&
+          !_activeSession!.callHasEnded) {
+        debugPrint(
+          '[CallService] Rejecting incoming call ${session.callId}: busy with ${_activeSession!.callId}',
+        );
+        unawaited(session.reject(reason: mx.CallErrorCode.userBusy));
+        return;
+      }
       _attachSession(session);
       _incomingCallController.add(
         CallData(
@@ -102,6 +112,16 @@ class CallService {
       );
     });
     debugPrint('[CallService] Matrix VoIP ready: ${voip.localPartyId}');
+    unawaited(_logTurnAvailability(voip));
+  }
+
+  Future<void> _logTurnAvailability(mx.VoIP voip) async {
+    final servers = await voip.getIceServers();
+    debugPrint(
+      servers.isEmpty
+          ? '[CallService] TURN unavailable; calls require a direct peer connection'
+          : '[CallService] TURN available; relay fallback configured (${servers.length} server entry)',
+    );
   }
 
   Future<void> stopListeningForIncomingCalls() async {
@@ -121,15 +141,23 @@ class CallService {
     if (roomId == null || roomId.isEmpty) {
       throw Exception('Could not create Matrix direct room for $receiverId');
     }
+    final room = MatrixChatService.instance.getRoomById(roomId);
+    if (room == null || room.membership != mx.Membership.join) {
+      throw StateError('The Matrix direct room is not joined or available.');
+    }
+    final matrixPeerId = _resolveDirectPeerId(room, receiverId);
 
     final session = await MatrixCallService.instance.invite(
       delegate: _delegate,
       roomId: roomId,
       video: type == CallType.video,
-      userId: _toMatrixUserId(receiverId),
+      userId: matrixPeerId,
     );
     _attachSession(session);
     if (type == CallType.video) await ensureVideoEnabled();
+    debugPrint(
+      '[CallService] Outgoing ${type.name} call=${session.callId} room=$roomId peer=$matrixPeerId',
+    );
     _callStatusController.add(CallStatus.ringing);
     return session.callId;
   }
@@ -359,6 +387,9 @@ class CallService {
     _attachSession(session);
     await MatrixCallService.instance.answer(session);
     if (call.type == CallType.video) await ensureVideoEnabled();
+    debugPrint(
+      '[CallService] Accepted ${call.type.name} call=${session.callId}',
+    );
     _callStatusController.add(CallStatus.accepted);
   }
 
@@ -472,6 +503,9 @@ class CallService {
         _localStream!.getVideoTracks().forEach((track) => track.enabled = true);
       }
       _localStreamController.add(_localStream!);
+      debugPrint(
+        '[CallService] Local media stream=${stream.id} audio=${stream.getAudioTracks().length} video=${stream.getVideoTracks().length}',
+      );
     } else {
       final group = _activeGroupSession;
       if (group != null) {
@@ -484,11 +518,30 @@ class CallService {
       }
       _remoteStream = stream;
       _remoteStreamController.add(_remoteStream!);
+      debugPrint(
+        '[CallService] Remote media stream=${stream.id} audio=${stream.getAudioTracks().length} video=${stream.getVideoTracks().length}',
+      );
       _callStatusController.add(CallStatus.accepted);
     }
   }
 
   Future<void> _cleanup() async {
+    final local = _localStream;
+    if (local != null) {
+      for (final track in local.getTracks()) {
+        track.stop();
+      }
+      await local.dispose();
+    }
+    final activeCallId = _activeSession?.callId;
+    if (activeCallId != null) {
+      final subscriptions = _sessionSubscriptions.remove(activeCallId);
+      if (subscriptions != null) {
+        for (final subscription in subscriptions) {
+          await subscription.cancel();
+        }
+      }
+    }
     _activeSession = null;
     _attachedCallIds.clear();
     _localStream = null;
@@ -507,6 +560,26 @@ class CallService {
     return '@$localpart:$domain';
   }
 
+  String _resolveDirectPeerId(mx.Room room, String fallback) {
+    final direct = room.directChatMatrixID?.trim();
+    final own = MatrixClientService.instance.userId;
+    if (direct != null &&
+        direct.startsWith('@') &&
+        direct.contains(':') &&
+        direct != own) {
+      return direct;
+    }
+    final joinedPeers =
+        room
+            .getParticipants(const [mx.Membership.join, mx.Membership.invite])
+            .map((user) => user.id.trim())
+            .where((userId) => userId != own)
+            .where((userId) => userId.startsWith('@') && userId.contains(':'))
+            .toSet();
+    if (joinedPeers.length == 1) return joinedPeers.single;
+    return _toMatrixUserId(fallback);
+  }
+
   void dispose() {
     stopListeningForIncomingCalls();
     _cleanup();
@@ -523,7 +596,7 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
   final CallService _service;
 
   void attach(mx.CallSession session) {
-    registerListeners(session);
+    unawaited(registerListeners(session));
   }
 
   @override
@@ -556,21 +629,29 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
 
   @override
   Future<void> registerListeners(mx.CallSession session) async {
-    session.onStreamAdd.stream.listen(_service._publishStream);
-    session.onStreamRemoved.stream.listen((_) {});
-    session.onCallStateChanged.stream.listen((state) {
-      switch (state) {
-        case mx.CallState.kConnected:
-          _service._callStatusController.add(CallStatus.accepted);
-          break;
-        case mx.CallState.kEnded:
-        case mx.CallState.kEnding:
-          _service._callStatusController.add(CallStatus.ended);
-          break;
-        default:
-          break;
-      }
-    });
+    if (_service._sessionSubscriptions.containsKey(session.callId)) return;
+    final subscriptions = <StreamSubscription<dynamic>>[];
+    _service._sessionSubscriptions[session.callId] = subscriptions;
+    subscriptions.add(
+      session.onStreamAdd.stream.listen(_service._publishStream),
+    );
+    subscriptions.add(session.onStreamRemoved.stream.listen((_) {}));
+    subscriptions.add(
+      session.onCallStateChanged.stream.listen((state) {
+        debugPrint('[CallService] call=${session.callId} state=${state.name}');
+        switch (state) {
+          case mx.CallState.kConnected:
+            _service._callStatusController.add(CallStatus.accepted);
+            break;
+          case mx.CallState.kEnded:
+          case mx.CallState.kEnding:
+            _service._callStatusController.add(CallStatus.ended);
+            break;
+          default:
+            break;
+        }
+      }),
+    );
   }
 
   @override
@@ -581,6 +662,9 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
   @override
   Future<void> handleCallEnded(mx.CallSession session) async {
     _service._callStatusController.add(CallStatus.ended);
+    if (identical(_service._activeSession, session)) {
+      await _service._cleanup();
+    }
   }
 
   @override
@@ -604,7 +688,8 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
   bool get isWeb => kIsWeb;
 
   @override
-  bool get canHandleNewCall => true;
+  bool get canHandleNewCall =>
+      _service._activeSession == null || _service._activeSession!.callHasEnded;
 
   @override
   mx.EncryptionKeyProvider? get keyProvider => null;

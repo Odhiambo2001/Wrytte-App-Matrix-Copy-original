@@ -232,7 +232,8 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _endCall() async {
     _stopRinging();
     await _callService.endCall();
-    if (mounted) Navigator.of(context).pop();
+    // CallStatus.ended closes this route. Popping here as well can accidentally
+    // close the chat underneath the call screen.
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────

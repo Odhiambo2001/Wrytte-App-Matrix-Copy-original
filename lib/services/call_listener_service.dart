@@ -12,7 +12,7 @@ import 'package:wrytte/ui/screens/calls/incoming_call_screen.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CallListenerService {
-  final CallService  _callService = CallService.instance;
+  final CallService _callService = CallService.instance;
 
   StreamSubscription? _incomingCallSubscription;
 
@@ -20,13 +20,16 @@ class CallListenerService {
 
   void startListening(BuildContext context) {
     // Tell CallService to open its Matrix VoIP listener.
-    unawaited(_callService.startListeningForIncomingCalls());
+    unawaited(
+      _callService.startListeningForIncomingCalls().catchError((error) {
+        debugPrint('[CallListener] Matrix VoIP startup failed: $error');
+      }),
+    );
 
     // Forward incoming call events → full-screen IncomingCallScreen
-    _incomingCallSubscription =
-        _callService.incomingCallStream.listen((call) {
-          _showIncomingCall(context, call);
-        });
+    _incomingCallSubscription = _callService.incomingCallStream.listen((call) {
+      _showIncomingCall(context, call);
+    });
   }
 
   // ── Stop ───────────────────────────────────────────────────────────────────
