@@ -4,7 +4,6 @@ import 'package:matrix/matrix.dart';
 
 import 'matrix_auth_service.dart';
 import 'matrix_chat_service.dart';
-import 'matrix_client.dart';
 
 class MatrixIncomingCall {
   const MatrixIncomingCall(this.session);
@@ -22,16 +21,31 @@ class MatrixCallService {
   static final MatrixCallService instance = MatrixCallService._();
 
   VoIP? _voip;
+  Future<VoIP>? _starting;
   final _incomingController = StreamController<MatrixIncomingCall>.broadcast();
 
   Stream<MatrixIncomingCall> get incomingCalls => _incomingController.stream;
   VoIP? get voip => _voip;
 
   Future<VoIP> ensureStarted(WebRTCDelegate delegate) async {
-    await MatrixAuthService.instance.restore();
+    final pending = _starting;
+    if (pending != null) return pending;
+    final future = _start(delegate);
+    _starting = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_starting, future)) _starting = null;
+    }
+  }
+
+  Future<VoIP> _start(WebRTCDelegate delegate) async {
+    final client = await MatrixAuthService.instance.restore();
     final existing = _voip;
-    if (existing != null) return existing;
-    final voip = VoIP(MatrixClientService.instance.client, delegate);
+    if (existing != null && identical(existing.client, client)) return existing;
+    final voip = VoIP(client, delegate);
+    // This SDK stream is used for group-call setup. Direct calls arrive through
+    // WebRTCDelegate.handleNewCall(), which CallService handles separately.
     voip.onIncomingCallStart.stream.listen(
       (session) => _incomingController.add(MatrixIncomingCall(session)),
     );
@@ -59,7 +73,6 @@ class MatrixCallService {
 
   Future<void> reject(CallSession session) => session.reject();
 
-  Future<void> hangup(CallSession session) => session.hangup(
-        reason: CallErrorCode.userHangup,
-      );
+  Future<void> hangup(CallSession session) =>
+      session.hangup(reason: CallErrorCode.userHangup);
 }

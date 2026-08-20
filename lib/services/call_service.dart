@@ -58,6 +58,7 @@ class CallService {
   StreamSubscription? _groupStreamRemovedSub;
   StreamSubscription? _groupEventSub;
   final Set<String> _attachedCallIds = {};
+  final Set<String> _announcedIncomingCallIds = {};
   final Map<String, List<StreamSubscription<dynamic>>> _sessionSubscriptions =
       {};
 
@@ -80,37 +81,12 @@ class CallService {
   String? get currentCallId => _activeSession?.callId;
 
   Future<void> startListeningForIncomingCalls() async {
-    final voip = await MatrixCallService.instance.ensureStarted(_delegate);
     _incomingCallSub ??= MatrixCallService.instance.incomingCalls.listen((
       call,
     ) {
-      final session = call.session;
-      if (_activeSession != null &&
-          _activeSession!.callId != session.callId &&
-          !_activeSession!.callHasEnded) {
-        debugPrint(
-          '[CallService] Rejecting incoming call ${session.callId}: busy with ${_activeSession!.callId}',
-        );
-        unawaited(session.reject(reason: mx.CallErrorCode.userBusy));
-        return;
-      }
-      _attachSession(session);
-      _incomingCallController.add(
-        CallData(
-          callId: session.callId,
-          callerId: session.remoteUserId ?? '',
-          callerName:
-              session.remoteUser?.displayName ??
-              session.remoteUserId ??
-              'Incoming call',
-          callerAvatar: session.remoteUser?.avatarUrl?.toString() ?? '',
-          receiverId: MatrixClientService.instance.userId ?? '',
-          type: call.isVideo ? CallType.video : CallType.voice,
-          status: CallStatus.ringing,
-          matrixSession: session,
-        ),
-      );
+      _handleIncomingSession(call.session);
     });
+    final voip = await MatrixCallService.instance.ensureStarted(_delegate);
     debugPrint('[CallService] Matrix VoIP ready: ${voip.localPartyId}');
     unawaited(_logTurnAvailability(voip));
   }
@@ -146,6 +122,7 @@ class CallService {
       throw StateError('The Matrix direct room is not joined or available.');
     }
     final matrixPeerId = _resolveDirectPeerId(room, receiverId);
+    await _validateDirectCallRoom(room, matrixPeerId);
 
     final session = await MatrixCallService.instance.invite(
       delegate: _delegate,
@@ -486,6 +463,41 @@ class CallService {
     }
   }
 
+  void _handleIncomingSession(mx.CallSession session) {
+    if (session.direction != mx.CallDirection.kIncoming) return;
+    if (!_announcedIncomingCallIds.add(session.callId)) return;
+    if (_activeSession != null &&
+        _activeSession!.callId != session.callId &&
+        !_activeSession!.callHasEnded) {
+      debugPrint(
+        '[CallService] Rejecting incoming call ${session.callId}: busy with ${_activeSession!.callId}',
+      );
+      unawaited(session.reject(reason: mx.CallErrorCode.userBusy));
+      return;
+    }
+    _attachSession(session);
+    final type =
+        session.type == mx.CallType.kVideo ? CallType.video : CallType.voice;
+    debugPrint(
+      '[CallService] Incoming ${type.name} call=${session.callId} room=${session.room.id} caller=${session.remoteUserId}',
+    );
+    _incomingCallController.add(
+      CallData(
+        callId: session.callId,
+        callerId: session.remoteUserId ?? '',
+        callerName:
+            session.remoteUser?.displayName ??
+            session.remoteUserId ??
+            'Incoming call',
+        callerAvatar: session.remoteUser?.avatarUrl?.toString() ?? '',
+        receiverId: MatrixClientService.instance.userId ?? '',
+        type: type,
+        status: CallStatus.ringing,
+        matrixSession: session,
+      ),
+    );
+  }
+
   void _publishStream(mx.WrappedMediaStream wrapped) {
     final stream = wrapped.stream;
     if (stream == null) return;
@@ -544,6 +556,7 @@ class CallService {
     }
     _activeSession = null;
     _attachedCallIds.clear();
+    if (activeCallId != null) _announcedIncomingCallIds.remove(activeCallId);
     _localStream = null;
     _remoteStream = null;
   }
@@ -580,6 +593,48 @@ class CallService {
     return _toMatrixUserId(fallback);
   }
 
+  Future<void> _validateDirectCallRoom(
+    mx.Room room,
+    String matrixPeerId,
+  ) async {
+    var participants = room.getParticipants(const [
+      mx.Membership.join,
+      mx.Membership.invite,
+    ]);
+    mx.User? peer;
+    for (final participant in participants) {
+      if (participant.id == matrixPeerId) {
+        peer = participant;
+        break;
+      }
+    }
+    if (peer == null) {
+      participants = await room.requestParticipants(const [
+        mx.Membership.join,
+        mx.Membership.invite,
+      ]);
+      for (final participant in participants) {
+        if (participant.id == matrixPeerId) {
+          peer = participant;
+          break;
+        }
+      }
+    }
+    if (peer == null) {
+      throw StateError(
+        'The selected Matrix room does not contain $matrixPeerId.',
+      );
+    }
+    if (peer.membership != mx.Membership.join) {
+      throw StateError(
+        'The recipient has not joined the Matrix direct room yet.',
+      );
+    }
+    debugPrint(
+      '[CallService] Direct call room verified room=${room.id} caller=${MatrixClientService.instance.userId} receiver=$matrixPeerId membership=${peer.membership.name}',
+    );
+  }
+
   void dispose() {
     stopListeningForIncomingCalls();
     _cleanup();
@@ -591,16 +646,20 @@ class CallService {
 }
 
 class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
-  _WrytteWebRtcDelegate(this._service);
+  _WrytteWebRtcDelegate(this._service)
+    : _mediaDevices = _PermissionAwareMediaDevices(
+        webrtc.navigator.mediaDevices,
+      );
 
   final CallService _service;
+  final webrtc_iface.MediaDevices _mediaDevices;
 
   void attach(mx.CallSession session) {
     unawaited(registerListeners(session));
   }
 
   @override
-  webrtc_iface.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices;
+  webrtc_iface.MediaDevices get mediaDevices => _mediaDevices;
 
   //@override
   //webrtc.MediaDevices get mediaDevices => webrtc.navigator.mediaDevices;
@@ -657,6 +716,7 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
   @override
   Future<void> handleNewCall(mx.CallSession session) async {
     _service._attachSession(session);
+    _service._handleIncomingSession(session);
   }
 
   @override
@@ -693,4 +753,52 @@ class _WrytteWebRtcDelegate implements mx.WebRTCDelegate {
 
   @override
   mx.EncryptionKeyProvider? get keyProvider => null;
+}
+
+class _PermissionAwareMediaDevices implements webrtc_iface.MediaDevices {
+  _PermissionAwareMediaDevices(this._delegate);
+
+  final webrtc_iface.MediaDevices _delegate;
+
+  @override
+  Function(dynamic event)? ondevicechange;
+
+  @override
+  Future<webrtc_iface.MediaStream> getUserMedia(
+    Map<String, dynamic> mediaConstraints,
+  ) async {
+    final permissions = <Permission>[];
+    final audio = mediaConstraints['audio'];
+    final video = mediaConstraints['video'];
+    if (audio != null && audio != false) permissions.add(Permission.microphone);
+    if (video != null && video != false) permissions.add(Permission.camera);
+    if (permissions.isNotEmpty) {
+      final results = await permissions.request();
+      if (results.values.any((status) => !status.isGranted)) {
+        throw StateError('Camera or microphone permission was denied.');
+      }
+    }
+    return _delegate.getUserMedia(mediaConstraints);
+  }
+
+  @override
+  Future<webrtc_iface.MediaStream> getDisplayMedia(
+    Map<String, dynamic> mediaConstraints,
+  ) => _delegate.getDisplayMedia(mediaConstraints);
+
+  @override
+  Future<List<dynamic>> getSources() => _delegate.getSources();
+
+  @override
+  Future<List<webrtc_iface.MediaDeviceInfo>> enumerateDevices() =>
+      _delegate.enumerateDevices();
+
+  @override
+  webrtc_iface.MediaTrackSupportedConstraints getSupportedConstraints() =>
+      _delegate.getSupportedConstraints();
+
+  @override
+  Future<webrtc_iface.MediaDeviceInfo> selectAudioOutput([
+    webrtc_iface.AudioOutputOptions? options,
+  ]) => _delegate.selectAudioOutput(options);
 }
