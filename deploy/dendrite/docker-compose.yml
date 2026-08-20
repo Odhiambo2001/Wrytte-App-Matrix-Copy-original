@@ -26,7 +26,8 @@ services:
       - "127.0.0.1:8008:8008"
       - "127.0.0.1:8448:8448"
     volumes:
-      - ./config:/etc/dendrite:ro
+      - ./.generated/dendrite.yaml:/etc/dendrite/dendrite.yaml:ro
+      - ./config/matrix_key.pem:/etc/dendrite/matrix_key.pem:ro
       - dendrite_media:/var/dendrite/media
       - dendrite_jetstream:/var/dendrite/jetstream
       - dendrite_search:/var/dendrite/searchindex
@@ -39,21 +40,29 @@ services:
     restart: unless-stopped
     command:
       - --no-cli
-      - --no-tcp-relay
       - --fingerprint
       - --lt-cred-mech
       - --use-auth-secret
-      - --static-auth-secret=change_this_turn_shared_secret
-      - --realm=matrix.wrytte.com
+      - --static-auth-secret=${TURN_SHARED_SECRET:?Set TURN_SHARED_SECRET in .env}
+      - --realm=${TURN_REALM:?Set TURN_REALM in .env}
+      - --server-name=${TURN_HOST:?Set TURN_HOST in .env}
+      - --external-ip=${TURN_EXTERNAL_IP:?Set TURN_EXTERNAL_IP in .env}
       - --listening-port=3478
       - --tls-listening-port=5349
       - --min-port=49160
       - --max-port=49200
+      - --cert=/etc/coturn/tls/fullchain.pem
+      - --pkey=/etc/coturn/tls/privkey.pem
+      - --no-multicast-peers
+      - --no-loopback-peers
     ports:
       - "3478:3478/tcp"
       - "3478:3478/udp"
       - "5349:5349/tcp"
       - "49160-49200:49160-49200/udp"
+    volumes:
+      - ${TURN_TLS_CERT:?Set TURN_TLS_CERT in .env}:/etc/coturn/tls/fullchain.pem:ro
+      - ${TURN_TLS_KEY:?Set TURN_TLS_KEY in .env}:/etc/coturn/tls/privkey.pem:ro
     networks:
       - dendrite_internal
 

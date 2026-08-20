@@ -93,10 +93,26 @@ class CallService {
 
   Future<void> _logTurnAvailability(mx.VoIP voip) async {
     final servers = await voip.getIceServers();
+    if (servers.isEmpty) {
+      debugPrint(
+        '[CallService] TURN unavailable; calls require a direct peer connection',
+      );
+      return;
+    }
+
+    final uris = servers
+        .expand((server) {
+          final value = server['urls'] ?? server['url'];
+          return value is Iterable ? value : [value];
+        })
+        .whereType<String>()
+        .toList(growable: false);
+    final hasTurn = uris.any(
+      (uri) => uri.startsWith('turn:') || uri.startsWith('turns:'),
+    );
     debugPrint(
-      servers.isEmpty
-          ? '[CallService] TURN unavailable; calls require a direct peer connection'
-          : '[CallService] TURN available; relay fallback configured (${servers.length} server entry)',
+      '[CallService] TURN ${hasTurn ? 'available' : 'missing'}; '
+      'credentialEntries=${servers.length} uris=${uris.join(',')}',
     );
   }
 

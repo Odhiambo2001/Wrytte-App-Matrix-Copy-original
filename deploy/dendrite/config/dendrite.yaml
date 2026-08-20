@@ -60,9 +60,9 @@ client_api:
   turn:
     turn_user_lifetime: "5m"
     turn_uris:
-      - turn:matrix.wrytte.com:3478?transport=udp
-      - turn:matrix.wrytte.com:3478?transport=tcp
-      - turns:matrix.wrytte.com:5349?transport=tcp
+      - turn:turn.matrix.wrytte.com:3478?transport=udp
+      - turn:turn.matrix.wrytte.com:3478?transport=tcp
+      - turns:turn.matrix.wrytte.com:5349?transport=tcp
     turn_shared_secret: change_this_turn_shared_secret
 
   rate_limiting:

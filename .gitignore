@@ -25,6 +25,10 @@ macos/Flutter/GeneratedPluginRegistrant.swift
 # Logs
 *.log
 
+# Generated deployment configuration containing production secrets
+deploy/dendrite/.env
+deploy/dendrite/.generated/
+
 # Platform symlinks
 **/ephemeral/.plugin_symlinks/
 
