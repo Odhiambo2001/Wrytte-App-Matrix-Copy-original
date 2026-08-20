@@ -43,6 +43,7 @@ class _CallScreenState extends State<CallScreen> {
   bool _isCameraOn = true;
   bool _isConnected = false;
   bool _isFrontCamera = true;
+  bool _isLocalVideoPrimary = false;
 
   // ── Timer ──────────────────────────────────────────────────────────────────
   int _elapsedSeconds = 0;
@@ -229,6 +230,10 @@ class _CallScreenState extends State<CallScreen> {
     _callService.switchCamera();
   }
 
+  void _swapPrimaryVideo() {
+    setState(() => _isLocalVideoPrimary = !_isLocalVideoPrimary);
+  }
+
   Future<void> _endCall() async {
     _stopRinging();
     await _callService.endCall();
@@ -355,27 +360,40 @@ class _CallScreenState extends State<CallScreen> {
   Widget _buildVideoCall() {
     final hasRemote = _remoteRenderer.srcObject != null;
     final hasLocal = _localRenderer.srcObject != null;
+    final showLocalPrimary = _isLocalVideoPrimary && hasLocal && _isCameraOn;
 
     return Stack(
       children: [
-        // ── Remote video full screen ─────────────────────────────────────
+        // ── Primary video ────────────────────────────────────────────────
         Positioned.fill(
-          child:
-              hasRemote
-                  ? RTCVideoView(
-                    _remoteRenderer,
-                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  )
-                  : Container(
-                    color: const Color(0xFF1A1D24),
-                    child: Center(
-                      child: UserAvatar(
-                        size: 120,
-                        imageUrl: widget.remoteUserAvatar,
-                        name: widget.remoteUserName,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: hasLocal && hasRemote ? _swapPrimaryVideo : null,
+            child:
+                showLocalPrimary
+                    ? RTCVideoView(
+                      _localRenderer,
+                      mirror: _isFrontCamera,
+                      objectFit:
+                          RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                    )
+                    : hasRemote
+                    ? RTCVideoView(
+                      _remoteRenderer,
+                      objectFit:
+                          RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                    )
+                    : Container(
+                      color: const Color(0xFF1A1D24),
+                      child: Center(
+                        child: UserAvatar(
+                          size: 120,
+                          imageUrl: widget.remoteUserAvatar,
+                          name: widget.remoteUserName,
+                        ),
                       ),
                     ),
-                  ),
+          ),
         ),
 
         // ── Gradients ────────────────────────────────────────────────────
@@ -419,31 +437,41 @@ class _CallScreenState extends State<CallScreen> {
           ),
         ),
 
-        // ── Local video PiP ──────────────────────────────────────────────
+        // ── Secondary video PiP ──────────────────────────────────────────
         Positioned(
           top: 60,
           right: 16,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: SizedBox(
-              width: 100,
-              height: 140,
-              child:
-                  hasLocal && _isCameraOn
-                      ? RTCVideoView(
-                        _localRenderer,
-                        mirror: _isFrontCamera,
-                        objectFit:
-                            RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                      )
-                      : Container(
-                        color: const Color(0xFF23262C),
-                        child: const Icon(
-                          Icons.videocam_off,
-                          color: Colors.white54,
-                          size: 32,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: hasLocal && hasRemote ? _swapPrimaryVideo : null,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                width: 100,
+                height: 140,
+                child:
+                    showLocalPrimary
+                        ? RTCVideoView(
+                          _remoteRenderer,
+                          objectFit:
+                              RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                        )
+                        : hasLocal && _isCameraOn
+                        ? RTCVideoView(
+                          _localRenderer,
+                          mirror: _isFrontCamera,
+                          objectFit:
+                              RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                        )
+                        : Container(
+                          color: const Color(0xFF23262C),
+                          child: const Icon(
+                            Icons.videocam_off,
+                            color: Colors.white54,
+                            size: 32,
+                          ),
                         ),
-                      ),
+              ),
             ),
           ),
         ),
