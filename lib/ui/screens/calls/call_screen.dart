@@ -132,12 +132,10 @@ class _CallScreenState extends State<CallScreen> {
   void _listenToRemoteStream() {
     _remoteStreamSub = _callService.remoteStreamStream.listen((stream) {
       if (!mounted) return;
-      setState(() {
-        _remoteRenderer.srcObject = stream;
-        _isConnected = true;
-      });
-      _stopRinging();
-      _startTimer();
+      // A remote MediaStream can be announced while ICE is still connecting.
+      // Attach it for rendering, but wait for CallStatus.accepted (the Matrix
+      // SDK's kConnected state) before showing the call as connected.
+      setState(() => _remoteRenderer.srcObject = stream);
     });
   }
 
@@ -609,7 +607,7 @@ class _CallScreenState extends State<CallScreen> {
                   active: _isSpeakerOn,
                 ),
                 _controlButton(
-                  icon: _isMuted ? Icons.mic_off : Icons.mic_off_outlined,
+                  icon: _isMuted ? Icons.mic_off : Icons.mic,
                   onTap: _toggleMute,
                   active: _isMuted,
                 ),
