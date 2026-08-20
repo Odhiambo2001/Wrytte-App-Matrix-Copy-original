@@ -20,7 +20,6 @@ import 'package:wrytte/ui/screens/terms_privacy_page.dart';
 import 'package:wrytte/ui/widgets/theme_wrapper.dart';
 
 import 'package:wrytte/models/contact_model.dart';
-import 'package:wrytte/services/call_listener_service.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
@@ -175,8 +174,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
   String? _currentPhone;
   List<Contact> _initialSavedContacts = const [];
 
-  final CallListenerService _callListener = CallListenerService();
-
   @override
   void initState() {
     super.initState();
@@ -312,7 +309,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
   @override
   void dispose() {
-    _callListener.stopListening();
     unawaited(NotificationService.instance.stop());
     super.dispose();
   }
@@ -328,11 +324,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
     );
     unawaited(NotificationService.instance.start(currentUserId: userId));
 
-    if (mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _callListener.startListening(context);
-      });
-    }
   }
 
   @override

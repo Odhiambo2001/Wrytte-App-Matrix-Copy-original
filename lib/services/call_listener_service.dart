@@ -27,7 +27,8 @@ class CallListenerService {
     );
 
     // Forward incoming call events → full-screen IncomingCallScreen
-    _incomingCallSubscription = _callService.incomingCallStream.listen((call) {
+    _incomingCallSubscription ??= _callService.incomingCallStream.listen((call) {
+      if (!context.mounted) return;
       _showIncomingCall(context, call);
     });
   }

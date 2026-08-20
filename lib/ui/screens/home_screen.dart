@@ -6,6 +6,7 @@ import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/backend/backend_realtime_service.dart';
+import 'package:wrytte/services/call_listener_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/chats/conversations_screen.dart'; // ← this one
@@ -44,6 +45,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _backendTokenTimer;
   bool _backendRefreshInFlight = false;
   UserProfile? _bottomNavProfile;
+  final CallListenerService _callListener = CallListenerService();
 
   @override
   void initState() {
@@ -65,6 +67,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _refreshBackendTokenIfNeeded();
     _scheduleBackendTokenRefresh();
     unawaited(BackendRealtimeService.instance.connect());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _callListener.startListening(context);
+    });
     _screens = [
       const ShopsScreen(),
       ConversationsScreen(
@@ -141,6 +147,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _callListener.stopListening();
     _backendTokenTimer?.cancel();
     unawaited(BackendRealtimeService.instance.disconnect());
     super.dispose();
