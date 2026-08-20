@@ -4,6 +4,8 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Bundle
 import android.telephony.TelephonyManager
 import androidx.core.view.WindowCompat
@@ -28,7 +30,9 @@ class MainActivity: FlutterActivity() {
     )
 
     private val deviceRegionChannel = "com.example.wrytte/device_region"
+    private val callerRingbackChannel = "com.example.wrytte/caller_ringback"
     private val onnxImageChannel = "com.example.wrytte/onnx_image"
+    private var callerRingback: ToneGenerator? = null
     private val ortEnvironment by lazy { OrtEnvironment.getEnvironment() }
     private val ortSessions = ConcurrentHashMap<String, NativeOrtSession>()
 
@@ -51,6 +55,26 @@ class MainActivity: FlutterActivity() {
             ).map { it.trim().uppercase() }
                 .firstOrNull { it.matches(Regex("^[A-Z]{2}$")) }
             result.success(region)
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            callerRingbackChannel,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "start" -> {
+                    stopCallerRingback()
+                    callerRingback = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80).also {
+                        it.startTone(ToneGenerator.TONE_SUP_RINGTONE)
+                    }
+                    result.success(null)
+                }
+                "stop" -> {
+                    stopCallerRingback()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
         }
 
         // ONNX sessions belong to independent, stage-gated models. A serial
@@ -205,9 +229,16 @@ class MainActivity: FlutterActivity() {
     }
 
     override fun onDestroy() {
+        stopCallerRingback()
         ortSessions.values.forEach { it.session.close() }
         ortSessions.clear()
         super.onDestroy()
+    }
+
+    private fun stopCallerRingback() {
+        callerRingback?.stopTone()
+        callerRingback?.release()
+        callerRingback = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

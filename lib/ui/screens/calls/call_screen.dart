@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/services/call_service.dart';
+import 'package:wrytte/services/caller_ringback_service.dart';
 
 class CallScreen extends StatefulWidget {
   final String remoteUserId;
@@ -67,7 +67,7 @@ class _CallScreenState extends State<CallScreen> {
       unawaited(_startVideoMedia());
     }
 
-    // Caller plays ringing tone while waiting for answer
+    // The caller hears supervisory ringback while the receiver is ringing.
     if (widget.isCaller && !widget.startsConnected) {
       _startRinging();
     }
@@ -169,15 +169,15 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _startRinging() async {
     try {
-      await FlutterRingtonePlayer().playRingtone(looping: true);
+      await CallerRingbackService.start();
     } catch (e) {
-      debugPrint('[CallScreen] Ringtone error: $e');
+      debugPrint('[CallScreen] Ringback error: $e');
     }
   }
 
   Future<void> _stopRinging() async {
     try {
-      await FlutterRingtonePlayer().stop();
+      await CallerRingbackService.stop();
     } catch (_) {}
   }
 
@@ -204,6 +204,7 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    unawaited(_stopRinging());
     _timer?.cancel();
     _statusSub?.cancel();
     _remoteStreamSub?.cancel();
