@@ -199,14 +199,47 @@ class MatrixAuthService {
     apkLog('Matrix.auth', 'resolved register homeserver="$baseUri"');
     _prepareHomeserver(client, baseUri);
     apkLog('Matrix.auth', 'register call user_id="$username"');
-    final response = await client
-        .register(
-          username: username,
-          password: password,
-          initialDeviceDisplayName: deviceName ?? 'Wrytte',
-          inhibitLogin: false,
-        )
-        .timeout(const Duration(seconds: 25));
+    // Synapse commonly answers the first registration request with a UIA
+    // challenge (401, m.login.dummy). Complete that challenge and resubmit
+    // the same registration request. Without this retry the caller falls
+    // back to password login, even though the account was never created.
+    RegisterResponse response;
+    try {
+      response = await client
+          .register(
+            username: username,
+            password: password,
+            initialDeviceDisplayName: deviceName ?? 'Wrytte',
+            inhibitLogin: false,
+          )
+          .timeout(const Duration(seconds: 25));
+    } on MatrixException catch (e) {
+      final hasDummyStage = e.authenticationFlows?.any(
+            (flow) => flow.stages.contains(AuthenticationTypes.dummy),
+          ) ??
+          false;
+      if (!e.requireAdditionalAuthentication ||
+          e.session == null ||
+          !hasDummyStage) {
+        rethrow;
+      }
+      apkLog(
+        'Matrix.auth',
+        'registration UIA challenge received; completing m.login.dummy',
+      );
+      response = await client
+          .register(
+            username: username,
+            password: password,
+            initialDeviceDisplayName: deviceName ?? 'Wrytte',
+            inhibitLogin: false,
+            auth: AuthenticationData(
+              type: AuthenticationTypes.dummy,
+              session: e.session,
+            ),
+          )
+          .timeout(const Duration(seconds: 25));
+    }
     apkLog(
       'Matrix.auth',
       'register response user_id="${client.userID}" device_id="${client.deviceID}"',
