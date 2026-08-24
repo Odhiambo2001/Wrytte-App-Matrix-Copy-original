@@ -29,6 +29,7 @@ class MatrixRtcLiveKitService {
   StreamSubscription<mx.GroupCallSession>? _incomingSub;
   mx.VoIP? _voip;
   LiveKitCall? _active;
+  Future<LiveKitCall>? _entering;
 
   Stream<LiveKitIncomingCall> get incomingCalls => _incoming.stream;
   LiveKitCall? get activeCall => _active;
@@ -106,32 +107,85 @@ class MatrixRtcLiveKitService {
     required CallType type,
   }) => _enter(incoming.group, type);
 
-  Future<LiveKitCall> _enter(mx.GroupCallSession group, CallType type) async {
-    await group.enter();
-    final backend = group.backend as mx.LiveKitBackend;
-    final token = await _requestToken(
-      roomId: group.room.id,
-      slotId: 'm.call#${group.room.id}',
-      serviceUrl: backend.livekitServiceUrl,
-    );
-    final room = lk.Room();
-    await room.connect(
-      token.url.isEmpty ? _sfuUrl : token.url,
-      token.jwt,
-      connectOptions: const lk.ConnectOptions(autoSubscribe: true),
-    );
-    await room.localParticipant?.setMicrophoneEnabled(true);
-    if (type == CallType.video) {
-      await room.localParticipant?.setCameraEnabled(true);
+  Future<LiveKitCall> _enter(mx.GroupCallSession group, CallType type) {
+    if (_active != null) {
+      return Future<LiveKitCall>.error(
+        StateError('A call is already active on this device.'),
+      );
     }
-    final call = LiveKitCall(room: room, matrixGroup: group, type: type);
-    _active = call;
-    return call;
+    if (_entering != null) {
+      return Future<LiveKitCall>.error(
+        StateError('Call setup is already in progress.'),
+      );
+    }
+
+    final enterFuture = _enterInternal(group, type);
+    _entering = enterFuture;
+    return enterFuture.whenComplete(() {
+      if (identical(_entering, enterFuture)) {
+        _entering = null;
+      }
+    });
+  }
+
+  Future<LiveKitCall> _enterInternal(
+    mx.GroupCallSession group,
+    CallType type,
+  ) async {
+    // A failed earlier attempt may have published a local MatrixRTC membership
+    // while never receiving a LiveKit token. Clear that stale local state
+    // before entering again.
+    if (group.state == mx.GroupCallState.entered) {
+      await group.leave();
+    }
+
+    lk.Room? room;
+    try {
+      final backend = group.backend as mx.LiveKitBackend;
+      // The legacy authorisation endpoint only needs the Matrix OpenID token.
+      // Obtain it before publishing MatrixRTC membership. That way a rejected
+      // JWT request cannot leave the group call state as `entered`.
+      final token = await _requestToken(
+        roomId: group.room.id,
+        serviceUrl: backend.livekitServiceUrl,
+      );
+      await group.enter();
+      room = lk.Room();
+      await room.connect(
+        token.url.isEmpty ? _sfuUrl : token.url,
+        token.jwt,
+        connectOptions: const lk.ConnectOptions(autoSubscribe: true),
+      );
+      await room.localParticipant?.setMicrophoneEnabled(true);
+      if (type == CallType.video) {
+        await room.localParticipant?.setCameraEnabled(true);
+      }
+      final call = LiveKitCall(room: room, matrixGroup: group, type: type);
+      _active = call;
+      return call;
+    } catch (_) {
+      // Entering MatrixRTC succeeds before the token exchange and LiveKit
+      // connection. Always unwind that membership if either later step fails;
+      // otherwise the next attempt throws GroupCallState.entered.
+      if (room != null) {
+        try {
+          await room.disconnect();
+        } catch (_) {}
+        try {
+          await room.dispose();
+        } catch (_) {}
+      }
+      if (group.state == mx.GroupCallState.entered) {
+        try {
+          await group.leave();
+        } catch (_) {}
+      }
+      rethrow;
+    }
   }
 
   Future<_LiveKitToken> _requestToken({
     required String roomId,
-    required String slotId,
     required String serviceUrl,
   }) async {
     final client = await MatrixAuthService.instance.restore();
@@ -147,8 +201,10 @@ class MatrixRtcLiveKitService {
       endpoint,
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({
+        // /sfu/get is the legacy MatrixRTC authorization endpoint. Older
+        // lk-jwt-service versions reject unknown JSON fields, including the
+        // MSC4195-only slot_id field. Use its established request shape.
         'room': roomId,
-        'slot_id': slotId,
         'openid_token': openId.toJson(),
         'device_id': client.deviceID,
       }),
@@ -170,9 +226,19 @@ class MatrixRtcLiveKitService {
     final call = _active;
     _active = null;
     if (call == null) return;
-    await call.room.disconnect();
-    await call.room.dispose();
-    await call.matrixGroup.leave();
+    try {
+      await call.room.disconnect();
+    } finally {
+      try {
+        await call.room.dispose();
+      } finally {
+        // Always remove MatrixRTC membership even if the network has already
+        // dropped and LiveKit disconnect throws.
+        if (call.matrixGroup.state == mx.GroupCallState.entered) {
+          await call.matrixGroup.leave();
+        }
+      }
+    }
   }
 
   Future<void> dispose() async {
