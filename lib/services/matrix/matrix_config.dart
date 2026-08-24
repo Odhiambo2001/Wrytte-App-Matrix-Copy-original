@@ -3,9 +3,7 @@ class MatrixConfig {
 
   static const homeserver = String.fromEnvironment(
     'WRYTTE_MATRIX_HOMESERVER',
-    defaultValue: 'http://31.220.58.129:8008',
-
-    //'https://matrix.wrytte.com',
+    defaultValue: 'https://matrix.wrytte.com',
   );
 
   static const serverName = String.fromEnvironment(
@@ -25,8 +23,8 @@ class MatrixConfig {
   // what blew past the SDK's 10s sync guard and left rooms=0. History
   // pagination gets its own (still reduced) page size below.
   static const syncTimelineLimit = 10; // ADDED: per-room events on each /sync
-  static const historyPageSize = 200; // CHANGED: was 3000 (used by requestHistory)
-
+  static const historyPageSize =
+      200; // CHANGED: was 3000 (used by requestHistory)
 
   static const localMediaMaxBytes = 512 * 1024 * 1024;
   static const localMediaTtl = Duration(days: 30);

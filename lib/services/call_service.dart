@@ -80,6 +80,10 @@ class CallService {
   webrtc.MediaStream? get remoteStream => _remoteStream;
   String? get currentCallId => _activeSession?.callId;
 
+  /// Delegate used by the MatrixRTC group-call layer. LiveKit owns media;
+  /// Matrix still uses this delegate for membership and encryption events.
+  mx.WebRTCDelegate get matrixRtcDelegate => _delegate;
+
   Future<void> startListeningForIncomingCalls() async {
     _incomingCallSub ??= MatrixCallService.instance.incomingCalls.listen((
       call,

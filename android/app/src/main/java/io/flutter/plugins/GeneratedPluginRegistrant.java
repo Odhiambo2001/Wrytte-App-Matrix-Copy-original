@@ -126,6 +126,11 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin libphonenumber_plugin, com.example.libphonenumber_plugin.LibphonenumberPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new io.livekit.plugin.LiveKitPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin livekit_client, io.livekit.plugin.LiveKitPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new com.crazecoder.openfile.OpenFilePlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin open_filex, com.crazecoder.openfile.OpenFilePlugin", e);

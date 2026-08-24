@@ -25,12 +25,13 @@ import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
+import 'package:wrytte/services/matrix/matrixrtc_livekit_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
-import 'package:wrytte/ui/screens/calls/call_screen.dart';
+import 'package:wrytte/ui/screens/calls/livekit_call_screen.dart';
 import 'package:wrytte/ui/screens/chats/video_message_recorder_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_input.dart';
@@ -403,7 +404,6 @@ class _ChatScreenState extends State<ChatScreen> {
   final FocusNode _focusNode = FocusNode();
 
   final ChatService _chat = ChatService();
-  final CallService _call = CallService.instance;
 
   StreamSubscription<List<ChatMessage>>? _messagesSub;
   String? _messagesSubscriptionConversationId;
@@ -1799,26 +1799,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final displayName = widget.title;
 
     try {
-      await _call.makeCall(
-        receiverId: normalisedReceiverId,
-        type: type,
-        callerName: widget.currentUserId,
-        callerAvatar: '',
-      );
+      final liveKitCall = await MatrixRtcLiveKitService.instance
+          .startDirectOutgoing(receiverId: normalisedReceiverId, type: type);
       if (!mounted) return;
       Navigator.of(context).push(
         MaterialPageRoute(
           builder:
-              (_) => CallScreen(
-                remoteUserId: normalisedReceiverId,
-                remoteUserName: displayName,
-                remoteUserAvatar:
-                    _receiverProfile?.hasProfileImage == true
-                        ? _receiverProfile!.profileImage
-                        : widget.avatarUrl,
-                type: type,
-                isCaller: true,
-              ),
+              (_) => LiveKitCallScreen(call: liveKitCall, title: displayName),
         ),
       );
     } catch (e) {
