@@ -58,6 +58,32 @@ class StoredAuthProfile {
       ).hasMatch(username.trim().replaceAll(RegExp(r'[\s\-()+]'), ''));
 }
 
+class WrytteIdSignInSearchResult {
+  const WrytteIdSignInSearchResult({
+    required this.exists,
+    required this.userId,
+  });
+
+  final bool exists;
+  final String userId;
+}
+
+class KFaceRecoveryData {
+  const KFaceRecoveryData({
+    required this.userId,
+    required this.wrytteId,
+    required this.kmap,
+    required this.publicKey,
+    required this.challenge,
+  });
+
+  final String userId;
+  final String wrytteId;
+  final Map<String, dynamic> kmap;
+  final String publicKey;
+  final String challenge;
+}
+
 class AuthService {
   AuthService._();
   static final AuthService instance = AuthService._();
@@ -350,10 +376,7 @@ class AuthService {
       // successful backend login.
       await ChatService().hydrateLocalConversations(syncReadMarkers: false);
     } catch (error, stackTrace) {
-      apkLog(
-        'Auth.login',
-        'local chat cache hydration skipped error="$error"',
-      );
+      apkLog('Auth.login', 'local chat cache hydration skipped error="$error"');
       debugPrintStack(stackTrace: stackTrace);
     }
     await _archiveProfile(
@@ -504,6 +527,148 @@ class AuthService {
     }
 
     _pendingEmailOtps.remove(normalizedEmail);
+    return user;
+  }
+
+  Future<AuthUser> registerWrytteId({
+    required String wrytteId,
+    String? username,
+    bool login = true,
+  }) async {
+    final response = await ApiService.postMultipart('/auth/register/wrytteid', {
+      'wrytteId': wrytteId,
+      if (username != null && username.trim().isNotEmpty)
+        'username': username.trim(),
+      'login': login.toString(),
+    });
+    if (response is! Map) {
+      throw Exception('Invalid Wrytte ID registration response.');
+    }
+
+    final user = AuthUser.fromJson(Map<String, dynamic>.from(response));
+    if (user.userId.isEmpty) {
+      throw Exception(
+        'Invalid Wrytte ID registration response: missing userid.',
+      );
+    }
+
+    if (login) {
+      await persistPhoneSession(
+        userId: user.userId,
+        username:
+            user.username.trim().isNotEmpty ? user.username.trim() : wrytteId,
+        phone: user.phone ?? wrytteId,
+        secret: user.secret,
+        token: user.token,
+        expiresAt: user.expiresAt,
+        preferMatrixRegisterFirst: true,
+      );
+    }
+    return user;
+  }
+
+  Future<void> saveKFaceRecoveryData({
+    required String userId,
+    required String wrytteId,
+    required Map<String, dynamic> kmap,
+    required String publicKey,
+    String? token,
+  }) async {
+    await ApiService.postJson(
+      '/auth/register/wrytteid/kface',
+      token: token,
+      body: {
+        'userId': userId,
+        'wrytteId': wrytteId,
+        'kmap': kmap,
+        'publicKey': publicKey,
+      },
+    );
+  }
+
+  Future<WrytteIdSignInSearchResult> searchWrytteIdForSignIn(
+    String wrytteId,
+  ) async {
+    final response = await ApiService.postMultipart(
+      '/auth/signin/wrytteid/search',
+      {'wrytteId': wrytteId},
+    );
+    if (response is! Map) {
+      throw Exception('Invalid Wrytte ID search response.');
+    }
+    final existsRaw = response['exists'];
+    final exists =
+        existsRaw is bool
+            ? existsRaw
+            : existsRaw?.toString().toLowerCase() == 'true';
+    final userId =
+        (response['userid'] ?? response['userId'] ?? '').toString().trim();
+    return WrytteIdSignInSearchResult(exists: exists, userId: userId);
+  }
+
+  Future<KFaceRecoveryData> getKFaceRecoveryData({
+    String? userId,
+    String? wrytteId,
+  }) async {
+    final response = await ApiService.postMultipart(
+      '/auth/signin/wrytteid/recovery',
+      {
+        if (userId != null && userId.trim().isNotEmpty) 'userid': userId.trim(),
+        if (wrytteId != null && wrytteId.trim().isNotEmpty)
+          'wrytteId': wrytteId.trim(),
+      },
+    );
+    if (response is! Map) {
+      throw Exception('Invalid K-Face recovery response.');
+    }
+    final rawKmap = response['kmap'];
+    final kmap =
+        rawKmap is Map
+            ? Map<String, dynamic>.from(rawKmap)
+            : jsonDecode(rawKmap?.toString() ?? '{}') as Map<String, dynamic>;
+    return KFaceRecoveryData(
+      userId:
+          (response['userid'] ?? response['userId'] ?? userId ?? '')
+              .toString()
+              .trim(),
+      wrytteId: (response['wrytteId'] ?? wrytteId ?? '').toString().trim(),
+      kmap: kmap,
+      publicKey: (response['publicKey'] ?? '').toString().trim(),
+      challenge: (response['challenge'] ?? '').toString().trim(),
+    );
+  }
+
+  Future<AuthUser> completeWrytteIdSignIn({
+    required String userId,
+    required String wrytteId,
+    required String challenge,
+    required String signature,
+  }) async {
+    final response = await ApiService.postJson(
+      '/auth/signin/wrytteid/complete',
+      body: {
+        'userid': userId,
+        'wrytteId': wrytteId,
+        'challenge': challenge,
+        'signature': signature,
+      },
+    );
+    if (response is! Map) {
+      throw Exception('Invalid Wrytte ID sign-in response.');
+    }
+    final user = AuthUser.fromJson(Map<String, dynamic>.from(response));
+    if (user.userId.isEmpty) {
+      throw Exception('Invalid Wrytte ID sign-in response: missing userid.');
+    }
+    await persistPhoneSession(
+      userId: user.userId,
+      username: user.username.trim().isNotEmpty ? user.username : wrytteId,
+      phone: user.phone ?? wrytteId,
+      secret: user.secret,
+      token: user.token,
+      expiresAt: user.expiresAt,
+      preferMatrixRegisterFirst: false,
+    );
     return user;
   }
 
@@ -693,7 +858,7 @@ class AuthService {
     if (secret.isEmpty) return null;
 
     try {
-      final response = await ApiService.postMultipart('/auth/login', {
+      final response = await ApiService.postMultipart('/auth/login/refresh', {
         'secret': secret,
         if (phone != null && phone.trim().isNotEmpty)
           'phone': phone.replaceAll(RegExp(r'[^\d]'), ''),

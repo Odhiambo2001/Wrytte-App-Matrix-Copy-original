@@ -122,7 +122,7 @@ class AvatarPreloadService {
     final isWrytteImage =
         url.startsWith('${ApiService.baseUrl}/usrimg/') ||
         url.startsWith('/usrimg/') ||
-        host == 'wryttedev.azurewebsites.net' ||
+        ApiService.isBackendHost(host) ||
         host == 'wrytte.com';
     if (!isWrytteImage) return null;
     return {'Authorization': 'Bearer $clean'};

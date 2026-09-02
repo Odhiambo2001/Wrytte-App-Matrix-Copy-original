@@ -112,7 +112,7 @@ class _UserAvatarState extends State<UserAvatar> {
     final host = Uri.tryParse(resolved)?.host.toLowerCase() ?? '';
     final needsBackendToken =
         rawUrl.startsWith('/usrimg/') ||
-        host == 'wryttedev.azurewebsites.net' ||
+        ApiService.isBackendHost(host) ||
         host == 'wrytte.com';
     if (!needsBackendToken) return;
     final cached = AuthService.instance.cachedBackendToken?.trim() ?? '';
@@ -364,7 +364,7 @@ class _UserAvatarState extends State<UserAvatar> {
     final uri = Uri.tryParse(rawUrl);
     final isWrytteImage =
         rawUrl.startsWith('/usrimg/') ||
-        uri?.host.toLowerCase() == 'wryttedev.azurewebsites.net' ||
+        ApiService.isBackendHost(uri?.host) ||
         uri?.host.toLowerCase() == 'wrytte.com';
     if (!isWrytteImage) return null;
     return {'Authorization': 'Bearer $clean'};

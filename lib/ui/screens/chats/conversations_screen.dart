@@ -557,8 +557,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         if (!resolved.startsWith('http')) continue;
         final uri = Uri.tryParse(resolved);
         final isBackendAvatar =
-            uri?.host == 'wryttedev.azurewebsites.net' ||
-            uri?.host == 'wrytte.com';
+            ApiService.isBackendHost(uri?.host) || uri?.host == 'wrytte.com';
         final backendToken =
             isBackendAvatar
                 ? (AuthService.instance.cachedBackendToken?.trim().isNotEmpty ==
@@ -1336,7 +1335,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final isWrytteImage =
         url.startsWith('${ApiService.baseUrl}/usrimg/') ||
         url.startsWith('/usrimg/') ||
-        host == 'wryttedev.azurewebsites.net' ||
+        ApiService.isBackendHost(host) ||
         host == 'wrytte.com';
     if (!isWrytteImage) return null;
     return {'Authorization': 'Bearer $clean'};

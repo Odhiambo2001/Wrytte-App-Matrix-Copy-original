@@ -23,6 +23,18 @@ class LocalSignatureVerification {
   final int signatureBytes;
 }
 
+class BackendChallengeSignature {
+  const BackendChallengeSignature({
+    required this.signatureBase64Url,
+    required this.challengeBytes,
+    required this.signatureBytes,
+  });
+
+  final String signatureBase64Url;
+  final int challengeBytes;
+  final int signatureBytes;
+}
+
 /// Local stand-in for the future backend Ed25519 challenge service.
 ///
 /// Enrollment persists only the public key. The private key is reconstructed
@@ -104,6 +116,40 @@ class LocalFaceSignatureService {
       seed.fillRange(0, seed.length, 0);
       challenge.fillRange(0, challenge.length, 0);
       enrolledPublicBytes.fillRange(0, enrolledPublicBytes.length, 0);
+    }
+  }
+
+  Future<BackendChallengeSignature> signBackendChallenge({
+    required String hkdfKeyHex,
+    required String challengeBase64Url,
+  }) async {
+    final sodium = await _sodium;
+    final seed = _deriveSigningSeed(hkdfKeyHex);
+    final secureSeed = sodium.secureCopy(seed);
+    final challenge = base64Url.decode(base64Url.normalize(challengeBase64Url));
+    KeyPair? recoveredKeyPair;
+    Uint8List? signature;
+    try {
+      recoveredKeyPair = sodium.crypto.sign.seedKeyPair(secureSeed);
+      signature = sodium.crypto.sign.detached(
+        message: Uint8List.fromList(challenge),
+        secretKey: recoveredKeyPair.secretKey,
+      );
+      return BackendChallengeSignature(
+        signatureBase64Url: base64UrlEncode(signature),
+        challengeBytes: challenge.length,
+        signatureBytes: signature.length,
+      );
+    } finally {
+      signature?.fillRange(0, signature.length, 0);
+      recoveredKeyPair?.publicKey.fillRange(
+        0,
+        recoveredKeyPair.publicKey.length,
+        0,
+      );
+      recoveredKeyPair?.dispose();
+      secureSeed.dispose();
+      seed.fillRange(0, seed.length, 0);
     }
   }
 

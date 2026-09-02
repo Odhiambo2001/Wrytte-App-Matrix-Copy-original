@@ -6,6 +6,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/face/camera_frame_converter.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/face_commitment_store.dart';
@@ -13,11 +14,13 @@ import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/services/face/local_face_signature_service.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
 import 'package:wrytte/ui/auth/kface_access_result_page.dart';
+import 'package:wrytte/ui/screens/home_screen.dart';
 
 class KFaceScanPage extends StatefulWidget {
-  const KFaceScanPage({super.key, required this.wrytteId});
+  const KFaceScanPage({super.key, required this.wrytteId, this.recoveryData});
 
   final String wrytteId;
+  final KFaceRecoveryData? recoveryData;
 
   @override
   State<KFaceScanPage> createState() => _KFaceScanPageState();
@@ -448,6 +451,16 @@ class _KFaceScanPageState extends State<KFaceScanPage>
           signatureEnrollment.publicKeyBase64,
         );
         await _commitmentStore.write(widget.wrytteId, commitment);
+        final user = await AuthService.instance.registerWrytteId(
+          wrytteId: widget.wrytteId,
+        );
+        await AuthService.instance.saveKFaceRecoveryData(
+          userId: user.userId,
+          wrytteId: widget.wrytteId,
+          kmap: commitment.toJson(),
+          publicKey: signatureEnrollment.publicKeyBase64,
+          token: user.token,
+        );
         _storedCommitment = commitment;
         _logFirstFrameToKeyDuration();
         _setStatus('Face enrollment complete.');
@@ -475,6 +488,24 @@ class _KFaceScanPageState extends State<KFaceScanPage>
               enrolledPublicKeyBase64: publicKey,
             );
             signatureVerified = verification.verified;
+            final backendRecovery = widget.recoveryData;
+            if (signatureVerified && backendRecovery != null) {
+              final signature = await _signatureService.signBackendChallenge(
+                hkdfKeyHex: recovery.derivedKey!,
+                challengeBase64Url: backendRecovery.challenge,
+              );
+              await AuthService.instance.completeWrytteIdSignIn(
+                userId: backendRecovery.userId,
+                wrytteId: backendRecovery.wrytteId,
+                challenge: backendRecovery.challenge,
+                signature: signature.signatureBase64Url,
+              );
+              debugPrint(
+                '[KFace][Finalization][BackendChallenge] '
+                'challengeBytes=${signature.challengeBytes} '
+                'signatureBytes=${signature.signatureBytes} result=ACCEPTED',
+              );
+            }
             debugPrint(
               '[KFace][Finalization][Signature] mode=LOGIN algorithm=Ed25519 '
               'provider=libsodium '
@@ -526,7 +557,7 @@ class _KFaceScanPageState extends State<KFaceScanPage>
             (_) => AddProfilePage(
               isNewUser: true,
               biometricSetup: biometricSetup,
-              lockNameAndDone: true,
+              lockNameAndDone: false,
               navigationRequestedAt: requestedAt,
               firstFrameToNavigationRequestMs: firstFrameToRequestMs,
             ),
@@ -560,6 +591,10 @@ class _KFaceScanPageState extends State<KFaceScanPage>
   void _openAccessResultPage(bool accepted) {
     if (!mounted || _accessResultOpened) return;
     _accessResultOpened = true;
+    if (accepted && widget.recoveryData != null) {
+      unawaited(_openRecoveredHome());
+      return;
+    }
     unawaited(
       Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
@@ -567,10 +602,29 @@ class _KFaceScanPageState extends State<KFaceScanPage>
               (_) => KFaceAccessResultPage(
                 accepted: accepted,
                 retryPageBuilder:
-                    (_) => KFaceScanPage(wrytteId: widget.wrytteId),
+                    (_) => KFaceScanPage(
+                      wrytteId: widget.wrytteId,
+                      recoveryData: widget.recoveryData,
+                    ),
               ),
         ),
       ),
+    );
+  }
+
+  Future<void> _openRecoveredHome() async {
+    final user = await AuthService.instance.getCurrentUser();
+    if (!mounted) return;
+    await Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        builder:
+            (_) => HomeScreen(
+              currentUserId: user?.userId ?? widget.recoveryData!.userId,
+              initialProfileName: user?.username,
+              initialPhone: user?.phone ?? widget.wrytteId,
+            ),
+      ),
+      (_) => false,
     );
   }
 

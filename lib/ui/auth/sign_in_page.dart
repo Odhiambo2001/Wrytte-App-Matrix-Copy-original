@@ -1,5 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
+import 'package:wrytte/services/face/face_commitment_store.dart';
+import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
@@ -14,6 +19,7 @@ class SignInPage extends StatefulWidget {
 class _SignInPageState extends State<SignInPage> {
   final TextEditingController _inputCtrl = TextEditingController();
   final FocusNode _focusNode = FocusNode();
+  final FaceCommitmentStore _commitmentStore = const FaceCommitmentStore();
   static const int _minLoginDigits = 8;
 
   bool _isValid = false;
@@ -40,13 +46,30 @@ class _SignInPageState extends State<SignInPage> {
         if (rule == null || bodyLength != rule.maximumNationalLength) {
           throw const FormatException('Incomplete or unknown Wrytte ID');
         }
+        final search = await AuthService.instance.searchWrytteIdForSignIn(
+          digits,
+        );
+        if (!search.exists) {
+          throw const _WrytteIdNotFoundException();
+        }
+        final recovery = await AuthService.instance.getKFaceRecoveryData(
+          userId: search.userId,
+          wrytteId: digits,
+        );
+        final kmap = Map<String, dynamic>.from(recovery.kmap);
+        kmap['signingPublicKey'] = recovery.publicKey;
+        await _commitmentStore.write(digits, FuzzyCommitment.fromJson(kmap));
+        debugPrint(
+          '[SignInPage] K-Face recovery challenge received bytes=${utf8.encode(recovery.challenge).length}',
+        );
         _focusNode.unfocus();
         await Future<void>.delayed(const Duration(milliseconds: 100));
         if (!mounted) return;
         await Navigator.push(
           context,
           MaterialPageRoute<void>(
-            builder: (_) => KFaceIntroPage(wrytteId: digits),
+            builder:
+                (_) => KFaceIntroPage(wrytteId: digits, recoveryData: recovery),
           ),
         );
         return;
@@ -65,7 +88,10 @@ class _SignInPageState extends State<SignInPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = 'Something went wrong. Please try again.';
+        _errorMessage =
+            e is _WrytteIdNotFoundException
+                ? 'Wrytte ID not found. Please sign up first.'
+                : 'Something went wrong. Please try again.';
       });
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -268,4 +294,8 @@ class _SignInPageState extends State<SignInPage> {
       ),
     );
   }
+}
+
+class _WrytteIdNotFoundException implements Exception {
+  const _WrytteIdNotFoundException();
 }

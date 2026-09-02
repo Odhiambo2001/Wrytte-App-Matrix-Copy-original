@@ -6,8 +6,11 @@ import 'package:flutter/foundation.dart';
 class ApiService {
   static const String baseUrl = String.fromEnvironment(
     'WRYTTE_BACKEND_API_URL',
-    defaultValue: 'https://wryttedev.azurewebsites.net',
+    defaultValue: 'https://api.wrytte.com',
   );
+
+  static bool isBackendHost(String? host) =>
+      host?.toLowerCase() == Uri.parse(baseUrl).host.toLowerCase();
 
   // POST (x-www-form-urlencoded)
 

@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:phone_numbers_parser/phone_numbers_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
+import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
 
@@ -102,9 +103,19 @@ class VirtualNumberService {
   Future<bool> _candidateExists(String backendId) async {
     final override = _candidateExistsOverride;
     if (override != null) return override(backendId);
-    // Backend availability checking is intentionally disabled until an
-    // unauthenticated signup endpoint is available. /api/Users/Search cannot
-    // be called here because a signup user has no backend token yet.
+    try {
+      final response = await ApiService.postMultipart(
+        '/auth/register/wrytteid/search',
+        {'wrytteId': backendId},
+      );
+      if (response is Map) {
+        final raw = response['exists'] ?? response['value'];
+        if (raw is bool) return raw;
+        return raw?.toString().toLowerCase() == 'true';
+      }
+    } catch (_) {
+      return false;
+    }
     return false;
   }
 

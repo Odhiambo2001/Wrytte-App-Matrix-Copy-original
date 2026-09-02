@@ -599,7 +599,7 @@ class RealNumberService {
   }
 
   // ---------------------------------------------------------------------------
-  //  Convert any phone input to full international format e.g. 254748630243.
+  //  Convert any phone input to E.164 international format e.g. +254748630243.
   //  Preserves country code using the countries list for dial-code detection.
   // ---------------------------------------------------------------------------
   String _toFullInternational(String fullPhone) {
@@ -636,13 +636,13 @@ class RealNumberService {
         'areaCode=${bestMatch.areaCode}  '
         'localNumber=${bestMatch.localNumber}',
       );
-      return '${bestMatch.areaCode}${bestMatch.localNumber}';
+      return '+${bestMatch.areaCode}${bestMatch.localNumber}';
     }
 
     debugPrint(
       '[RealNumberService] no dial-code match, using raw digits: $digits',
     );
-    return digits;
+    return digits.isEmpty ? '' : '+$digits';
   }
 }
 

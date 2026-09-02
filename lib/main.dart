@@ -301,7 +301,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
     final isWrytteImage =
         url.startsWith('${ApiService.baseUrl}/usrimg/') ||
         url.startsWith('/usrimg/') ||
-        host == 'wryttedev.azurewebsites.net' ||
+        ApiService.isBackendHost(host) ||
         host == 'wrytte.com';
     if (!isWrytteImage) return null;
     return {'Authorization': 'Bearer $clean'};
@@ -323,7 +323,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
       }),
     );
     unawaited(NotificationService.instance.start(currentUserId: userId));
-
   }
 
   @override
