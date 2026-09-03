@@ -25,6 +25,22 @@ macos/Flutter/GeneratedPluginRegistrant.swift
 # Logs
 *.log
 
+# Secrets and machine-specific credentials. Do not commit any .env file,
+# including examples: keep secret-free setup instructions in documentation.
+.env
+.env.*
+**/.env
+**/.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*service-account*.json
+*service_account*.json
+android/app/google-services.json
+
 # Generated deployment configuration containing production secrets
 deploy/dendrite/.env
 deploy/dendrite/.generated/
