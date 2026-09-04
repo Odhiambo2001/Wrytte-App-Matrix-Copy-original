@@ -47,8 +47,8 @@ class KFaceAccessResultPage extends StatelessWidget {
               const SizedBox(height: 14),
               Text(
                 accepted
-                    ? 'Your face and signing key were verified successfully.'
-                    : 'Your face or signing key could not be verified.',
+                    ? 'Your face was verified successfully.'
+                    : 'Your face could not be verified.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: Color(0xFF92959D),

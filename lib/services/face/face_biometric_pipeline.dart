@@ -136,7 +136,7 @@ class FaceBiometricPipeline {
     final visibleArea =
         math.max(0, math.min(640, right) - math.max(0, left)) *
         math.max(0, math.min(640, bottom) - math.max(0, top));
-    final visible = fullArea == 0 ? 0 : visibleArea / fullArea;
+    final visible = (fullArea == 0 ? 0 : visibleArea / fullArea).toDouble();
     final landmarks = face.landmarks;
     final geometry =
         (landmarks.leftEye.y < landmarks.nose.y &&

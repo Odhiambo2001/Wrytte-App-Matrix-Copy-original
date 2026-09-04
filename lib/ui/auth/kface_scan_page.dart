@@ -31,13 +31,16 @@ class KFaceScanPage extends StatefulWidget {
 }
 
 class _KFaceScanPageState extends State<KFaceScanPage> {
+  static const _bottomPanelHeight = 250.0;
   final _pipeline = FaceBiometricPipeline();
   CameraController? _camera;
   bool _ready = false;
   bool _sending = false;
   bool _complete = false;
+  Stopwatch? _captureToTransitionTimer;
   DateTime? _lastFrame;
   String _status = 'Center your face inside the ring.';
+  String? _cameraError;
 
   bool get _enrolling => widget.isEnrollment;
 
@@ -74,8 +77,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _ready = true;
       });
     } catch (_) {
-      if (mounted)
-        setState(() => _status = 'Unable to start the face scanner.');
+      if (mounted) {
+        setState(() {
+          _cameraError = 'Unable to initialize the face scanner.';
+          _status = 'Unable to initialize the face scanner.';
+        });
+      }
     }
   }
 
@@ -110,6 +117,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       }
       if (analysis.acceptedFrameCount == FaceBiometricPipeline.framesToUse) {
         _complete = true;
+        _captureToTransitionTimer = Stopwatch()..start();
         unawaited(_submit());
       }
     } catch (_) {
@@ -125,15 +133,19 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     if (mounted) setState(() => _status = 'Verifying securely…');
     try {
       if (_enrolling) {
-        final current = await AuthService.instance.getCurrentUser();
-        final accepted =
-            current?.token.isNotEmpty == true &&
-            await BiometricApiService.enroll(
-              token: current!.token,
-              captures: _pipeline.cropSets,
-            );
+        // Creating the Wrytte-ID account first yields the authenticated,
+        // short-lived normal session required by the server enrolment endpoint.
+        // The server remains the sole owner of the biometric commitment.
+        final current = await AuthService.instance.registerWrytteId(
+          wrytteId: widget.wrytteId,
+        );
+        final accepted = await BiometricApiService.enroll(
+          token: current.token,
+          captures: _pipeline.cropSets,
+        );
         if (!accepted) throw Exception();
         if (!mounted) return;
+        _logTransitionTiming('profile_setup');
         await Navigator.of(context).pushReplacement(
           MaterialPageRoute<void>(
             builder: (_) => AddProfilePage(isNewUser: true),
@@ -152,11 +164,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           );
         if (!mounted) return;
         if (!accepted) {
+          _logTransitionTiming('failure_result');
           await _showResult(false);
           return;
         }
         final user = await AuthService.instance.getCurrentUser();
         if (!mounted) return;
+        _logTransitionTiming('home');
         await Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute<void>(
             builder:
@@ -170,10 +184,25 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         );
       }
     } catch (_) {
-      if (mounted) await _showResult(false);
+      if (mounted) {
+        _logTransitionTiming('failure_result');
+        await _showResult(false);
+      }
     } finally {
       _sending = false;
     }
+  }
+
+  void _logTransitionTiming(String destination) {
+    final timer = _captureToTransitionTimer;
+    if (timer == null) return;
+    timer.stop();
+    // No identity or biometric material is included in performance logs.
+    // ignore: avoid_print
+    print(
+      '[BiometricTiming] stage=navigation destination=$destination '
+      'elapsed_ms=${timer.elapsedMilliseconds}',
+    );
   }
 
   Future<void> _showResult(bool accepted) =>
@@ -192,6 +221,22 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         ),
       );
 
+  Future<void> _startOver() async {
+    if (_sending) return;
+    _pipeline.reset();
+    setState(() {
+      _complete = false;
+      _lastFrame = null;
+      _status = 'Center your face inside the ring.';
+    });
+    final camera = _camera;
+    if (camera != null &&
+        camera.value.isInitialized &&
+        !camera.value.isStreamingImages) {
+      await camera.startImageStream(_onFrame);
+    }
+  }
+
   @override
   void dispose() {
     unawaited(_camera?.dispose());
@@ -201,40 +246,74 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   @override
   Widget build(BuildContext context) {
-    final progress =
-        _pipeline.acceptedFrameCount / FaceBiometricPipeline.framesToUse;
+    final progress = (_pipeline.acceptedFrameCount /
+            FaceBiometricPipeline.framesToUse)
+        .clamp(0.0, 1.0);
+    final size = MediaQuery.sizeOf(context);
+    final previewHeight = size.height - _bottomPanelHeight;
+    final ringSize = (size.width * 0.75).clamp(240.0, 340.0);
+    final ringTop = (previewHeight * 0.50) - (ringSize / 2);
+    final ringLeft = (size.width - ringSize) / 2;
+    const tickRingMargin = 20.0;
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      extendBody: true,
       body: Stack(
+        fit: StackFit.expand,
         children: [
-          if (_camera != null && _camera!.value.isInitialized)
-            Positioned.fill(child: CameraPreview(_camera!)),
-          Center(
-            child: Container(
-              width: 270,
-              height: 270,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color:
-                      Color.lerp(Colors.white, Colors.greenAccent, progress)!,
-                  width: 5,
+          Positioned(
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: _bottomPanelHeight,
+            child: _ScanCamera(
+              controller: _camera,
+              error: _cameraError,
+              onRetry: _initialize,
+            ),
+          ),
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).pop(),
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: const BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
                 ),
               ),
             ),
           ),
-          SafeArea(
-            child: IconButton(
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.close, color: Colors.white),
+          Positioned(
+            left: ringLeft - tickRingMargin,
+            top: ringTop - tickRingMargin,
+            width: ringSize + tickRingMargin * 2,
+            height: ringSize + tickRingMargin * 2,
+            child: _TickRing(
+              size: ringSize + tickRingMargin * 2,
+              activeTickFraction: progress,
             ),
           ),
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
-              color: Colors.black87,
               width: double.infinity,
-              padding: const EdgeInsets.all(28),
+              height: _bottomPanelHeight,
+              color: Colors.black,
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -246,14 +325,38 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   Text(
                     _status,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white70),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      height: 1.4,
+                      color: Color(0xFFBFC6CF),
+                    ),
                   ),
-                  const SizedBox(height: 16),
-                  LinearProgressIndicator(value: progress, minHeight: 8),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: _startOver,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4285DF),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(26),
+                        ),
+                      ),
+                      child: const Text(
+                        'Start over',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -262,4 +365,93 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       ),
     );
   }
+}
+
+class _ScanCamera extends StatelessWidget {
+  const _ScanCamera({
+    required this.controller,
+    required this.error,
+    required this.onRetry,
+  });
+  final CameraController? controller;
+  final String? error;
+  final Future<void> Function() onRetry;
+  @override
+  Widget build(BuildContext context) {
+    if (error != null)
+      return Container(
+        color: const Color(0xFF1D2430),
+        child: Center(
+          child: Text(
+            error!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0xFFBFC6CF), fontSize: 15),
+          ),
+        ),
+      );
+    final camera = controller;
+    if (camera == null || !camera.value.isInitialized)
+      return const Center(
+        child: SizedBox(
+          width: 34,
+          height: 34,
+          child: CircularProgressIndicator(strokeWidth: 3),
+        ),
+      );
+    final preview = camera.value.previewSize;
+    final aspect = preview == null ? 3 / 4 : preview.height / preview.width;
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.contain,
+        child: SizedBox(
+          width: 1000,
+          height: 1000 / aspect,
+          child: CameraPreview(camera),
+        ),
+      ),
+    );
+  }
+}
+
+class _TickRing extends StatelessWidget {
+  const _TickRing({required this.size, required this.activeTickFraction});
+  final double size;
+  final double activeTickFraction;
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: CustomPaint(painter: _TickRingPainter(activeTickFraction)),
+  );
+}
+
+class _TickRingPainter extends CustomPainter {
+  const _TickRingPainter(this.activeTickFraction);
+  final double activeTickFraction;
+  @override
+  void paint(Canvas canvas, Size size) {
+    const count = 72, length = 14.0, width = 4.0;
+    final center = size.center(Offset.zero),
+        outer = size.shortestSide / 2,
+        inner = outer - length;
+    final active = (activeTickFraction.clamp(0.0, 1.0) * count).ceil();
+    final paint =
+        Paint()
+          ..strokeWidth = width
+          ..strokeCap = StrokeCap.round;
+    for (var index = 0; index < count; index++) {
+      final angle = 2 * math.pi * index / count - math.pi / 2;
+      final direction = Offset(math.cos(angle), math.sin(angle));
+      paint.color =
+          index < active ? const Color(0xFF00E676) : const Color(0xFFBFC6CF);
+      canvas.drawLine(
+        center + direction * inner,
+        center + direction * outer,
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _TickRingPainter old) =>
+      old.activeTickFraction != activeTickFraction;
 }

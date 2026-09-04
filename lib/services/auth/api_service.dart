@@ -137,6 +137,7 @@ class ApiService {
     Map<String, String> fields, {
     List<http.MultipartFile> files = const [],
     String? token,
+    Map<String, String> headers = const {},
   }) async {
     final uri = Uri.parse("$baseUrl$path");
 
@@ -147,6 +148,7 @@ class ApiService {
     if (token != null) {
       request.headers["Authorization"] = "Bearer $token";
     }
+    request.headers.addAll(headers);
 
     debugPrint("➡️ POST MULTIPART $uri");
     debugPrint("📦 FIELDS: ${_redactMap(fields)}");
