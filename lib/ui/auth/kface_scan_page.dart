@@ -102,6 +102,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
       final analysis = await _pipeline.processFrame(image);
       if (!mounted) return;
+      // The image stream can invoke this callback while RetinaFace is still
+      // processing the previous frame. Such a skipped frame has no timing and
+      // must not replace the useful on-screen capture status with "No face".
+      if (analysis.processingMilliseconds == 0) return;
       if (!analysis.faceDetected) {
         setState(() => _status = 'No face detected.');
       } else if (!analysis.targetFaceSelected) {
@@ -184,7 +188,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           (_) => false,
         );
       }
-    } catch (_) {
+    } catch (error) {
+      // Type-only diagnostic: no request data, identity, image, or token.
+      // ignore: avoid_print
+      print('[BiometricTiming] stage=submit_failure type=${error.runtimeType}');
       if (mounted) {
         _logTransitionTiming('failure_result');
         await _showResult(false);
