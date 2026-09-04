@@ -328,6 +328,7 @@ class AuthService {
     String? token,
     DateTime? expiresAt,
     bool preferMatrixRegisterFirst = false,
+    bool deferNonEssentialInitialization = false,
   }) async {
     // Never carry a different account's name into this session, and never
     // overwrite this account's archived real name with a generated fallback.
@@ -369,6 +370,45 @@ class AuthService {
       writes.add(_storage.write(key: _secretKey, value: secret.trim()));
     }
     await Future.wait(writes);
+
+    final initialization = _finishSessionInitialization(
+      userId: userId,
+      username: nameToSave,
+      phone: normalizedPhone,
+      secret: secret,
+      token: tokenToSave,
+      expiresAt: expiresAt,
+      preferMatrixRegisterFirst: preferMatrixRegisterFirst,
+    );
+    if (deferNonEssentialInitialization) {
+      // Profile Setup needs an authenticated local session, not a completed
+      // Matrix sync. Keep expensive network/cache work off its critical path.
+      unawaited(
+        initialization.catchError((Object error, StackTrace stackTrace) {
+          apkLog(
+            'Auth.deferredInitialization',
+            'failed type="${error.runtimeType}"',
+          );
+          debugPrintStack(stackTrace: stackTrace);
+        }),
+      );
+      return;
+    }
+    await initialization;
+  }
+
+  Future<void> _finishSessionInitialization({
+    required String userId,
+    required String username,
+    required String phone,
+    required String secret,
+    required String token,
+    required DateTime? expiresAt,
+    required bool preferMatrixRegisterFirst,
+  }) async {
+    // Avoid applying late background initialization to an account that logged
+    // out or was replaced while Profile Setup was already visible.
+    if (await _storage.read(key: _userIdKey) != userId) return;
     try {
       await ChatLocalDb.instance.bindOwner(userId);
       // Populate the owner-scoped in-memory timeline before any Matrix network
@@ -380,11 +420,11 @@ class AuthService {
       debugPrintStack(stackTrace: stackTrace);
     }
     await _archiveProfile(
-      phone: normalizedPhone,
+      phone: phone,
       userId: userId,
-      username: nameToSave,
+      username: username,
       secret: secret,
-      token: tokenToSave,
+      token: token,
       expiresAt: expiresAt,
     );
 
@@ -392,7 +432,7 @@ class AuthService {
       final generation = ++_matrixBootstrapGeneration;
       await _tryLoginToMatrix(
         userId: userId,
-        nickname: nameToSave,
+        nickname: username,
         generation: generation,
         preferRegisterFirst: preferMatrixRegisterFirst,
       );
@@ -677,6 +717,7 @@ class AuthService {
   Future<AuthUser> completeServerBiometricSignIn(
     Map<String, dynamic> response, {
     required String wrytteId,
+    bool deferNonEssentialInitialization = false,
   }) async {
     final user = AuthUser.fromJson(response);
     if (user.userId.isEmpty || user.token.isEmpty) {
@@ -690,6 +731,7 @@ class AuthService {
       token: user.token,
       expiresAt: user.expiresAt,
       preferMatrixRegisterFirst: false,
+      deferNonEssentialInitialization: deferNonEssentialInitialization,
     );
     return user;
   }

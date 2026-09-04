@@ -148,6 +148,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         await AuthService.instance.completeServerBiometricSignIn(
           response,
           wrytteId: widget.wrytteId,
+          deferNonEssentialInitialization: true,
         );
         if (!mounted) return;
         _logTransitionTiming('profile_setup');
