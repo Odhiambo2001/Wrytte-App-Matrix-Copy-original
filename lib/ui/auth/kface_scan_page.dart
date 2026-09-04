@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/face/biometric_api_service.dart';
+import 'package:wrytte/services/face/biometric_enrollment_timing.dart';
 import 'package:wrytte/services/face/camera_frame_converter.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
@@ -122,6 +123,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       if (analysis.acceptedFrameCount == FaceBiometricPipeline.framesToUse) {
         _complete = true;
         _captureToTransitionTimer = Stopwatch()..start();
+        if (_enrolling) BiometricEnrollmentTiming.start();
         unawaited(_submit());
       }
     } catch (_) {
@@ -194,6 +196,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // ignore: avoid_print
       print('[BiometricTiming] stage=submit_failure type=${error.runtimeType}');
       if (mounted) {
+        if (_enrolling) BiometricEnrollmentTiming.cancel();
         _logTransitionTiming('failure_result');
         await _showResult(false);
       }

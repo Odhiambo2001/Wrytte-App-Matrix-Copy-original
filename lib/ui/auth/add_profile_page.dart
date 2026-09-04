@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/face/biometric_enrollment_timing.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
@@ -153,6 +154,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
     if (!mounted) return;
     final currentUser = await AuthService.instance.getCurrentUser();
     if (!mounted) return;
+    if (widget.isNewUser) BiometricEnrollmentTiming.logHomeNavigation();
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
         builder:
@@ -192,6 +194,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
       phone: phone,
       secret: secret,
       preferMatrixRegisterFirst: widget.isNewUser,
+      deferNonEssentialInitialization: widget.isNewUser,
     );
 
     _syncProfileInBackground(name);
