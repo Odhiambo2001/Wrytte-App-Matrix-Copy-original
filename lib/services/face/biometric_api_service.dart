@@ -22,6 +22,20 @@ class BiometricApiService {
     return response is Map && response['accepted'] == true;
   }
 
+  /// Atomically creates a Wrytte-ID account after, and only after, the
+  /// server accepts its biometric enrollment. No session exists on rejection.
+  static Future<Map<String, dynamic>> enrollNew({
+    required String wrytteId,
+    required List<BiometricCropSet> captures,
+  }) async {
+    final response = await _send(
+      '/api/biometrics/enroll/new',
+      captures,
+      fields: {'wrytteId': wrytteId},
+    );
+    return response is Map ? Map<String, dynamic>.from(response) : const {};
+  }
+
   static Future<Map<String, dynamic>> verify({
     required String wrytteId,
     required List<BiometricCropSet> captures,

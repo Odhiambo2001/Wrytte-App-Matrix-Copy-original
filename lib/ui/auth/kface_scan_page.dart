@@ -133,17 +133,18 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     if (mounted) setState(() => _status = 'Verifying securely…');
     try {
       if (_enrolling) {
-        // Creating the Wrytte-ID account first yields the authenticated,
-        // short-lived normal session required by the server enrolment endpoint.
-        // The server remains the sole owner of the biometric commitment.
-        final current = await AuthService.instance.registerWrytteId(
+        // The server creates the account only after biometric acceptance. A
+        // rejected scan therefore cannot leave a usable local session behind.
+        final response = await BiometricApiService.enrollNew(
           wrytteId: widget.wrytteId,
-        );
-        final accepted = await BiometricApiService.enroll(
-          token: current.token,
           captures: _pipeline.cropSets,
         );
+        final accepted = response['token']?.toString().isNotEmpty == true;
         if (!accepted) throw Exception();
+        await AuthService.instance.completeServerBiometricSignIn(
+          response,
+          wrytteId: widget.wrytteId,
+        );
         if (!mounted) return;
         _logTransitionTiming('profile_setup');
         await Navigator.of(context).pushReplacement(
