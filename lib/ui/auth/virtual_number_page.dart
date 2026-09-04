@@ -78,7 +78,8 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => KFaceIntroPage(wrytteId: _virtualNumber),
+        builder:
+            (_) => KFaceIntroPage(wrytteId: _virtualNumber, isEnrollment: true),
       ),
     );
   }

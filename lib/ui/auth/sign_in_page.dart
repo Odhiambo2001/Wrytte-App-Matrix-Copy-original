@@ -1,10 +1,6 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
-import 'package:wrytte/services/face/face_commitment_store.dart';
-import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
@@ -19,7 +15,6 @@ class SignInPage extends StatefulWidget {
 class _SignInPageState extends State<SignInPage> {
   final TextEditingController _inputCtrl = TextEditingController();
   final FocusNode _focusNode = FocusNode();
-  final FaceCommitmentStore _commitmentStore = const FaceCommitmentStore();
   static const int _minLoginDigits = 8;
 
   bool _isValid = false;
@@ -52,24 +47,13 @@ class _SignInPageState extends State<SignInPage> {
         if (!search.exists) {
           throw const _WrytteIdNotFoundException();
         }
-        final recovery = await AuthService.instance.getKFaceRecoveryData(
-          userId: search.userId,
-          wrytteId: digits,
-        );
-        final kmap = Map<String, dynamic>.from(recovery.kmap);
-        kmap['signingPublicKey'] = recovery.publicKey;
-        await _commitmentStore.write(digits, FuzzyCommitment.fromJson(kmap));
-        debugPrint(
-          '[SignInPage] K-Face recovery challenge received bytes=${utf8.encode(recovery.challenge).length}',
-        );
         _focusNode.unfocus();
         await Future<void>.delayed(const Duration(milliseconds: 100));
         if (!mounted) return;
         await Navigator.push(
           context,
           MaterialPageRoute<void>(
-            builder:
-                (_) => KFaceIntroPage(wrytteId: digits, recoveryData: recovery),
+            builder: (_) => KFaceIntroPage(wrytteId: digits),
           ),
         );
         return;

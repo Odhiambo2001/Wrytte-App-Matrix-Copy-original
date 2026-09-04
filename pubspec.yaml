@@ -137,12 +137,6 @@ flutter:
 
   assets:
     - assets/models/retinaface_mv2.onnx
-    - assets/models/adaface_ir_101.onnx
-    - assets/models/MiniFASNetV2.onnx
-    - assets/models/MiniFASNetV1SE.onnx
-    - assets/ldpc/
-    - assets/ldpc/Weights_Var_MS/
-    - assets/ldpc/Biases_Var_MS/
     - assets/images/wrytte_logo.png
     - assets/images/default_avatar.jpg
     - assets/images/video image1.jpg

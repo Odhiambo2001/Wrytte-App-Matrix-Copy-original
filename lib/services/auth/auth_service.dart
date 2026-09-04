@@ -672,6 +672,28 @@ class AuthService {
     return user;
   }
 
+  /// Persists a successful server-owned biometric sign-in. The API response
+  /// contains a normal session only after it has verified the server template.
+  Future<AuthUser> completeServerBiometricSignIn(
+    Map<String, dynamic> response, {
+    required String wrytteId,
+  }) async {
+    final user = AuthUser.fromJson(response);
+    if (user.userId.isEmpty || user.token.isEmpty) {
+      throw Exception('Biometric sign-in was not accepted.');
+    }
+    await persistPhoneSession(
+      userId: user.userId,
+      username: user.username.trim().isNotEmpty ? user.username : wrytteId,
+      phone: user.phone ?? wrytteId,
+      secret: user.secret,
+      token: user.token,
+      expiresAt: user.expiresAt,
+      preferMatrixRegisterFirst: false,
+    );
+    return user;
+  }
+
   // ---------------------------------------------------------------------------
   // Session reads
   // ---------------------------------------------------------------------------
