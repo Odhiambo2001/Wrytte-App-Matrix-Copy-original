@@ -5,18 +5,23 @@ import 'package:image/image.dart' as img;
 import 'package:wrytte/services/face/opencv_face_preprocessor.dart';
 import 'package:wrytte/services/face/retinaface_detector.dart';
 
-/// One frontend-prepared crop set. No embedding, liveness score, biometric
-/// key, quantization, or commitment is created on the device.
+/// One frontend-prepared capture set. No Umeyama alignment, embedding,
+/// liveness score, biometric key, quantization, or commitment is created on
+/// the device.
 class BiometricCropSet {
   const BiometricCropSet({
-    required this.adafaceBgr,
+    required this.retinaFaceBgr,
+    required this.adafaceLandmarks,
     required this.livenessFrameBgr,
     required this.livenessFrameWidth,
     required this.livenessFrameHeight,
     required this.livenessFaceBox,
   });
 
-  final Uint8List adafaceBgr;
+  /// The 640x640 RetinaFace image and its landmark coordinates. The backend
+  /// uses them to run Umeyama and create the 112x112 AdaFace input.
+  final Uint8List retinaFaceBgr;
+  final FaceLandmarks adafaceLandmarks;
 
   /// A correctly-oriented camera frame. The backend derives both fixed
   /// MiniFASNet context crops from this one source image.
@@ -98,9 +103,8 @@ class TargetFaceSelection {
   final double? sizeGap;
 }
 
-/// Keeps RetinaFace and OpenCV on the device, then prepares the exact crops
-/// consumed by the backend. AdaFace, MiniFASNet, quantization, and LDPC are
-/// intentionally absent from this class.
+/// Keeps RetinaFace and OpenCV frame preparation on the device. The backend
+/// owns Umeyama, AdaFace, MiniFASNet, quantization, and LDPC.
 class FaceBiometricPipeline {
   static const framesToUse = 5;
   static const targetConfidenceThreshold = 0.83;
@@ -237,20 +241,11 @@ class FaceBiometricPipeline {
           processingMilliseconds: stopwatch.elapsedMilliseconds,
         );
       }
-      final aligned = openCv.align(prepared, target.landmarks);
-      if (aligned == null) {
-        return FrameAnalysis(
-          faceDetected: true,
-          targetFaceSelected: true,
-          alignmentAccepted: false,
-          acceptedFrameCount: _acceptedCrops.length,
-          processingMilliseconds: stopwatch.elapsedMilliseconds,
-        );
-      }
       final livenessFaceBox = openCv.mapFaceToOriginalBox(prepared, target);
       _acceptedCrops.add(
         BiometricCropSet(
-          adafaceBgr: Uint8List.fromList(aligned.bgr),
+          retinaFaceBgr: Uint8List.fromList(prepared.bgr),
+          adafaceLandmarks: target.landmarks,
           livenessFrameBgr: Uint8List.fromList(prepared.originalBgr),
           livenessFrameWidth: prepared.originalWidth,
           livenessFrameHeight: prepared.originalHeight,
@@ -278,8 +273,8 @@ class FaceBiometricPipeline {
                 _visibleFraction(face) >= fullBboxVisibleThreshold &&
                 size >= normalFaceSizeMinimum &&
                 size <= normalFaceSizeMaximum &&
-                // A RetinaFace detection always carries its five named landmarks.
-                // `align` below is the final validity check for those coordinates.
+                // The backend validates the five RetinaFace landmarks while
+                // calculating the server-owned Umeyama transform.
                 true;
           }).toList()
           ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
@@ -309,7 +304,7 @@ class FaceBiometricPipeline {
   /// releasing their references minimizes their lifetime in this process.
   void reset() {
     for (final capture in _acceptedCrops) {
-      capture.adafaceBgr.fillRange(0, capture.adafaceBgr.length, 0);
+      capture.retinaFaceBgr.fillRange(0, capture.retinaFaceBgr.length, 0);
       capture.livenessFrameBgr.fillRange(0, capture.livenessFrameBgr.length, 0);
     }
     _acceptedCrops.clear();

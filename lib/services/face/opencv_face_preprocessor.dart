@@ -41,13 +41,6 @@ class RetinaFrame {
   }
 }
 
-class AlignedFace {
-  const AlignedFace({required this.bgr, required this.sharpness});
-
-  final Uint8List bgr;
-  final double sharpness;
-}
-
 class MiniFasNetCropBox {
   const MiniFasNetCropBox({
     required this.left,
@@ -98,14 +91,6 @@ class MiniFasNetCrops {
 
 class OpenCvFacePreprocessor {
   static const retinaSize = 640;
-  static const faceSize = 112;
-  static const _reference = <math.Point<double>>[
-    math.Point(38.2946, 51.6963),
-    math.Point(73.5318, 51.6963),
-    math.Point(56.0252, 71.7366),
-    math.Point(41.5493, 92.3655),
-    math.Point(70.7299, 92.3655),
-  ];
 
   ffi.Pointer<ffi.Uint8> _copyToOwnedSourceBuffer(Uint8List bytes) {
     final buffer = calloc<ffi.Uint8>(bytes.length);
@@ -316,78 +301,5 @@ class OpenCvFacePreprocessor {
       right: right.toInt(),
       bottom: bottom.toInt(),
     );
-  }
-
-  AlignedFace? align(RetinaFrame frame, FaceLandmarks landmarks) {
-    final sourcePoints = <math.Point<double>>[
-      landmarks.leftEye,
-      landmarks.rightEye,
-      landmarks.nose,
-      landmarks.leftMouth,
-      landmarks.rightMouth,
-    ];
-    final matrixValues = _umeyama(sourcePoints, _reference);
-    if (matrixValues == null) return null;
-
-    final source = frame.retinaMat;
-    final matrix = cv.Mat.fromList(2, 3, cv.MatType.CV_32FC1, matrixValues);
-    final aligned = cv.warpAffine(
-      source,
-      matrix,
-      (faceSize, faceSize),
-      flags: cv.INTER_LANCZOS4,
-      borderMode: cv.BORDER_REFLECT,
-    );
-    final gray = cv.cvtColor(aligned, cv.COLOR_BGR2GRAY);
-    final laplacian = cv.laplacian(gray, cv.MatType.CV_64F);
-    try {
-      final (_, standardDeviation) = cv.meanStdDev(laplacian);
-      final sharpness = standardDeviation.val1 * standardDeviation.val1;
-      return AlignedFace(
-        // The aligned Mat is disposed below. AdaFace executes asynchronously,
-        // so it requires an owned 112x112x3 copy.
-        bgr: Uint8List.fromList(aligned.data),
-        sharpness: sharpness,
-      );
-    } finally {
-      laplacian.dispose();
-      gray.dispose();
-      aligned.dispose();
-      matrix.dispose();
-    }
-  }
-
-  List<double>? _umeyama(
-    List<math.Point<double>> source,
-    List<math.Point<double>> destination,
-  ) {
-    if (source.length != destination.length || source.isEmpty) return null;
-    final count = source.length;
-    final sourceMeanX = source.fold<double>(0, (sum, p) => sum + p.x) / count;
-    final sourceMeanY = source.fold<double>(0, (sum, p) => sum + p.y) / count;
-    final destinationMeanX =
-        destination.fold<double>(0, (sum, p) => sum + p.x) / count;
-    final destinationMeanY =
-        destination.fold<double>(0, (sum, p) => sum + p.y) / count;
-
-    var denominator = 0.0;
-    var rotationScaleA = 0.0;
-    var rotationScaleB = 0.0;
-    for (var index = 0; index < count; index++) {
-      final sx = source[index].x - sourceMeanX;
-      final sy = source[index].y - sourceMeanY;
-      final dx = destination[index].x - destinationMeanX;
-      final dy = destination[index].y - destinationMeanY;
-      denominator += sx * sx + sy * sy;
-      rotationScaleA += sx * dx + sy * dy;
-      rotationScaleB += sx * dy - sy * dx;
-    }
-    if (denominator < 1e-10) return null;
-
-    final a = rotationScaleA / denominator;
-    final b = rotationScaleB / denominator;
-    final translateX = destinationMeanX - a * sourceMeanX + b * sourceMeanY;
-    final translateY = destinationMeanY - b * sourceMeanX - a * sourceMeanY;
-    return [a, -b, translateX, b, a, translateY];
   }
 }

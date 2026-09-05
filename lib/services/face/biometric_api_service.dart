@@ -7,10 +7,12 @@ import 'package:http_parser/http_parser.dart';
 import 'package:image/image.dart' as img;
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
+import 'package:wrytte/services/face/retinaface_detector.dart';
 
-/// Sends five aligned AdaFace crops and five shared liveness source frames.
-/// The backend derives the two MiniFASNet crops from every source frame. The
-/// device never runs or stores AdaFace, MiniFASNet, quantization, or LDPC.
+/// Sends five RetinaFace frames plus their landmarks and five shared liveness
+/// source frames. The backend calculates Umeyama, derives both MiniFASNet
+/// crops, and runs AdaFace. The device never runs or stores Umeyama, AdaFace,
+/// MiniFASNet, quantization, or LDPC.
 class BiometricApiService {
   static const _maximumLivenessFrameWidth = 1280;
   static const _maximumLivenessFrameHeight = 1280;
@@ -71,7 +73,8 @@ class BiometricApiService {
       captures
           .map(
             (capture) => <String, Object>{
-              'adaface': capture.adafaceBgr,
+              'retinaFace': capture.retinaFaceBgr,
+              'landmarks': _landmarks(capture.adafaceLandmarks),
               'livenessFrame': capture.livenessFrameBgr,
               'livenessFrameWidth': capture.livenessFrameWidth,
               'livenessFrameHeight': capture.livenessFrameHeight,
@@ -85,14 +88,16 @@ class BiometricApiService {
     );
     final files = <http.MultipartFile>[];
     final livenessGeometry = <Map<String, int>>[];
+    final adafaceLandmarks = <Map<String, double>>[];
     for (final capture in encodedCaptures) {
       livenessGeometry.add(capture['geometry']! as Map<String, int>);
+      adafaceLandmarks.add(capture['landmarks']! as Map<String, double>);
       files
         ..add(
           http.MultipartFile.fromBytes(
-            'adafaceCrops',
-            capture['adaface']! as Uint8List,
-            filename: 'face.png',
+            'retinaFaceFrames',
+            capture['retinaFace']! as Uint8List,
+            filename: 'retina-face.png',
             contentType: MediaType('image', 'png'),
           ),
         )
@@ -112,7 +117,11 @@ class BiometricApiService {
     try {
       return await ApiService.postMultipart(
         path,
-        {...fields, 'livenessGeometry': jsonEncode(livenessGeometry)},
+        {
+          ...fields,
+          'livenessGeometry': jsonEncode(livenessGeometry),
+          'adafaceLandmarks': jsonEncode(adafaceLandmarks),
+        },
         files: files,
         token: token,
         headers: {'X-Biometric-Request-Id': requestId},
@@ -188,7 +197,8 @@ class BiometricApiService {
       'height': capture['height']! as int,
     };
     return <String, Object>{
-      'adaface': _png(capture['adaface']! as Uint8List, 112, 112),
+      'retinaFace': _png(capture['retinaFace']! as Uint8List, 640, 640),
+      'landmarks': capture['landmarks']! as Map<String, double>,
       'livenessFrame': Uint8List.fromList(
         img.encodePng(livenessImage, level: 6),
       ),
@@ -201,6 +211,20 @@ class BiometricApiService {
       ),
     };
   }
+
+  static Map<String, double> _landmarks(FaceLandmarks landmarks) =>
+      <String, double>{
+        'leftEyeX': landmarks.leftEye.x,
+        'leftEyeY': landmarks.leftEye.y,
+        'rightEyeX': landmarks.rightEye.x,
+        'rightEyeY': landmarks.rightEye.y,
+        'noseX': landmarks.nose.x,
+        'noseY': landmarks.nose.y,
+        'leftMouthX': landmarks.leftMouth.x,
+        'leftMouthY': landmarks.leftMouth.y,
+        'rightMouthX': landmarks.rightMouth.x,
+        'rightMouthY': landmarks.rightMouth.y,
+      };
 
   @visibleForTesting
   static (int, int) livenessTargetSize(int sourceWidth, int sourceHeight) {
