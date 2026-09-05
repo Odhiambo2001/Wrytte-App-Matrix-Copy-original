@@ -53,8 +53,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   Future<void> _initialize() async {
     try {
-      if (!(await Permission.camera.request()).isGranted)
+      if (!(await Permission.camera.request()).isGranted) {
         throw Exception('Camera permission is required.');
+      }
       await _pipeline.initializeDetector();
       final cameras = await availableCameras();
       final description = cameras.firstWhere(
@@ -91,8 +92,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     if (!_ready || _sending || _complete) return;
     final now = DateTime.now();
     if (_lastFrame != null &&
-        now.difference(_lastFrame!) < const Duration(milliseconds: 100))
+        now.difference(_lastFrame!) < const Duration(milliseconds: 100)) {
       return;
+    }
     _lastFrame = now;
     try {
       final camera = _camera;
@@ -134,8 +136,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   Future<void> _submit() async {
     _sending = true;
     final camera = _camera;
-    if (camera?.value.isStreamingImages == true)
+    if (camera?.value.isStreamingImages == true) {
       await camera!.stopImageStream();
+    }
     if (mounted) setState(() => _status = 'Verifying securely…');
     try {
       if (_enrolling) {
@@ -146,7 +149,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           captures: _pipeline.cropSets,
         );
         final accepted = response['token']?.toString().isNotEmpty == true;
-        if (!accepted) throw Exception();
+        if (!accepted) {
+          await _resumeAfterBiometricRejection();
+          return;
+        }
+        // The response has arrived, so the five upload candidates are no
+        // longer needed. Clear them before session storage or navigation.
+        _pipeline.reset();
         await AuthService.instance.completeServerBiometricSignIn(
           response,
           wrytteId: widget.wrytteId,
@@ -165,17 +174,18 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           captures: _pipeline.cropSets,
         );
         final accepted = response['token']?.toString().isNotEmpty == true;
-        if (accepted)
-          await AuthService.instance.completeServerBiometricSignIn(
-            response,
-            wrytteId: widget.wrytteId,
-          );
-        if (!mounted) return;
         if (!accepted) {
-          _logTransitionTiming('failure_result');
-          await _showResult(false);
+          await _resumeAfterBiometricRejection();
           return;
         }
+        // The response has arrived, so the five upload candidates are no
+        // longer needed. Clear them before session storage or navigation.
+        _pipeline.reset();
+        await AuthService.instance.completeServerBiometricSignIn(
+          response,
+          wrytteId: widget.wrytteId,
+        );
+        if (!mounted) return;
         final user = await AuthService.instance.getCurrentUser();
         if (!mounted) return;
         _logTransitionTiming('home');
@@ -195,6 +205,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // Type-only diagnostic: no request data, identity, image, or token.
       // ignore: avoid_print
       print('[BiometricTiming] stage=submit_failure type=${error.runtimeType}');
+      _pipeline.reset();
       if (mounted) {
         if (_enrolling) BiometricEnrollmentTiming.cancel();
         _logTransitionTiming('failure_result');
@@ -202,6 +213,27 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       }
     } finally {
       _sending = false;
+    }
+  }
+
+  /// A false biometric result is deliberately indistinguishable from a bad
+  /// capture or an unknown Wrytte ID. Discard all candidates and continue the
+  /// original scan rather than showing a result screen that reveals nothing.
+  Future<void> _resumeAfterBiometricRejection() async {
+    _pipeline.reset();
+    if (_enrolling) BiometricEnrollmentTiming.cancel();
+    _captureToTransitionTimer?.stop();
+    _captureToTransitionTimer = null;
+    _complete = false;
+    _lastFrame = null;
+    _sending = false;
+    if (!mounted) return;
+    setState(() => _status = 'Center your face inside the ring.');
+    final camera = _camera;
+    if (camera != null &&
+        camera.value.isInitialized &&
+        !camera.value.isStreamingImages) {
+      await camera.startImageStream(_onFrame);
     }
   }
 
@@ -390,7 +422,7 @@ class _ScanCamera extends StatelessWidget {
   final Future<void> Function() onRetry;
   @override
   Widget build(BuildContext context) {
-    if (error != null)
+    if (error != null) {
       return Container(
         color: const Color(0xFF1D2430),
         child: Center(
@@ -401,8 +433,9 @@ class _ScanCamera extends StatelessWidget {
           ),
         ),
       );
+    }
     final camera = controller;
-    if (camera == null || !camera.value.isInitialized)
+    if (camera == null || !camera.value.isInitialized) {
       return const Center(
         child: SizedBox(
           width: 34,
@@ -410,6 +443,7 @@ class _ScanCamera extends StatelessWidget {
           child: CircularProgressIndicator(strokeWidth: 3),
         ),
       );
+    }
     final preview = camera.value.previewSize;
     final aspect = preview == null ? 3 / 4 : preview.height / preview.width;
     return SizedBox.expand(

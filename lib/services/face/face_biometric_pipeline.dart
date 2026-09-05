@@ -303,7 +303,17 @@ class FaceBiometricPipeline {
     return area <= 0 ? 0 : (width * height) / area;
   }
 
-  void reset() => _acceptedCrops.clear();
+  /// Best-effort in-memory cleanup once a biometric request has finished.
+  /// Camera frames are never written to device storage. Dart cannot promise
+  /// secure physical-memory erasure, but zeroing our owned byte arrays before
+  /// releasing their references minimizes their lifetime in this process.
+  void reset() {
+    for (final capture in _acceptedCrops) {
+      capture.adafaceBgr.fillRange(0, capture.adafaceBgr.length, 0);
+      capture.livenessFrameBgr.fillRange(0, capture.livenessFrameBgr.length, 0);
+    }
+    _acceptedCrops.clear();
+  }
 
   Future<void> dispose() async {
     reset();
