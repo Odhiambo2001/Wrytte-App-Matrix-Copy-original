@@ -65,6 +65,23 @@ class MiniFasNetCropBox {
   int get height => bottom - top + 1;
 }
 
+/// Integer face geometry in the correctly-oriented original camera frame.
+/// The backend receives this together with the source frame and reproduces
+/// the fixed V2 and V1SE context crops from it.
+class LivenessFaceBox {
+  const LivenessFaceBox({
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+  });
+
+  final int x;
+  final int y;
+  final int width;
+  final int height;
+}
+
 class MiniFasNetCrops {
   const MiniFasNetCrops({
     required this.v2Bgr,
@@ -163,21 +180,14 @@ class OpenCvFacePreprocessor {
   /// camera frame, then resizes it to the models' 80x80 BGR input.
   MiniFasNetCrops cropForMiniFasNet(RetinaFrame frame, FaceDetection face) {
     const outputSize = 80;
-    final retinaToOriginal = frame.cropSide / retinaSize;
-    // The reference first converts xyxy to integer xywh.
-    final mappedLeft = frame.cropX + (face.left * retinaToOriginal);
-    final mappedTop = frame.cropY + (face.top * retinaToOriginal);
-    final left = mappedLeft.toInt();
-    final top = mappedTop.toInt();
-    final boxWidth = math.max(1, (face.width * retinaToOriginal).toInt());
-    final boxHeight = math.max(1, (face.height * retinaToOriginal).toInt());
+    final faceBox = mapFaceToOriginalBox(frame, face);
     MiniFasNetCropBox box(double scale) => calculateMiniFasNetCropBox(
       sourceWidth: frame.originalWidth,
       sourceHeight: frame.originalHeight,
-      x: left,
-      y: top,
-      boxWidth: boxWidth,
-      boxHeight: boxHeight,
+      x: faceBox.x,
+      y: faceBox.y,
+      boxWidth: faceBox.width,
+      boxHeight: faceBox.height,
       scale: scale,
     );
     final v2Box = box(2.7);
@@ -212,6 +222,39 @@ class OpenCvFacePreprocessor {
       v1seBgr: resizeCrop(v1seBox),
       v2Box: v2Box,
       v1seBox: v1seBox,
+    );
+  }
+
+  /// Maps a RetinaFace box from the fixed 640x640 detector image back to the
+  /// original camera frame. These exact integer values travel with the shared
+  /// liveness source image so the backend can apply the same model-specific
+  /// context scales without receiving two near-duplicate images.
+  LivenessFaceBox mapFaceToOriginalBox(RetinaFrame frame, FaceDetection face) =>
+      mapRetinaFaceToOriginalBox(
+        cropX: frame.cropX,
+        cropY: frame.cropY,
+        cropSide: frame.cropSide,
+        faceLeft: face.left,
+        faceTop: face.top,
+        faceWidth: face.width,
+        faceHeight: face.height,
+      );
+
+  static LivenessFaceBox mapRetinaFaceToOriginalBox({
+    required int cropX,
+    required int cropY,
+    required int cropSide,
+    required double faceLeft,
+    required double faceTop,
+    required double faceWidth,
+    required double faceHeight,
+  }) {
+    final retinaToOriginal = cropSide / retinaSize;
+    return LivenessFaceBox(
+      x: (cropX + (faceLeft * retinaToOriginal)).toInt(),
+      y: (cropY + (faceTop * retinaToOriginal)).toInt(),
+      width: math.max(1, (faceWidth * retinaToOriginal).toInt()),
+      height: math.max(1, (faceHeight * retinaToOriginal).toInt()),
     );
   }
 

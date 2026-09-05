@@ -35,4 +35,21 @@ void main() {
     expect(crop.right, 270);
     expect(crop.width, 271);
   });
+
+  test('maps the RetinaFace box to original-frame geometry for upload', () {
+    final box = OpenCvFacePreprocessor.mapRetinaFaceToOriginalBox(
+      cropX: 80,
+      cropY: 0,
+      cropSide: 480,
+      faceLeft: 160,
+      faceTop: 120,
+      faceWidth: 240,
+      faceHeight: 320,
+    );
+
+    expect(box.x, 200);
+    expect(box.y, 90);
+    expect(box.width, 180);
+    expect(box.height, 240);
+  });
 }

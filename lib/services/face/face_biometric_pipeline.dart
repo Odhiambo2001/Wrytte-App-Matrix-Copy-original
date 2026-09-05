@@ -10,13 +10,20 @@ import 'package:wrytte/services/face/retinaface_detector.dart';
 class BiometricCropSet {
   const BiometricCropSet({
     required this.adafaceBgr,
-    required this.livenessV2Bgr,
-    required this.livenessV1seBgr,
+    required this.livenessFrameBgr,
+    required this.livenessFrameWidth,
+    required this.livenessFrameHeight,
+    required this.livenessFaceBox,
   });
 
   final Uint8List adafaceBgr;
-  final Uint8List livenessV2Bgr;
-  final Uint8List livenessV1seBgr;
+
+  /// A correctly-oriented camera frame. The backend derives both fixed
+  /// MiniFASNet context crops from this one source image.
+  final Uint8List livenessFrameBgr;
+  final int livenessFrameWidth;
+  final int livenessFrameHeight;
+  final LivenessFaceBox livenessFaceBox;
 }
 
 class FrameAnalysis {
@@ -165,25 +172,27 @@ class FaceBiometricPipeline {
                   face.confidence >= targetConfidenceThreshold,
             )
             .toList();
-    if (qualifying.length == 1 && faces.length == 1)
+    if (qualifying.length == 1 && faces.length == 1) {
       return TargetFaceSelection(
         qualifying.first.faceNumber,
         'ONLY_QUALIFYING_FACE',
         [qualifying.first.faceNumber],
         null,
       );
+    }
     if (qualifying.length == 1 && faces.length == 2) {
       final other = faces.firstWhere(
         (f) => f.faceNumber != qualifying.first.faceNumber,
       );
       final gap = qualifying.first.faceSizeRatio - other.faceSizeRatio;
-      if (other.distanceLabel == 'FAR' && gap >= 0.20)
+      if (other.distanceLabel == 'FAR' && gap >= 0.20) {
         return TargetFaceSelection(
           qualifying.first.faceNumber,
           'NORMAL_FAR_SIZE_GAP_OK',
           [qualifying.first.faceNumber],
           gap,
         );
+      }
       return TargetFaceSelection(
         null,
         other.distanceLabel == 'FAR'
@@ -238,12 +247,14 @@ class FaceBiometricPipeline {
           processingMilliseconds: stopwatch.elapsedMilliseconds,
         );
       }
-      final livenessCrops = openCv.cropForMiniFasNet(prepared, target);
+      final livenessFaceBox = openCv.mapFaceToOriginalBox(prepared, target);
       _acceptedCrops.add(
         BiometricCropSet(
           adafaceBgr: Uint8List.fromList(aligned.bgr),
-          livenessV2Bgr: Uint8List.fromList(livenessCrops.v2Bgr),
-          livenessV1seBgr: Uint8List.fromList(livenessCrops.v1seBgr),
+          livenessFrameBgr: Uint8List.fromList(prepared.originalBgr),
+          livenessFrameWidth: prepared.originalWidth,
+          livenessFrameHeight: prepared.originalHeight,
+          livenessFaceBox: livenessFaceBox,
         ),
       );
       return FrameAnalysis(
