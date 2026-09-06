@@ -11,14 +11,34 @@ import 'package:wrytte/services/face/retinaface_detector.dart';
 
 /// Sends five RetinaFace frames plus their landmarks and five shared liveness
 /// source frames. The backend calculates Umeyama, derives both MiniFASNet
-/// crops, and runs AdaFace. The device never runs or stores Umeyama, AdaFace,
-/// MiniFASNet, quantization, or LDPC.
+/// crops, runs AdaFace, and performs quantization. Flutter receives only the
+/// 832 packed quantization bits needed for its local LDPC commitment; it never
+/// receives an embedding, liveness score, or image from the backend.
+class BiometricLdpcInput {
+  const BiometricLdpcInput._({
+    required this.accepted,
+    required this.ldpcBits,
+    this.enrollmentTicket,
+  });
+
+  BiometricLdpcInput.rejected()
+    : accepted = false,
+      ldpcBits = Uint8List(0),
+      enrollmentTicket = null;
+
+  final bool accepted;
+  final Uint8List ldpcBits;
+  final String? enrollmentTicket;
+}
+
 class BiometricApiService {
+  static const ldpcInputBitCount = 832;
+  static const _packedLdpcInputByteCount = ldpcInputBitCount ~/ 8;
   static const _maximumLivenessFrameWidth = 1280;
   static const _maximumLivenessFrameHeight = 1280;
   static const _maximumLivenessFramePixels = 921600;
 
-  static Future<bool> enroll({
+  static Future<BiometricLdpcInput> enroll({
     required String token,
     required List<BiometricCropSet> captures,
   }) async {
@@ -27,12 +47,13 @@ class BiometricApiService {
       captures,
       token: token,
     );
-    return response is Map && response['accepted'] == true;
+    return _ldpcInputFromResponse(response);
   }
 
-  /// Atomically creates a Wrytte-ID account after, and only after, the
-  /// server accepts its biometric enrollment. No session exists on rejection.
-  static Future<Map<String, dynamic>> enrollNew({
+  /// Validates a capture and returns a short-lived enrolment ticket. Flutter
+  /// must create the local LDPC commitment before exchanging that ticket for
+  /// an account; a rejected scan creates neither account nor session.
+  static Future<BiometricLdpcInput> enrollNew({
     required String wrytteId,
     required List<BiometricCropSet> captures,
   }) async {
@@ -41,10 +62,10 @@ class BiometricApiService {
       captures,
       fields: {'wrytteId': wrytteId},
     );
-    return response is Map ? Map<String, dynamic>.from(response) : const {};
+    return _ldpcInputFromResponse(response, needsEnrollmentTicket: true);
   }
 
-  static Future<Map<String, dynamic>> verify({
+  static Future<BiometricLdpcInput> verify({
     required String wrytteId,
     required List<BiometricCropSet> captures,
   }) async {
@@ -53,7 +74,51 @@ class BiometricApiService {
       captures,
       fields: {'wrytteId': wrytteId},
     );
-    return response is Map ? Map<String, dynamic>.from(response) : const {};
+    return _ldpcInputFromResponse(response);
+  }
+
+  static BiometricLdpcInput _ldpcInputFromResponse(
+    dynamic response, {
+    bool needsEnrollmentTicket = false,
+  }) {
+    if (response is! Map || response['accepted'] != true) {
+      return BiometricLdpcInput.rejected();
+    }
+    try {
+      final encoded = response['ldpcBits']?.toString() ?? '';
+      if (encoded.length > 1024) throw const FormatException();
+      final packed = base64Decode(encoded);
+      if (packed.length != _packedLdpcInputByteCount) {
+        throw const FormatException();
+      }
+      final ticket = response['enrollmentTicket']?.toString().trim();
+      if (needsEnrollmentTicket && (ticket == null || ticket.isEmpty)) {
+        throw const FormatException();
+      }
+      final normalizedTicket = ticket == null || ticket.isEmpty ? null : ticket;
+      return BiometricLdpcInput._(
+        accepted: true,
+        ldpcBits: _unpackLdpcBits(Uint8List.fromList(packed)),
+        enrollmentTicket: normalizedTicket,
+      );
+    } catch (_) {
+      // Treat a malformed biometric response exactly like a generic denial.
+      return BiometricLdpcInput.rejected();
+    }
+  }
+
+  @visibleForTesting
+  static Uint8List unpackLdpcBits(Uint8List packed) => _unpackLdpcBits(packed);
+
+  static Uint8List _unpackLdpcBits(Uint8List packed) {
+    if (packed.length != _packedLdpcInputByteCount) {
+      throw const FormatException('Invalid biometric response.');
+    }
+    final bits = Uint8List(ldpcInputBitCount);
+    for (var index = 0; index < bits.length; index++) {
+      bits[index] = (packed[index ~/ 8] >> (7 - index % 8)) & 1;
+    }
+    return bits;
   }
 
   static Future<dynamic> _send(

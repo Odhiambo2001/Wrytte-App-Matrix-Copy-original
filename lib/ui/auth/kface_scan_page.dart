@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -10,12 +11,15 @@ import 'package:wrytte/services/face/biometric_api_service.dart';
 import 'package:wrytte/services/face/biometric_enrollment_timing.dart';
 import 'package:wrytte/services/face/camera_frame_converter.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
+import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
+import 'package:wrytte/services/face/local_face_signature_service.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
 import 'package:wrytte/ui/auth/kface_access_result_page.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
-/// Server-biometric scanner. Existing Wrytte-ID users are treated as needing
-/// enrolment again: no local face commitment is read or retained.
+/// Camera and RetinaFace stay on-device. The backend owns alignment, AdaFace,
+/// liveness, and quantization; Flutter owns the local LDPC commitment and
+/// proof-of-possession signature. This keeps the scan interface unchanged.
 class KFaceScanPage extends StatefulWidget {
   const KFaceScanPage({
     super.key,
@@ -34,6 +38,8 @@ class KFaceScanPage extends StatefulWidget {
 class _KFaceScanPageState extends State<KFaceScanPage> {
   static const _bottomPanelHeight = 250.0;
   final _pipeline = FaceBiometricPipeline();
+  final _ldpc = LdpcFuzzyCommitment();
+  final _signatureService = LocalFaceSignatureService();
   CameraController? _camera;
   bool _ready = false;
   bool _sending = false;
@@ -142,24 +148,23 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     if (mounted) setState(() => _status = 'Verifying securely…');
     try {
       if (_enrolling) {
-        // The server creates the account only after biometric acceptance. A
-        // rejected scan therefore cannot leave a usable local session behind.
-        final response = await BiometricApiService.enrollNew(
+        final biometric = await BiometricApiService.enrollNew(
           wrytteId: widget.wrytteId,
           captures: _pipeline.cropSets,
         );
-        final accepted = response['token']?.toString().isNotEmpty == true;
-        if (!accepted) {
+        if (!biometric.accepted || biometric.enrollmentTicket == null) {
           await _resumeAfterBiometricRejection();
           return;
         }
-        // The response has arrived, so the five upload candidates are no
-        // longer needed. Clear them before session storage or navigation.
+        // The backend has accepted the five frames. They are never needed for
+        // LDPC, so discard every candidate before local key work begins.
         _pipeline.reset();
-        await AuthService.instance.completeServerBiometricSignIn(
-          response,
+        final enrollment = await _createLocalEnrollment(biometric.ldpcBits);
+        await AuthService.instance.completeClientBiometricEnrollment(
           wrytteId: widget.wrytteId,
-          deferNonEssentialInitialization: true,
+          biometricEnrollmentTicket: biometric.enrollmentTicket!,
+          kmap: enrollment.commitment.toJson(),
+          publicKey: enrollment.publicKey,
         );
         if (!mounted) return;
         _logTransitionTiming('profile_setup');
@@ -169,21 +174,37 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           ),
         );
       } else {
-        final response = await BiometricApiService.verify(
+        final recovery =
+            widget.recoveryData ??
+            await AuthService.instance.getKFaceRecoveryData(
+              wrytteId: widget.wrytteId,
+            );
+        final biometric = await BiometricApiService.verify(
           wrytteId: widget.wrytteId,
           captures: _pipeline.cropSets,
         );
-        final accepted = response['token']?.toString().isNotEmpty == true;
-        if (!accepted) {
+        if (!biometric.accepted) {
           await _resumeAfterBiometricRejection();
           return;
         }
-        // The response has arrived, so the five upload candidates are no
-        // longer needed. Clear them before session storage or navigation.
         _pipeline.reset();
-        await AuthService.instance.completeServerBiometricSignIn(
-          response,
+        final recoveredKey = await _recoverLocalKey(
+          biometric.ldpcBits,
+          recovery.kmap,
+        );
+        if (recoveredKey == null) {
+          await _resumeAfterBiometricRejection();
+          return;
+        }
+        final signature = await _signatureService.signBackendChallenge(
+          hkdfKeyHex: recoveredKey,
+          challengeBase64Url: recovery.challenge,
+        );
+        await AuthService.instance.completeWrytteIdSignIn(
+          userId: recovery.userId,
           wrytteId: widget.wrytteId,
+          challenge: recovery.challenge,
+          signature: signature,
         );
         if (!mounted) return;
         final user = await AuthService.instance.getCurrentUser();
@@ -213,6 +234,40 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       }
     } finally {
       _sending = false;
+    }
+  }
+
+  Future<_ClientEnrollment> _createLocalEnrollment(Uint8List ldpcBits) async {
+    try {
+      await _ldpc.initialize();
+      final commitment = _ldpc.enrollQuantizedBits(ldpcBits);
+      final key = _ldpc.deriveEnrollmentKeyFromQuantizedBits(
+        ldpcBits,
+        commitment,
+      );
+      final signing = await _signatureService.enroll(key);
+      return _ClientEnrollment(
+        commitment: commitment.withSigningPublicKey(signing.publicKeyBase64),
+        publicKey: signing.publicKeyBase64,
+      );
+    } finally {
+      ldpcBits.fillRange(0, ldpcBits.length, 0);
+    }
+  }
+
+  Future<String?> _recoverLocalKey(
+    Uint8List ldpcBits,
+    Map<String, dynamic> serializedCommitment,
+  ) async {
+    try {
+      await _ldpc.initialize();
+      final result = _ldpc.recoverQuantizedBits(
+        ldpcBits,
+        FuzzyCommitment.fromJson(serializedCommitment),
+      );
+      return result.accepted ? result.derivedKey : null;
+    } finally {
+      ldpcBits.fillRange(0, ldpcBits.length, 0);
     }
   }
 
@@ -409,6 +464,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       ),
     );
   }
+}
+
+class _ClientEnrollment {
+  const _ClientEnrollment({required this.commitment, required this.publicKey});
+
+  final FuzzyCommitment commitment;
+  final String publicKey;
 }
 
 class _ScanCamera extends StatelessWidget {

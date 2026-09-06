@@ -104,7 +104,8 @@ class TargetFaceSelection {
 }
 
 /// Keeps RetinaFace and OpenCV frame preparation on the device. The backend
-/// owns Umeyama, AdaFace, MiniFASNet, quantization, and LDPC.
+/// owns Umeyama, AdaFace, MiniFASNet, and quantization. Flutter performs LDPC
+/// only after the backend has accepted all five candidate captures.
 class FaceBiometricPipeline {
   static const framesToUse = 5;
   static const targetConfidenceThreshold = 0.83;
