@@ -267,36 +267,43 @@ class FaceBiometricPipeline {
   }
 
   FaceDetection? _selectTargetFace(List<FaceDetection> faces) {
-    final eligible =
-        faces.where((face) {
-            final size = math.max(face.width / 640, face.height / 640);
-            return face.confidence >= targetConfidenceThreshold &&
-                _visibleFraction(face) >= fullBboxVisibleThreshold &&
-                size >= normalFaceSizeMinimum &&
-                size <= normalFaceSizeMaximum &&
-                // The backend validates the five RetinaFace landmarks while
-                // calculating the server-owned Umeyama transform.
-                true;
-          }).toList()
-          ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
-    if (eligible.isEmpty) return null;
-    if (eligible.length == 1) return eligible.first;
-    final firstArea = eligible[0].width * eligible[0].height;
-    final secondArea = eligible[1].width * eligible[1].height;
-    return (firstArea - secondArea) / firstArea >= 0.20 ? eligible.first : null;
+    // A biometric capture is permitted for one qualifying normal-distance
+    // face, or for exactly two faces only when the other is far and at least
+    // 0.20 smaller by the detector's size ratio. This intentionally rejects
+    // two normal faces and every three-or-more-face frame.
+    if (faces.isEmpty || faces.length > 2) return null;
+    final selection = selectTargetFace(
+      List<TargetFaceMetrics>.generate(faces.length, (index) {
+        final face = faces[index];
+        final completeness = measureFaceCompleteness(face);
+        final distance = measureFaceDistance(face);
+        return TargetFaceMetrics(
+          faceNumber: index,
+          faceLabel: completeness.label,
+          visibleLandmarks: _hasFiveUsableLandmarks(face) ? 5 : 0,
+          distanceLabel: distance.label,
+          boundingBoxVisibleFraction: completeness.boundingBoxVisibleFraction,
+          faceSizeRatio: distance.sizeRatio,
+          confidence: face.confidence,
+        );
+      }),
+    );
+    final targetNumber = selection.targetFaceNumber;
+    return targetNumber == null ? null : faces[targetNumber];
   }
 
-  double _visibleFraction(FaceDetection face) {
-    final width = math.max(
-      0.0,
-      math.min(640.0, face.right) - math.max(0.0, face.left),
+  static bool _hasFiveUsableLandmarks(FaceDetection face) {
+    final points = <math.Point<double>>[
+      face.landmarks.leftEye,
+      face.landmarks.rightEye,
+      face.landmarks.nose,
+      face.landmarks.leftMouth,
+      face.landmarks.rightMouth,
+    ];
+    return points.every(
+      (point) =>
+          point.x.isFinite && point.y.isFinite && point.x >= 0 && point.y >= 0,
     );
-    final height = math.max(
-      0.0,
-      math.min(640.0, face.bottom) - math.max(0.0, face.top),
-    );
-    final area = face.width * face.height;
-    return area <= 0 ? 0 : (width * height) / area;
   }
 
   /// Best-effort in-memory cleanup once a biometric request has finished.

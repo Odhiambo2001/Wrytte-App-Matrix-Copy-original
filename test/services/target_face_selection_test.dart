@@ -53,6 +53,15 @@ void main() {
     expect(result.reason, 'BOTH_FACES_NORMAL');
   });
 
+  test('rejects every three-face frame even when one face qualifies', () {
+    final result = FaceBiometricPipeline.selectTargetFace([
+      face(1, size: 0.45),
+      face(2, faceLabel: 'PARTIAL', distance: 'FAR', size: 0.25),
+      face(3, faceLabel: 'PARTIAL', distance: 'FAR', size: 0.20),
+    ]);
+    expect(result.targetFaceNumber, isNull);
+  });
+
   test('rejects a face when any strict requirement fails', () {
     final cases = [
       face(1, faceLabel: 'PARTIAL'),
