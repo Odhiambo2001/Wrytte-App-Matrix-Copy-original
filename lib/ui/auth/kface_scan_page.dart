@@ -5,7 +5,6 @@ import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/face/biometric_api_service.dart';
 import 'package:wrytte/services/face/biometric_enrollment_timing.dart';
@@ -62,9 +61,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   Future<void> _initialize() async {
     try {
-      if (!(await Permission.camera.request()).isGranted) {
-        throw Exception('Camera permission is required.');
-      }
       await _pipeline.initializeDetector();
       final cameras = await availableCameras();
       final description = cameras.firstWhere(
