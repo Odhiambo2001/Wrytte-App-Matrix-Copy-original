@@ -31,20 +31,20 @@ void main() {
     expect(result.label, 'NORMAL');
   });
 
-  test('includes 0.35 and 0.70 boundaries in normal', () {
+  test('includes 0.34 and 0.72 boundaries in normal', () {
     expect(
-      FaceBiometricPipeline.measureFaceDistance(face(100, 224)).label,
+      FaceBiometricPipeline.measureFaceDistance(face(100, 217.6)).label,
       'NORMAL',
     );
     expect(
-      FaceBiometricPipeline.measureFaceDistance(face(100, 448)).label,
+      FaceBiometricPipeline.measureFaceDistance(face(100, 460.8)).label,
       'NORMAL',
     );
   });
 
   test('classifies a large RetinaFace box as close', () {
-    final result = FaceBiometricPipeline.measureFaceDistance(face(400, 460));
+    final result = FaceBiometricPipeline.measureFaceDistance(face(400, 470));
     expect(result.label, 'CLOSE');
-    expect(result.sizeRatio, closeTo(460 / 640, 0.0001));
+    expect(result.sizeRatio, closeTo(470 / 640, 0.0001));
   });
 }

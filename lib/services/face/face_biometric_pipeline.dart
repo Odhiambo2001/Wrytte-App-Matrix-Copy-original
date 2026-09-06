@@ -29,6 +29,13 @@ class BiometricCropSet {
   final int livenessFrameWidth;
   final int livenessFrameHeight;
   final LivenessFaceBox livenessFaceBox;
+
+  /// Clears the frontend-owned candidate bytes immediately after its upload
+  /// has completed. The backend never asks the device to retain candidates.
+  void clear() {
+    retinaFaceBgr.fillRange(0, retinaFaceBgr.length, 0);
+    livenessFrameBgr.fillRange(0, livenessFrameBgr.length, 0);
+  }
 }
 
 class FrameAnalysis {
@@ -36,15 +43,15 @@ class FrameAnalysis {
     required this.faceDetected,
     required this.targetFaceSelected,
     required this.alignmentAccepted,
-    required this.acceptedFrameCount,
     required this.processingMilliseconds,
+    this.capture,
   });
 
   final bool faceDetected;
   final bool targetFaceSelected;
   final bool alignmentAccepted;
-  final int acceptedFrameCount;
   final int processingMilliseconds;
+  final BiometricCropSet? capture;
 }
 
 class FaceDistance {
@@ -105,7 +112,7 @@ class TargetFaceSelection {
 
 /// Keeps RetinaFace and OpenCV frame preparation on the device. The backend
 /// owns Umeyama, AdaFace, MiniFASNet, and quantization. Flutter performs LDPC
-/// only after the backend has accepted all five candidate captures.
+/// only after the backend has accepted five immediately uploaded candidates.
 class FaceBiometricPipeline {
   static const framesToUse = 5;
   static const targetConfidenceThreshold = 0.83;
@@ -115,11 +122,7 @@ class FaceBiometricPipeline {
 
   final RetinaFaceDetector retinaFace = RetinaFaceDetector();
   final OpenCvFacePreprocessor openCv = OpenCvFacePreprocessor();
-  final List<BiometricCropSet> _acceptedCrops = [];
   bool _processing = false;
-
-  int get acceptedFrameCount => _acceptedCrops.length;
-  List<BiometricCropSet> get cropSets => List.unmodifiable(_acceptedCrops);
 
   Future<void> initializeDetector() => retinaFace.initialize();
 
@@ -128,9 +131,9 @@ class FaceBiometricPipeline {
     final heightRatio = face.height / 640;
     final size = math.max(widthRatio, heightRatio);
     return FaceDistance(
-      size < 0.35
+      size < normalFaceSizeMinimum
           ? 'FAR'
-          : size > 0.70
+          : size > normalFaceSizeMaximum
           ? 'CLOSE'
           : 'NORMAL',
       widthRatio,
@@ -218,12 +221,11 @@ class FaceBiometricPipeline {
   }
 
   Future<FrameAnalysis> processFrame(img.Image cameraFrame) async {
-    if (_processing || _acceptedCrops.length >= framesToUse) {
+    if (_processing) {
       return FrameAnalysis(
         faceDetected: false,
         targetFaceSelected: false,
         alignmentAccepted: false,
-        acceptedFrameCount: _acceptedCrops.length,
         processingMilliseconds: 0,
       );
     }
@@ -238,27 +240,24 @@ class FaceBiometricPipeline {
           faceDetected: faces.isNotEmpty,
           targetFaceSelected: false,
           alignmentAccepted: false,
-          acceptedFrameCount: _acceptedCrops.length,
           processingMilliseconds: stopwatch.elapsedMilliseconds,
         );
       }
       final livenessFaceBox = openCv.mapFaceToOriginalBox(prepared, target);
-      _acceptedCrops.add(
-        BiometricCropSet(
-          retinaFaceBgr: Uint8List.fromList(prepared.bgr),
-          adafaceLandmarks: target.landmarks,
-          livenessFrameBgr: Uint8List.fromList(prepared.originalBgr),
-          livenessFrameWidth: prepared.originalWidth,
-          livenessFrameHeight: prepared.originalHeight,
-          livenessFaceBox: livenessFaceBox,
-        ),
+      final capture = BiometricCropSet(
+        retinaFaceBgr: Uint8List.fromList(prepared.bgr),
+        adafaceLandmarks: target.landmarks,
+        livenessFrameBgr: Uint8List.fromList(prepared.originalBgr),
+        livenessFrameWidth: prepared.originalWidth,
+        livenessFrameHeight: prepared.originalHeight,
+        livenessFaceBox: livenessFaceBox,
       );
       return FrameAnalysis(
         faceDetected: true,
         targetFaceSelected: true,
         alignmentAccepted: true,
-        acceptedFrameCount: _acceptedCrops.length,
         processingMilliseconds: stopwatch.elapsedMilliseconds,
+        capture: capture,
       );
     } finally {
       prepared.dispose();
@@ -307,16 +306,9 @@ class FaceBiometricPipeline {
   }
 
   /// Best-effort in-memory cleanup once a biometric request has finished.
-  /// Camera frames are never written to device storage. Dart cannot promise
-  /// secure physical-memory erasure, but zeroing our owned byte arrays before
-  /// releasing their references minimizes their lifetime in this process.
-  void reset() {
-    for (final capture in _acceptedCrops) {
-      capture.retinaFaceBgr.fillRange(0, capture.retinaFaceBgr.length, 0);
-      capture.livenessFrameBgr.fillRange(0, capture.livenessFrameBgr.length, 0);
-    }
-    _acceptedCrops.clear();
-  }
+  /// Each candidate is cleared by its caller after its immediate upload, so
+  /// this pipeline never accumulates camera frames in device memory.
+  void reset() {}
 
   Future<void> dispose() async {
     reset();

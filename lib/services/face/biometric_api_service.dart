@@ -31,6 +31,34 @@ class BiometricLdpcInput {
   final String? enrollmentTicket;
 }
 
+/// Result of one immediately uploaded camera candidate. The backend returns
+/// LDPC material only after it has accepted candidate index four; earlier
+/// responses contain no embedding, score, image, or biometric template.
+class BiometricCandidateResult {
+  const BiometricCandidateResult._({
+    required this.accepted,
+    required this.captureSessionId,
+    required this.index,
+    required this.acceptedCandidates,
+    this.completedInput,
+  });
+
+  const BiometricCandidateResult.rejected({
+    this.captureSessionId,
+    required this.index,
+    required this.acceptedCandidates,
+  }) : accepted = false,
+       completedInput = null;
+
+  final bool accepted;
+  final String? captureSessionId;
+  final int index;
+  final int acceptedCandidates;
+  final BiometricLdpcInput? completedInput;
+
+  bool get complete => completedInput != null;
+}
+
 class BiometricApiService {
   static const ldpcInputBitCount = 832;
   static const _packedLdpcInputByteCount = ldpcInputBitCount ~/ 8;
@@ -75,6 +103,105 @@ class BiometricApiService {
       fields: {'wrytteId': wrytteId},
     );
     return _ldpcInputFromResponse(response);
+  }
+
+  /// Sends one target-face candidate as soon as Flutter selects it. The
+  /// backend liveness-checks the pair, associates it with [candidateIndex],
+  /// and retains only an in-memory AdaFace vector until all five indexes pass.
+  static Future<BiometricCandidateResult> enrollNewCandidate({
+    required String wrytteId,
+    required int candidateIndex,
+    String? captureSessionId,
+    required BiometricCropSet capture,
+  }) async {
+    final response = await _sendCandidate(
+      '/api/biometrics/enroll/new/candidate',
+      wrytteId: wrytteId,
+      candidateIndex: candidateIndex,
+      captureSessionId: captureSessionId,
+      capture: capture,
+    );
+    return _candidateResultFromResponse(response, needsEnrollmentTicket: true);
+  }
+
+  static Future<BiometricCandidateResult> verifyCandidate({
+    required String wrytteId,
+    required int candidateIndex,
+    String? captureSessionId,
+    required BiometricCropSet capture,
+  }) async {
+    final response = await _sendCandidate(
+      '/api/biometrics/verify/candidate',
+      wrytteId: wrytteId,
+      candidateIndex: candidateIndex,
+      captureSessionId: captureSessionId,
+      capture: capture,
+    );
+    return _candidateResultFromResponse(response);
+  }
+
+  static BiometricCandidateResult _candidateResultFromResponse(
+    dynamic response, {
+    bool needsEnrollmentTicket = false,
+  }) {
+    if (response is! Map) {
+      return const BiometricCandidateResult.rejected(
+        index: -1,
+        acceptedCandidates: 0,
+      );
+    }
+    final index = _asInt(response['index']) ?? -1;
+    final acceptedCandidates = _asInt(response['acceptedCandidates']) ?? 0;
+    final sessionId = response['captureSessionId']?.toString().trim();
+    final normalizedSessionId =
+        sessionId == null || sessionId.isEmpty ? null : sessionId;
+    if (response['accepted'] != true) {
+      return BiometricCandidateResult.rejected(
+        captureSessionId: normalizedSessionId,
+        index: index,
+        acceptedCandidates: acceptedCandidates,
+      );
+    }
+    if (index < 0 ||
+        index >= FaceBiometricPipeline.framesToUse ||
+        acceptedCandidates < 1 ||
+        acceptedCandidates > FaceBiometricPipeline.framesToUse ||
+        normalizedSessionId == null) {
+      return const BiometricCandidateResult.rejected(
+        index: -1,
+        acceptedCandidates: 0,
+      );
+    }
+    if (acceptedCandidates < FaceBiometricPipeline.framesToUse) {
+      return BiometricCandidateResult._(
+        accepted: true,
+        captureSessionId: normalizedSessionId,
+        index: index,
+        acceptedCandidates: acceptedCandidates,
+      );
+    }
+    final completed = _ldpcInputFromResponse(
+      response,
+      needsEnrollmentTicket: needsEnrollmentTicket,
+    );
+    if (!completed.accepted) {
+      return const BiometricCandidateResult.rejected(
+        index: -1,
+        acceptedCandidates: 0,
+      );
+    }
+    return BiometricCandidateResult._(
+      accepted: true,
+      captureSessionId: normalizedSessionId,
+      index: index,
+      acceptedCandidates: acceptedCandidates,
+      completedInput: completed,
+    );
+  }
+
+  static int? _asInt(Object? value) {
+    if (value is int) return value;
+    return int.tryParse(value?.toString() ?? '');
   }
 
   static BiometricLdpcInput _ldpcInputFromResponse(
@@ -198,6 +325,70 @@ class BiometricApiService {
       print(
         '[BiometricTiming] request=$requestId stage=upload_and_response '
         'elapsed_ms=${stopwatch.elapsedMilliseconds}',
+      );
+    }
+  }
+
+  static Future<dynamic> _sendCandidate(
+    String path, {
+    required String wrytteId,
+    required int candidateIndex,
+    required String? captureSessionId,
+    required BiometricCropSet capture,
+  }) async {
+    if (candidateIndex < 0 ||
+        candidateIndex >= FaceBiometricPipeline.framesToUse) {
+      throw ArgumentError('Invalid biometric candidate index.');
+    }
+    // PNG encoding remains off the UI isolate while the camera preview keeps
+    // running. This is a single candidate pair, not a five-frame batch.
+    final encoded = await compute(_encodeCapture, <String, Object>{
+      'retinaFace': capture.retinaFaceBgr,
+      'landmarks': _landmarks(capture.adafaceLandmarks),
+      'livenessFrame': capture.livenessFrameBgr,
+      'livenessFrameWidth': capture.livenessFrameWidth,
+      'livenessFrameHeight': capture.livenessFrameHeight,
+      'x': capture.livenessFaceBox.x,
+      'y': capture.livenessFaceBox.y,
+      'width': capture.livenessFaceBox.width,
+      'height': capture.livenessFaceBox.height,
+    });
+    final requestId = _requestId();
+    final stopwatch = Stopwatch()..start();
+    try {
+      return await ApiService.postMultipart(
+        path,
+        <String, String>{
+          'wrytteId': wrytteId,
+          'candidateIndex': '$candidateIndex',
+          if (captureSessionId != null && captureSessionId.isNotEmpty)
+            'captureSessionId': captureSessionId,
+          'livenessGeometry': jsonEncode(<Object>[encoded['geometry']!]),
+          'adafaceLandmarks': jsonEncode(<Object>[encoded['landmarks']!]),
+        },
+        files: <http.MultipartFile>[
+          http.MultipartFile.fromBytes(
+            'retinaFaceFrame',
+            encoded['retinaFace']! as Uint8List,
+            filename: 'retina-face.png',
+            contentType: MediaType('image', 'png'),
+          ),
+          http.MultipartFile.fromBytes(
+            'livenessFrame',
+            encoded['livenessFrame']! as Uint8List,
+            filename: 'liveness-frame.png',
+            contentType: MediaType('image', 'png'),
+          ),
+        ],
+        headers: <String, String>{'X-Biometric-Request-Id': requestId},
+      );
+    } finally {
+      stopwatch.stop();
+      // No image, embedding, Wrytte ID, session ID, score, or token is logged.
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] request=$requestId stage=candidate_upload_and_response '
+        'index=$candidateIndex elapsed_ms=${stopwatch.elapsedMilliseconds}',
       );
     }
   }

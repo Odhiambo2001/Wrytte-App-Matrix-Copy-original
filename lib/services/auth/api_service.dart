@@ -234,7 +234,11 @@ class ApiService {
       final shouldRedact =
           lowerKey.contains('secret') ||
           lowerKey.contains('token') ||
-          lowerKey.contains('password');
+          lowerKey.contains('password') ||
+          lowerKey.contains('wrytteid') ||
+          lowerKey.contains('capturesession') ||
+          lowerKey.contains('landmark') ||
+          lowerKey.contains('geometry');
       return MapEntry(key, shouldRedact ? '***' : value);
     });
   }

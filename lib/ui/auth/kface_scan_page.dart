@@ -43,7 +43,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   CameraController? _camera;
   bool _ready = false;
   bool _sending = false;
+  bool _uploadingCandidate = false;
   bool _complete = false;
+  int _acceptedCandidateCount = 0;
+  String? _captureSessionId;
   Stopwatch? _captureToTransitionTimer;
   DateTime? _lastFrame;
   String _status = 'Center your face inside the ring.';
@@ -95,7 +98,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   }
 
   Future<void> _onFrame(CameraImage frame) async {
-    if (!_ready || _sending || _complete) return;
+    if (!_ready || _sending || _uploadingCandidate || _complete) return;
     final now = DateTime.now();
     if (_lastFrame != null &&
         now.difference(_lastFrame!) < const Duration(milliseconds: 100)) {
@@ -122,24 +125,103 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       } else if (!analysis.alignmentAccepted) {
         setState(() => _status = 'Hold still and look at the camera.');
       } else {
+        final capture = analysis.capture;
+        if (capture == null) return;
+        final candidateIndex = _acceptedCandidateCount;
+        _uploadingCandidate = true;
+        if (candidateIndex == FaceBiometricPipeline.framesToUse - 1) {
+          _captureToTransitionTimer = Stopwatch()..start();
+          if (_enrolling) BiometricEnrollmentTiming.start();
+        }
         setState(
           () =>
               _status =
-                  'Capturing ${analysis.acceptedFrameCount} of ${FaceBiometricPipeline.framesToUse}…',
+                  'Capturing ${candidateIndex + 1} of ${FaceBiometricPipeline.framesToUse}…',
         );
-      }
-      if (analysis.acceptedFrameCount == FaceBiometricPipeline.framesToUse) {
-        _complete = true;
-        _captureToTransitionTimer = Stopwatch()..start();
-        if (_enrolling) BiometricEnrollmentTiming.start();
-        unawaited(_submit());
+        unawaited(_uploadCandidate(capture, candidateIndex));
       }
     } catch (_) {
       // Frames are disposable; an invalid transient camera frame is ignored.
     }
   }
 
-  Future<void> _submit() async {
+  /// Sends each selected target frame immediately. A rejected candidate stays
+  /// at the same index, while accepted candidates are deleted from device
+  /// memory before the next frame is scanned.
+  Future<void> _uploadCandidate(
+    BiometricCropSet capture,
+    int candidateIndex,
+  ) async {
+    try {
+      final result =
+          _enrolling
+              ? await BiometricApiService.enrollNewCandidate(
+                wrytteId: widget.wrytteId,
+                candidateIndex: candidateIndex,
+                captureSessionId: _captureSessionId,
+                capture: capture,
+              )
+              : await BiometricApiService.verifyCandidate(
+                wrytteId: widget.wrytteId,
+                candidateIndex: candidateIndex,
+                captureSessionId: _captureSessionId,
+                capture: capture,
+              );
+      capture.clear();
+      if (!mounted) return;
+
+      if (!result.accepted ||
+          result.index != candidateIndex ||
+          result.acceptedCandidates != candidateIndex + 1) {
+        // A false result reveals neither liveness nor account information.
+        // Keep a valid server session so the same index can be replaced; an
+        // absent session means this client must start a fresh five-frame set.
+        _captureSessionId = result.captureSessionId;
+        _acceptedCandidateCount =
+            result.captureSessionId == null ? 0 : result.acceptedCandidates;
+        if (candidateIndex == FaceBiometricPipeline.framesToUse - 1) {
+          _captureToTransitionTimer?.stop();
+          _captureToTransitionTimer = null;
+          if (_enrolling) BiometricEnrollmentTiming.cancel();
+        }
+        setState(() => _status = 'Center your face inside the ring.');
+        return;
+      }
+
+      _captureSessionId = result.captureSessionId;
+      _acceptedCandidateCount = result.acceptedCandidates;
+      if (!result.complete) {
+        setState(
+          () =>
+              _status =
+                  'Capturing $_acceptedCandidateCount of ${FaceBiometricPipeline.framesToUse}…',
+        );
+        return;
+      }
+
+      _complete = true;
+      await _completeSubmission(result.completedInput!);
+    } catch (error) {
+      // Type-only diagnostic: no request data, identity, image, or token.
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] stage=candidate_failure type=${error.runtimeType}',
+      );
+      if (candidateIndex == FaceBiometricPipeline.framesToUse - 1) {
+        _captureToTransitionTimer?.stop();
+        _captureToTransitionTimer = null;
+        if (_enrolling) BiometricEnrollmentTiming.cancel();
+      }
+      if (mounted) {
+        setState(() => _status = 'Center your face inside the ring.');
+      }
+    } finally {
+      capture.clear();
+      _uploadingCandidate = false;
+    }
+  }
+
+  Future<void> _completeSubmission(BiometricLdpcInput biometric) async {
     _sending = true;
     final camera = _camera;
     if (camera?.value.isStreamingImages == true) {
@@ -148,17 +230,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     if (mounted) setState(() => _status = 'Verifying securely…');
     try {
       if (_enrolling) {
-        final biometric = await BiometricApiService.enrollNew(
-          wrytteId: widget.wrytteId,
-          captures: _pipeline.cropSets,
-        );
         if (!biometric.accepted || biometric.enrollmentTicket == null) {
           await _resumeAfterBiometricRejection();
           return;
         }
-        // The backend has accepted the five frames. They are never needed for
-        // LDPC, so discard every candidate before local key work begins.
-        _pipeline.reset();
         final enrollment = await _createLocalEnrollment(biometric.ldpcBits);
         await AuthService.instance.completeClientBiometricEnrollment(
           wrytteId: widget.wrytteId,
@@ -179,15 +254,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             await AuthService.instance.getKFaceRecoveryData(
               wrytteId: widget.wrytteId,
             );
-        final biometric = await BiometricApiService.verify(
-          wrytteId: widget.wrytteId,
-          captures: _pipeline.cropSets,
-        );
         if (!biometric.accepted) {
           await _resumeAfterBiometricRejection();
           return;
         }
-        _pipeline.reset();
         final recoveredKey = await _recoverLocalKey(
           biometric.ldpcBits,
           recovery.kmap,
@@ -280,6 +350,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _captureToTransitionTimer?.stop();
     _captureToTransitionTimer = null;
     _complete = false;
+    _acceptedCandidateCount = 0;
+    _captureSessionId = null;
     _lastFrame = null;
     _sending = false;
     if (!mounted) return;
@@ -321,10 +393,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
 
   Future<void> _startOver() async {
-    if (_sending) return;
+    if (_sending || _uploadingCandidate) return;
     _pipeline.reset();
     setState(() {
       _complete = false;
+      _acceptedCandidateCount = 0;
+      _captureSessionId = null;
       _lastFrame = null;
       _status = 'Center your face inside the ring.';
     });
@@ -345,7 +419,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   @override
   Widget build(BuildContext context) {
-    final progress = (_pipeline.acceptedFrameCount /
+    final progress = (_acceptedCandidateCount /
             FaceBiometricPipeline.framesToUse)
         .clamp(0.0, 1.0);
     final size = MediaQuery.sizeOf(context);
