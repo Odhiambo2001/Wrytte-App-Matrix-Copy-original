@@ -202,10 +202,16 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       }
 
       _complete = true;
-      final completedInput =
-          _enrolling
-              ? await _claimEnrollmentInput(result.enrollmentProvision)
-              : result.completedInput;
+      if (_enrolling) {
+        final provision = result.enrollmentProvision;
+        if (provision == null) {
+          await _resumeAfterBiometricRejection();
+          return;
+        }
+        await _openProfileWhileBiometricsFinalize(provision);
+        return;
+      }
+      final completedInput = result.completedInput;
       if (completedInput == null || !completedInput.accepted) {
         await _resumeAfterBiometricRejection();
         return;
@@ -239,6 +245,85 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       wrytteId: widget.wrytteId,
       ldpcInputTicket: provision.ldpcInputTicket,
     );
+  }
+
+  /// The fifth live candidate already has an authenticated backend session.
+  /// Move to Profile Setup immediately; the one-time LDPC input is delivered
+  /// later while the user names the account and enters Home.
+  Future<void> _openProfileWhileBiometricsFinalize(
+    BiometricEnrollmentProvision provision,
+  ) async {
+    _sending = true;
+    final camera = _camera;
+    if (camera?.value.isStreamingImages == true) {
+      await camera!.stopImageStream();
+    }
+    await AuthService.instance.persistPhoneSession(
+      userId: provision.userId,
+      username:
+          provision.username.isNotEmpty ? provision.username : widget.wrytteId,
+      phone: provision.phone.isNotEmpty ? provision.phone : widget.wrytteId,
+      secret: provision.secret,
+      token: provision.token,
+      preferMatrixRegisterFirst: true,
+      deferNonEssentialInitialization: true,
+    );
+    // This task retains no image. It waits only for the opaque delivery ticket
+    // and completes the client-owned LDPC commitment after navigation.
+    unawaited(_completeEnrollmentInBackground(provision));
+    if (!mounted) return;
+    _logTransitionTiming('profile_setup');
+    await Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => const AddProfilePage(isNewUser: true),
+      ),
+    );
+  }
+
+  Future<void> _completeEnrollmentInBackground(
+    BiometricEnrollmentProvision provision,
+  ) async {
+    try {
+      final biometric = await _waitForEnrollmentLdpcInput(provision);
+      if (biometric == null ||
+          !biometric.accepted ||
+          biometric.enrollmentTicket == null) {
+        throw StateError('Biometric finalization was not accepted.');
+      }
+      final enrollment = await _createLocalEnrollment(biometric.ldpcBits);
+      await AuthService.instance.completeClientBiometricEnrollment(
+        wrytteId: widget.wrytteId,
+        biometricEnrollmentTicket: biometric.enrollmentTicket!,
+        kmap: enrollment.commitment.toJson(),
+        publicKey: enrollment.publicKey,
+      );
+      // Deliberately no identity, ticket, image, score, vector, or key data.
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] stage=background_enrollment_finalization outcome=accepted',
+      );
+    } catch (error) {
+      // The account session remains valid while a transient background task is
+      // retried by the next app launch or explicit biometric recovery flow.
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] stage=background_enrollment_finalization type=${error.runtimeType}',
+      );
+    }
+  }
+
+  Future<BiometricLdpcInput?> _waitForEnrollmentLdpcInput(
+    BiometricEnrollmentProvision provision,
+  ) async {
+    // The endpoint is rate-limited. Ten six-second polls fit its one-minute
+    // window while giving server-side Umeyama/AdaFace ample time to finish.
+    for (var attempt = 0; attempt < 10; attempt++) {
+      final input = await _claimEnrollmentInput(provision);
+      if (input == null || input.accepted) return input;
+      if (!input.pending) return null;
+      await Future<void>.delayed(const Duration(seconds: 6));
+    }
+    return null;
   }
 
   Future<void> _completeSubmission(BiometricLdpcInput biometric) async {

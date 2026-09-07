@@ -19,16 +19,25 @@ class BiometricLdpcInput {
   const BiometricLdpcInput._({
     required this.accepted,
     required this.ldpcBits,
+    required this.pending,
     this.enrollmentTicket,
   });
 
   BiometricLdpcInput.rejected()
     : accepted = false,
       ldpcBits = Uint8List(0),
+      pending = false,
+      enrollmentTicket = null;
+
+  BiometricLdpcInput.pending()
+    : accepted = false,
+      ldpcBits = Uint8List(0),
+      pending = true,
       enrollmentTicket = null;
 
   final bool accepted;
   final Uint8List ldpcBits;
+  final bool pending;
   final String? enrollmentTicket;
 }
 
@@ -38,12 +47,16 @@ class BiometricLdpcInput {
 class BiometricEnrollmentProvision {
   const BiometricEnrollmentProvision({
     required this.userId,
+    required this.username,
+    required this.phone,
     required this.secret,
     required this.token,
     required this.ldpcInputTicket,
   });
 
   final String userId;
+  final String username;
+  final String phone;
   final String secret;
   final String token;
   final String ldpcInputTicket;
@@ -132,7 +145,8 @@ class BiometricApiService {
 
   /// Sends one target-face candidate as soon as Flutter selects it. The
   /// backend liveness-checks the pair, associates it with [candidateIndex],
-  /// and retains only an in-memory AdaFace vector until all five indexes pass.
+  /// and retains the temporary detector PNG only until background biometric
+  /// finalization consumes it after the fifth live candidate.
   static Future<BiometricCandidateResult> enrollNewCandidate({
     required String wrytteId,
     required int candidateIndex,
@@ -268,6 +282,8 @@ class BiometricApiService {
   ) {
     final userId =
         (response['userid'] ?? response['userId'] ?? '').toString().trim();
+    final username = response['username']?.toString().trim() ?? '';
+    final phone = response['phone']?.toString().trim() ?? '';
     final secret = response['secret']?.toString().trim() ?? '';
     final token = response['token']?.toString().trim() ?? '';
     final ldpcInputTicket =
@@ -281,6 +297,8 @@ class BiometricApiService {
     }
     return BiometricEnrollmentProvision(
       userId: userId,
+      username: username,
+      phone: phone,
       secret: secret,
       token: token,
       ldpcInputTicket: ldpcInputTicket,
@@ -296,8 +314,13 @@ class BiometricApiService {
     dynamic response, {
     bool needsEnrollmentTicket = false,
   }) {
-    if (response is! Map || response['accepted'] != true) {
+    if (response is! Map) {
       return BiometricLdpcInput.rejected();
+    }
+    if (response['accepted'] != true) {
+      return response['pending'] == true
+          ? BiometricLdpcInput.pending()
+          : BiometricLdpcInput.rejected();
     }
     try {
       final encoded = response['ldpcBits']?.toString() ?? '';
@@ -314,6 +337,7 @@ class BiometricApiService {
       return BiometricLdpcInput._(
         accepted: true,
         ldpcBits: _unpackLdpcBits(Uint8List.fromList(packed)),
+        pending: false,
         enrollmentTicket: normalizedTicket,
       );
     } catch (_) {
