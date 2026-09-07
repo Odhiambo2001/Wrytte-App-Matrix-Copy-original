@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -36,22 +37,36 @@ class KFaceScanPage extends StatefulWidget {
 
 class _KFaceScanPageState extends State<KFaceScanPage> {
   static const _bottomPanelHeight = 250.0;
+  // A continuous scan can inspect far more than five target frames, but only
+  // this many multipart uploads may consume device/network resources at once.
+  static const _maxConcurrentEnrollmentUploads = 15;
+  static const _maxBufferedEnrollmentCaptures = 30;
+  static const _maxEnrollmentSubmissions = 300;
   final _pipeline = FaceBiometricPipeline();
   final _ldpc = LdpcFuzzyCommitment();
   final _signatureService = LocalFaceSignatureService();
   CameraController? _camera;
   bool _ready = false;
   bool _sending = false;
-  bool _uploadingCandidate = false;
+  int _inFlightCandidateUploads = 0;
+  final Queue<BiometricCropSet> _pendingEnrollmentCaptures =
+      Queue<BiometricCropSet>();
   bool _complete = false;
   int _acceptedCandidateCount = 0;
+  int _nextCandidateSubmissionIndex = 0;
   String? _captureSessionId;
   Stopwatch? _captureToTransitionTimer;
-  DateTime? _lastFrame;
   String _status = 'Center your face inside the ring.';
   String? _cameraError;
 
   bool get _enrolling => widget.isEnrollment;
+  bool get _hasCandidateUploadCapacity =>
+      _enrolling
+          ? _nextCandidateSubmissionIndex < _maxEnrollmentSubmissions &&
+              _inFlightCandidateUploads + _pendingEnrollmentCaptures.length <
+                  _maxConcurrentEnrollmentUploads +
+                      _maxBufferedEnrollmentCaptures
+          : _inFlightCandidateUploads == 0;
 
   @override
   void initState() {
@@ -83,6 +98,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _camera = camera;
         _ready = true;
       });
+      if (_enrolling) unawaited(_startEnrollmentCaptureSession());
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -94,13 +110,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   }
 
   Future<void> _onFrame(CameraImage frame) async {
-    if (!_ready || _sending || _uploadingCandidate || _complete) return;
-    final now = DateTime.now();
-    if (_lastFrame != null &&
-        now.difference(_lastFrame!) < const Duration(milliseconds: 100)) {
+    if (!_ready || _sending || _complete || !_hasCandidateUploadCapacity) {
       return;
     }
-    _lastFrame = now;
+    if (_enrolling && _captureSessionId == null) return;
     try {
       final camera = _camera;
       if (camera == null) return;
@@ -123,27 +136,67 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       } else {
         final capture = analysis.capture;
         if (capture == null) return;
-        final candidateIndex = _acceptedCandidateCount;
-        _uploadingCandidate = true;
-        if (candidateIndex == FaceBiometricPipeline.framesToUse - 1) {
+        if (_captureToTransitionTimer == null && _enrolling) {
           _captureToTransitionTimer = Stopwatch()..start();
-          if (_enrolling) BiometricEnrollmentTiming.start();
+          BiometricEnrollmentTiming.start();
+        }
+        if (_enrolling) {
+          // The BE selects the five live frames. Queue every local target
+          // capture, then drain up to fifteen uploads concurrently.
+          _pendingEnrollmentCaptures.addLast(capture);
+          _dispatchPendingEnrollmentCaptures();
+        } else {
+          _inFlightCandidateUploads++;
+          unawaited(_uploadCandidate(capture, _acceptedCandidateCount));
         }
         setState(
           () =>
               _status =
-                  'Capturing ${candidateIndex + 1} of ${FaceBiometricPipeline.framesToUse}…',
+                  'Capturing $_acceptedCandidateCount of ${FaceBiometricPipeline.framesToUse}…',
         );
-        unawaited(_uploadCandidate(capture, candidateIndex));
       }
     } catch (_) {
       // Frames are disposable; an invalid transient camera frame is ignored.
     }
   }
 
-  /// Sends each selected target frame immediately. A rejected candidate stays
-  /// at the same index, while accepted candidates are deleted from device
-  /// memory before the next frame is scanned.
+  /// The camera opens immediately. This tiny request only obtains the opaque
+  /// backend session that lets valid target frames stream in a bounded queue.
+  Future<void> _startEnrollmentCaptureSession() async {
+    try {
+      final sessionId = await BiometricApiService.startEnrollmentCaptureSession(
+        wrytteId: widget.wrytteId,
+      );
+      if (!mounted || _complete || sessionId == null) return;
+      _captureSessionId = sessionId;
+      _dispatchPendingEnrollmentCaptures();
+    } catch (_) {
+      // Keep the scanner visible. A later restart obtains a fresh session.
+    }
+  }
+
+  /// Sends every locally valid signup target frame. The BE selects the first
+  /// five that pass both liveness models; it is not restricted to the first
+  /// five submissions. Every local image buffer is cleared after upload.
+  void _dispatchPendingEnrollmentCaptures() {
+    if (!_enrolling || _complete || _sending || _captureSessionId == null) {
+      return;
+    }
+    if (_nextCandidateSubmissionIndex >= _maxEnrollmentSubmissions) {
+      _discardPendingEnrollmentCaptures();
+      return;
+    }
+    while (_inFlightCandidateUploads < _maxConcurrentEnrollmentUploads &&
+        _pendingEnrollmentCaptures.isNotEmpty &&
+        _nextCandidateSubmissionIndex < _maxEnrollmentSubmissions &&
+        !_complete) {
+      final capture = _pendingEnrollmentCaptures.removeFirst();
+      final candidateIndex = _nextCandidateSubmissionIndex++;
+      _inFlightCandidateUploads++;
+      unawaited(_uploadCandidate(capture, candidateIndex));
+    }
+  }
+
   Future<void> _uploadCandidate(
     BiometricCropSet capture,
     int candidateIndex,
@@ -165,20 +218,28 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               );
       capture.clear();
       if (!mounted) return;
+      if (_complete) return;
 
-      if (!result.accepted ||
-          result.index != candidateIndex ||
-          result.acceptedCandidates != candidateIndex + 1) {
+      final validAcceptedResult =
+          result.accepted &&
+          result.index >= 0 &&
+          result.acceptedCandidates >= 1 &&
+          result.acceptedCandidates <= FaceBiometricPipeline.framesToUse;
+      if (!validAcceptedResult) {
         // A false result reveals neither liveness nor account information.
         // Keep a valid server session so the same index can be replaced; an
         // absent session means this client must start a fresh five-frame set.
         _captureSessionId = result.captureSessionId;
         _acceptedCandidateCount =
-            result.captureSessionId == null ? 0 : result.acceptedCandidates;
-        if (candidateIndex == FaceBiometricPipeline.framesToUse - 1) {
-          _captureToTransitionTimer?.stop();
-          _captureToTransitionTimer = null;
-          if (_enrolling) BiometricEnrollmentTiming.cancel();
+            result.captureSessionId == null
+                ? 0
+                : _enrolling
+                ? math.max(_acceptedCandidateCount, result.acceptedCandidates)
+                : result.acceptedCandidates;
+        if (_enrolling && result.captureSessionId == null) {
+          _discardPendingEnrollmentCaptures();
+          _nextCandidateSubmissionIndex = 0;
+          unawaited(_startEnrollmentCaptureSession());
         }
         setState(
           () =>
@@ -191,7 +252,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       }
 
       _captureSessionId = result.captureSessionId;
-      _acceptedCandidateCount = result.acceptedCandidates;
+      _acceptedCandidateCount = math.max(
+        _acceptedCandidateCount,
+        result.acceptedCandidates,
+      );
       if (!result.complete) {
         setState(
           () =>
@@ -223,17 +287,26 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       print(
         '[BiometricTiming] stage=candidate_failure type=${error.runtimeType}',
       );
-      if (candidateIndex == FaceBiometricPipeline.framesToUse - 1) {
-        _captureToTransitionTimer?.stop();
-        _captureToTransitionTimer = null;
-        if (_enrolling) BiometricEnrollmentTiming.cancel();
-      }
       if (mounted) {
         setState(() => _status = 'Center your face inside the ring.');
       }
     } finally {
       capture.clear();
-      _uploadingCandidate = false;
+      _inFlightCandidateUploads = math.max(0, _inFlightCandidateUploads - 1);
+      if (_enrolling &&
+          !_complete &&
+          _nextCandidateSubmissionIndex >= _maxEnrollmentSubmissions &&
+          _inFlightCandidateUploads == 0) {
+        unawaited(_resumeAfterBiometricRejection());
+      } else {
+        _dispatchPendingEnrollmentCaptures();
+      }
+    }
+  }
+
+  void _discardPendingEnrollmentCaptures() {
+    while (_pendingEnrollmentCaptures.isNotEmpty) {
+      _pendingEnrollmentCaptures.removeFirst().clear();
     }
   }
 
@@ -456,9 +529,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _captureToTransitionTimer = null;
     _complete = false;
     _acceptedCandidateCount = 0;
+    _nextCandidateSubmissionIndex = 0;
     _captureSessionId = null;
-    _lastFrame = null;
+    _discardPendingEnrollmentCaptures();
     _sending = false;
+    if (_enrolling) unawaited(_startEnrollmentCaptureSession());
     if (!mounted) return;
     setState(() => _status = 'Center your face inside the ring.');
     final camera = _camera;
@@ -498,25 +573,28 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
 
   Future<void> _startOver() async {
-    if (_sending || _uploadingCandidate) return;
+    if (_sending || _inFlightCandidateUploads > 0) return;
     _pipeline.reset();
     setState(() {
       _complete = false;
       _acceptedCandidateCount = 0;
+      _nextCandidateSubmissionIndex = 0;
       _captureSessionId = null;
-      _lastFrame = null;
       _status = 'Center your face inside the ring.';
     });
+    _discardPendingEnrollmentCaptures();
     final camera = _camera;
     if (camera != null &&
         camera.value.isInitialized &&
         !camera.value.isStreamingImages) {
       await camera.startImageStream(_onFrame);
     }
+    if (_enrolling) unawaited(_startEnrollmentCaptureSession());
   }
 
   @override
   void dispose() {
+    _discardPendingEnrollmentCaptures();
     unawaited(_camera?.dispose());
     unawaited(_pipeline.dispose());
     super.dispose();

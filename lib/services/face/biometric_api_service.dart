@@ -143,10 +143,10 @@ class BiometricApiService {
     return _ldpcInputFromResponse(response);
   }
 
-  /// Sends one target-face candidate as soon as Flutter selects it. The
-  /// backend liveness-checks the pair, associates it with [candidateIndex],
-  /// and retains the temporary detector PNG only until background biometric
-  /// finalization consumes it after the fifth live candidate.
+  /// Sends one target-face candidate as soon as Flutter selects it.
+  /// [candidateIndex] is a unique client submission number, not the final
+  /// biometric slot: concurrent liveness requests may finish in a different
+  /// order. The backend assigns accepted slots 0 through 4 as frames pass.
   static Future<BiometricCandidateResult> enrollNewCandidate({
     required String wrytteId,
     required int candidateIndex,
@@ -161,6 +161,21 @@ class BiometricApiService {
       capture: capture,
     );
     return _candidateResultFromResponse(response, isEnrollment: true);
+  }
+
+  /// Opens one opaque session before Flutter begins up to five concurrent
+  /// liveness uploads. The session is tied to the normalized Wrytte ID, but
+  /// reveals neither account existence nor biometric information.
+  static Future<String?> startEnrollmentCaptureSession({
+    required String wrytteId,
+  }) async {
+    final response = await ApiService.postMultipart(
+      '/api/biometrics/enroll/new/session',
+      <String, String>{'wrytteId': WrytteId.forBackend(wrytteId)},
+    );
+    if (response is! Map || response['accepted'] != true) return null;
+    final sessionId = response['captureSessionId']?.toString().trim() ?? '';
+    return sessionId.isEmpty || sessionId.length > 256 ? null : sessionId;
   }
 
   static Future<BiometricCandidateResult> verifyCandidate({
@@ -448,8 +463,10 @@ class BiometricApiService {
     required String? captureSessionId,
     required BiometricCropSet capture,
   }) async {
-    if (candidateIndex < 0 ||
-        candidateIndex >= FaceBiometricPipeline.framesToUse) {
+    // Five *accepted* candidates are required. A liveness-rejected upload is
+    // replaced with a new submission number, so a bounded continuous scan can
+    // submit up to 300 valid target frames rather than only the first five.
+    if (candidateIndex < 0 || candidateIndex > 299) {
       throw ArgumentError('Invalid biometric candidate index.');
     }
     // PNG encoding remains off the UI isolate while the camera preview keeps
