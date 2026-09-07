@@ -180,7 +180,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _captureToTransitionTimer = null;
           if (_enrolling) BiometricEnrollmentTiming.cancel();
         }
-        setState(() => _status = 'Center your face inside the ring.');
+        setState(
+          () =>
+              _status =
+                  result.errorCode == 'FACE_NOT_LIVE'
+                      ? 'Face could not be verified. Try again.'
+                      : 'Center your face inside the ring.',
+        );
         return;
       }
 
@@ -196,7 +202,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       }
 
       _complete = true;
-      await _completeSubmission(result.completedInput!);
+      final completedInput =
+          _enrolling
+              ? await _claimEnrollmentInput(result.enrollmentProvision)
+              : result.completedInput;
+      if (completedInput == null || !completedInput.accepted) {
+        await _resumeAfterBiometricRejection();
+        return;
+      }
+      await _completeSubmission(completedInput);
     } catch (error) {
       // Type-only diagnostic: no request data, identity, image, or token.
       // ignore: avoid_print
@@ -215,6 +229,16 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       capture.clear();
       _uploadingCandidate = false;
     }
+  }
+
+  Future<BiometricLdpcInput?> _claimEnrollmentInput(
+    BiometricEnrollmentProvision? provision,
+  ) async {
+    if (provision == null) return null;
+    return BiometricApiService.claimEnrollmentLdpcInput(
+      wrytteId: widget.wrytteId,
+      ldpcInputTicket: provision.ldpcInputTicket,
+    );
   }
 
   Future<void> _completeSubmission(BiometricLdpcInput biometric) async {

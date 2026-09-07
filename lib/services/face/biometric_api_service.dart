@@ -32,9 +32,26 @@ class BiometricLdpcInput {
   final String? enrollmentTicket;
 }
 
+/// The signup response returned after five live candidates. These credentials
+/// are consumed internally by the app; the screen never displays them. The
+/// opaque [ldpcInputTicket] is exchanged once for the compact LDPC input.
+class BiometricEnrollmentProvision {
+  const BiometricEnrollmentProvision({
+    required this.userId,
+    required this.secret,
+    required this.token,
+    required this.ldpcInputTicket,
+  });
+
+  final String userId;
+  final String secret;
+  final String token;
+  final String ldpcInputTicket;
+}
+
 /// Result of one immediately uploaded camera candidate. The backend returns
-/// LDPC material only after it has accepted candidate index four; earlier
-/// responses contain no embedding, score, image, or biometric template.
+/// no template, image, or score. On the fifth signup candidate it returns a
+/// provisional account response; the LDPC input is claimed separately.
 class BiometricCandidateResult {
   const BiometricCandidateResult._({
     required this.accepted,
@@ -42,22 +59,27 @@ class BiometricCandidateResult {
     required this.index,
     required this.acceptedCandidates,
     this.completedInput,
-  });
+    this.enrollmentProvision,
+  }) : errorCode = null;
 
   const BiometricCandidateResult.rejected({
     this.captureSessionId,
     required this.index,
     required this.acceptedCandidates,
+    required this.errorCode,
   }) : accepted = false,
-       completedInput = null;
+       completedInput = null,
+       enrollmentProvision = null;
 
   final bool accepted;
   final String? captureSessionId;
   final int index;
   final int acceptedCandidates;
   final BiometricLdpcInput? completedInput;
+  final BiometricEnrollmentProvision? enrollmentProvision;
+  final String? errorCode;
 
-  bool get complete => completedInput != null;
+  bool get complete => completedInput != null || enrollmentProvision != null;
 }
 
 class BiometricApiService {
@@ -124,7 +146,7 @@ class BiometricApiService {
       captureSessionId: captureSessionId,
       capture: capture,
     );
-    return _candidateResultFromResponse(response, needsEnrollmentTicket: true);
+    return _candidateResultFromResponse(response, isEnrollment: true);
   }
 
   static Future<BiometricCandidateResult> verifyCandidate({
@@ -143,14 +165,31 @@ class BiometricApiService {
     return _candidateResultFromResponse(response);
   }
 
+  /// Gets the one-time LDPC input after signup credentials have been returned
+  /// internally. The server retains only 104 packed bytes until this call.
+  static Future<BiometricLdpcInput> claimEnrollmentLdpcInput({
+    required String wrytteId,
+    required String ldpcInputTicket,
+  }) async {
+    final response = await ApiService.postMultipart(
+      '/api/biometrics/enroll/new/ldpc',
+      <String, String>{
+        'wrytteId': WrytteId.forBackend(wrytteId),
+        'ldpcInputTicket': ldpcInputTicket,
+      },
+    );
+    return _ldpcInputFromResponse(response, needsEnrollmentTicket: true);
+  }
+
   static BiometricCandidateResult _candidateResultFromResponse(
     dynamic response, {
-    bool needsEnrollmentTicket = false,
+    bool isEnrollment = false,
   }) {
     if (response is! Map) {
       return const BiometricCandidateResult.rejected(
         index: -1,
         acceptedCandidates: 0,
+        errorCode: null,
       );
     }
     final index = _asInt(response['index']) ?? -1;
@@ -163,6 +202,7 @@ class BiometricApiService {
         captureSessionId: normalizedSessionId,
         index: index,
         acceptedCandidates: acceptedCandidates,
+        errorCode: _errorCode(response['error']),
       );
     }
     if (index < 0 ||
@@ -173,6 +213,7 @@ class BiometricApiService {
       return const BiometricCandidateResult.rejected(
         index: -1,
         acceptedCandidates: 0,
+        errorCode: null,
       );
     }
     if (acceptedCandidates < FaceBiometricPipeline.framesToUse) {
@@ -183,14 +224,29 @@ class BiometricApiService {
         acceptedCandidates: acceptedCandidates,
       );
     }
-    final completed = _ldpcInputFromResponse(
-      response,
-      needsEnrollmentTicket: needsEnrollmentTicket,
-    );
+    if (isEnrollment) {
+      final provision = _enrollmentProvisionFromResponse(response);
+      if (provision == null) {
+        return const BiometricCandidateResult.rejected(
+          index: -1,
+          acceptedCandidates: 0,
+          errorCode: null,
+        );
+      }
+      return BiometricCandidateResult._(
+        accepted: true,
+        captureSessionId: normalizedSessionId,
+        index: index,
+        acceptedCandidates: acceptedCandidates,
+        enrollmentProvision: provision,
+      );
+    }
+    final completed = _ldpcInputFromResponse(response);
     if (!completed.accepted) {
       return const BiometricCandidateResult.rejected(
         index: -1,
         acceptedCandidates: 0,
+        errorCode: null,
       );
     }
     return BiometricCandidateResult._(
@@ -199,6 +255,35 @@ class BiometricApiService {
       index: index,
       acceptedCandidates: acceptedCandidates,
       completedInput: completed,
+    );
+  }
+
+  static String? _errorCode(Object? value) {
+    final code = value?.toString().trim();
+    return code == null || code.isEmpty ? null : code;
+  }
+
+  static BiometricEnrollmentProvision? _enrollmentProvisionFromResponse(
+    Map<dynamic, dynamic> response,
+  ) {
+    final userId =
+        (response['userid'] ?? response['userId'] ?? '').toString().trim();
+    final secret = response['secret']?.toString().trim() ?? '';
+    final token = response['token']?.toString().trim() ?? '';
+    final ldpcInputTicket =
+        response['ldpcInputTicket']?.toString().trim() ?? '';
+    if (userId.isEmpty ||
+        secret.isEmpty ||
+        token.isEmpty ||
+        ldpcInputTicket.isEmpty ||
+        ldpcInputTicket.length > 256) {
+      return null;
+    }
+    return BiometricEnrollmentProvision(
+      userId: userId,
+      secret: secret,
+      token: token,
+      ldpcInputTicket: ldpcInputTicket,
     );
   }
 
