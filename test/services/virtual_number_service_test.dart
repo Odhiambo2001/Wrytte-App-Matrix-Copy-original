@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
+import 'package:wrytte/utils/wrytte_id.dart';
 
 void main() {
   final service = VirtualNumberService(candidateExists: (_) async => false);
@@ -111,5 +112,11 @@ void main() {
     );
     expect(candidate.number, startsWith('00'));
     expect(candidate.number.substring(2), searched.last.substring(1));
+  });
+
+  test('converts the displayed +00 form to the backend W form', () {
+    expect(WrytteId.forBackend('+00 212 123 3333'), 'W2121233333');
+    expect(WrytteId.forBackend('002121233333'), 'W2121233333');
+    expect(WrytteId.forBackend('w2121233333'), 'W2121233333');
   });
 }

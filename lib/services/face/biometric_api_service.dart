@@ -8,6 +8,7 @@ import 'package:image/image.dart' as img;
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/retinaface_detector.dart';
+import 'package:wrytte/utils/wrytte_id.dart';
 
 /// Sends five RetinaFace frames plus their landmarks and five shared liveness
 /// source frames. The backend calculates Umeyama, derives both MiniFASNet
@@ -85,10 +86,11 @@ class BiometricApiService {
     required String wrytteId,
     required List<BiometricCropSet> captures,
   }) async {
+    final backendWrytteId = WrytteId.forBackend(wrytteId);
     final response = await _send(
       '/api/biometrics/enroll/new',
       captures,
-      fields: {'wrytteId': wrytteId},
+      fields: {'wrytteId': backendWrytteId},
     );
     return _ldpcInputFromResponse(response, needsEnrollmentTicket: true);
   }
@@ -97,10 +99,11 @@ class BiometricApiService {
     required String wrytteId,
     required List<BiometricCropSet> captures,
   }) async {
+    final backendWrytteId = WrytteId.forBackend(wrytteId);
     final response = await _send(
       '/api/biometrics/verify',
       captures,
-      fields: {'wrytteId': wrytteId},
+      fields: {'wrytteId': backendWrytteId},
     );
     return _ldpcInputFromResponse(response);
   }
@@ -116,7 +119,7 @@ class BiometricApiService {
   }) async {
     final response = await _sendCandidate(
       '/api/biometrics/enroll/new/candidate',
-      wrytteId: wrytteId,
+      wrytteId: WrytteId.forBackend(wrytteId),
       candidateIndex: candidateIndex,
       captureSessionId: captureSessionId,
       capture: capture,
@@ -132,7 +135,7 @@ class BiometricApiService {
   }) async {
     final response = await _sendCandidate(
       '/api/biometrics/verify/candidate',
-      wrytteId: wrytteId,
+      wrytteId: WrytteId.forBackend(wrytteId),
       candidateIndex: candidateIndex,
       captureSessionId: captureSessionId,
       capture: capture,

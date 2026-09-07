@@ -5,6 +5,7 @@ import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
+import 'package:wrytte/utils/wrytte_id.dart';
 
 class WrytteIdCandidate {
   final String number;
@@ -80,8 +81,7 @@ class VirtualNumberService {
       }
 
       final number = '$_wryttePrefix$body';
-      final suffix = number.substring(_wryttePrefix.length);
-      final exists = await _candidateExists('W$suffix');
+      final exists = await _candidateExists(WrytteId.forBackend(number));
       if (!exists) {
         availableNumber = number;
         break;

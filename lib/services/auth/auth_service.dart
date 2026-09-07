@@ -27,6 +27,7 @@ import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
+import 'package:wrytte/utils/wrytte_id.dart';
 
 class StoredAuthProfile {
   final String userId;
@@ -575,8 +576,9 @@ class AuthService {
     String? username,
     bool login = true,
   }) async {
+    final backendWrytteId = WrytteId.forBackend(wrytteId);
     final response = await ApiService.postMultipart('/auth/register/wrytteid', {
-      'wrytteId': wrytteId,
+      'wrytteId': backendWrytteId,
       if (username != null && username.trim().isNotEmpty)
         'username': username.trim(),
       'login': login.toString(),
@@ -614,12 +616,13 @@ class AuthService {
     required String publicKey,
     String? token,
   }) async {
+    final backendWrytteId = WrytteId.forBackend(wrytteId);
     await ApiService.postJson(
       '/auth/register/wrytteid/kface',
       token: token,
       body: {
         'userId': userId,
-        'wrytteId': wrytteId,
+        'wrytteId': backendWrytteId,
         'kmap': kmap,
         'publicKey': publicKey,
       },
@@ -635,10 +638,11 @@ class AuthService {
     required Map<String, dynamic> kmap,
     required String publicKey,
   }) async {
+    final backendWrytteId = WrytteId.forBackend(wrytteId);
     final response = await ApiService.postJson(
       '/auth/register/wrytteid/kface',
       body: {
-        'wrytteId': wrytteId,
+        'wrytteId': backendWrytteId,
         'kmap': kmap,
         'publicKey': publicKey,
         'biometricEnrollmentTicket': biometricEnrollmentTicket,
@@ -667,9 +671,10 @@ class AuthService {
   Future<WrytteIdSignInSearchResult> searchWrytteIdForSignIn(
     String wrytteId,
   ) async {
+    final backendWrytteId = WrytteId.forBackend(wrytteId);
     final response = await ApiService.postMultipart(
       '/auth/signin/wrytteid/search',
-      {'wrytteId': wrytteId},
+      {'wrytteId': backendWrytteId},
     );
     if (response is! Map) {
       throw Exception('Invalid Wrytte ID search response.');
@@ -688,12 +693,15 @@ class AuthService {
     String? userId,
     String? wrytteId,
   }) async {
+    final backendWrytteId =
+        wrytteId == null || wrytteId.trim().isEmpty
+            ? null
+            : WrytteId.forBackend(wrytteId);
     final response = await ApiService.postMultipart(
       '/auth/signin/wrytteid/recovery',
       {
         if (userId != null && userId.trim().isNotEmpty) 'userid': userId.trim(),
-        if (wrytteId != null && wrytteId.trim().isNotEmpty)
-          'wrytteId': wrytteId.trim(),
+        if (backendWrytteId != null) 'wrytteId': backendWrytteId,
       },
     );
     if (response is! Map) {
@@ -722,11 +730,12 @@ class AuthService {
     required String challenge,
     required String signature,
   }) async {
+    final backendWrytteId = WrytteId.forBackend(wrytteId);
     final response = await ApiService.postJson(
       '/auth/signin/wrytteid/complete',
       body: {
         'userid': userId,
-        'wrytteId': wrytteId,
+        'wrytteId': backendWrytteId,
         'challenge': challenge,
         'signature': signature,
       },
