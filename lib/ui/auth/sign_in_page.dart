@@ -58,7 +58,11 @@ class _SignInPageState extends State<SignInPage> {
         await Navigator.push(
           context,
           MaterialPageRoute<void>(
-            builder: (_) => KFaceIntroPage(wrytteId: digits),
+            builder:
+                (_) => KFaceIntroPage(
+                  wrytteId: digits,
+                  userId: search.userId,
+                ),
           ),
         );
         return;

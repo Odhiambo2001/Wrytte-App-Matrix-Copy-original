@@ -72,14 +72,12 @@ class BiometricVerificationBootstrap {
     required this.input,
     required this.userId,
     required this.kmap,
-    required this.publicKey,
     required this.challenge,
   });
 
   final BiometricLdpcInput input;
   final String userId;
   final Map<String, dynamic> kmap;
-  final String publicKey;
   final String challenge;
 }
 
@@ -162,13 +160,14 @@ class BiometricApiService {
 
   static Future<BiometricLdpcInput> verify({
     required String wrytteId,
+    required String userId,
     required List<BiometricCropSet> captures,
   }) async {
     final backendWrytteId = WrytteId.forBackend(wrytteId);
     final response = await _send(
       '/api/biometrics/verify',
       captures,
-      fields: {'wrytteId': backendWrytteId},
+      fields: {'wrytteId': backendWrytteId, 'userId': userId},
     );
     return _ldpcInputFromResponse(response);
   }
@@ -209,13 +208,17 @@ class BiometricApiService {
   }
 
   /// Opens the same bounded continuous capture session for sign-in. The
-  /// backend binds this opaque ID to the already-found Wrytte account.
+  /// backend binds this opaque ID to the already-found internal account ID.
   static Future<String?> startVerifyCaptureSession({
     required String wrytteId,
+    required String userId,
   }) async {
     final response = await ApiService.postMultipart(
       '/api/biometrics/verify/session',
-      <String, String>{'wrytteId': WrytteId.forBackend(wrytteId)},
+      <String, String>{
+        'wrytteId': WrytteId.forBackend(wrytteId),
+        'userId': userId,
+      },
     );
     if (response is! Map || response['accepted'] != true) return null;
     final sessionId = response['captureSessionId']?.toString().trim() ?? '';
@@ -224,6 +227,7 @@ class BiometricApiService {
 
   static Future<BiometricCandidateResult> verifyCandidate({
     required String wrytteId,
+    required String userId,
     required int candidateIndex,
     String? captureSessionId,
     required BiometricCropSet capture,
@@ -231,6 +235,7 @@ class BiometricApiService {
     final response = await _sendCandidate(
       '/api/biometrics/verify/candidate',
       wrytteId: WrytteId.forBackend(wrytteId),
+      userId: userId,
       candidateIndex: candidateIndex,
       captureSessionId: captureSessionId,
       capture: capture,
@@ -340,9 +345,8 @@ class BiometricApiService {
     if (!input.accepted) return null;
     final userId =
         (response['userid'] ?? response['userId'] ?? '').toString().trim();
-    final publicKey = response['publicKey']?.toString().trim() ?? '';
     final challenge = response['challenge']?.toString().trim() ?? '';
-    if (userId.isEmpty || publicKey.isEmpty || challenge.isEmpty) return null;
+    if (userId.isEmpty || challenge.isEmpty) return null;
     final rawKmap = response['kmap'];
     Map<String, dynamic> kmap;
     try {
@@ -353,8 +357,11 @@ class BiometricApiService {
         if (decoded is! Map) return null;
         kmap = Map<String, dynamic>.from(decoded);
       }
-      final commitment = FuzzyCommitment.fromJson(kmap);
-      if (commitment.signingPublicKey != publicKey) return null;
+      FuzzyCommitment.fromJson(kmap);
+      // The registered Ed25519 public key remains server-side. It is not
+      // needed by the client to recover the key or sign the challenge.
+      // Older commitments may still contain this optional field in storage;
+      // the backend strips it before sending the recovery kmap to the FE.
     } catch (_) {
       return null;
     }
@@ -362,7 +369,6 @@ class BiometricApiService {
       input: input,
       userId: userId,
       kmap: kmap,
-      publicKey: publicKey,
       challenge: challenge,
     );
   }
@@ -539,6 +545,7 @@ class BiometricApiService {
   static Future<dynamic> _sendCandidate(
     String path, {
     required String wrytteId,
+    String? userId,
     required int candidateIndex,
     required String? captureSessionId,
     required BiometricCropSet capture,
@@ -569,6 +576,8 @@ class BiometricApiService {
         path,
         <String, String>{
           'wrytteId': wrytteId,
+          if (userId != null && userId.trim().isNotEmpty)
+            'userId': userId.trim(),
           'candidateIndex': '$candidateIndex',
           if (captureSessionId != null && captureSessionId.isNotEmpty)
             'captureSessionId': captureSessionId,

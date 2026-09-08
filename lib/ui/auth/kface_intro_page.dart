@@ -6,12 +6,14 @@ import 'package:wrytte/ui/auth/kface_scan_page.dart';
 
 class KFaceIntroPage extends StatefulWidget {
   final String wrytteId;
+  final String? userId;
   final KFaceRecoveryData? recoveryData;
   final bool isEnrollment;
 
   const KFaceIntroPage({
     super.key,
     required this.wrytteId,
+    this.userId,
     this.recoveryData,
     this.isEnrollment = false,
   });
@@ -85,6 +87,7 @@ class _KFaceIntroPageState extends State<KFaceIntroPage> {
                                 builder:
                                     (_) => KFaceScanPage(
                                       wrytteId: widget.wrytteId,
+                                      userId: widget.userId,
                                       recoveryData: widget.recoveryData,
                                       isEnrollment: widget.isEnrollment,
                                     ),

@@ -75,14 +75,12 @@ class KFaceRecoveryData {
     required this.userId,
     required this.wrytteId,
     required this.kmap,
-    required this.publicKey,
     required this.challenge,
   });
 
   final String userId;
   final String wrytteId;
   final Map<String, dynamic> kmap;
-  final String publicKey;
   final String challenge;
 }
 
@@ -734,7 +732,6 @@ class AuthService {
               .trim(),
       wrytteId: (response['wrytteId'] ?? wrytteId ?? '').toString().trim(),
       kmap: kmap,
-      publicKey: (response['publicKey'] ?? '').toString().trim(),
       challenge: (response['challenge'] ?? '').toString().trim(),
     );
   }

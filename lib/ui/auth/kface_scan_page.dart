@@ -24,10 +24,14 @@ class KFaceScanPage extends StatefulWidget {
   const KFaceScanPage({
     super.key,
     required this.wrytteId,
+    this.userId,
     this.recoveryData,
     required this.isEnrollment,
   });
   final String wrytteId;
+  /// Internal BE account ID returned by the Wrytte-ID search. It marks every
+  /// sign-in capture; enrollment has no existing account ID.
+  final String? userId;
   final KFaceRecoveryData? recoveryData;
   final bool isEnrollment;
 
@@ -167,6 +171,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               )
               : await BiometricApiService.startVerifyCaptureSession(
                 wrytteId: widget.wrytteId,
+                userId: widget.userId!,
               );
       if (!mounted || _complete || sessionId == null) return;
       _captureSessionId = sessionId;
@@ -214,6 +219,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               )
               : await BiometricApiService.verifyCandidate(
                 wrytteId: widget.wrytteId,
+                userId: widget.userId!,
                 candidateIndex: candidateIndex,
                 captureSessionId: _captureSessionId,
                 capture: capture,
@@ -538,6 +544,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                 retryPageBuilder:
                     (_) => KFaceScanPage(
                       wrytteId: widget.wrytteId,
+                      userId: widget.userId,
                       recoveryData: widget.recoveryData,
                       isEnrollment: widget.isEnrollment,
                     ),
