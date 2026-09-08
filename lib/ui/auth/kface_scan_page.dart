@@ -170,7 +170,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                 wrytteId: widget.wrytteId,
               )
               : await BiometricApiService.startVerifyCaptureSession(
-                wrytteId: widget.wrytteId,
                 userId: widget.userId!,
               );
       if (!mounted || _complete || sessionId == null) return;
@@ -218,7 +217,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                 capture: capture,
               )
               : await BiometricApiService.verifyCandidate(
-                wrytteId: widget.wrytteId,
                 userId: widget.userId!,
                 candidateIndex: candidateIndex,
                 captureSessionId: _captureSessionId,

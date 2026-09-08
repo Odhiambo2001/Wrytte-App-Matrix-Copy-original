@@ -159,15 +159,13 @@ class BiometricApiService {
   }
 
   static Future<BiometricLdpcInput> verify({
-    required String wrytteId,
     required String userId,
     required List<BiometricCropSet> captures,
   }) async {
-    final backendWrytteId = WrytteId.forBackend(wrytteId);
     final response = await _send(
       '/api/biometrics/verify',
       captures,
-      fields: {'wrytteId': backendWrytteId, 'userId': userId},
+      fields: {'userId': userId},
     );
     return _ldpcInputFromResponse(response);
   }
@@ -210,15 +208,11 @@ class BiometricApiService {
   /// Opens the same bounded continuous capture session for sign-in. The
   /// backend binds this opaque ID to the already-found internal account ID.
   static Future<String?> startVerifyCaptureSession({
-    required String wrytteId,
     required String userId,
   }) async {
     final response = await ApiService.postMultipart(
       '/api/biometrics/verify/session',
-      <String, String>{
-        'wrytteId': WrytteId.forBackend(wrytteId),
-        'userId': userId,
-      },
+      <String, String>{'userId': userId},
     );
     if (response is! Map || response['accepted'] != true) return null;
     final sessionId = response['captureSessionId']?.toString().trim() ?? '';
@@ -226,7 +220,6 @@ class BiometricApiService {
   }
 
   static Future<BiometricCandidateResult> verifyCandidate({
-    required String wrytteId,
     required String userId,
     required int candidateIndex,
     String? captureSessionId,
@@ -234,7 +227,6 @@ class BiometricApiService {
   }) async {
     final response = await _sendCandidate(
       '/api/biometrics/verify/candidate',
-      wrytteId: WrytteId.forBackend(wrytteId),
       userId: userId,
       candidateIndex: candidateIndex,
       captureSessionId: captureSessionId,
@@ -544,7 +536,7 @@ class BiometricApiService {
 
   static Future<dynamic> _sendCandidate(
     String path, {
-    required String wrytteId,
+    String? wrytteId,
     String? userId,
     required int candidateIndex,
     required String? captureSessionId,
@@ -575,7 +567,8 @@ class BiometricApiService {
       return await ApiService.postMultipart(
         path,
         <String, String>{
-          'wrytteId': wrytteId,
+          if (wrytteId != null && wrytteId.trim().isNotEmpty)
+            'wrytteId': wrytteId.trim(),
           if (userId != null && userId.trim().isNotEmpty)
             'userId': userId.trim(),
           'candidateIndex': '$candidateIndex',
