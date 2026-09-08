@@ -553,7 +553,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted) return;
     final postContext = _postKeys[eventId]?.currentContext;
-    if (postContext != null) {
+    if (postContext != null && postContext.mounted) {
       await Scrollable.ensureVisible(
         postContext,
         duration: const Duration(milliseconds: 220),
@@ -561,6 +561,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         alignment: 0.25,
       );
     }
+    if (!mounted) return;
     _highlightTimer = Timer(const Duration(seconds: 2), () {
       if (mounted && _highlightedPostId == eventId) {
         setState(() => _highlightedPostId = null);
@@ -687,9 +688,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             Icons.arrow_back_ios_new,
             () => Navigator.pop(context),
             size: 48,
-            backgroundColor: const Color(0xFF23262C).withOpacity(0.30),
+            backgroundColor: const Color(0xFF23262C).withValues(alpha: 0.30),
             borderColor: const Color(0xFF23262C),
-            iconColor: Colors.white.withOpacity(0.70),
+            iconColor: Colors.white.withValues(alpha: 0.70),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -701,7 +702,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 height: 48,
                 padding: EdgeInsets.zero,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF23262C).withOpacity(0.30),
+                  color: const Color(0xFF23262C).withValues(alpha: 0.30),
                   borderRadius: BorderRadius.circular(28),
                   border: Border.all(color: const Color(0xFF23262C)),
                 ),
@@ -753,9 +754,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             Icons.more_vert,
             () {},
             size: 48,
-            backgroundColor: const Color(0xFF23262C).withOpacity(0.30),
+            backgroundColor: const Color(0xFF23262C).withValues(alpha: 0.30),
             borderColor: const Color(0xFF23262C),
-            iconColor: Colors.white.withOpacity(0.70),
+            iconColor: Colors.white.withValues(alpha: 0.70),
           ),
         ],
       ),
@@ -1217,6 +1218,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   await Clipboard.setData(ClipboardData(text: post.content));
                   if (!sheetContext.mounted) return;
                   Navigator.pop(sheetContext);
+                  if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Copied to clipboard')),
                   );
@@ -1370,12 +1372,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     });
   }
 
-  void _showUnavailable(String feature) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('$feature will be available soon.')));
-  }
-
   String? _formatCount(int count) {
     if (count <= 0) return '0';
     if (count < 1000) return '$count';
@@ -1393,11 +1389,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             height: 54,
             child: FilledButton(
               onPressed: _subscribeToChannel,
-              child: const Text('Subscribe'),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF4DA3FF),
                 foregroundColor: Colors.white,
               ),
+              child: const Text('Subscribe'),
             ),
           ),
         ),
@@ -1424,9 +1420,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   Icons.add,
                   _openMediaPicker,
                   size: 40,
-                  backgroundColor: const Color(0xFF23262C).withOpacity(0.30),
+                  backgroundColor: const Color(
+                    0xFF23262C,
+                  ).withValues(alpha: 0.30),
                   borderColor: const Color(0xFF23262C),
-                  iconColor: Colors.white.withOpacity(0.70),
+                  iconColor: Colors.white.withValues(alpha: 0.70),
                 ),
                 const SizedBox(width: 4),
                 Expanded(
@@ -1438,7 +1436,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF23262C).withOpacity(0.30),
+                        color: const Color(0xFF23262C).withValues(alpha: 0.30),
                         borderRadius: BorderRadius.circular(28),
                         border: Border.all(color: const Color(0xFF23262C)),
                       ),
@@ -1474,9 +1472,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       : (hasText ? Icons.send : Icons.camera_alt_outlined),
                   _publishing ? null : (hasText ? _publishPost : () {}),
                   size: 40,
-                  backgroundColor: const Color(0xFF23262C).withOpacity(0.30),
+                  backgroundColor: const Color(
+                    0xFF23262C,
+                  ).withValues(alpha: 0.30),
                   borderColor: const Color(0xFF23262C),
-                  iconColor: Colors.white.withOpacity(0.70),
+                  iconColor: Colors.white.withValues(alpha: 0.70),
                 ),
               ],
             ),
