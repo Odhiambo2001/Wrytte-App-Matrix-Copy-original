@@ -70,13 +70,11 @@ class BiometricEnrollmentProvision {
 class BiometricVerificationBootstrap {
   const BiometricVerificationBootstrap({
     required this.input,
-    required this.userId,
     required this.kmap,
     required this.challenge,
   });
 
   final BiometricLdpcInput input;
-  final String userId;
   final Map<String, dynamic> kmap;
   final String challenge;
 }
@@ -335,10 +333,8 @@ class BiometricApiService {
     BiometricLdpcInput input,
   ) {
     if (!input.accepted) return null;
-    final userId =
-        (response['userid'] ?? response['userId'] ?? '').toString().trim();
     final challenge = response['challenge']?.toString().trim() ?? '';
-    if (userId.isEmpty || challenge.isEmpty) return null;
+    if (challenge.isEmpty) return null;
     final rawKmap = response['kmap'];
     Map<String, dynamic> kmap;
     try {
@@ -359,7 +355,6 @@ class BiometricApiService {
     }
     return BiometricVerificationBootstrap(
       input: input,
-      userId: userId,
       kmap: kmap,
       challenge: challenge,
     );

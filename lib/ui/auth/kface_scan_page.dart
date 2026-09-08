@@ -427,7 +427,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         challengeBase64Url: verification.challenge,
       );
       await AuthService.instance.completeWrytteIdSignIn(
-        userId: verification.userId,
+        userId: widget.userId!,
         wrytteId: widget.wrytteId,
         challenge: verification.challenge,
         signature: signature,
