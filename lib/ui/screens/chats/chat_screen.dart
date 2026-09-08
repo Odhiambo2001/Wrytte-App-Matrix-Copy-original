@@ -199,7 +199,7 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
               Text(
                 '${selectedTargets.length} selected',
                 style: TextStyle(
-                  color: Colors.white.withOpacity(0.72),
+                  color: Colors.white.withValues(alpha: 0.72),
                   fontSize: 13,
                 ),
               ),
@@ -249,7 +249,7 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
       child: Text(
         label,
         style: TextStyle(
-          color: Colors.white.withOpacity(0.48),
+          color: Colors.white.withValues(alpha: 0.48),
           fontSize: 15,
           fontWeight: FontWeight.w700,
         ),
@@ -295,7 +295,7 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.48),
+                        color: Colors.white.withValues(alpha: 0.48),
                         fontSize: 15,
                       ),
                     ),
@@ -315,7 +315,7 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
                   color:
                       selected
                           ? const Color(0xFF20C768)
-                          : Colors.white.withOpacity(0.42),
+                          : Colors.white.withValues(alpha: 0.42),
                   width: 2,
                 ),
               ),
@@ -336,7 +336,9 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
       decoration: BoxDecoration(
         color: const Color(0xFF101318),
-        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.06))),
+        border: Border(
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+        ),
       ),
       child: Row(
         children: [
@@ -369,7 +371,7 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.56),
+                    color: Colors.white.withValues(alpha: 0.56),
                     fontSize: 13,
                   ),
                 ),
@@ -2265,7 +2267,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             );
                           });
                         } catch (e) {
-                          if (!mounted) return;
+                          if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text('Could not delete message: $e'),
@@ -2958,7 +2960,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       color:
                           _showDebug
                               ? Colors.orangeAccent
-                              : Colors.grey.withOpacity(0.6),
+                              : Colors.grey.withValues(alpha: 0.6),
                       shape: BoxShape.circle,
                     ),
                     child: const Center(
@@ -2986,7 +2988,7 @@ class _ChatScreenState extends State<ChatScreen> {
       bottom: 140,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.88),
+          color: Colors.black.withValues(alpha: 0.88),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.orangeAccent, width: 1),
         ),
@@ -3181,9 +3183,9 @@ class _ChatScreenState extends State<ChatScreen> {
         curve: Curves.easeOutCubic,
       );
     }
-    if (!mounted) return;
+    if (!context.mounted) return;
     await WidgetsBinding.instance.endOfFrame;
-    if (!mounted) return;
+    if (!context.mounted) return;
     final messageContext = _messageKeys[eventId]?.currentContext;
     if (messageContext != null) {
       await Scrollable.ensureVisible(
@@ -3215,7 +3217,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       'No messages yet.\nSay hello!',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.3),
+                        color: Colors.white.withValues(alpha: 0.3),
                         fontSize: 15,
                         height: 1.6,
                       ),
@@ -3354,7 +3356,9 @@ class _ChatScreenState extends State<ChatScreen> {
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF4DA3FF),
               foregroundColor: Colors.white,
-              disabledBackgroundColor: const Color(0xFF4DA3FF).withOpacity(0.5),
+              disabledBackgroundColor: const Color(
+                0xFF4DA3FF,
+              ).withValues(alpha: 0.5),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(24),
               ),
@@ -3847,8 +3851,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                                 ? _groupSubtitle()
                                                 : 'Online',
                                             style: TextStyle(
-                                              color: Colors.white.withOpacity(
-                                                0.5,
+                                              color: Colors.white.withValues(
+                                                alpha: 0.5,
                                               ),
                                               fontSize: 12,
                                               height: 1.0,
@@ -4071,26 +4075,6 @@ class _ChatScreenState extends State<ChatScreen> {
     // contact avatars (for example in the header and profile entry point).
     if (clean.isEmpty) return null;
     return clean;
-  }
-
-  bool _isKnownGroupAvatar(String avatarUrl) {
-    final key = _normaliseAvatarIdentity(avatarUrl);
-    if (key.isEmpty) return false;
-    if (MatrixClientService.instance.isInitialized) {
-      for (final room in MatrixChatService.instance.rooms) {
-        if (!MatrixChatService.instance.isMatrixGroupRoom(room)) continue;
-        if (_normaliseAvatarIdentity(_safeGroupRoomAvatarUrl(room)) == key) {
-          return true;
-        }
-      }
-    }
-    for (final conversation in _chat.cachedConversationsSnapshot) {
-      if (!(conversation.isGroupKind || conversation.isChannelKind)) continue;
-      if (_normaliseAvatarIdentity(conversation.otherUserAvatar) == key) {
-        return true;
-      }
-    }
-    return false;
   }
 
   bool get _isReadOnlySuggestedGroup {
@@ -4488,7 +4472,7 @@ class _ChatScreenState extends State<ChatScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFF181B22),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: Row(
         children: [
@@ -4522,7 +4506,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.68),
+                    color: Colors.white.withValues(alpha: 0.68),
                     fontSize: 13,
                   ),
                 ),
@@ -4546,7 +4530,7 @@ class _ChatScreenState extends State<ChatScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFF181B22),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: Row(
         children: [
@@ -4580,7 +4564,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.68),
+                    color: Colors.white.withValues(alpha: 0.68),
                     fontSize: 13,
                   ),
                 ),
@@ -4632,19 +4616,22 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Row(
         children: [
           Expanded(
-            child: Divider(color: Colors.white.withOpacity(0.08), height: 1),
+            child: Divider(
+              color: Colors.white.withValues(alpha: 0.08),
+              height: 1,
+            ),
           ),
           const SizedBox(width: 10),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: const Color(0xFF23262C).withOpacity(0.60),
+              color: const Color(0xFF23262C).withValues(alpha: 0.60),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withOpacity(0.5),
+                color: Colors.white.withValues(alpha: 0.5),
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -4652,7 +4639,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Divider(color: Colors.white.withOpacity(0.08), height: 1),
+            child: Divider(
+              color: Colors.white.withValues(alpha: 0.08),
+              height: 1,
+            ),
           ),
         ],
       ),
@@ -4675,7 +4665,7 @@ class _ChatScreenState extends State<ChatScreen> {
             width: width,
             height: height,
             decoration: BoxDecoration(
-              color: const Color(0xFF23262C).withOpacity(0.30),
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
               borderRadius: BorderRadius.circular(height / 2),
               border: Border.all(color: const Color(0xFF23262C), width: 1.0),
             ),

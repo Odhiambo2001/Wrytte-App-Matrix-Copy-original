@@ -164,7 +164,7 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
             Positioned.fill(
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-                child: Container(color: Colors.black.withOpacity(0.40)),
+                child: Container(color: Colors.black.withValues(alpha: 0.40)),
               ),
             ),
 
@@ -247,7 +247,7 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
                   filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF23262C).withOpacity(0.30),
+                      color: const Color(0xFF23262C).withValues(alpha: 0.30),
                       borderRadius: BorderRadius.circular(24),
                       border: Border.all(color: const Color(0xFF23262C)),
                     ),
@@ -300,7 +300,7 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
       return Center(
         child: Text(
           'No messages yet',
-          style: TextStyle(color: Colors.white.withOpacity(0.35)),
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
         ),
       );
     }
@@ -369,7 +369,7 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
           width: dialogWidth,
           constraints: BoxConstraints(maxHeight: maxHeight),
           decoration: BoxDecoration(
-            color: const Color(0xFF23262C).withOpacity(0.30),
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: const Color(0xFF23262C), width: 1),
           ),
@@ -393,7 +393,7 @@ class _MiniChatPreviewState extends State<MiniChatPreview> {
                       Divider(
                         height: 0,
                         thickness: 0.5,
-                        color: Colors.white.withOpacity(0.08),
+                        color: Colors.white.withValues(alpha: 0.08),
                         indent: 16,
                         endIndent: 16,
                       ),

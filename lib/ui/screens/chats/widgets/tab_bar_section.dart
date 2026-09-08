@@ -19,7 +19,7 @@ class TabBarSection extends StatelessWidget {
             height: 44,
             decoration: BoxDecoration(
               // ✅ Same glass color + opacity as BottomNavBar
-              color: const Color(0xFF23262C).withOpacity(0.30),
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
               borderRadius: BorderRadius.circular(22),
               // ✅ Same thin solid outline as BottomNavBar
               border: Border.all(color: const Color(0xFF23262C), width: 1.0),

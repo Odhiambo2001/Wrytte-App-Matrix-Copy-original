@@ -256,7 +256,7 @@ class MessageBubble extends StatelessWidget {
           Icon(
             Icons.push_pin,
             size: 13,
-            color: Colors.white.withOpacity(isMine ? 0.72 : 0.55),
+            color: Colors.white.withValues(alpha: isMine ? 0.72 : 0.55),
           ),
           const SizedBox(width: 3),
         ],
@@ -264,7 +264,7 @@ class MessageBubble extends StatelessWidget {
           Text(
             'Edited ',
             style: TextStyle(
-              color: Colors.white.withOpacity(isMine ? 0.65 : 0.45),
+              color: Colors.white.withValues(alpha: isMine ? 0.65 : 0.45),
               fontSize: 11,
               height: 1,
             ),
@@ -272,7 +272,7 @@ class MessageBubble extends StatelessWidget {
         Text(
           time,
           style: TextStyle(
-            color: Colors.white.withOpacity(isMine ? 0.65 : 0.45),
+            color: Colors.white.withValues(alpha: isMine ? 0.65 : 0.45),
             fontSize: 11,
             height: 1,
           ),
@@ -288,19 +288,19 @@ class MessageBubble extends StatelessWidget {
         return Icon(
           Icons.access_time_rounded,
           size: 13,
-          color: Colors.white.withOpacity(0.55),
+          color: Colors.white.withValues(alpha: 0.55),
         );
       case MessageStatus.sent:
         return Icon(
           Icons.done,
           size: 14,
-          color: Colors.white.withOpacity(0.65),
+          color: Colors.white.withValues(alpha: 0.65),
         );
       case MessageStatus.delivered:
         return Icon(
           Icons.done_all,
           size: 14,
-          color: Colors.white.withOpacity(0.65),
+          color: Colors.white.withValues(alpha: 0.65),
         );
       case MessageStatus.read:
         return const Icon(Icons.done_all, size: 14, color: _readGreen);
@@ -314,7 +314,7 @@ class MessageBubble extends StatelessWidget {
         return Icon(
           Icons.done_all,
           size: 14,
-          color: Colors.white.withOpacity(0.65),
+          color: Colors.white.withValues(alpha: 0.65),
         );
     }
   }
@@ -360,7 +360,7 @@ class _VideoMessageBubble extends StatelessWidget {
                     width: 58,
                     height: 58,
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.42),
+                      color: Colors.black.withValues(alpha: 0.42),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
@@ -384,7 +384,7 @@ class _VideoMessageBubble extends StatelessWidget {
                     child: Text(
                       _fmt(totalSeconds),
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.65),
+                        color: Colors.white.withValues(alpha: 0.65),
                         fontSize: 12,
                       ),
                     ),
@@ -432,7 +432,7 @@ class _ImageMessageBubbleState extends State<_ImageMessageBubble> {
               child: AspectRatio(
                 aspectRatio: 4 / 3,
                 child: Container(
-                  color: Colors.black.withOpacity(0.18),
+                  color: Colors.black.withValues(alpha: 0.18),
                   child: image,
                 ),
               ),
@@ -557,7 +557,7 @@ class _FileMessageBubbleState extends State<_FileMessageBubble> {
                   width: 38,
                   height: 38,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.15),
+                    color: Colors.white.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child:
@@ -578,7 +578,7 @@ class _FileMessageBubbleState extends State<_FileMessageBubble> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.92),
+                      color: Colors.white.withValues(alpha: 0.92),
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
                     ),
@@ -633,14 +633,14 @@ class _ForwardedLabel extends StatelessWidget {
         children: [
           Icon(
             Icons.shortcut_rounded,
-            color: Colors.white.withOpacity(0.62),
+            color: Colors.white.withValues(alpha: 0.62),
             size: 15,
           ),
           const SizedBox(width: 4),
           Text(
             'Forwarded',
             style: TextStyle(
-              color: Colors.white.withOpacity(0.62),
+              color: Colors.white.withValues(alpha: 0.62),
               fontSize: 13,
               fontStyle: FontStyle.italic,
             ),
@@ -779,7 +779,7 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.15),
+                    color: Colors.white.withValues(alpha: 0.15),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
@@ -805,7 +805,7 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
                     Text(
                       '${_fmt(_elapsed)} / ${_fmt(widget.totalSeconds)}',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.6),
+                        color: Colors.white.withValues(alpha: 0.6),
                         fontSize: 11,
                       ),
                     ),
@@ -882,7 +882,7 @@ class _WaveformBars extends StatelessWidget {
             height: _heights[i],
             margin: const EdgeInsets.symmetric(horizontal: 1),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(played ? 0.9 : 0.3),
+              color: Colors.white.withValues(alpha: played ? 0.9 : 0.3),
               borderRadius: BorderRadius.circular(2),
             ),
           );
@@ -937,13 +937,13 @@ class _BubbleContent extends StatelessWidget {
                       Icon(
                         Icons.shortcut_rounded,
                         size: 14,
-                        color: Colors.white.withOpacity(0.48),
+                        color: Colors.white.withValues(alpha: 0.48),
                       ),
                       const SizedBox(width: 4),
                       Text(
                         'Forwarded',
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.48),
+                          color: Colors.white.withValues(alpha: 0.48),
                           fontSize: 13,
                           fontStyle: FontStyle.italic,
                         ),
@@ -956,13 +956,13 @@ class _BubbleContent extends StatelessWidget {
                   margin: const EdgeInsets.only(bottom: 6),
                   padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(isMine ? 0.16 : 0.22),
+                    color: Colors.black.withValues(alpha: isMine ? 0.16 : 0.22),
                     borderRadius: BorderRadius.circular(8),
                     border: Border(
                       left: BorderSide(
                         color:
                             isMine
-                                ? Colors.white.withOpacity(0.8)
+                                ? Colors.white.withValues(alpha: 0.8)
                                 : const Color(0xFF4DA3FF),
                         width: 3,
                       ),
@@ -987,7 +987,7 @@ class _BubbleContent extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.68),
+                          color: Colors.white.withValues(alpha: 0.68),
                           fontSize: 12,
                           height: 1.25,
                         ),
@@ -1059,7 +1059,7 @@ class _LinkedMessageTextState extends State<_LinkedMessageText> {
     _recognizers.clear();
 
     final baseStyle = TextStyle(
-      color: Colors.white.withOpacity(widget.isDeleted ? 0.65 : 1),
+      color: Colors.white.withValues(alpha: widget.isDeleted ? 0.65 : 1),
       fontSize: 15,
       height: 1.35,
       fontStyle: widget.isDeleted ? FontStyle.italic : FontStyle.normal,
@@ -1074,7 +1074,7 @@ class _LinkedMessageTextState extends State<_LinkedMessageText> {
             child: Icon(
               Icons.star_rounded,
               size: 15,
-              color: Colors.white.withOpacity(0.72),
+              color: Colors.white.withValues(alpha: 0.72),
             ),
           ),
         ),

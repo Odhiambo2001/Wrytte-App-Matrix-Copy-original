@@ -124,7 +124,7 @@ class _ShopItemCardState extends State<ShopItemCard> {
                       Text(
                         item.timeAgo,
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.4),
+                          color: Colors.white.withValues(alpha: 0.4),
                           fontSize: 12,
                         ),
                       ),
@@ -134,7 +134,7 @@ class _ShopItemCardState extends State<ShopItemCard> {
                 // More button
                 Icon(
                   Icons.more_horiz,
-                  color: Colors.white.withOpacity(0.4),
+                  color: Colors.white.withValues(alpha: 0.4),
                   size: 20,
                 ),
               ],
@@ -201,14 +201,14 @@ class _ShopItemCardState extends State<ShopItemCard> {
                             Text(
                               '  •  ',
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.4),
+                                color: Colors.white.withValues(alpha: 0.4),
                                 fontSize: 14,
                               ),
                             ),
                             Text(
                               item.meta!,
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.6),
+                                color: Colors.white.withValues(alpha: 0.6),
                                 fontSize: 14,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -242,7 +242,7 @@ class _ShopItemCardState extends State<ShopItemCard> {
                               ),
                               child: Icon(
                                 _categoryIcon(item.category),
-                                color: Colors.white.withOpacity(0.2),
+                                color: Colors.white.withValues(alpha: 0.2),
                                 size: 36,
                               ),
                             ),

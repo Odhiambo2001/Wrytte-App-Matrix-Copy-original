@@ -139,7 +139,7 @@ class ChatConversation {
         lastMessageTime: last?.originServerTs ?? DateTime.now(),
         unreadCount:
             last != null && !_sameUser(last.senderId, currentUserId) ? 1 : 0,
-        otherUserName: room.displayname,
+        otherUserName: room.getLocalizedDisplayname(),
         otherUserAvatar: room.avatar?.toString(),
         conversationKind: kind,
       );
@@ -169,7 +169,7 @@ class ChatConversation {
           last != null && !_sameUser(last.senderId, currentUserId) ? 1 : 0,
       lastMessageType:
           last?.messageType == mx.MessageTypes.Audio ? 'voice' : 'text',
-      otherUserName: room.displayname,
+      otherUserName: room.getLocalizedDisplayname(),
       otherUserAvatar: room.avatar?.toString(),
       conversationKind: kind,
     );

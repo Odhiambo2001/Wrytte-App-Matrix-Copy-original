@@ -85,6 +85,7 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
         ),
       ],
     ).then((value) {
+      if (!context.mounted) return;
       if (value == 'contact') {
         Navigator.push(
           context,
@@ -168,7 +169,7 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
                       height: _pillHeight,
                       padding: const EdgeInsets.symmetric(horizontal: 18),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF23262C).withOpacity(0.30),
+                        color: const Color(0xFF23262C).withValues(alpha: 0.30),
                         borderRadius: BorderRadius.circular(22),
                         border: Border.all(
                           color: const Color(0xFF23262C),
@@ -199,7 +200,7 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
                   child: Container(
                     height: _pillHeight,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF23262C).withOpacity(0.30),
+                      color: const Color(0xFF23262C).withValues(alpha: 0.30),
                       borderRadius: BorderRadius.circular(22),
                       border: Border.all(
                         color: const Color(0xFF23262C),
@@ -219,7 +220,10 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
                               'assets/svg/stories_icon.svg',
                               height: 20,
                               width: 20,
-                              color: const Color(0xFF4DA3FF),
+                              colorFilter: const ColorFilter.mode(
+                                Color(0xFF4DA3FF),
+                                BlendMode.srcIn,
+                              ),
                             ),
                           ),
                         ),

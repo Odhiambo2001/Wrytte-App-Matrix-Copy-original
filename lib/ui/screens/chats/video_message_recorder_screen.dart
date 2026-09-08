@@ -194,7 +194,7 @@ class _VideoMessageRecorderScreenState
                           vertical: 7,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.42),
+                          color: Colors.black.withValues(alpha: 0.42),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
@@ -226,7 +226,7 @@ class _VideoMessageRecorderScreenState
                       width: 76,
                       height: 76,
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.16),
+                        color: Colors.white.withValues(alpha: 0.16),
                         shape: BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 4),
                       ),

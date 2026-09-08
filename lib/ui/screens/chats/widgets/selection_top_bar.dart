@@ -55,7 +55,7 @@ class _SelectionTopBarState extends State<SelectionTopBar> {
               child: Container(
                 height: _pillHeight,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF23262C).withOpacity(0.30),
+                  color: const Color(0xFF23262C).withValues(alpha: 0.30),
                   borderRadius: BorderRadius.circular(22),
                   border: Border.all(
                     color: const Color(0xFF23262C),
@@ -206,7 +206,7 @@ class _VDivider extends StatelessWidget {
     return Container(
       width: 0.5,
       height: 20,
-      color: Colors.white.withOpacity(0.12),
+      color: Colors.white.withValues(alpha: 0.12),
     );
   }
 }

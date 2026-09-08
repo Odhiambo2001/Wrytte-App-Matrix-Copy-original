@@ -185,7 +185,7 @@ class _PostItemState extends State<PostItem> {
           child: _buildActionBar(),
         ),
 
-        Divider(height: 1, color: Colors.white.withOpacity(0.07)),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.07)),
       ],
     );
   }
@@ -241,7 +241,7 @@ class _PostItemState extends State<PostItem> {
                         vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.55),
+                        color: Colors.black.withValues(alpha: 0.55),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
@@ -259,7 +259,7 @@ class _PostItemState extends State<PostItem> {
                     right: 10,
                     child: Icon(
                       Icons.volume_off_outlined,
-                      color: Colors.white.withOpacity(0.8),
+                      color: Colors.white.withValues(alpha: 0.8),
                       size: 18,
                     ),
                   ),
@@ -272,7 +272,7 @@ class _PostItemState extends State<PostItem> {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.55),
+                        color: Colors.black.withValues(alpha: 0.55),
                         borderRadius: BorderRadius.circular(5),
                       ),
                       child: const Text(

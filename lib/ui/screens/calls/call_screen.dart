@@ -313,13 +313,13 @@ class _CallScreenState extends State<CallScreen> {
                   Icon(
                     Icons.lock_outline,
                     size: 13,
-                    color: Colors.white.withOpacity(0.5),
+                    color: Colors.white.withValues(alpha: 0.5),
                   ),
                   const SizedBox(width: 4),
                   Text(
                     'End-to-end encrypted',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.5),
+                      color: Colors.white.withValues(alpha: 0.5),
                       fontSize: 13,
                     ),
                   ),
@@ -339,7 +339,7 @@ class _CallScreenState extends State<CallScreen> {
                     ? 'Calling…'
                     : 'Connecting…',
                 style: TextStyle(
-                  color: Colors.white.withOpacity(0.6),
+                  color: Colors.white.withValues(alpha: 0.6),
                   fontSize: 16,
                   fontWeight: FontWeight.w500,
                 ),
@@ -408,7 +408,7 @@ class _CallScreenState extends State<CallScreen> {
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          Colors.black.withOpacity(0.6),
+                          Colors.black.withValues(alpha: 0.6),
                           Colors.transparent,
                         ],
                       ),
@@ -424,7 +424,7 @@ class _CallScreenState extends State<CallScreen> {
                         begin: Alignment.bottomCenter,
                         end: Alignment.topCenter,
                         colors: [
-                          Colors.black.withOpacity(0.75),
+                          Colors.black.withValues(alpha: 0.75),
                           Colors.transparent,
                         ],
                       ),
@@ -512,13 +512,13 @@ class _CallScreenState extends State<CallScreen> {
                           Icon(
                             Icons.lock_outline,
                             size: 12,
-                            color: Colors.white.withOpacity(0.6),
+                            color: Colors.white.withValues(alpha: 0.6),
                           ),
                           const SizedBox(width: 3),
                           Text(
                             'End-to-end encrypted',
                             style: TextStyle(
-                              color: Colors.white.withOpacity(0.6),
+                              color: Colors.white.withValues(alpha: 0.6),
                               fontSize: 12,
                             ),
                           ),
@@ -581,9 +581,9 @@ class _CallScreenState extends State<CallScreen> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
             decoration: BoxDecoration(
-              color: const Color(0xFF23262C).withOpacity(0.55),
+              color: const Color(0xFF23262C).withValues(alpha: 0.55),
               borderRadius: BorderRadius.circular(32),
-              border: Border.all(color: Colors.white.withOpacity(0.08)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -634,7 +634,7 @@ class _CallScreenState extends State<CallScreen> {
         isEndCall
             ? const Color(0xFFFF3B30)
             : active
-            ? Colors.white.withOpacity(0.25)
+            ? Colors.white.withValues(alpha: 0.25)
             : const Color(0xFF2C2F36);
 
     return GestureDetector(
@@ -650,7 +650,7 @@ class _CallScreenState extends State<CallScreen> {
                   ? Colors.white
                   : active
                   ? Colors.white
-                  : Colors.white.withOpacity(0.85),
+                  : Colors.white.withValues(alpha: 0.85),
           size: 26,
         ),
       ),
@@ -672,9 +672,9 @@ class _CallScreenState extends State<CallScreen> {
             width: size,
             height: size,
             decoration: BoxDecoration(
-              color: const Color(0xFF23262C).withOpacity(0.40),
+              color: const Color(0xFF23262C).withValues(alpha: 0.40),
               shape: BoxShape.circle,
-              border: Border.all(color: Colors.white.withOpacity(0.10)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
             ),
             child: Center(child: child),
           ),

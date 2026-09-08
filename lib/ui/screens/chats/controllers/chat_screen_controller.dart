@@ -19,17 +19,13 @@ class ChatScreenController {
     _chatState = ChatState();
   }
 
-
   // PUBLIC STREAMS
 
-
   Stream<List<ChatMessage>> get messagesStream => _chatState.messagesStream;
-  Stream<bool>              get loadingStream  => _chatState.loadingStream;
-  Stream<String?>           get errorStream    => _chatState.errorStream;
-
+  Stream<bool> get loadingStream => _chatState.loadingStream;
+  Stream<String?> get errorStream => _chatState.errorStream;
 
   // INITIALIZE
-
 
   Future<void> initialize() async {
     await _chatState.initialize();
@@ -37,9 +33,7 @@ class ChatScreenController {
     await _chatState.loadConversation(resolvedId);
   }
 
-
   // SEND TEXT MESSAGE
-
 
   Future<void> sendMessage(String content) async {
     if (content.trim().isEmpty) return;
@@ -59,9 +53,7 @@ class ChatScreenController {
     await _chatState.sendMessage(message);
   }
 
-
   // SEND VOICE NOTE
-
 
   Future<void> sendVoiceMessage({
     required String filePath,
@@ -71,31 +63,26 @@ class ChatScreenController {
       receiverID: receiverId,
       filePath: filePath,
       durationSeconds: durationSeconds,
-      senderName: currentUser.username.isNotEmpty
-          ? currentUser.username
-          : 'New voice message',
+      senderName:
+          currentUser.username.isNotEmpty
+              ? currentUser.username
+              : 'New voice message',
     );
   }
 
-
   // IS MINE
-
 
   bool isMine(ChatMessage message) {
     return message.senderId == currentUser.userId;
   }
 
-
   // DISPOSE
-
 
   void dispose() {
     _chatState.dispose();
   }
 
-
   // PRIVATE HELPERS
-
 
   String? _cachedConversationId;
 
@@ -103,7 +90,8 @@ class ChatScreenController {
     if (_cachedConversationId != null) return _cachedConversationId!;
 
     _cachedConversationId =
-        await _chatService.getMatrixConversationId(receiverId) ?? conversationId;
+        await _chatService.getMatrixConversationId(receiverId) ??
+        conversationId;
 
     return _cachedConversationId!;
   }

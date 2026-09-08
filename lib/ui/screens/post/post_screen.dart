@@ -192,7 +192,7 @@ final List<VideoData> _dummyVideos = [
 
 BoxDecoration _glassDecoration(double borderRadius) {
   return BoxDecoration(
-    color: const Color(0xFF23262C).withOpacity(0.30),
+    color: const Color(0xFF23262C).withValues(alpha: 0.30),
     borderRadius: BorderRadius.circular(borderRadius),
     border: Border.all(color: const Color(0xFF23262C), width: 1.0),
   );
@@ -299,9 +299,9 @@ class _PostScreenState extends State<PostScreen>
                       end: Alignment.bottomCenter,
                       stops: const [0.0, 0.6, 1.0],
                       colors: [
-                        const Color(0xFF08090B).withOpacity(0.95),
-                        const Color(0xFF08090B).withOpacity(0.75),
-                        const Color(0xFF08090B).withOpacity(0.0),
+                        const Color(0xFF08090B).withValues(alpha: 0.95),
+                        const Color(0xFF08090B).withValues(alpha: 0.75),
+                        const Color(0xFF08090B).withValues(alpha: 0.0),
                       ],
                     ),
                   ),
@@ -434,7 +434,8 @@ class _TabPill extends StatelessWidget {
         child: Text(
           label,
           style: TextStyle(
-            color: isActive ? Colors.white : Colors.white.withOpacity(0.45),
+            color:
+                isActive ? Colors.white : Colors.white.withValues(alpha: 0.45),
             fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
             fontSize: 15,
           ),

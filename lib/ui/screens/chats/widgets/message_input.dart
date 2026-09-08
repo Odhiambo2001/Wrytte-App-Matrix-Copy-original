@@ -211,9 +211,9 @@ class _MessageInputFieldState extends State<MessageInputField> {
               end: Alignment.topCenter,
               stops: const [0.0, 0.7, 1.0],
               colors: [
-                const Color(0xFF08090B).withOpacity(0.98),
-                const Color(0xFF08090B).withOpacity(0.80),
-                const Color(0xFF08090B).withOpacity(0.0),
+                const Color(0xFF08090B).withValues(alpha: 0.98),
+                const Color(0xFF08090B).withValues(alpha: 0.80),
+                const Color(0xFF08090B).withValues(alpha: 0.0),
               ],
             ),
           ),
@@ -230,7 +230,7 @@ class _MessageInputFieldState extends State<MessageInputField> {
                     height: widget.inputPillHeight,
                     child: Icon(
                       Icons.add,
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.white.withValues(alpha: 0.7),
                       size: 25,
                     ),
                     onTap: _showAttachmentMenu,
@@ -257,7 +257,7 @@ class _MessageInputFieldState extends State<MessageInputField> {
                                   decoration: BoxDecoration(
                                     color: const Color(
                                       0xFF23262C,
-                                    ).withOpacity(0.30),
+                                    ).withValues(alpha: 0.30),
                                     borderRadius: BorderRadius.circular(20),
                                     border: Border.all(
                                       color: const Color(0xFF23262C),
@@ -285,8 +285,8 @@ class _MessageInputFieldState extends State<MessageInputField> {
                                           decoration: InputDecoration(
                                             hintText: 'Message',
                                             hintStyle: TextStyle(
-                                              color: Colors.white.withOpacity(
-                                                0.3,
+                                              color: Colors.white.withValues(
+                                                alpha: 0.3,
                                               ),
                                               fontSize: 15,
                                             ),
@@ -317,7 +317,9 @@ class _MessageInputFieldState extends State<MessageInputField> {
                                                 width: 23,
                                                 height: 23,
                                                 colorFilter: ColorFilter.mode(
-                                                  Colors.white.withOpacity(0.4),
+                                                  Colors.white.withValues(
+                                                    alpha: 0.4,
+                                                  ),
                                                   BlendMode.srcIn,
                                                 ),
                                               ),
@@ -343,7 +345,7 @@ class _MessageInputFieldState extends State<MessageInputField> {
                         width: 40,
                         height: 40,
                         colorFilter: ColorFilter.mode(
-                          Colors.white.withOpacity(0.7),
+                          Colors.white.withValues(alpha: 0.7),
                           BlendMode.srcIn,
                         ),
                       ),
@@ -409,7 +411,7 @@ class _MessageInputFieldState extends State<MessageInputField> {
                             color:
                                 _isRecording
                                     ? Colors.redAccent
-                                    : Colors.white.withOpacity(0.7),
+                                    : Colors.white.withValues(alpha: 0.7),
                             size: 25,
                           ),
                         ),
@@ -483,7 +485,7 @@ class _MessageInputFieldState extends State<MessageInputField> {
         child: Container(
           height: widget.inputPillHeight,
           decoration: BoxDecoration(
-            color: const Color(0xFF23262C).withOpacity(0.30),
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: const Color(0xFF23262C), width: 1.0),
           ),
@@ -510,7 +512,7 @@ class _MessageInputFieldState extends State<MessageInputField> {
                   color:
                       _cancelRecordingOnRelease
                           ? Colors.redAccent
-                          : Colors.white.withOpacity(0.4),
+                          : Colors.white.withValues(alpha: 0.4),
                   fontSize: 13,
                 ),
               ),
@@ -537,7 +539,7 @@ class _MessageInputFieldState extends State<MessageInputField> {
             width: width,
             height: height,
             decoration: BoxDecoration(
-              color: const Color(0xFF23262C).withOpacity(0.30),
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
               borderRadius: BorderRadius.circular(height / 2),
               border: Border.all(color: const Color(0xFF23262C), width: 1.0),
             ),

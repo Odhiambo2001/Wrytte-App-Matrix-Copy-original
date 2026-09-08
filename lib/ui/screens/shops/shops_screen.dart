@@ -339,9 +339,9 @@ class _ShopsScreenState extends State<ShopsScreen>
                     end: Alignment.bottomCenter,
                     stops: const [0.0, 0.6, 1.0],
                     colors: [
-                      const Color(0xFF08090B).withOpacity(0.95),
-                      const Color(0xFF08090B).withOpacity(0.75),
-                      const Color(0xFF08090B).withOpacity(0.0),
+                      const Color(0xFF08090B).withValues(alpha: 0.95),
+                      const Color(0xFF08090B).withValues(alpha: 0.75),
+                      const Color(0xFF08090B).withValues(alpha: 0.0),
                     ],
                   ),
                 ),
@@ -432,7 +432,9 @@ class _ShopsTopBar extends StatelessWidget {
                         height: _pillHeight,
                         padding: const EdgeInsets.symmetric(horizontal: 14),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF23262C).withOpacity(0.30),
+                          color: const Color(
+                            0xFF23262C,
+                          ).withValues(alpha: 0.30),
                           borderRadius: BorderRadius.circular(22),
                           border: Border.all(
                             color: const Color(0xFF23262C),
@@ -452,7 +454,7 @@ class _ShopsTopBar extends StatelessWidget {
                             Text(
                               'Location',
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.85),
+                                color: Colors.white.withValues(alpha: 0.85),
                                 fontSize: 13,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -472,7 +474,9 @@ class _ShopsTopBar extends StatelessWidget {
                         width: _pillHeight,
                         height: _pillHeight,
                         decoration: BoxDecoration(
-                          color: const Color(0xFF23262C).withOpacity(0.30),
+                          color: const Color(
+                            0xFF23262C,
+                          ).withValues(alpha: 0.30),
                           borderRadius: BorderRadius.circular(22),
                           border: Border.all(
                             color: const Color(0xFF23262C),
@@ -534,7 +538,7 @@ class _CategoryBar extends StatelessWidget {
           child: Container(
             height: 44,
             decoration: BoxDecoration(
-              color: const Color(0xFF23262C).withOpacity(0.30),
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
               borderRadius: BorderRadius.circular(22),
               border: Border.all(color: const Color(0xFF23262C), width: 1.0),
             ),
@@ -580,8 +584,8 @@ class _CategoryBar extends StatelessWidget {
                             color:
                                 isActive
                                     ? Colors.white
-                                    : Colors.white.withOpacity(
-                                      0.3 + activeWeight * 0.3,
+                                    : Colors.white.withValues(
+                                      alpha: 0.3 + activeWeight * 0.3,
                                     ),
                             fontWeight:
                                 isActive ? FontWeight.w600 : FontWeight.w500,

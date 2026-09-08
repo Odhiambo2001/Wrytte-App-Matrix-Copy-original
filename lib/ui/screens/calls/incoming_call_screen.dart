@@ -151,13 +151,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                     Icon(
                       Icons.lock_outline,
                       size: 14,
-                      color: Colors.white.withOpacity(0.5),
+                      color: Colors.white.withValues(alpha: 0.5),
                     ),
                     const SizedBox(width: 5),
                     Text(
                       'End-to-end encrypted',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
+                        color: Colors.white.withValues(alpha: 0.5),
                         fontSize: 14,
                       ),
                     ),
@@ -182,7 +182,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                 Text(
                   isVideo ? 'Incoming video call…' : 'Incoming voice call…',
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.55),
+                    color: Colors.white.withValues(alpha: 0.55),
                     fontSize: 16,
                   ),
                 ),
@@ -259,7 +259,7 @@ class _ActionButton extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: Colors.white.withOpacity(0.75),
+              color: Colors.white.withValues(alpha: 0.75),
               fontSize: 14,
               fontWeight: FontWeight.w500,
             ),

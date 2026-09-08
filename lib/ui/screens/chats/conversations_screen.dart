@@ -1915,30 +1915,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     return safe;
   }
 
-  bool _isKnownGroupAvatar(String? avatarUrl) {
-    final key = _normaliseAvatarIdentity(avatarUrl);
-    if (key.isEmpty) return false;
-    for (final conversation in _conversations) {
-      if (!_isGroupConversation(conversation)) continue;
-      if (_normaliseAvatarIdentity(conversation.otherUserAvatar) == key) {
-        return true;
-      }
-      final roomAvatar = _groupRoomAvatarUrl(
-        MatrixChatService.instance.getRoomById(conversation.id),
-      );
-      if (_normaliseAvatarIdentity(roomAvatar) == key) return true;
-    }
-    if (MatrixClientService.instance.isInitialized) {
-      for (final room in MatrixChatService.instance.rooms) {
-        if (!MatrixChatService.instance.isMatrixGroupRoom(room)) continue;
-        if (_normaliseAvatarIdentity(_groupRoomAvatarUrl(room)) == key) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
   String? _cachedPublicAvatarForConversation(ChatConversation conv) {
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final uid = _profileUidForConversation(conv);
@@ -3009,7 +2985,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                               width: constraints.maxWidth + 20,
                               height: 1,
                               child: Divider(
-                                color: Colors.grey.withOpacity(0.3),
+                                color: Colors.grey.withValues(alpha: 0.3),
                                 thickness: 0.5,
                                 height: 1,
                               ),
@@ -3365,7 +3341,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                   ),
                   const SizedBox(height: 14),
                   Divider(
-                    color: Colors.grey.withOpacity(0.3),
+                    color: Colors.grey.withValues(alpha: 0.3),
                     thickness: 0.5,
                     height: 0,
                   ),
@@ -3564,13 +3540,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Future<void> _commitGroupExit(GroupExitRequest request) async {
+    final messenger = ScaffoldMessenger.of(context);
     try {
       apkLog(
         'Groups.undo',
         'countdown expired; committing ${request.type.name} room_id="${request.roomId}"',
       );
       await request.commit();
-      if (!mounted) return;
+      if (!context.mounted) return;
       await _loadLocalConversations();
       await _loadSuggestedGroups(force: true);
     } catch (error) {
@@ -3578,7 +3555,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       setState(() => _groupExitHiddenRoomIds.remove(request.roomId));
       await _loadLocalConversations();
       await _loadSuggestedGroups(force: true);
-      ScaffoldMessenger.of(context).showSnackBar(
+      if (!mounted) return;
+      messenger.showSnackBar(
         SnackBar(
           content: Text(
             'Could not update ${request.isChannel ? 'channel' : 'group'}: '

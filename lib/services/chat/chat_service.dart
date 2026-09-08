@@ -1971,7 +1971,13 @@ class ChatService {
     if (value.isEmpty) return null;
     final uri = Uri.tryParse(value);
     if (uri == null || !uri.isScheme('mxc')) return value;
-    return uri.getDownloadLink(client).toString();
+    final homeserver = client.homeserver;
+    if (homeserver == null) return null;
+    return homeserver
+        .resolve(
+          '_matrix/media/v3/download/${uri.host}${uri.hasPort ? ':${uri.port}' : ''}${uri.path}',
+        )
+        .toString();
   }
 
   Future<void> markConversationAsRead(String conversationId) async {

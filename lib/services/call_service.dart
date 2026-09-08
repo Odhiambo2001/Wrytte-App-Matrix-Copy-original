@@ -807,7 +807,7 @@ class _PermissionAwareMediaDevices implements webrtc_iface.MediaDevices {
   ) => _delegate.getDisplayMedia(mediaConstraints);
 
   @override
-  Future<List<dynamic>> getSources() => _delegate.getSources();
+  Future<List<dynamic>> getSources() async => _delegate.enumerateDevices();
 
   @override
   Future<List<webrtc_iface.MediaDeviceInfo>> enumerateDevices() =>

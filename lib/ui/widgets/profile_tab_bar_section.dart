@@ -17,7 +17,6 @@ class ProfileTabBarSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool isScrollable = tabs.length > 3;
     final double screenWidth = MediaQuery.of(context).size.width;
 
     // For 2 tabs centre at 60% width; for 3+ stretch full width
@@ -35,7 +34,7 @@ class ProfileTabBarSection extends StatelessWidget {
         child: Container(
           height: 44,
           decoration: BoxDecoration(
-            color: const Color(0xFF23262C).withOpacity(0.30),
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: const Color(0xFF23262C), width: 1.0),
           ),

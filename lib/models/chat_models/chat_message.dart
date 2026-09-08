@@ -397,7 +397,13 @@ String? _attachmentUrlFromMatrix(mx.Event event) {
   final mxcUrl = event.attachmentMxcUrl;
   if (mxcUrl == null) return null;
   if (!mxcUrl.isScheme('mxc')) return mxcUrl.toString();
-  return mxcUrl.getDownloadLink(event.room.client).toString();
+  final homeserver = event.room.client.homeserver;
+  if (homeserver == null) return null;
+  return homeserver
+      .resolve(
+        '_matrix/media/v3/download/${mxcUrl.host}${mxcUrl.hasPort ? ':${mxcUrl.port}' : ''}${mxcUrl.path}',
+      )
+      .toString();
 }
 
 MessageStatus _statusFromMatrix(mx.EventStatus status) {

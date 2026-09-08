@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
@@ -441,10 +440,7 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
               cursorColor: const Color(0xFF4DA3FF),
               decoration: InputDecoration(
                 hintText: widget.isChannel ? 'link' : null,
-                hintStyle: const TextStyle(
-                  color: Colors.white38,
-                  fontSize: 18,
-                ),
+                hintStyle: const TextStyle(color: Colors.white38, fontSize: 18),
                 border: InputBorder.none,
                 isCollapsed: true,
               ),
@@ -455,19 +451,16 @@ class _NewGroupScreenState extends State<NewGroupScreen> {
       ),
     );
   }
-
 }
 
 class _NewGroupMembersScreen extends StatefulWidget {
   final String groupName;
-  final String channelLink;
   final bool isPublic;
   final String? aliasLocalpart;
   final bool isChannel;
 
   const _NewGroupMembersScreen({
     required this.groupName,
-    this.channelLink = '',
     required this.isPublic,
     this.aliasLocalpart,
     this.isChannel = false,
@@ -548,7 +541,7 @@ class _NewGroupMembersScreenState extends State<_NewGroupMembersScreen> {
         isPublic: widget.isPublic,
         aliasLocalpart: widget.aliasLocalpart,
         memberIds: selectedIds,
-        link: widget.channelLink,
+        link: '',
         conversationKind:
             widget.isChannel
                 ? ConversationKind.channel

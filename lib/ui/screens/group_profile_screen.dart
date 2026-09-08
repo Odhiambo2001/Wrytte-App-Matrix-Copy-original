@@ -1766,7 +1766,7 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
   File? _pickedImageFile;
   Timer? _aliasDebounce;
   bool _saving = false;
-  bool _leaving = false;
+  final bool _leaving = false;
   bool _deleting = false;
   bool _checkingAlias = false;
   bool _aliasAvailable = true;
@@ -2043,34 +2043,6 @@ class _EditGroupScreenState extends State<_EditGroupScreen> {
       setState(() => _saving = false);
       _showSnack('Failed to save group: $e', isError: true);
     }
-  }
-
-  Future<void> _leaveGroup() async {
-    if (_leaving || _deleting) return;
-    setState(() => _leaving = true);
-    final roomId = widget.roomId;
-    final alias =
-        MatrixChatService.instance.getRoomById(roomId)?.canonicalAlias ??
-        widget.initialAlias;
-    Navigator.pop(
-      context,
-      _GroupEditResult(
-        pendingAction: GroupExitRequest.leave(
-          roomId: roomId,
-          commit: () async {
-            // Save the account-scoped room-id guards before the network
-            // calls. This keeps an old cached row or in-flight /sync from
-            // restoring the group while leave/forget completes.
-            await ChatService().dismissDeletedGroupLocally(roomId);
-            await MatrixChatService.instance.dismissPublicGroup(
-              roomId: roomId,
-              canonicalAlias: alias,
-            );
-            await MatrixChatService.instance.leaveGroup(roomId);
-          },
-        ),
-      ),
-    );
   }
 
   Future<void> _deleteGroup() async {

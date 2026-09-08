@@ -526,40 +526,6 @@ class _NewContactPageState extends State<NewContactPage> {
     return contacts;
   }
 
-  Future<void> _prefillNameFromProfile(
-    String matrixUserId,
-    String identifier,
-  ) async {
-    if (_firstNameCtrl.text.trim().isNotEmpty ||
-        _lastNameCtrl.text.trim().isNotEmpty) {
-      return;
-    }
-
-    try {
-      final profile = await UserProfileService.instance.getProfileByUid(
-        matrixUserId,
-        phone: identifier,
-        forceRefresh: true,
-      );
-      final name = _cleanProfileName(profile?.displayName);
-      if (name.isEmpty || !mounted) return;
-      if (_fullIdentifier != identifier) return;
-      if (_resolvedUserId?.trim() != matrixUserId.trim()) return;
-      if (_firstNameCtrl.text.trim().isNotEmpty ||
-          _lastNameCtrl.text.trim().isNotEmpty) {
-        return;
-      }
-
-      final parts = name.split(RegExp(r'\s+'));
-      setState(() {
-        _firstNameCtrl.text = parts.first;
-        _lastNameCtrl.text = parts.length > 1 ? parts.skip(1).join(' ') : '';
-      });
-    } catch (e) {
-      debugPrint('[NewContact.lookup] profile name prefill skipped: $e');
-    }
-  }
-
   // ─────────────────────────────────────────────────────────────
   // Save — now fully wired to Matrix + device contacts
   // ─────────────────────────────────────────────────────────────

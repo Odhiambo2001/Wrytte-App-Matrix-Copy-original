@@ -62,11 +62,12 @@ class _ChannelGalleryPickerState extends State<ChannelGalleryPicker> {
     if (album == null) return;
     setState(() => _loading = true);
     final assets = await album.getAssetListPaged(page: 0, size: 200);
-    if (mounted)
+    if (mounted) {
       setState(() {
         _assets = assets;
         _loading = false;
       });
+    }
   }
 
   void _toggle(AssetEntity asset) {
@@ -84,9 +85,7 @@ class _ChannelGalleryPickerState extends State<ChannelGalleryPicker> {
     if (!mounted || file == null) return;
     final result = await Navigator.push<ChannelGallerySelection>(
       context,
-      MaterialPageRoute(
-        builder: (_) => ChannelMediaPreview(file: file),
-      ),
+      MaterialPageRoute(builder: (_) => ChannelMediaPreview(file: file)),
     );
     if (mounted && result != null) {
       Navigator.pop(context, result);
@@ -165,25 +164,25 @@ class _ChannelGalleryPickerState extends State<ChannelGalleryPicker> {
                 final asset = _assets[index];
                 final selectedIndex = _selected.indexOf(asset);
                 return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      GestureDetector(
-                        onTap: () => _preview(asset),
-                        child: Image(
-                          image: AssetEntityImageProvider(
-                            asset,
-                            isOriginal: false,
-                            thumbnailSize: const ThumbnailSize.square(300),
-                          ),
-                          fit: BoxFit.cover,
+                  fit: StackFit.expand,
+                  children: [
+                    GestureDetector(
+                      onTap: () => _preview(asset),
+                      child: Image(
+                        image: AssetEntityImageProvider(
+                          asset,
+                          isOriginal: false,
+                          thumbnailSize: const ThumbnailSize.square(300),
                         ),
+                        fit: BoxFit.cover,
                       ),
-                      Positioned(
-                        top: 8,
-                        right: 8,
-                        child: GestureDetector(
-                          onTap: () => _toggle(asset),
-                          child: Container(
+                    ),
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: GestureDetector(
+                        onTap: () => _toggle(asset),
+                        child: Container(
                           width: 28,
                           height: 28,
                           alignment: Alignment.center,
@@ -199,10 +198,10 @@ class _ChannelGalleryPickerState extends State<ChannelGalleryPicker> {
                               selectedIndex >= 0
                                   ? Text('${selectedIndex + 1}')
                                   : null,
-                          ),
                         ),
                       ),
-                    ],
+                    ),
+                  ],
                 );
               },
             ),
@@ -227,7 +226,9 @@ class _ChannelGalleryPickerState extends State<ChannelGalleryPicker> {
                           ),
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF23262C).withOpacity(0.30),
+                            color: const Color(
+                              0xFF23262C,
+                            ).withValues(alpha: 0.30),
                             borderRadius: BorderRadius.circular(28),
                             border: Border.all(
                               color: const Color(0xFF23262C),
@@ -257,7 +258,9 @@ class _ChannelGalleryPickerState extends State<ChannelGalleryPicker> {
                         height: 40,
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            color: const Color(0xFF23262C).withOpacity(0.30),
+                            color: const Color(
+                              0xFF23262C,
+                            ).withValues(alpha: 0.30),
                             shape: BoxShape.circle,
                             border: Border.all(
                               color: const Color(0xFF23262C),
@@ -268,7 +271,7 @@ class _ChannelGalleryPickerState extends State<ChannelGalleryPicker> {
                             padding: EdgeInsets.zero,
                             icon: Icon(
                               Icons.send,
-                              color: Colors.white.withOpacity(0.70),
+                              color: Colors.white.withValues(alpha: 0.70),
                               size: 20,
                             ),
                             onPressed: _finish,
@@ -346,7 +349,9 @@ class _ChannelMediaPreviewState extends State<ChannelMediaPreview> {
                       ? GestureDetector(
                         onTap: () {
                           setState(() {
-                            video.value.isPlaying ? video.pause() : video.play();
+                            video.value.isPlaying
+                                ? video.pause()
+                                : video.play();
                           });
                         },
                         child: AspectRatio(
@@ -375,10 +380,13 @@ class _ChannelMediaPreviewState extends State<ChannelMediaPreview> {
                 children: [
                   Expanded(
                     child: Container(
-                      constraints: const BoxConstraints(minHeight: 40, maxHeight: 120),
+                      constraints: const BoxConstraints(
+                        minHeight: 40,
+                        maxHeight: 120,
+                      ),
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF23262C).withOpacity(0.30),
+                        color: const Color(0xFF23262C).withValues(alpha: 0.30),
                         borderRadius: BorderRadius.circular(28),
                         border: Border.all(color: const Color(0xFF23262C)),
                       ),
@@ -386,7 +394,10 @@ class _ChannelMediaPreviewState extends State<ChannelMediaPreview> {
                         controller: _captionController,
                         minLines: 1,
                         maxLines: 4,
-                        style: const TextStyle(color: Colors.white, fontSize: 17),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                        ),
                         decoration: const InputDecoration(
                           hintText: 'Add a caption...',
                           hintStyle: TextStyle(color: Colors.white38),
@@ -401,13 +412,16 @@ class _ChannelMediaPreviewState extends State<ChannelMediaPreview> {
                     height: 40,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        color: const Color(0xFF23262C).withOpacity(0.30),
+                        color: const Color(0xFF23262C).withValues(alpha: 0.30),
                         shape: BoxShape.circle,
                         border: Border.all(color: const Color(0xFF23262C)),
                       ),
                       child: IconButton(
                         padding: EdgeInsets.zero,
-                        icon: Icon(Icons.send, color: Colors.white.withOpacity(0.70)),
+                        icon: Icon(
+                          Icons.send,
+                          color: Colors.white.withValues(alpha: 0.70),
+                        ),
                         onPressed: _post,
                       ),
                     ),

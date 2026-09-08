@@ -98,7 +98,10 @@ class _VideoItemState extends State<VideoItem> {
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
+                colors: [
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.9),
+                ],
               ),
             ),
           ),
@@ -171,7 +174,7 @@ class _VideoItemState extends State<VideoItem> {
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color: Colors.white.withOpacity(0.75),
+                              color: Colors.white.withValues(alpha: 0.75),
                               fontSize: 13.5,
                               height: 1.4,
                             ),
@@ -265,7 +268,7 @@ class _PillAction extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color: const Color(0xFF0F1013).withOpacity(0.5),
+          color: const Color(0xFF0F1013).withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Row(
@@ -299,7 +302,7 @@ class _GroupedPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 9),
       decoration: BoxDecoration(
-        color: const Color(0xFF0F1013).withOpacity(0.5),
+        color: const Color(0xFF0F1013).withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: children),

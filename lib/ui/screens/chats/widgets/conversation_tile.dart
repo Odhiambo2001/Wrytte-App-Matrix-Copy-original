@@ -51,7 +51,7 @@ class ConversationTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
-      color: isSelected ? _blue.withOpacity(0.08) : Colors.transparent,
+      color: isSelected ? _blue.withValues(alpha: 0.08) : Colors.transparent,
       child: Column(
         children: [
           InkWell(
@@ -60,89 +60,89 @@ class ConversationTile extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(
-            children: [
-              // ── Selection circle ────────────────────────────────────────
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                width: isSelectionMode ? 28 : 0,
-                height: 60,
-                alignment: Alignment.center,
-                child:
-                    isSelectionMode
-                        ? _SelectionCircle(isSelected: isSelected)
-                        : const SizedBox.shrink(),
-              ),
-
-              if (isSelectionMode) const SizedBox(width: 6),
-
-              // ── Avatar ─────────────────────────────────────────────────
-              Stack(
-                clipBehavior: Clip.none,
                 children: [
-                  UserAvatar(
-                    size: 60,
-                    imageUrl: avatarUrl,
-                    localImagePath: localAvatarPath,
-                    cacheIdentity: avatarCacheIdentity,
-                    name: name,
-                    isDeleted: isDeleted,
+                  // ── Selection circle ────────────────────────────────────────
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: isSelectionMode ? 28 : 0,
+                    height: 60,
+                    alignment: Alignment.center,
+                    child:
+                        isSelectionMode
+                            ? _SelectionCircle(isSelected: isSelected)
+                            : const SizedBox.shrink(),
                   ),
 
-                  if (isOnline && !isSelectionMode)
-                    Positioned(
-                      bottom: 2,
-                      right: 2,
-                      child: Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: Colors.green,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                        ),
+                  if (isSelectionMode) const SizedBox(width: 6),
+
+                  // ── Avatar ─────────────────────────────────────────────────
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      UserAvatar(
+                        size: 60,
+                        imageUrl: avatarUrl,
+                        localImagePath: localAvatarPath,
+                        cacheIdentity: avatarCacheIdentity,
+                        name: name,
+                        isDeleted: isDeleted,
                       ),
-                    ),
-                ],
-              ),
 
-              const SizedBox(width: 12),
-
-              // ── Name + message ─────────────────────────────────────────
-              Expanded(
-                child:
-                    channelOnly
-                        ? _ChannelDetails(
-                          name: name,
-                          subscriberCount: channelSubscriberCount ?? 0,
-                        )
-                        : hasMessage
-                        ? _ConversationDetails(
-                          name: name,
-                          senderName: senderName,
-                          lastMessage: lastMessage,
-                          time: time,
-                          unreadCount: unreadCount,
-                          isSelectionMode: isSelectionMode,
-                          isSelected: isSelected,
-                        )
-                        : SizedBox(
-                          height: 60,
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                color: Colors.white,
-                              ),
+                      if (isOnline && !isSelectionMode)
+                        Positioned(
+                          bottom: 2,
+                          right: 2,
+                          child: Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              color: Colors.green,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
                             ),
                           ),
                         ),
-              ),
-            ],
+                    ],
+                  ),
+
+                  const SizedBox(width: 12),
+
+                  // ── Name + message ─────────────────────────────────────────
+                  Expanded(
+                    child:
+                        channelOnly
+                            ? _ChannelDetails(
+                              name: name,
+                              subscriberCount: channelSubscriberCount ?? 0,
+                            )
+                            : hasMessage
+                            ? _ConversationDetails(
+                              name: name,
+                              senderName: senderName,
+                              lastMessage: lastMessage,
+                              time: time,
+                              unreadCount: unreadCount,
+                              isSelectionMode: isSelectionMode,
+                              isSelected: isSelected,
+                            )
+                            : SizedBox(
+                              height: 60,
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -168,11 +168,21 @@ class _ChannelDetails extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.start,
     mainAxisAlignment: MainAxisAlignment.center,
     children: [
-      Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
-        style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
+      Text(
+        name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 17,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
       const SizedBox(height: 4),
-      Text('$subscriberCount ${subscriberCount == 1 ? 'subscriber' : 'subscribers'}',
-        style: const TextStyle(color: Colors.white54, fontSize: 15)),
+      Text(
+        '$subscriberCount ${subscriberCount == 1 ? 'subscriber' : 'subscribers'}',
+        style: const TextStyle(color: Colors.white54, fontSize: 15),
+      ),
     ],
   );
 }
@@ -270,7 +280,11 @@ class _ConversationDetails extends StatelessWidget {
 
         const SizedBox(height: 14),
 
-        Divider(color: Colors.grey.withOpacity(0.3), thickness: 0.5, height: 0),
+        Divider(
+          color: Colors.grey.withValues(alpha: 0.3),
+          thickness: 0.5,
+          height: 0,
+        ),
       ],
     );
   }
@@ -294,7 +308,7 @@ class _SelectionCircle extends StatelessWidget {
         shape: BoxShape.circle,
         color: isSelected ? _blue : Colors.transparent,
         border: Border.all(
-          color: isSelected ? _blue : Colors.grey.withOpacity(0.55),
+          color: isSelected ? _blue : Colors.grey.withValues(alpha: 0.55),
           width: 1.8,
         ),
       ),

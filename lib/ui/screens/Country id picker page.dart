@@ -1,3 +1,6 @@
+// This legacy route is referenced by its historical filename in deep links.
+// ignore_for_file: file_names
+
 import 'package:flutter/material.dart';
 import 'package:wrytte/utils/countries_id.dart';
 
@@ -137,9 +140,9 @@ class _CountryIdPickerPageState extends State<CountryIdPickerPage> {
                     end: Alignment.bottomCenter,
                     stops: const [0.0, 0.6, 1.0],
                     colors: [
-                      const Color(0xFF08090B).withOpacity(0.95),
-                      const Color(0xFF08090B).withOpacity(0.75),
-                      const Color(0xFF08090B).withOpacity(0.0),
+                      const Color(0xFF08090B).withValues(alpha: 0.95),
+                      const Color(0xFF08090B).withValues(alpha: 0.75),
+                      const Color(0xFF08090B).withValues(alpha: 0.0),
                     ],
                   ),
                 ),
