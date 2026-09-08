@@ -271,7 +271,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         return;
       }
 
+      // Stop OpenCV/RetinaFace extraction as soon as the backend has accepted
+      // the five live candidates. Keep the camera stream open so the preview
+      // remains visible while LDPC recovery and challenge signing complete.
       _complete = true;
+      _discardPendingCandidateCaptures();
       if (_enrolling) {
         final provision = result.enrollmentProvision;
         if (provision == null) {
@@ -408,10 +412,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     BiometricVerificationBootstrap verification,
   ) async {
     _sending = true;
-    final camera = _camera;
-    if (camera?.value.isStreamingImages == true) {
-      await camera!.stopImageStream();
-    }
+    // Sign-in keeps the camera preview/stream alive, but [_complete] makes
+    // [_onFrame] return before OpenCV/RetinaFace performs any more extraction.
+    // The page disposes the camera normally after navigation.
     if (mounted) setState(() => _status = 'Verifying securely…');
     try {
       final recoveredKey = await _recoverLocalKey(
