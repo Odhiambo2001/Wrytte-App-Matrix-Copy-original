@@ -3,7 +3,7 @@
 // that can be found in the LICENSE file.
 
 /// OpenCV bindings for Flutter
-library cv;
+library;
 
 export 'package:dartcv4/calib3d.dart';
 export 'package:dartcv4/contrib.dart';

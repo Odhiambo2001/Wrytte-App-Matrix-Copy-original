@@ -5,6 +5,6 @@
 // that can be found in the LICENSE file.
 
 /// OpenCV bindings for Flutter
-library cv;
+library;
 
 export 'opencv.dart';
