@@ -7,6 +7,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:image/image.dart' as img;
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
+import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/services/face/retinaface_detector.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 
@@ -63,9 +64,28 @@ class BiometricEnrollmentProvision {
   final String ldpcInputTicket;
 }
 
+/// The fifth live sign-in response contains the compact backend template and
+/// a one-time challenge. It never contains the account secret or session
+/// token; those are returned only after the device proves possession below.
+class BiometricVerificationBootstrap {
+  const BiometricVerificationBootstrap({
+    required this.input,
+    required this.userId,
+    required this.kmap,
+    required this.publicKey,
+    required this.challenge,
+  });
+
+  final BiometricLdpcInput input;
+  final String userId;
+  final Map<String, dynamic> kmap;
+  final String publicKey;
+  final String challenge;
+}
+
 /// Result of one immediately uploaded camera candidate. The backend returns
-/// no template, image, or score. On the fifth signup candidate it returns a
-/// provisional account response; the LDPC input is claimed separately.
+/// no image, score, or embedding. Signup receives provisional credentials on
+/// the fifth live candidate; sign-in receives an LDPC verification bootstrap.
 class BiometricCandidateResult {
   const BiometricCandidateResult._({
     required this.accepted,
@@ -74,6 +94,7 @@ class BiometricCandidateResult {
     required this.acceptedCandidates,
     this.completedInput,
     this.enrollmentProvision,
+    this.verificationBootstrap,
   }) : errorCode = null;
 
   const BiometricCandidateResult.rejected({
@@ -83,17 +104,25 @@ class BiometricCandidateResult {
     required this.errorCode,
   }) : accepted = false,
        completedInput = null,
-       enrollmentProvision = null;
+       enrollmentProvision = null,
+       verificationBootstrap = null;
 
   final bool accepted;
   final String? captureSessionId;
   final int index;
   final int acceptedCandidates;
+
+  /// Legacy batch compatibility; continuous sign-in uses the validated
+  /// [verificationBootstrap] instead.
   final BiometricLdpcInput? completedInput;
   final BiometricEnrollmentProvision? enrollmentProvision;
+  final BiometricVerificationBootstrap? verificationBootstrap;
   final String? errorCode;
 
-  bool get complete => completedInput != null || enrollmentProvision != null;
+  bool get complete =>
+      completedInput != null ||
+      enrollmentProvision != null ||
+      verificationBootstrap != null;
 }
 
 class BiometricApiService {
@@ -179,6 +208,20 @@ class BiometricApiService {
     return sessionId.isEmpty || sessionId.length > 256 ? null : sessionId;
   }
 
+  /// Opens the same bounded continuous capture session for sign-in. The
+  /// backend binds this opaque ID to the already-found Wrytte account.
+  static Future<String?> startVerifyCaptureSession({
+    required String wrytteId,
+  }) async {
+    final response = await ApiService.postMultipart(
+      '/api/biometrics/verify/session',
+      <String, String>{'wrytteId': WrytteId.forBackend(wrytteId)},
+    );
+    if (response is! Map || response['accepted'] != true) return null;
+    final sessionId = response['captureSessionId']?.toString().trim() ?? '';
+    return sessionId.isEmpty || sessionId.length > 256 ? null : sessionId;
+  }
+
   static Future<BiometricCandidateResult> verifyCandidate({
     required String wrytteId,
     required int candidateIndex,
@@ -236,7 +279,7 @@ class BiometricApiService {
       );
     }
     if (index < 0 ||
-        index >= FaceBiometricPipeline.framesToUse ||
+        index > 299 ||
         acceptedCandidates < 1 ||
         acceptedCandidates > FaceBiometricPipeline.framesToUse ||
         normalizedSessionId == null) {
@@ -272,7 +315,8 @@ class BiometricApiService {
       );
     }
     final completed = _ldpcInputFromResponse(response);
-    if (!completed.accepted) {
+    final bootstrap = _verificationBootstrapFromResponse(response, completed);
+    if (bootstrap == null) {
       return const BiometricCandidateResult.rejected(
         index: -1,
         acceptedCandidates: 0,
@@ -285,6 +329,41 @@ class BiometricApiService {
       index: index,
       acceptedCandidates: acceptedCandidates,
       completedInput: completed,
+      verificationBootstrap: bootstrap,
+    );
+  }
+
+  static BiometricVerificationBootstrap? _verificationBootstrapFromResponse(
+    Map<dynamic, dynamic> response,
+    BiometricLdpcInput input,
+  ) {
+    if (!input.accepted) return null;
+    final userId =
+        (response['userid'] ?? response['userId'] ?? '').toString().trim();
+    final publicKey = response['publicKey']?.toString().trim() ?? '';
+    final challenge = response['challenge']?.toString().trim() ?? '';
+    if (userId.isEmpty || publicKey.isEmpty || challenge.isEmpty) return null;
+    final rawKmap = response['kmap'];
+    Map<String, dynamic> kmap;
+    try {
+      if (rawKmap is Map) {
+        kmap = Map<String, dynamic>.from(rawKmap);
+      } else {
+        final decoded = jsonDecode(rawKmap?.toString() ?? '');
+        if (decoded is! Map) return null;
+        kmap = Map<String, dynamic>.from(decoded);
+      }
+      final commitment = FuzzyCommitment.fromJson(kmap);
+      if (commitment.signingPublicKey != publicKey) return null;
+    } catch (_) {
+      return null;
+    }
+    return BiometricVerificationBootstrap(
+      input: input,
+      userId: userId,
+      kmap: kmap,
+      publicKey: publicKey,
+      challenge: challenge,
     );
   }
 

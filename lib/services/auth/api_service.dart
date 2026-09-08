@@ -41,7 +41,7 @@ class ApiService {
         .timeout(const Duration(seconds: 20));
 
     debugPrint("⬅️ STATUS: ${response.statusCode}");
-    debugPrint("⬅️ RESPONSE: ${response.body}");
+    debugPrint("⬅️ RESPONSE: ${_redactResponse(response.body)}");
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return _safeDecode(response.body);
@@ -80,7 +80,7 @@ class ApiService {
         .timeout(const Duration(seconds: 20));
 
     debugPrint("⬅️ STATUS: ${response.statusCode}");
-    debugPrint("⬅️ RESPONSE: ${response.body}");
+    debugPrint("⬅️ RESPONSE: ${_redactResponse(response.body)}");
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return _safeDecode(response.body);
@@ -121,7 +121,7 @@ class ApiService {
     final response = await http.Response.fromStream(streamedResponse);
 
     debugPrint("⬅️ STATUS: ${response.statusCode}");
-    debugPrint("⬅️ RESPONSE: ${response.body}");
+    debugPrint("⬅️ RESPONSE: ${_redactResponse(response.body)}");
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return _safeDecode(response.body);
@@ -163,7 +163,7 @@ class ApiService {
     final response = await http.Response.fromStream(streamedResponse);
 
     debugPrint("⬅️ STATUS: ${response.statusCode}");
-    debugPrint("⬅️ RESPONSE: ${response.body}");
+    debugPrint("⬅️ RESPONSE: ${_redactResponse(response.body)}");
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return _safeDecode(response.body);
@@ -197,7 +197,7 @@ class ApiService {
         .timeout(const Duration(seconds: 20));
 
     debugPrint("⬅️ STATUS: ${response.statusCode}");
-    debugPrint("⬅️ RESPONSE: ${response.body}");
+    debugPrint("⬅️ RESPONSE: ${_redactResponse(response.body)}");
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return _safeDecode(response.body);
@@ -241,6 +241,41 @@ class ApiService {
           lowerKey.contains('geometry');
       return MapEntry(key, shouldRedact ? '***' : value);
     });
+  }
+
+  /// Response logs are diagnostics only. Never print credentials, biometric
+  /// material, challenges, signatures, or opaque tickets to the device log.
+  static String _redactResponse(String body) {
+    if (body.isEmpty) return body;
+    try {
+      return jsonEncode(_redactValue(jsonDecode(body)));
+    } catch (_) {
+      return '<non-json response>';
+    }
+  }
+
+  static dynamic _redactValue(dynamic value) {
+    if (value is Map) {
+      return value.map((key, item) {
+        final name = key.toString().toLowerCase();
+        final sensitive =
+            name.contains('secret') ||
+            name.contains('token') ||
+            name.contains('password') ||
+            name.contains('kmap') ||
+            name.contains('publickey') ||
+            name.contains('challenge') ||
+            name.contains('signature') ||
+            name.contains('ldpc') ||
+            name.contains('landmark') ||
+            name.contains('geometry') ||
+            name.contains('wrytteid') ||
+            name == 'userid';
+        return MapEntry(key, sensitive ? '***' : _redactValue(item));
+      });
+    }
+    if (value is List) return value.map(_redactValue).toList(growable: false);
+    return value;
   }
 }
 

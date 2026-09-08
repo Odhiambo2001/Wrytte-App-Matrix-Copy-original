@@ -39,9 +39,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   static const _bottomPanelHeight = 250.0;
   // A continuous scan can inspect far more than five target frames, but only
   // this many multipart uploads may consume device/network resources at once.
-  static const _maxConcurrentEnrollmentUploads = 15;
-  static const _maxBufferedEnrollmentCaptures = 30;
-  static const _maxEnrollmentSubmissions = 300;
+  static const _maxConcurrentCandidateUploads = 15;
+  static const _maxBufferedCandidateCaptures = 30;
+  static const _maxCandidateSubmissions = 300;
   final _pipeline = FaceBiometricPipeline();
   final _ldpc = LdpcFuzzyCommitment();
   final _signatureService = LocalFaceSignatureService();
@@ -49,7 +49,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   bool _ready = false;
   bool _sending = false;
   int _inFlightCandidateUploads = 0;
-  final Queue<BiometricCropSet> _pendingEnrollmentCaptures =
+  final Queue<BiometricCropSet> _pendingCandidateCaptures =
       Queue<BiometricCropSet>();
   bool _complete = false;
   int _acceptedCandidateCount = 0;
@@ -61,12 +61,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   bool get _enrolling => widget.isEnrollment;
   bool get _hasCandidateUploadCapacity =>
-      _enrolling
-          ? _nextCandidateSubmissionIndex < _maxEnrollmentSubmissions &&
-              _inFlightCandidateUploads + _pendingEnrollmentCaptures.length <
-                  _maxConcurrentEnrollmentUploads +
-                      _maxBufferedEnrollmentCaptures
-          : _inFlightCandidateUploads == 0;
+      _nextCandidateSubmissionIndex < _maxCandidateSubmissions &&
+      _inFlightCandidateUploads + _pendingCandidateCaptures.length <
+          _maxConcurrentCandidateUploads + _maxBufferedCandidateCaptures;
 
   @override
   void initState() {
@@ -101,7 +98,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _camera = camera;
         _ready = true;
       });
-      if (_enrolling) unawaited(_startEnrollmentCaptureSession());
+      unawaited(_startCaptureSession());
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -116,7 +113,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     if (!_ready || _sending || _complete || !_hasCandidateUploadCapacity) {
       return;
     }
-    if (_enrolling && _captureSessionId == null) return;
+    if (_captureSessionId == null) return;
     try {
       final camera = _camera;
       if (camera == null) return;
@@ -139,19 +136,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       } else {
         final capture = analysis.capture;
         if (capture == null) return;
-        if (_captureToTransitionTimer == null && _enrolling) {
+        if (_captureToTransitionTimer == null) {
           _captureToTransitionTimer = Stopwatch()..start();
-          BiometricEnrollmentTiming.start();
+          if (_enrolling) BiometricEnrollmentTiming.start();
         }
-        if (_enrolling) {
-          // The BE selects the five live frames. Queue every local target
-          // capture, then drain up to fifteen uploads concurrently.
-          _pendingEnrollmentCaptures.addLast(capture);
-          _dispatchPendingEnrollmentCaptures();
-        } else {
-          _inFlightCandidateUploads++;
-          unawaited(_uploadCandidate(capture, _acceptedCandidateCount));
-        }
+        // The BE selects the five live frames. Queue every local target
+        // capture for both signup and sign-in, then drain up to fifteen
+        // uploads concurrently. Submission numbers are not accepted slots.
+        _pendingCandidateCaptures.addLast(capture);
+        _dispatchPendingCandidateCaptures();
         setState(
           () =>
               _status =
@@ -165,35 +158,41 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   /// The camera opens immediately. This tiny request only obtains the opaque
   /// backend session that lets valid target frames stream in a bounded queue.
-  Future<void> _startEnrollmentCaptureSession() async {
+  Future<void> _startCaptureSession() async {
     try {
-      final sessionId = await BiometricApiService.startEnrollmentCaptureSession(
-        wrytteId: widget.wrytteId,
-      );
+      final sessionId =
+          _enrolling
+              ? await BiometricApiService.startEnrollmentCaptureSession(
+                wrytteId: widget.wrytteId,
+              )
+              : await BiometricApiService.startVerifyCaptureSession(
+                wrytteId: widget.wrytteId,
+              );
       if (!mounted || _complete || sessionId == null) return;
       _captureSessionId = sessionId;
-      _dispatchPendingEnrollmentCaptures();
+      _dispatchPendingCandidateCaptures();
     } catch (_) {
       // Keep the scanner visible. A later restart obtains a fresh session.
     }
   }
 
-  /// Sends every locally valid signup target frame. The BE selects the first
-  /// five that pass both liveness models; it is not restricted to the first
-  /// five submissions. Every local image buffer is cleared after upload.
-  void _dispatchPendingEnrollmentCaptures() {
-    if (!_enrolling || _complete || _sending || _captureSessionId == null) {
+  /// Sends every locally valid target frame for signup or sign-in. The BE
+  /// selects whichever five submissions pass both liveness models; it is not
+  /// restricted to the first five. Every local image buffer is cleared after
+  /// upload.
+  void _dispatchPendingCandidateCaptures() {
+    if (_complete || _sending || _captureSessionId == null) {
       return;
     }
-    if (_nextCandidateSubmissionIndex >= _maxEnrollmentSubmissions) {
-      _discardPendingEnrollmentCaptures();
+    if (_nextCandidateSubmissionIndex >= _maxCandidateSubmissions) {
+      _discardPendingCandidateCaptures();
       return;
     }
-    while (_inFlightCandidateUploads < _maxConcurrentEnrollmentUploads &&
-        _pendingEnrollmentCaptures.isNotEmpty &&
-        _nextCandidateSubmissionIndex < _maxEnrollmentSubmissions &&
+    while (_inFlightCandidateUploads < _maxConcurrentCandidateUploads &&
+        _pendingCandidateCaptures.isNotEmpty &&
+        _nextCandidateSubmissionIndex < _maxCandidateSubmissions &&
         !_complete) {
-      final capture = _pendingEnrollmentCaptures.removeFirst();
+      final capture = _pendingCandidateCaptures.removeFirst();
       final candidateIndex = _nextCandidateSubmissionIndex++;
       _inFlightCandidateUploads++;
       unawaited(_uploadCandidate(capture, candidateIndex));
@@ -239,10 +238,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                 : _enrolling
                 ? math.max(_acceptedCandidateCount, result.acceptedCandidates)
                 : result.acceptedCandidates;
-        if (_enrolling && result.captureSessionId == null) {
-          _discardPendingEnrollmentCaptures();
+        if (result.captureSessionId == null) {
+          _discardPendingCandidateCaptures();
           _nextCandidateSubmissionIndex = 0;
-          unawaited(_startEnrollmentCaptureSession());
+          unawaited(_startCaptureSession());
         }
         setState(
           () =>
@@ -278,12 +277,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         await _openProfileWhileBiometricsFinalize(provision);
         return;
       }
-      final completedInput = result.completedInput;
-      if (completedInput == null || !completedInput.accepted) {
+      final verification = result.verificationBootstrap;
+      if (verification == null || !verification.input.accepted) {
         await _resumeAfterBiometricRejection();
         return;
       }
-      await _completeSubmission(completedInput);
+      await _completeSubmission(verification);
     } catch (error) {
       // Type-only diagnostic: no request data, identity, image, or token.
       // ignore: avoid_print
@@ -296,20 +295,19 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     } finally {
       capture.clear();
       _inFlightCandidateUploads = math.max(0, _inFlightCandidateUploads - 1);
-      if (_enrolling &&
-          !_complete &&
-          _nextCandidateSubmissionIndex >= _maxEnrollmentSubmissions &&
+      if (!_complete &&
+          _nextCandidateSubmissionIndex >= _maxCandidateSubmissions &&
           _inFlightCandidateUploads == 0) {
         unawaited(_resumeAfterBiometricRejection());
       } else {
-        _dispatchPendingEnrollmentCaptures();
+        _dispatchPendingCandidateCaptures();
       }
     }
   }
 
-  void _discardPendingEnrollmentCaptures() {
-    while (_pendingEnrollmentCaptures.isNotEmpty) {
-      _pendingEnrollmentCaptures.removeFirst().clear();
+  void _discardPendingCandidateCaptures() {
+    while (_pendingCandidateCaptures.isNotEmpty) {
+      _pendingCandidateCaptures.removeFirst().clear();
     }
   }
 
@@ -402,7 +400,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     return null;
   }
 
-  Future<void> _completeSubmission(BiometricLdpcInput biometric) async {
+  Future<void> _completeSubmission(
+    BiometricVerificationBootstrap verification,
+  ) async {
     _sending = true;
     final camera = _camera;
     if (camera?.value.isStreamingImages == true) {
@@ -410,69 +410,39 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
     if (mounted) setState(() => _status = 'Verifying securely…');
     try {
-      if (_enrolling) {
-        if (!biometric.accepted || biometric.enrollmentTicket == null) {
-          await _resumeAfterBiometricRejection();
-          return;
-        }
-        final enrollment = await _createLocalEnrollment(biometric.ldpcBits);
-        await AuthService.instance.completeClientBiometricEnrollment(
-          wrytteId: widget.wrytteId,
-          biometricEnrollmentTicket: biometric.enrollmentTicket!,
-          kmap: enrollment.commitment.toJson(),
-          publicKey: enrollment.publicKey,
-        );
-        if (!mounted) return;
-        _logTransitionTiming('profile_setup');
-        await Navigator.of(context).pushReplacement(
-          MaterialPageRoute<void>(
-            builder: (_) => AddProfilePage(isNewUser: true),
-          ),
-        );
-      } else {
-        final recovery =
-            widget.recoveryData ??
-            await AuthService.instance.getKFaceRecoveryData(
-              wrytteId: widget.wrytteId,
-            );
-        if (!biometric.accepted) {
-          await _resumeAfterBiometricRejection();
-          return;
-        }
-        final recoveredKey = await _recoverLocalKey(
-          biometric.ldpcBits,
-          recovery.kmap,
-        );
-        if (recoveredKey == null) {
-          await _resumeAfterBiometricRejection();
-          return;
-        }
-        final signature = await _signatureService.signBackendChallenge(
-          hkdfKeyHex: recoveredKey,
-          challengeBase64Url: recovery.challenge,
-        );
-        await AuthService.instance.completeWrytteIdSignIn(
-          userId: recovery.userId,
-          wrytteId: widget.wrytteId,
-          challenge: recovery.challenge,
-          signature: signature,
-        );
-        if (!mounted) return;
-        final user = await AuthService.instance.getCurrentUser();
-        if (!mounted) return;
-        _logTransitionTiming('home');
-        await Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute<void>(
-            builder:
-                (_) => HomeScreen(
-                  currentUserId: user!.userId,
-                  initialProfileName: user.username,
-                  initialPhone: user.phone,
-                ),
-          ),
-          (_) => false,
-        );
+      final recoveredKey = await _recoverLocalKey(
+        verification.input.ldpcBits,
+        verification.kmap,
+      );
+      if (recoveredKey == null) {
+        await _resumeAfterBiometricRejection();
+        return;
       }
+      final signature = await _signatureService.signBackendChallenge(
+        hkdfKeyHex: recoveredKey,
+        challengeBase64Url: verification.challenge,
+      );
+      await AuthService.instance.completeWrytteIdSignIn(
+        userId: verification.userId,
+        wrytteId: widget.wrytteId,
+        challenge: verification.challenge,
+        signature: signature,
+      );
+      if (!mounted) return;
+      final user = await AuthService.instance.getCurrentUser();
+      if (!mounted) return;
+      _logTransitionTiming('home');
+      await Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute<void>(
+          builder:
+              (_) => HomeScreen(
+                currentUserId: user!.userId,
+                initialProfileName: user.username,
+                initialPhone: user.phone,
+              ),
+        ),
+        (_) => false,
+      );
     } catch (error) {
       // Type-only diagnostic: no request data, identity, image, or token.
       // ignore: avoid_print
@@ -534,9 +504,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _acceptedCandidateCount = 0;
     _nextCandidateSubmissionIndex = 0;
     _captureSessionId = null;
-    _discardPendingEnrollmentCaptures();
+    _discardPendingCandidateCaptures();
     _sending = false;
-    if (_enrolling) unawaited(_startEnrollmentCaptureSession());
+    unawaited(_startCaptureSession());
     if (!mounted) return;
     setState(() => _status = 'Center your face inside the ring.');
     final camera = _camera;
@@ -585,19 +555,19 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _captureSessionId = null;
       _status = 'Center your face inside the ring.';
     });
-    _discardPendingEnrollmentCaptures();
+    _discardPendingCandidateCaptures();
     final camera = _camera;
     if (camera != null &&
         camera.value.isInitialized &&
         !camera.value.isStreamingImages) {
       await camera.startImageStream(_onFrame);
     }
-    if (_enrolling) unawaited(_startEnrollmentCaptureSession());
+    unawaited(_startCaptureSession());
   }
 
   @override
   void dispose() {
-    _discardPendingEnrollmentCaptures();
+    _discardPendingCandidateCaptures();
     unawaited(_camera?.dispose());
     unawaited(_pipeline.dispose());
     super.dispose();
