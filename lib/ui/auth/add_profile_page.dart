@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/face/biometric_enrollment_timing.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
@@ -29,6 +31,7 @@ class AddProfilePage extends StatefulWidget {
 class _AddProfilePageState extends State<AddProfilePage> {
   final TextEditingController _nicknameController = TextEditingController();
   final FocusNode _nicknameFocusNode = FocusNode();
+  final ImagePicker _imagePicker = ImagePicker();
 
   bool _syncContacts = true;
   bool _isValid = false;
@@ -38,6 +41,7 @@ class _AddProfilePageState extends State<AddProfilePage> {
   bool _biometricFailed = false;
 
   String? _currentUserId;
+  File? _pickedProfileImage;
 
   bool get _profileReady => _biometricReady && !_isLoading;
   bool get _nameAndDoneEnabled => _profileReady && !widget.lockNameAndDone;
@@ -185,6 +189,11 @@ class _AddProfilePageState extends State<AddProfilePage> {
     await UserProfileService.instance.updateDisplayName(name);
     debugPrint('[AddProfilePage] Name saved locally: "$name"');
 
+    final profileImage = _pickedProfileImage;
+    if (profileImage != null) {
+      unawaited(_uploadProfileImageInBackground(profileImage));
+    }
+
     // Re-persist the local session quickly; Matrix can finish in the background.
     final secret = await AuthService.instance.getStoredSecret() ?? '';
     final phone = await AuthService.instance.getSavedPhone() ?? '';
@@ -199,6 +208,34 @@ class _AddProfilePageState extends State<AddProfilePage> {
 
     _syncProfileInBackground(name);
     await _navigateHome(uid);
+  }
+
+  Future<void> _pickProfileImage() async {
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (picked == null || !mounted) return;
+      setState(() => _pickedProfileImage = File(picked.path));
+    } catch (error) {
+      debugPrint('[AddProfilePage] profile image selection failed: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not select a profile photo.')),
+      );
+    }
+  }
+
+  Future<void> _uploadProfileImageInBackground(File image) async {
+    try {
+      await UserProfileService.instance.uploadProfileImage(image);
+      debugPrint('[AddProfilePage] profile image uploaded');
+    } catch (error) {
+      // The profile remains usable when an optional avatar upload is offline;
+      // UserProfileService keeps the local image pending for retry.
+      debugPrint('[AddProfilePage] profile image upload pending: $error');
+    }
   }
 
   void _syncProfileInBackground(String name) {
@@ -291,16 +328,22 @@ class _AddProfilePageState extends State<AddProfilePage> {
 
               // ── Avatar placeholder ───────────────────────────────────────
               GestureDetector(
-                onTap:
-                    _profileReady
-                        ? () {
-                          // TODO: open image picker
-                        }
-                        : null,
-                child: const CircleAvatar(
+                onTap: _profileReady ? _pickProfileImage : null,
+                child: CircleAvatar(
                   radius: 50,
-                  backgroundColor: Color(0xFF1F4F7F),
-                  child: Icon(Icons.person, size: 50, color: Colors.white70),
+                  backgroundColor: const Color(0xFF1F4F7F),
+                  backgroundImage:
+                      _pickedProfileImage == null
+                          ? null
+                          : FileImage(_pickedProfileImage!),
+                  child:
+                      _pickedProfileImage == null
+                          ? const Icon(
+                            Icons.person,
+                            size: 50,
+                            color: Colors.white70,
+                          )
+                          : null,
                 ),
               ),
 

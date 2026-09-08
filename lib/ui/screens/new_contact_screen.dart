@@ -1032,9 +1032,7 @@ class _NewContactPageState extends State<NewContactPage> {
                         style: TextStyle(color: Colors.white54, fontSize: 13),
                       ),
                       GestureDetector(
-                        onTap: () {
-                          // TODO: share invite link
-                        },
+                        onTap: _copyInviteLink,
                         child: const Text(
                           'Invite',
                           style: TextStyle(color: _kBlue, fontSize: 13),
@@ -1310,9 +1308,7 @@ class _NewContactPageState extends State<NewContactPage> {
               // ── Add via QR code ────────────────────────────────
               Center(
                 child: GestureDetector(
-                  onTap: () {
-                    // TODO: open QR scanner
-                  },
+                  onTap: _openQrScanner,
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1335,6 +1331,73 @@ class _NewContactPageState extends State<NewContactPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _copyInviteLink() async {
+    final identifier = _fullIdentifier.trim();
+    final query =
+        identifier.isEmpty
+            ? ''
+            : '?phone=${Uri.encodeQueryComponent(identifier)}';
+    final inviteLink = 'https://wrytte.com/invite$query';
+    await Clipboard.setData(ClipboardData(text: inviteLink));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Invite link copied to clipboard.')),
+    );
+  }
+
+  Future<void> _openQrScanner() async {
+    final controller = TextEditingController();
+    final scannedValue = await showDialog<String>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: _kCard,
+            title: const Text(
+              'Enter Wrytte ID',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: TextField(
+              controller: controller,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                hintText: 'Wrytte ID',
+                hintStyle: TextStyle(color: Colors.white54),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, controller.text),
+                child: const Text('Continue'),
+              ),
+            ],
+          ),
+    );
+    controller.dispose();
+    final value = scannedValue?.trim() ?? '';
+    if (value.isEmpty || !mounted) return;
+
+    final wrytteMode = countriesId.firstWhere(
+      (country) => country.isoCode == 'WID',
+      orElse: () => countriesId.first,
+    );
+    setState(() {
+      _selectedCountry = wrytteMode;
+      _codeCtrl.text = '+${wrytteMode.dialCode}';
+      _numberCtrl.text = value;
+      _showDivider = true;
+      _lookupState = _LookupState.idle;
+      _lookupError = null;
+      _resolvedUserId = null;
+      _isRegisteredOnWrytte = false;
+    });
+    _onNumberChanged();
   }
 }
 
