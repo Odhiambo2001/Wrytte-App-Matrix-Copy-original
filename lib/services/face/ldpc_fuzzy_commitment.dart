@@ -13,6 +13,7 @@ class FuzzyCommitment {
     required this.kdfSalt,
     this.signingPublicKey,
     this.quantScale = LdpcFuzzyCommitment.quantScale,
+    this.formatVersion = LdpcFuzzyCommitment.commitmentFormatVersion,
   });
 
   final Uint8List helper;
@@ -21,6 +22,7 @@ class FuzzyCommitment {
   final Uint8List kdfSalt;
   final String? signingPublicKey;
   final int quantScale;
+  final int formatVersion;
 
   Map<String, dynamic> toJson() => {
     'helper': _pack(helper),
@@ -32,6 +34,7 @@ class FuzzyCommitment {
     'kdf': LdpcFuzzyCommitment.kdfAlgorithm,
     if (signingPublicKey != null) 'signingPublicKey': signingPublicKey,
     'quantScale': quantScale,
+    'formatVersion': formatVersion,
   };
 
   factory FuzzyCommitment.fromJson(Map<String, dynamic> json) {
@@ -42,40 +45,64 @@ class FuzzyCommitment {
       final kdfSalt = json['kdfSalt'];
       final kdf = json['kdf'];
       final quantScale = json['quantScale'];
+      final formatVersion = json['formatVersion'];
       if (helperLength != LdpcFuzzyCommitment.codeN ||
           nonceLength != LdpcFuzzyCommitment.codeN ||
           keyHash is! String ||
           !RegExp(r'^[0-9a-f]{64}$').hasMatch(keyHash) ||
           kdfSalt is! String ||
           kdf != LdpcFuzzyCommitment.kdfAlgorithm ||
-          quantScale != LdpcFuzzyCommitment.quantScale) {
+          quantScale != LdpcFuzzyCommitment.quantScale ||
+          formatVersion != LdpcFuzzyCommitment.commitmentFormatVersion) {
         throw const FormatException('Invalid LDPC commitment.');
       }
       final decodedSalt = base64Decode(kdfSalt);
       if (decodedSalt.length != LdpcFuzzyCommitment.kdfSaltLength) {
         throw const FormatException('Invalid LDPC commitment.');
       }
+      final signingPublicKey = json['signingPublicKey'];
+      if (signingPublicKey != null) {
+        _validatePublicKey(signingPublicKey);
+      }
       return FuzzyCommitment(
         helper: _unpack(json['helper'] as String, helperLength),
         nonce: _unpack(json['nonce'] as String, nonceLength),
         keyHash: keyHash,
         kdfSalt: Uint8List.fromList(decodedSalt),
-        signingPublicKey: json['signingPublicKey'] as String?,
+        signingPublicKey: signingPublicKey as String?,
         quantScale: quantScale,
+        formatVersion: formatVersion,
       );
     } catch (_) {
       throw const FormatException('Invalid LDPC commitment.');
     }
   }
 
-  FuzzyCommitment withSigningPublicKey(String publicKey) => FuzzyCommitment(
-    helper: helper,
-    nonce: nonce,
-    keyHash: keyHash,
-    kdfSalt: kdfSalt,
-    signingPublicKey: publicKey,
-    quantScale: quantScale,
-  );
+  FuzzyCommitment withSigningPublicKey(String publicKey) {
+    _validatePublicKey(publicKey);
+    return FuzzyCommitment(
+      helper: helper,
+      nonce: nonce,
+      keyHash: keyHash,
+      kdfSalt: kdfSalt,
+      signingPublicKey: publicKey,
+      quantScale: quantScale,
+      formatVersion: formatVersion,
+    );
+  }
+
+  static void _validatePublicKey(Object? encoded) {
+    if (encoded is! String || encoded.isEmpty) {
+      throw const FormatException('Invalid Ed25519 public key.');
+    }
+    try {
+      if (base64Decode(encoded).length != 32) {
+        throw const FormatException('Invalid Ed25519 public key.');
+      }
+    } catch (_) {
+      throw const FormatException('Invalid Ed25519 public key.');
+    }
+  }
 
   static String _pack(Uint8List bits) => base64Encode(_packBits(bits));
 
@@ -114,6 +141,7 @@ class LdpcFuzzyCommitment {
   static const codeK = 160;
   static const kdfAlgorithm = 'HKDF-SHA-256';
   static const kdfInfo = 'wrytte/kface/application-key/v1';
+  static const commitmentFormatVersion = 1;
   static const kdfSaltLength = 32;
   static const derivedKeyLength = 32;
   static const _codeM = 672;

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:wrytte/services/auth/device_region_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
+import 'package:wrytte/ui/auth/virtual_number_page.dart';
+import 'package:wrytte/ui/auth/wrytte_id_not_found_page.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 
 class SignInPage extends StatefulWidget {
@@ -45,7 +48,9 @@ class _SignInPageState extends State<SignInPage> {
           digits,
         );
         if (!search.exists) {
-          throw const _WrytteIdNotFoundException();
+          _focusNode.unfocus();
+          await _showWrytteIdUnavailablePage();
+          return;
         }
         _focusNode.unfocus();
         await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -72,14 +77,28 @@ class _SignInPageState extends State<SignInPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _errorMessage =
-            e is _WrytteIdNotFoundException
-                ? 'Wrytte ID not found. Please sign up first.'
-                : 'Something went wrong. Please try again.';
+        _errorMessage = 'Something went wrong. Please try again.';
       });
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _showWrytteIdUnavailablePage() async {
+    final shouldSignUp = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute<bool>(builder: (_) => const WrytteIdNotFoundPage()),
+    );
+    if (!mounted || shouldSignUp != true) return;
+
+    final regionCode = await DeviceRegionService.detectOnce();
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => VirtualNumberPage(regionCode: regionCode),
+      ),
+    );
   }
 
   @override
@@ -278,8 +297,4 @@ class _SignInPageState extends State<SignInPage> {
       ),
     );
   }
-}
-
-class _WrytteIdNotFoundException implements Exception {
-  const _WrytteIdNotFoundException();
 }

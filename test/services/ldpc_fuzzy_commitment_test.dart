@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -28,8 +29,31 @@ void main() {
       expect(input, hasLength(LdpcFuzzyCommitment.codeN));
       expect(commitment.helper, hasLength(LdpcFuzzyCommitment.codeN));
       expect(commitment.nonce, hasLength(LdpcFuzzyCommitment.codeN));
+      expect(
+        commitment.toJson()['formatVersion'],
+        LdpcFuzzyCommitment.commitmentFormatVersion,
+      );
       expect(recovery.accepted, isTrue);
       expect(recovery.derivedKey, enrollmentKey);
+
+      final publicKey = base64Encode(Uint8List(32));
+      final serialized = commitment.withSigningPublicKey(publicKey).toJson();
+      final restored = FuzzyCommitment.fromJson(serialized);
+      expect(restored.signingPublicKey, publicKey);
+      expect(
+        restored.formatVersion,
+        LdpcFuzzyCommitment.commitmentFormatVersion,
+      );
+      expect(
+        () => FuzzyCommitment.fromJson(
+          Map<String, dynamic>.from(serialized)..remove('formatVersion'),
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => commitment.withSigningPublicKey(base64Encode(Uint8List(31))),
+        throwsFormatException,
+      );
     },
   );
 }

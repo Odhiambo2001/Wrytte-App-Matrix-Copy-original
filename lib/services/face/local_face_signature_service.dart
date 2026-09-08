@@ -27,7 +27,8 @@ class LocalSignatureVerification {
 ///
 /// Enrollment persists only the public key. The private key is reconstructed
 /// from the successfully recovered, domain-separated HKDF output and exists
-/// only for the duration of signing a fresh challenge.
+/// only for the duration of signing a fresh challenge. Each in-memory key
+/// pair is explicitly destroyed in a finally block after use.
 class LocalFaceSignatureService {
   LocalFaceSignatureService({Ed25519? algorithm})
     : _algorithm = algorithm ?? Ed25519();
@@ -39,20 +40,25 @@ class LocalFaceSignatureService {
 
   Future<LocalSignatureEnrollment> enroll(String hkdfKeyHex) async {
     final seed = _deriveSigningSeed(hkdfKeyHex);
+    SimpleKeyPair? keyPair;
     try {
-      final keyPair = await _algorithm.newKeyPairFromSeed(seed);
+      keyPair = await _algorithm.newKeyPairFromSeed(seed);
       final publicKey = await keyPair.extractPublicKey();
+      if (publicKey.bytes.length != 32) {
+        throw const FormatException('Invalid Ed25519 public key.');
+      }
       return LocalSignatureEnrollment(
         publicKeyBase64: base64Encode(publicKey.bytes),
       );
     } finally {
+      keyPair?.destroy();
       seed.fillRange(0, seed.length, 0);
     }
   }
 
   /// Signs the backend's fresh, short-lived challenge with the private key
-  /// reconstructed from local LDPC recovery. The seed, challenge, and
-  /// signature are never persisted or logged.
+  /// reconstructed from local LDPC recovery. The seed, key pair, challenge,
+  /// and signature bytes are never persisted or logged.
   Future<String> signBackendChallenge({
     required String hkdfKeyHex,
     required String challengeBase64Url,
@@ -66,14 +72,22 @@ class LocalFaceSignatureService {
       throw const FormatException('Invalid sign-in challenge.');
     }
     final seed = _deriveSigningSeed(hkdfKeyHex);
+    SimpleKeyPair? keyPair;
     try {
-      final keyPair = await _algorithm.newKeyPairFromSeed(seed);
+      keyPair = await _algorithm.newKeyPairFromSeed(seed);
       final signature = await _algorithm.sign(challenge, keyPair: keyPair);
-      if (signature.bytes.length != 64) {
+      final signatureBytes = Uint8List.fromList(signature.bytes);
+      if (signatureBytes.length != 64) {
+        signatureBytes.fillRange(0, signatureBytes.length, 0);
         throw StateError('Invalid Ed25519 signature.');
       }
-      return base64UrlEncode(signature.bytes).replaceAll('=', '');
+      try {
+        return base64UrlEncode(signatureBytes).replaceAll('=', '');
+      } finally {
+        signatureBytes.fillRange(0, signatureBytes.length, 0);
+      }
     } finally {
+      keyPair?.destroy();
       seed.fillRange(0, seed.length, 0);
       challenge.fillRange(0, challenge.length, 0);
     }
@@ -84,17 +98,21 @@ class LocalFaceSignatureService {
     required String hkdfKeyHex,
     required String enrolledPublicKeyBase64,
   }) async {
-    final enrolledPublicBytes = base64Decode(enrolledPublicKeyBase64);
+    final enrolledPublicBytes = Uint8List.fromList(
+      base64Decode(enrolledPublicKeyBase64),
+    );
     if (enrolledPublicBytes.length != 32) {
+      enrolledPublicBytes.fillRange(0, enrolledPublicBytes.length, 0);
       throw const FormatException('Invalid enrolled Ed25519 public key.');
     }
 
     final seed = _deriveSigningSeed(hkdfKeyHex);
     final challenge = _createChallenge(identity);
+    SimpleKeyPair? recoveredKeyPair;
     try {
       // The corresponding public key is intentionally not persisted at login.
       // Only the reconstructed private key is used to sign this challenge.
-      final recoveredKeyPair = await _algorithm.newKeyPairFromSeed(seed);
+      recoveredKeyPair = await _algorithm.newKeyPairFromSeed(seed);
       final signature = await _algorithm.sign(
         challenge,
         keyPair: recoveredKeyPair,
@@ -115,8 +133,10 @@ class LocalFaceSignatureService {
         signatureBytes: signature.bytes.length,
       );
     } finally {
+      recoveredKeyPair?.destroy();
       seed.fillRange(0, seed.length, 0);
       challenge.fillRange(0, challenge.length, 0);
+      enrolledPublicBytes.fillRange(0, enrolledPublicBytes.length, 0);
     }
   }
 

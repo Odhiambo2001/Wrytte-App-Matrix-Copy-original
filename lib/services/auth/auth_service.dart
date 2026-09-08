@@ -20,6 +20,7 @@ import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
+import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
@@ -617,6 +618,7 @@ class AuthService {
     String? token,
   }) async {
     final backendWrytteId = WrytteId.forBackend(wrytteId);
+    _validateClientKFaceRecoveryData(kmap, publicKey);
     await ApiService.postJson(
       '/auth/register/wrytteid/kface',
       token: token,
@@ -639,6 +641,7 @@ class AuthService {
     required String publicKey,
   }) async {
     final backendWrytteId = WrytteId.forBackend(wrytteId);
+    _validateClientKFaceRecoveryData(kmap, publicKey);
     final response = await ApiService.postJson(
       '/auth/register/wrytteid/kface',
       body: {
@@ -666,6 +669,18 @@ class AuthService {
       deferNonEssentialInitialization: true,
     );
     return user;
+  }
+
+  void _validateClientKFaceRecoveryData(
+    Map<String, dynamic> kmap,
+    String publicKey,
+  ) {
+    final commitment = FuzzyCommitment.fromJson(kmap);
+    final normalizedPublicKey = publicKey.trim();
+    if (commitment.signingPublicKey == null ||
+        commitment.signingPublicKey != normalizedPublicKey) {
+      throw const FormatException('Invalid biometric signing key.');
+    }
   }
 
   Future<WrytteIdSignInSearchResult> searchWrytteIdForSignIn(

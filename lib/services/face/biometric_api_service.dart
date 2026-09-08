@@ -10,11 +10,12 @@ import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/retinaface_detector.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 
-/// Sends five RetinaFace frames plus their landmarks and five shared liveness
-/// source frames. The backend calculates Umeyama, derives both MiniFASNet
-/// crops, runs AdaFace, and performs quantization. Flutter receives only the
-/// 832 packed quantization bits needed for its local LDPC commitment; it never
-/// receives an embedding, liveness score, or image from the backend.
+/// Sends each valid RetinaFace target frame plus its landmarks and matching
+/// liveness source frame as soon as the camera produces it. The backend
+/// selects five live candidates, calculates Umeyama, runs AdaFace, and
+/// performs quantization. Flutter receives only the 832 packed quantization
+/// bits needed for its local LDPC commitment; it never receives an embedding,
+/// liveness score, or image from the backend.
 class BiometricLdpcInput {
   const BiometricLdpcInput._({
     required this.accepted,
