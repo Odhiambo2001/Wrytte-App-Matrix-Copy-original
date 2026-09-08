@@ -86,6 +86,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         description,
         ResolutionPreset.medium,
         enableAudio: false,
+        // Request a consistent scan cadence. The platform uses the nearest
+        // supported range if this specific device cannot provide exactly 15.
+        fps: 15,
         imageFormatGroup:
             Platform.isIOS
                 ? ImageFormatGroup.bgra8888
