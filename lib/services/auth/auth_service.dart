@@ -699,6 +699,9 @@ class AuthService {
             : existsRaw?.toString().toLowerCase() == 'true';
     final userId =
         (response['userid'] ?? response['userId'] ?? '').toString().trim();
+    if (exists && userId.isEmpty) {
+      throw Exception('Invalid Wrytte ID search response: missing userid.');
+    }
     return WrytteIdSignInSearchResult(exists: exists, userId: userId);
   }
 
