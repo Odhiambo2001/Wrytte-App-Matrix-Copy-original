@@ -34,8 +34,6 @@ class _LoginOtpPageState extends State<LoginOtpPage>
   late AnimationController _shakeController;
   late Animation<double> _shakeAnimation;
 
-  static const _validCode = '112233';
-
   bool get _isValid => _otpController.text.length == 6;
 
   @override
@@ -43,6 +41,7 @@ class _LoginOtpPageState extends State<LoginOtpPage>
     super.initState();
 
     _startResendTimer();
+    unawaited(_requestCode());
 
     _shakeController = AnimationController(
       vsync: this,
@@ -58,6 +57,20 @@ class _LoginOtpPageState extends State<LoginOtpPage>
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) _focusNode.requestFocus();
     });
+  }
+
+  Future<void> _requestCode() async {
+    try {
+      await _realNumberService.sendLoginSmsCode(widget.phoneNumber);
+    } catch (error) {
+      debugPrint('[LoginOtp] SMS request failed: $error');
+      if (mounted) {
+        setState(() {
+          _errorMessage =
+              'Unable to send the verification code. Please try again.';
+        });
+      }
+    }
   }
 
   void _startResendTimer() {
@@ -86,23 +99,9 @@ class _LoginOtpPageState extends State<LoginOtpPage>
     try {
       final enteredCode = _otpController.text.trim();
 
-      // Step 1 — Check the code is correct
-      if (enteredCode != _validCode) {
-        _shakeController.forward(from: 0);
-        setState(() {
-          _isLoading = false;
-          //_errorMessage = 'Invalid code. Please try again.';
-          _errorMessage =
-              'Incorrect code. Please enter the correct 6-digit code.';
-          _otpController.clear();
-        });
-        return;
-      }
-
-      final result = await _realNumberService.registerRealPhone(
+      final result = await _realNumberService.loginWithPhoneOtp(
         fullPhone: widget.phoneNumber,
         code: enteredCode,
-        login: true,
       );
       final resolvedUserId = result.userId;
 
@@ -132,19 +131,33 @@ class _LoginOtpPageState extends State<LoginOtpPage>
     }
   }
 
-  void _resendCode() {
+  Future<void> _resendCode() async {
     if (!_canResend || _isLoading) return;
     _startResendTimer();
     setState(() {
       _errorMessage = null;
       _otpController.clear();
+      _isLoading = true;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Code resent.'),
-        backgroundColor: Color(0xFF23262C),
-      ),
-    );
+    try {
+      await _realNumberService.sendLoginSmsCode(widget.phoneNumber);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Code resent.'),
+          backgroundColor: Color(0xFF23262C),
+        ),
+      );
+    } catch (error) {
+      debugPrint('[LoginOtp] SMS resend failed: $error');
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Unable to resend the code. Please try again later.';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Widget _buildOtpBoxes() {

@@ -38,11 +38,22 @@ class RealNumberService {
   // ---------------------------------------------------------------------------
   Future<void> sendSmsCode(String fullPhone) async {
     final phone = _toFullInternational(fullPhone);
-    debugPrint('[RealNumberService] sendSmsCode → $phone');
+    debugPrint('[RealNumberService] requesting signup SMS verification');
 
     await ApiService.postMultipart('/auth/register/sendsmscode', {
       'phone': phone,
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Phone sign-in — STEP 1: Send SMS code
+  //  POST /auth/login/sendsmscode   field: phone
+  // ---------------------------------------------------------------------------
+  Future<void> sendLoginSmsCode(String fullPhone) async {
+    final phone = _toFullInternational(fullPhone);
+    debugPrint('[RealNumberService] requesting sign-in SMS verification');
+
+    await ApiService.postMultipart('/auth/login/sendsmscode', {'phone': phone});
   }
 
   // ---------------------------------------------------------------------------
@@ -256,6 +267,26 @@ class RealNumberService {
     return _handleRegisterResponse(
       response,
       fallbackPhone: phone ?? '',
+      serverIndicatesNewUser: false,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Phone sign-in with a backend/Twilio-verified code
+  //  POST /auth/login/phone   fields: phone, code
+  // ---------------------------------------------------------------------------
+  Future<RealNumberRegisterResult> loginWithPhoneOtp({
+    required String fullPhone,
+    required String code,
+  }) async {
+    final phone = _toFullInternational(fullPhone);
+    final response = await ApiService.postMultipart('/auth/login/phone', {
+      'phone': phone,
+      'code': code.trim(),
+    });
+    return _handleRegisterResponse(
+      response,
+      fallbackPhone: phone,
       serverIndicatesNewUser: false,
     );
   }

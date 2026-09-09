@@ -235,6 +235,8 @@ class ApiService {
           lowerKey.contains('secret') ||
           lowerKey.contains('token') ||
           lowerKey.contains('password') ||
+          lowerKey == 'code' ||
+          lowerKey.contains('otp') ||
           lowerKey.contains('wrytteid') ||
           lowerKey.contains('capturesession') ||
           lowerKey.contains('landmark') ||

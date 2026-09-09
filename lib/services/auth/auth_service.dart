@@ -91,8 +91,6 @@ class AuthService {
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
   final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
 
-  final Map<String, String> _pendingPhoneOtps = {};
-  final Map<String, String> _pendingEmailOtps = {};
   int _matrixBootstrapGeneration = 0;
   Future<void>? _matrixLoginInFlight;
   String? _matrixLoginInFlightUserId;
@@ -453,20 +451,21 @@ class AuthService {
   }
 
   // ---------------------------------------------------------------------------
-  // Send SMS / email codes (dev stubs)
+  // Send SMS / email codes through the backend. Twilio credentials and OTP
+  // generation remain server-side; this service never stores an OTP locally.
   // ---------------------------------------------------------------------------
   Future<void> sendSmsCode(String phone) async {
     final normalizedPhone = _normalizePhone(phone);
-    _pendingPhoneOtps[normalizedPhone] = '112233';
-    debugPrint(
-      '[AuthService] OTP ready for $normalizedPhone (dev: use 112233)',
-    );
+    await ApiService.postMultipart('/auth/register/sendsmscode', {
+      'phone': normalizedPhone,
+    });
   }
 
   Future<void> sendEmailCode(String email) async {
     final normalizedEmail = email.trim().toLowerCase();
-    _pendingEmailOtps[normalizedEmail] = '112233';
-    debugPrint('[AuthService] Email OTP ready for $normalizedEmail');
+    await ApiService.postMultipart('/auth/register/sendemailcode', {
+      'email': normalizedEmail,
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -480,34 +479,31 @@ class AuthService {
     bool login = true,
   }) async {
     final normalizedPhone = _normalizePhone(phone);
-    final expected = _pendingPhoneOtps[normalizedPhone];
-    if (expected == null) {
-      throw Exception('No OTP session found for $normalizedPhone.');
+    final response = await ApiService.postMultipart('/auth/register/rpn', {
+      'phone': normalizedPhone,
+      'code': code.trim(),
+      if (username != null && username.trim().isNotEmpty)
+        'username': username.trim(),
+      'login': login.toString(),
+    });
+    if (response is! Map) {
+      throw Exception('Invalid phone registration response.');
     }
-    if (code.trim() != expected) throw Exception('Invalid verification code.');
-
-    final userId = _phoneToUserId(normalizedPhone);
-    final effectiveUsername = username ?? normalizedPhone;
-
-    final user = AuthUser(
-      userId: userId,
-      username: effectiveUsername,
-      secret: userId,
-      token: userId,
-      phone: normalizedPhone,
-    );
+    final user = AuthUser.fromJson(Map<String, dynamic>.from(response));
+    if (user.userId.isEmpty || user.token.isEmpty) {
+      throw Exception('Phone registration was not accepted.');
+    }
 
     if (login) {
-      // Use userId as a placeholder secret — real secret comes from Simon's API
       await persistPhoneSession(
-        userId: userId,
-        username: effectiveUsername,
+        userId: user.userId,
+        username: user.username,
         phone: normalizedPhone,
-        secret: userId,
+        secret: user.secret,
+        token: user.token,
+        expiresAt: user.expiresAt,
       );
     }
-
-    _pendingPhoneOtps.remove(normalizedPhone);
     return user;
   }
 
@@ -540,33 +536,33 @@ class AuthService {
     bool login = true,
   }) async {
     final normalizedEmail = email.trim().toLowerCase();
-    final expected = _pendingEmailOtps[normalizedEmail];
-    if (expected == null) {
-      throw Exception('No OTP session found for $normalizedEmail.');
+    final normalizedPhone = _normalizePhone(phone);
+    final response = await ApiService.postMultipart('/auth/register/vpn', {
+      'email': normalizedEmail,
+      'phone': normalizedPhone,
+      'code': code.trim(),
+      if (username != null && username.trim().isNotEmpty)
+        'username': username.trim(),
+      'login': login.toString(),
+    });
+    if (response is! Map) {
+      throw Exception('Invalid virtual phone registration response.');
     }
-    if (code.trim() != expected) throw Exception('Invalid verification code.');
-
-    final userId = phone.replaceAll(RegExp(r'[^\d]'), '');
-    final effectiveUsername = username ?? normalizedEmail.split('@').first;
-
-    final user = AuthUser(
-      userId: userId,
-      username: effectiveUsername,
-      secret: userId,
-      token: userId,
-      phone: phone,
-    );
+    final user = AuthUser.fromJson(Map<String, dynamic>.from(response));
+    if (user.userId.isEmpty || user.token.isEmpty) {
+      throw Exception('Virtual phone registration was not accepted.');
+    }
 
     if (login) {
       await persistPhoneSession(
-        userId: userId,
-        username: effectiveUsername,
-        phone: phone,
-        secret: userId,
+        userId: user.userId,
+        username: user.username,
+        phone: normalizedPhone,
+        secret: user.secret,
+        token: user.token,
+        expiresAt: user.expiresAt,
       );
     }
-
-    _pendingEmailOtps.remove(normalizedEmail);
     return user;
   }
 
@@ -1414,9 +1410,6 @@ class AuthService {
       debugPrint('[AuthService] stale Matrix logout failed: $e');
     }
   }
-
-  String _phoneToUserId(String normalizedPhone) =>
-      normalizedPhone.replaceAll(RegExp(r'[^\d]'), '');
 
   String _normalizePhone(String phone) {
     var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
