@@ -32,6 +32,26 @@ class RealNumberRegisterResult {
 class RealNumberService {
   RealNumberService();
 
+  /// Checks whether registration should continue before an SMS is sent.
+  /// This is deliberately separate from the OTP-backed legacy check used by
+  /// [registerRealPhone], so the phone page can stop existing accounts early.
+  Future<bool> searchPhoneExists(String fullPhone) async {
+    final phone = _toFullInternational(fullPhone);
+    for (final path in const [
+      '/auth/register/phone/search',
+      '/api/auth/register/phone/search',
+    ]) {
+      try {
+        final response = await ApiService.postMultipart(path, {'phone': phone});
+        final exists = _parseExists(response);
+        if (exists != null) return exists;
+      } catch (error) {
+        debugPrint('[RealNumberService] phone search $path failed: $error');
+      }
+    }
+    throw Exception('Unable to check this phone number.');
+  }
+
   // ---------------------------------------------------------------------------
   //  RPN — STEP 1: Send SMS code
   //  POST /auth/register/sendsmscode   field: phone

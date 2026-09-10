@@ -236,6 +236,17 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       final phone = _fullPhone;
       if (phone == null) return;
 
+      if (!widget.isSignInFlow) {
+        final exists = await _realNumberService.searchPhoneExists(phone);
+        if (exists) {
+          if (!mounted) return;
+          await _showValidationDialog(
+            'This phone number already has a Wrytte account. Please use Log In instead.',
+          );
+          return;
+        }
+      }
+
       await _realNumberService.sendSmsCode(phone);
 
       if (!mounted) return;

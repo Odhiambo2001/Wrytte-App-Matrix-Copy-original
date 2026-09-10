@@ -9,6 +9,7 @@ class KFaceIntroPage extends StatefulWidget {
   final String? userId;
   final KFaceRecoveryData? recoveryData;
   final bool isEnrollment;
+  final bool attachToExistingUser;
 
   const KFaceIntroPage({
     super.key,
@@ -16,6 +17,7 @@ class KFaceIntroPage extends StatefulWidget {
     this.userId,
     this.recoveryData,
     this.isEnrollment = false,
+    this.attachToExistingUser = false,
   });
 
   @override
@@ -57,8 +59,10 @@ class _KFaceIntroPageState extends State<KFaceIntroPage> {
                         child: CustomPaint(painter: _KFacePainter()),
                       ),
                       const SizedBox(height: 22),
-                      const Text(
-                        'How to Log In to Kface',
+                      Text(
+                        widget.isEnrollment
+                            ? 'Set up KFace'
+                            : 'How to Log In to Kface',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white,
@@ -67,8 +71,10 @@ class _KFaceIntroPageState extends State<KFaceIntroPage> {
                         ),
                       ),
                       const SizedBox(height: 14),
-                      const Text(
-                        'Position your face in the camera\nframe, then look directly at the\ncamera to recover your key.',
+                      Text(
+                        widget.isEnrollment
+                            ? 'Position your face in the camera\nframe, then look directly at the\ncamera to create your recovery key.'
+                            : 'Position your face in the camera\nframe, then look directly at the\ncamera to recover your key.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Color(0xFF85878F),
@@ -90,6 +96,8 @@ class _KFaceIntroPageState extends State<KFaceIntroPage> {
                                       userId: widget.userId,
                                       recoveryData: widget.recoveryData,
                                       isEnrollment: widget.isEnrollment,
+                                      attachToExistingUser:
+                                          widget.attachToExistingUser,
                                     ),
                               ),
                             );

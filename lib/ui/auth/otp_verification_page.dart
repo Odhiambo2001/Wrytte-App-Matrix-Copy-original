@@ -2,7 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
-import 'package:wrytte/ui/auth/add_profile_page.dart';
+import 'package:wrytte/services/auth/device_metadata_service.dart';
+import 'package:wrytte/ui/auth/kface_choice_page.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 
@@ -107,11 +108,26 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
       // even if somehow routed through the signup UI.
 
       if (result.isNewUser) {
-        // First-time signup only — must set profile name
+        // Register the server-generated device record before offering KFace.
+        // Device registration is non-blocking for account creation: a network
+        // retry can safely call the idempotent endpoint later.
+        try {
+          await DeviceMetadataService.instance.registerWithBackend();
+        } catch (error) {
+          debugPrint(
+            '[OtpVerificationPage] device registration deferred: $error',
+          );
+        }
+        if (!mounted) return;
+        // First-time signup: choose KFace or skip, then set profile name.
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(
-            builder: (_) => const AddProfilePage(isNewUser: true),
+            builder:
+                (_) => KFaceChoicePage(
+                  phoneNumber: widget.phoneNumber,
+                  userId: result.userId,
+                ),
           ),
           (_) => false,
         );

@@ -27,13 +27,16 @@ class KFaceScanPage extends StatefulWidget {
     this.userId,
     this.recoveryData,
     required this.isEnrollment,
+    this.attachToExistingUser = false,
   });
   final String wrytteId;
+
   /// Internal BE account ID returned by the Wrytte-ID search. It marks every
   /// sign-in capture; enrollment has no existing account ID.
   final String? userId;
   final KFaceRecoveryData? recoveryData;
   final bool isEnrollment;
+  final bool attachToExistingUser;
 
   @override
   State<KFaceScanPage> createState() => _KFaceScanPageState();
@@ -166,9 +169,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     try {
       final sessionId =
           _enrolling
-              ? await BiometricApiService.startEnrollmentCaptureSession(
-                wrytteId: widget.wrytteId,
-              )
+              ? widget.attachToExistingUser
+                  ? await BiometricApiService.startExistingEnrollmentCaptureSession(
+                    userId: widget.userId!,
+                    token:
+                        await AuthService.instance.getValidBackendToken() ?? '',
+                  )
+                  : await BiometricApiService.startEnrollmentCaptureSession(
+                    wrytteId: widget.wrytteId,
+                  )
               : await BiometricApiService.startVerifyCaptureSession(
                 userId: widget.userId!,
               );
@@ -210,12 +219,21 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     try {
       final result =
           _enrolling
-              ? await BiometricApiService.enrollNewCandidate(
-                wrytteId: widget.wrytteId,
-                candidateIndex: candidateIndex,
-                captureSessionId: _captureSessionId,
-                capture: capture,
-              )
+              ? widget.attachToExistingUser
+                  ? await BiometricApiService.enrollExistingCandidate(
+                    userId: widget.userId!,
+                    token:
+                        await AuthService.instance.getValidBackendToken() ?? '',
+                    candidateIndex: candidateIndex,
+                    captureSessionId: _captureSessionId,
+                    capture: capture,
+                  )
+                  : await BiometricApiService.enrollNewCandidate(
+                    wrytteId: widget.wrytteId,
+                    candidateIndex: candidateIndex,
+                    captureSessionId: _captureSessionId,
+                    capture: capture,
+                  )
               : await BiometricApiService.verifyCandidate(
                 userId: widget.userId!,
                 candidateIndex: candidateIndex,
@@ -277,6 +295,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _complete = true;
       _discardPendingCandidateCaptures();
       if (_enrolling) {
+        if (widget.attachToExistingUser) {
+          final input = result.completedInput;
+          if (input == null || !input.accepted) {
+            await _resumeAfterBiometricRejection();
+            return;
+          }
+          await _completeExistingUserEnrollment(input);
+          return;
+        }
         final provision = result.enrollmentProvision;
         if (provision == null) {
           await _resumeAfterBiometricRejection();
@@ -294,7 +321,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     } catch (error) {
       // Type-only diagnostic: no request data, identity, image, or token.
       // ignore: avoid_print
-      print(
+      debugPrint(
         '[BiometricTiming] stage=candidate_failure type=${error.runtimeType}',
       );
       if (mounted) {
@@ -310,6 +337,36 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       } else {
         _dispatchPendingCandidateCaptures();
       }
+    }
+  }
+
+  Future<void> _completeExistingUserEnrollment(BiometricLdpcInput input) async {
+    _sending = true;
+    final camera = _camera;
+    if (camera?.value.isStreamingImages == true) {
+      await camera!.stopImageStream();
+    }
+    try {
+      final enrollment = await _createLocalEnrollment(input.ldpcBits);
+      await AuthService.instance.savePhoneKFaceRecoveryData(
+        userId: widget.userId!,
+        kmap: enrollment.commitment.toJson(),
+        publicKey: enrollment.publicKey,
+      );
+      if (!mounted) return;
+      await Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute<void>(
+          builder: (_) => const AddProfilePage(isNewUser: true),
+        ),
+        (_) => false,
+      );
+    } catch (error) {
+      debugPrint(
+        '[BiometricTiming] stage=phone_enrollment_failure type=${error.runtimeType}',
+      );
+      await _resumeAfterBiometricRejection();
+    } finally {
+      _sending = false;
     }
   }
 
@@ -548,6 +605,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                       userId: widget.userId,
                       recoveryData: widget.recoveryData,
                       isEnrollment: widget.isEnrollment,
+                      attachToExistingUser: widget.attachToExistingUser,
                     ),
               ),
         ),

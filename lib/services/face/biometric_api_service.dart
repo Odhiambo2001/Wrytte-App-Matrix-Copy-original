@@ -188,6 +188,24 @@ class BiometricApiService {
     return _candidateResultFromResponse(response, isEnrollment: true);
   }
 
+  static Future<BiometricCandidateResult> enrollExistingCandidate({
+    required String userId,
+    required String token,
+    required int candidateIndex,
+    String? captureSessionId,
+    required BiometricCropSet capture,
+  }) async {
+    final response = await _sendCandidate(
+      '/api/biometrics/enroll/user/candidate',
+      userId: userId,
+      token: token,
+      candidateIndex: candidateIndex,
+      captureSessionId: captureSessionId,
+      capture: capture,
+    );
+    return _candidateResultFromResponse(response, existingEnrollment: true);
+  }
+
   /// Opens one opaque session before Flutter begins up to five concurrent
   /// liveness uploads. The session is tied to the normalized Wrytte ID, but
   /// reveals neither account existence nor biometric information.
@@ -197,6 +215,20 @@ class BiometricApiService {
     final response = await ApiService.postMultipart(
       '/api/biometrics/enroll/new/session',
       <String, String>{'wrytteId': WrytteId.forBackend(wrytteId)},
+    );
+    if (response is! Map || response['accepted'] != true) return null;
+    final sessionId = response['captureSessionId']?.toString().trim() ?? '';
+    return sessionId.isEmpty || sessionId.length > 256 ? null : sessionId;
+  }
+
+  static Future<String?> startExistingEnrollmentCaptureSession({
+    required String userId,
+    required String token,
+  }) async {
+    final response = await ApiService.postMultipart(
+      '/api/biometrics/enroll/user/session',
+      <String, String>{'userId': userId},
+      token: token,
     );
     if (response is! Map || response['accepted'] != true) return null;
     final sessionId = response['captureSessionId']?.toString().trim() ?? '';
@@ -252,6 +284,7 @@ class BiometricApiService {
   static BiometricCandidateResult _candidateResultFromResponse(
     dynamic response, {
     bool isEnrollment = false,
+    bool existingEnrollment = false,
   }) {
     if (response is! Map) {
       return const BiometricCandidateResult.rejected(
@@ -290,6 +323,23 @@ class BiometricApiService {
         captureSessionId: normalizedSessionId,
         index: index,
         acceptedCandidates: acceptedCandidates,
+      );
+    }
+    if (existingEnrollment) {
+      final completed = _ldpcInputFromResponse(response);
+      if (!completed.accepted) {
+        return const BiometricCandidateResult.rejected(
+          index: -1,
+          acceptedCandidates: 0,
+          errorCode: null,
+        );
+      }
+      return BiometricCandidateResult._(
+        accepted: true,
+        captureSessionId: normalizedSessionId,
+        index: index,
+        acceptedCandidates: acceptedCandidates,
+        completedInput: completed,
       );
     }
     if (isEnrollment) {
@@ -533,6 +583,7 @@ class BiometricApiService {
     String path, {
     String? wrytteId,
     String? userId,
+    String? token,
     required int candidateIndex,
     required String? captureSessionId,
     required BiometricCropSet capture,
@@ -586,6 +637,7 @@ class BiometricApiService {
             contentType: MediaType('image', 'png'),
           ),
         ],
+        token: token,
         headers: <String, String>{'X-Biometric-Request-Id': requestId},
       );
     } finally {

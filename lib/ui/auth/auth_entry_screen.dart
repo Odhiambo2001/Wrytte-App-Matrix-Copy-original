@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/auth/device_region_service.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/phone_auth_page.dart';
@@ -13,13 +14,13 @@ class AuthEntryScreen extends StatefulWidget {
 }
 
 class _AuthEntryScreenState extends State<AuthEntryScreen> {
-  late final Future<String> _signupRegion;
+  Future<String>? _signupRegion;
+  bool _agreed = false;
+  bool _collectingDeviceInfo = false;
 
   @override
   void initState() {
     super.initState();
-    // Start one SIM/network/locale detection when signup is first displayed.
-    _signupRegion = DeviceRegionService.detectOnce();
   }
 
   @override
@@ -53,8 +54,8 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
 
                       const SizedBox(height: 1),
 
-                      const Text(
-                        "Sign Up",
+                      Text(
+                        _agreed ? "Sign Up" : "Welcome to Wrytte",
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 26,
@@ -64,39 +65,62 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
 
                       const SizedBox(height: 40),
 
-                      _buildButton(
-                        context: context,
-                        text: "Wrytte ID",
-                        onTap: () async {
-                          final regionCode = await _signupRegion;
-                          if (!context.mounted) return;
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder:
-                                  (_) =>
-                                      VirtualNumberPage(regionCode: regionCode),
-                            ),
-                          );
-                        },
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      _buildButton(
-                        context: context,
-                        text: "Phone number",
-                        onTap: () async {
-                          await VirtualNumberService().clearPendingWrytteId();
-                          if (!context.mounted) return;
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const PhoneAuthPage(),
-                            ),
-                          );
-                        },
-                      ),
+                      if (!_agreed) ...[
+                        const Text(
+                          'Before creating an account, Wrytte collects your device language, region, and phone model to protect your session.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 15,
+                            height: 1.35,
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        _buildButton(
+                          context: context,
+                          text:
+                              _collectingDeviceInfo
+                                  ? 'Loading…'
+                                  : 'Agree and continue',
+                          onTap:
+                              _collectingDeviceInfo ? () {} : _agreeAndContinue,
+                        ),
+                      ] else ...[
+                        _buildButton(
+                          context: context,
+                          text: "Wrytte ID",
+                          onTap: () async {
+                            final regionCode =
+                                await (_signupRegion ??=
+                                    DeviceRegionService.detectOnce());
+                            if (!context.mounted) return;
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder:
+                                    (_) => VirtualNumberPage(
+                                      regionCode: regionCode,
+                                    ),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                        _buildButton(
+                          context: context,
+                          text: "Phone number",
+                          onTap: () async {
+                            await VirtualNumberService().clearPendingWrytteId();
+                            if (!context.mounted) return;
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const PhoneAuthPage(),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
 
                       const SizedBox(height: 40),
 
@@ -139,6 +163,21 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _agreeAndContinue() async {
+    setState(() => _collectingDeviceInfo = true);
+    try {
+      await DeviceMetadataService.instance.collect();
+      _signupRegion ??= DeviceRegionService.detectOnce();
+      if (!mounted) return;
+      setState(() => _agreed = true);
+    } catch (error) {
+      debugPrint('[AuthEntryScreen] device metadata collection failed: $error');
+      if (mounted) setState(() => _agreed = true);
+    } finally {
+      if (mounted) setState(() => _collectingDeviceInfo = false);
+    }
   }
 
   Widget _buildButton({

@@ -641,6 +641,23 @@ class AuthService {
     );
   }
 
+  Future<void> savePhoneKFaceRecoveryData({
+    required String userId,
+    required Map<String, dynamic> kmap,
+    required String publicKey,
+  }) async {
+    final token = await getValidBackendToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('Missing auth session.');
+    }
+    _validateClientKFaceRecoveryData(kmap, publicKey);
+    await ApiService.postJson(
+      '/auth/register/phone/kface',
+      token: token,
+      body: {'userId': userId, 'kmap': kmap, 'publicKey': publicKey},
+    );
+  }
+
   /// Finalizes a Wrytte-ID account only after this device has constructed its
   /// LDPC recovery commitment and Ed25519 public key. The opaque ticket comes
   /// from an accepted five-frame biometric capture and expires server-side.
