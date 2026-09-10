@@ -32,9 +32,8 @@ class RealNumberRegisterResult {
 class RealNumberService {
   RealNumberService();
 
-  /// Checks whether registration should continue before an SMS is sent.
-  /// This is deliberately separate from the OTP-backed legacy check used by
-  /// [registerRealPhone], so the phone page can stop existing accounts early.
+  /// Checks whether the number belongs to an existing account before choosing
+  /// the registration or sign-in SMS flow.
   Future<bool> searchPhoneExists(String fullPhone) async {
     final phone = _toFullInternational(fullPhone);
     for (final path in const [

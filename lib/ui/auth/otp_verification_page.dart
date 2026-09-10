@@ -89,11 +89,17 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
     HapticFeedback.lightImpact();
 
     try {
-      final result = await _realNumberService.registerRealPhone(
-        fullPhone: widget.phoneNumber,
-        code: _otpController.text,
-        login: true,
-      );
+      final result =
+          widget.isSignInFlow
+              ? await _realNumberService.loginWithPhoneOtp(
+                fullPhone: widget.phoneNumber,
+                code: _otpController.text,
+              )
+              : await _realNumberService.registerRealPhone(
+                fullPhone: widget.phoneNumber,
+                code: _otpController.text,
+                login: true,
+              );
 
       if (!mounted) return;
 

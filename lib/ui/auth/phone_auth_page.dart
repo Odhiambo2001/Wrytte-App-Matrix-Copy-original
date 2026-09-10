@@ -236,18 +236,17 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       final phone = _fullPhone;
       if (phone == null) return;
 
-      if (!widget.isSignInFlow) {
-        final exists = await _realNumberService.searchPhoneExists(phone);
-        if (exists) {
-          if (!mounted) return;
-          await _showValidationDialog(
-            'This phone number already has a Wrytte account. Please use Log In instead.',
-          );
-          return;
-        }
+      // The signup entry point also supports returning users. Search first so
+      // an existing number receives the sign-in SMS flow instead of being
+      // blocked with a "use Log In" message.
+      final existingAccount =
+          widget.isSignInFlow ||
+          await _realNumberService.searchPhoneExists(phone);
+      if (existingAccount) {
+        await _realNumberService.sendLoginSmsCode(phone);
+      } else {
+        await _realNumberService.sendSmsCode(phone);
       }
-
-      await _realNumberService.sendSmsCode(phone);
 
       if (!mounted) return;
 
@@ -257,7 +256,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
           builder:
               (_) => OtpVerificationPage(
                 phoneNumber: phone,
-                isSignInFlow: widget.isSignInFlow,
+                isSignInFlow: existingAccount,
               ),
         ),
       );
