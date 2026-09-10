@@ -24,6 +24,8 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_agreed) return _buildSignupMethodPage(context);
+
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
       body: SafeArea(
@@ -41,7 +43,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                       const _TtMark(),
                       const SizedBox(height: 52),
                       Text(
-                        _agreed ? 'Sign Up' : 'Welcome to Wrytte',
+                        'Welcome to Wrytte',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white,
@@ -50,75 +52,117 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      if (!_agreed) ...[
-                        const SizedBox(height: 20),
-                        const Text(
-                          'A secure social messenger for chatting,\nsharing moments, creating communities, and\nstaying connected with the people who\nmatter most.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 17,
-                            height: 1.35,
-                          ),
+                      const SizedBox(height: 20),
+                      const Text(
+                        'A secure social messenger for chatting,\nsharing moments, creating communities, and\nstaying connected with the people who\nmatter most.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          height: 1.35,
                         ),
-                        const Spacer(),
-                        _termsText(context),
-                        const SizedBox(height: 24),
-                        _buildPrimaryButton(
-                          text:
-                              _collectingDeviceInfo
-                                  ? 'Loading…'
-                                  : 'Agree and continue',
-                          onTap:
-                              _collectingDeviceInfo ? () {} : _agreeAndContinue,
-                        ),
-                        const SizedBox(height: 32),
-                      ] else ...[
-                        const SizedBox(height: 40),
-                        _buildButton(
-                          context: context,
-                          text: 'Wrytte ID',
-                          onTap: () async {
-                            final regionCode =
-                                await (_signupRegion ??=
-                                    DeviceRegionService.detectOnce());
-                            if (!context.mounted) return;
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder:
-                                    (_) => VirtualNumberPage(
-                                      regionCode: regionCode,
-                                    ),
-                              ),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 20),
-                        _buildButton(
-                          context: context,
-                          text: 'Phone number',
-                          onTap: () async {
-                            await VirtualNumberService().clearPendingWrytteId();
-                            if (!context.mounted) return;
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const PhoneAuthPage(),
-                              ),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 40),
-                        _loginLink(context),
-                        const Spacer(),
-                      ],
+                      ),
+                      const Spacer(),
+                      _termsText(context),
+                      const SizedBox(height: 24),
+                      _buildPrimaryButton(
+                        text:
+                            _collectingDeviceInfo
+                                ? 'Loading…'
+                                : 'Agree and continue',
+                        onTap:
+                            _collectingDeviceInfo ? () {} : _agreeAndContinue,
+                      ),
+                      const SizedBox(height: 32),
                     ],
                   ),
                 ),
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSignupMethodPage(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF08090B),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight:
+                  MediaQuery.of(context).size.height -
+                  MediaQuery.of(context).padding.top -
+                  MediaQuery.of(context).padding.bottom,
+            ),
+            child: IntrinsicHeight(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 220,
+                        child: Image.asset(
+                          'assets/images/wrytte_logo.png',
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      const Text(
+                        'Sign Up',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 40),
+                      _buildButton(
+                        context: context,
+                        text: 'Wrytte ID',
+                        onTap: () async {
+                          final regionCode =
+                              await (_signupRegion ??=
+                                  DeviceRegionService.detectOnce());
+                          if (!context.mounted) return;
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder:
+                                  (_) =>
+                                      VirtualNumberPage(regionCode: regionCode),
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      _buildButton(
+                        context: context,
+                        text: 'Phone number',
+                        onTap: () async {
+                          await VirtualNumberService().clearPendingWrytteId();
+                          if (!context.mounted) return;
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const PhoneAuthPage(),
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 40),
+                      _loginLink(context),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
