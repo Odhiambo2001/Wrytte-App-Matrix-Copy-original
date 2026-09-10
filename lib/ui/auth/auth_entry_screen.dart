@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/auth/device_region_service.dart';
@@ -5,6 +6,7 @@ import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/phone_auth_page.dart';
 import 'package:wrytte/ui/auth/sign_in_page.dart';
 import 'package:wrytte/ui/auth/virtual_number_page.dart';
+import 'package:wrytte/ui/screens/terms_privacy_page.dart';
 
 class AuthEntryScreen extends StatefulWidget {
   const AuthEntryScreen({super.key});
@@ -19,65 +21,48 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
   bool _collectingDeviceInfo = false;
 
   @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
       body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight:
-                  MediaQuery.of(context).size.height -
-                  MediaQuery.of(context).padding.top -
-                  MediaQuery.of(context).padding.bottom,
-            ),
-            child: IntrinsicHeight(
-              child: Center(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  padding: const EdgeInsets.symmetric(horizontal: 26),
                   child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      SizedBox(
-                        width: 220,
-                        child: Image.asset(
-                          'assets/images/wrytte_logo.png',
-                          fit: BoxFit.contain,
-                        ),
-                      ),
-
-                      const SizedBox(height: 1),
-
+                      const SizedBox(height: 180),
+                      const _TtMark(),
+                      const SizedBox(height: 100),
                       Text(
-                        _agreed ? "Sign Up" : "Welcome to Wrytte",
-                        style: TextStyle(
+                        _agreed ? 'Sign Up' : 'Welcome to Wrytte',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 26,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 36,
+                          height: 1.1,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-
-                      const SizedBox(height: 40),
-
                       if (!_agreed) ...[
+                        const SizedBox(height: 36),
                         const Text(
-                          'Before creating an account, Wrytte collects your device language, region, and phone model to protect your session.',
+                          'A secure social messenger for chatting,\nsharing moments, creating communities, and\nstaying connected with the people who\nmatter most.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: 15,
+                            color: Colors.white,
+                            fontSize: 18,
                             height: 1.35,
                           ),
                         ),
-                        const SizedBox(height: 24),
-                        _buildButton(
-                          context: context,
+                        const Spacer(),
+                        _termsText(context),
+                        const SizedBox(height: 34),
+                        _buildPrimaryButton(
                           text:
                               _collectingDeviceInfo
                                   ? 'Loading…'
@@ -85,10 +70,12 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                           onTap:
                               _collectingDeviceInfo ? () {} : _agreeAndContinue,
                         ),
+                        const SizedBox(height: 24),
                       ] else ...[
+                        const SizedBox(height: 40),
                         _buildButton(
                           context: context,
-                          text: "Wrytte ID",
+                          text: 'Wrytte ID',
                           onTap: () async {
                             final regionCode =
                                 await (_signupRegion ??=
@@ -108,7 +95,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                         const SizedBox(height: 20),
                         _buildButton(
                           context: context,
-                          text: "Phone number",
+                          text: 'Phone number',
                           onTap: () async {
                             await VirtualNumberService().clearPendingWrytteId();
                             if (!context.mounted) return;
@@ -120,48 +107,84 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                             );
                           },
                         ),
+                        const SizedBox(height: 40),
+                        _loginLink(context),
+                        const Spacer(),
                       ],
-
-                      const SizedBox(height: 40),
-
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Text(
-                            "Already have an account? ",
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 16,
-                            ),
-                          ),
-                          GestureDetector(
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => const SignInPage(),
-                                ),
-                              );
-                            },
-                            child: const Text(
-                              "Log In",
-                              style: TextStyle(
-                                color: Color(0xFF4DA3FF),
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
                     ],
                   ),
                 ),
               ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _termsText(BuildContext context) {
+    return Text.rich(
+      TextSpan(
+        style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.45),
+        children: [
+          const TextSpan(text: 'By continuing, you agree to the '),
+          TextSpan(
+            text: 'Wrytte Terms of Service',
+            style: const TextStyle(color: Color(0xFF4DA3FF)),
+            recognizer:
+                TapGestureRecognizer()
+                  ..onTap =
+                      () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const TermsPrivacyPage(),
+                        ),
+                      ),
+          ),
+          const TextSpan(text: ' and '),
+          TextSpan(
+            text: 'App Privacy',
+            style: const TextStyle(color: Color(0xFF4DA3FF)),
+            recognizer:
+                TapGestureRecognizer()
+                  ..onTap =
+                      () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const TermsPrivacyPage(),
+                        ),
+                      ),
+          ),
+        ],
+      ),
+      textAlign: TextAlign.center,
+    );
+  }
+
+  Widget _loginLink(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Text(
+          'Already have an account? ',
+          style: TextStyle(color: Colors.white70, fontSize: 16),
+        ),
+        GestureDetector(
+          onTap:
+              () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SignInPage()),
+              ),
+          child: const Text(
+            'Log In',
+            style: TextStyle(
+              color: Color(0xFF4DA3FF),
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),
-      ),
+      ],
     );
   }
 
@@ -178,6 +201,31 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
     } finally {
       if (mounted) setState(() => _collectingDeviceInfo = false);
     }
+  }
+
+  Widget _buildPrimaryButton({
+    required String text,
+    required VoidCallback onTap,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      height: 72,
+      child: ElevatedButton(
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF4DA3FF),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(38),
+          ),
+        ),
+        child: Text(
+          text,
+          style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w500),
+        ),
+      ),
+    );
   }
 
   Widget _buildButton({
@@ -203,6 +251,49 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
             fontWeight: FontWeight.w500,
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _TtMark extends StatelessWidget {
+  const _TtMark();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 132,
+      height: 116,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          const Positioned(
+            left: 0,
+            bottom: 0,
+            child: Text(
+              'tt',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 108,
+                height: .8,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -17,
+              ),
+            ),
+          ),
+          Positioned(
+            right: 8,
+            top: 0,
+            child: Container(
+              width: 18,
+              height: 18,
+              decoration: const BoxDecoration(
+                color: Color(0xFFFF5964),
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
