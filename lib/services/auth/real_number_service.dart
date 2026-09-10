@@ -15,7 +15,7 @@ class RealNumberRegisterResult {
   final String secret;
 
   /// True  → brand-new account (must set profile name on AddProfilePage)
-  /// False → existing account   (go straight to HomeScreen)
+  /// False → existing account   (may be offered KFace before HomeScreen)
   final bool isNewUser;
 
   const RealNumberRegisterResult({

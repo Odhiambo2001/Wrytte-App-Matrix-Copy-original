@@ -105,13 +105,13 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
 
       // ── Routing logic ────────────────────────────────────────────────────
       //
-      // result.isNewUser = true  → first signup  → MUST set profile name
-      // result.isNewUser = false → returning user → go straight to HomeScreen
+      // result.isNewUser = true  → first signup  → offer KFace, then profile
+      // result.isNewUser = false → returning user → offer KFace if not set up
       //
       // NOTE: isSignInFlow is kept for callers that explicitly set it, but
       // isNewUser from the server is the authoritative source of truth.
-      // A phone that already has an account always skips AddProfilePage,
-      // even if somehow routed through the signup UI.
+      // A returning phone account never goes through AddProfilePage. It can
+      // still enroll KFace, and an already enrolled device goes to Home.
 
       if (result.isNewUser) {
         // Register the server-generated device record before offering KFace.
@@ -138,19 +138,50 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
           (_) => false,
         );
       } else {
-        // Returning user (same number, second signup+) — skip profile page entirely
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(
-            builder:
-                (_) => HomeScreen(
-                  currentUserId: result.userId,
-                  initialProfileName: result.username,
-                  initialPhone: widget.phoneNumber,
-                ),
-          ),
-          (_) => false,
-        );
+        // Register/update the current device so the backend can tell whether
+        // KFace has already been attached to it. Failure is non-blocking; the
+        // authenticated session remains usable and the choice page can retry.
+        Map<String, dynamic>? device;
+        try {
+          device = await DeviceMetadataService.instance.registerWithBackend();
+        } catch (error) {
+          debugPrint(
+            '[OtpVerificationPage] returning-user device registration deferred: $error',
+          );
+        }
+        if (!mounted) return;
+
+        final rawKFace = device?['kface'];
+        final hasKFace =
+            rawKFace == true || rawKFace?.toString().toLowerCase() == 'true';
+        if (!hasKFace) {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute<void>(
+              builder:
+                  (_) => KFaceChoicePage(
+                    phoneNumber: widget.phoneNumber,
+                    userId: result.userId,
+                    isExistingUser: true,
+                    username: result.username,
+                  ),
+            ),
+            (_) => false,
+          );
+        } else {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute<void>(
+              builder:
+                  (_) => HomeScreen(
+                    currentUserId: result.userId,
+                    initialProfileName: result.username,
+                    initialPhone: widget.phoneNumber,
+                  ),
+            ),
+            (_) => false,
+          );
+        }
       }
     } catch (e) {
       HapticFeedback.heavyImpact();

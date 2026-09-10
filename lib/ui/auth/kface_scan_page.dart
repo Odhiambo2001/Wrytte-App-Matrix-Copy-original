@@ -354,9 +354,16 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         publicKey: enrollment.publicKey,
       );
       if (!mounted) return;
+      final currentUser = await AuthService.instance.getCurrentUser();
+      if (!mounted) return;
       await Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute<void>(
-          builder: (_) => const AddProfilePage(isNewUser: true),
+          builder:
+              (_) => HomeScreen(
+                currentUserId: widget.userId!,
+                initialProfileName: currentUser?.username,
+                initialPhone: currentUser?.phone ?? widget.wrytteId,
+              ),
         ),
         (_) => false,
       );

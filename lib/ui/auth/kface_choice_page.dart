@@ -1,19 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
+import 'package:wrytte/ui/screens/home_screen.dart';
 
-/// Gives a newly registered phone account an explicit KFace opt-in.  Skipping
-/// leaves the account usable with its phone OTP; choosing KFace starts the
-/// same five-candidate liveness flow used by Wrytte-ID enrollment.
+/// Gives a phone account an explicit KFace opt-in. Skipping leaves the account
+/// usable with its phone OTP; choosing KFace starts the five-candidate
+/// liveness flow and attaches the resulting recovery data to that account.
 class KFaceChoicePage extends StatelessWidget {
   const KFaceChoicePage({
     super.key,
     required this.phoneNumber,
     required this.userId,
+    this.isExistingUser = false,
+    this.username,
   });
 
   final String phoneNumber;
   final String userId;
+  final bool isExistingUser;
+  final String? username;
 
   @override
   Widget build(BuildContext context) {
@@ -72,11 +77,20 @@ class KFaceChoicePage extends StatelessWidget {
               const SizedBox(height: 14),
               TextButton(
                 onPressed:
-                    () => Navigator.pushReplacement(
+                    () => Navigator.pushAndRemoveUntil(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const AddProfilePage(isNewUser: true),
+                      MaterialPageRoute<void>(
+                        builder:
+                            (_) =>
+                                isExistingUser
+                                    ? HomeScreen(
+                                      currentUserId: userId,
+                                      initialProfileName: username,
+                                      initialPhone: phoneNumber,
+                                    )
+                                    : const AddProfilePage(isNewUser: true),
                       ),
+                      (_) => false,
                     ),
                 child: const Text('Skip for now'),
               ),
