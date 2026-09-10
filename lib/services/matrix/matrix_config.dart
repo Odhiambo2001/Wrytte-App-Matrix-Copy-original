@@ -8,8 +8,16 @@ class MatrixConfig {
 
   static const serverName = String.fromEnvironment(
     'WRYTTE_MATRIX_SERVER_NAME',
-    defaultValue: 'matrix.wrytte.com',
+    // Existing Synapse users are currently hosted under the Contabo IP. Keep
+    // this aligned with the backend's MATRIX_SERVER_NAME until Synapse is
+    // migrated to a DNS name. Builds can override it with --dart-define.
+    defaultValue: '185.202.223.192',
   );
+
+  /// Maximum time a single Matrix login/registration request may occupy the
+  /// authentication flow. A failed Matrix bootstrap must not block backend
+  /// authentication indefinitely.
+  static const authRequestTimeout = Duration(seconds: 15);
 
   static const appServiceName = 'Wrytte';
   static const pushAppId = 'com.example.wrytte';

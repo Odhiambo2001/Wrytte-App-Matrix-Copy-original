@@ -6,6 +6,7 @@ import 'package:matrix/matrix.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
 import 'matrix_client.dart';
+import 'matrix_config.dart';
 import 'server_discovery_service.dart';
 
 class MatrixAuthService {
@@ -97,14 +98,12 @@ class MatrixAuthService {
       // If a first sync already completed in a prior session, this is cheap.
       final firstSync = client.firstSyncReceived;
       if (firstSync != null) {
-        await firstSync.timeout(
-          const Duration(seconds: 30),
-          onTimeout: () {},
-        );
+        await firstSync.timeout(const Duration(seconds: 30), onTimeout: () {});
       } else {
-        await client
-            .oneShotSync()
-            .timeout(const Duration(seconds: 30), onTimeout: () => '');
+        await client.oneShotSync().timeout(
+          const Duration(seconds: 30),
+          onTimeout: () => '',
+        );
       }
       apkLog(
         'Matrix.auth',
@@ -153,7 +152,7 @@ class MatrixAuthService {
           password: password,
           initialDeviceDisplayName: deviceName ?? 'Wrytte',
         )
-        .timeout(const Duration(seconds: 25));
+        .timeout(MatrixConfig.authRequestTimeout);
     apkLog(
       'Matrix.auth',
       'password login response user_id="${client.userID}" device_id="${client.deviceID}"',
@@ -212,9 +211,10 @@ class MatrixAuthService {
             initialDeviceDisplayName: deviceName ?? 'Wrytte',
             inhibitLogin: false,
           )
-          .timeout(const Duration(seconds: 25));
+          .timeout(MatrixConfig.authRequestTimeout);
     } on MatrixException catch (e) {
-      final hasDummyStage = e.authenticationFlows?.any(
+      final hasDummyStage =
+          e.authenticationFlows?.any(
             (flow) => flow.stages.contains(AuthenticationTypes.dummy),
           ) ??
           false;
@@ -238,7 +238,7 @@ class MatrixAuthService {
               session: e.session,
             ),
           )
-          .timeout(const Duration(seconds: 25));
+          .timeout(MatrixConfig.authRequestTimeout);
     }
     apkLog(
       'Matrix.auth',

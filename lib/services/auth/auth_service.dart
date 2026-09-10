@@ -232,6 +232,14 @@ class AuthService {
           apkLog('Matrix.auth', 'login skipped stale user_id="$userId"');
           return;
         }
+        if (_isMatrixTransportFailure(e)) {
+          apkLog(
+            'Matrix.auth',
+            'register-first fallback skipped; homeserver unavailable '
+                'user_id="$userId" error="$e"',
+          );
+          rethrow;
+        }
         apkLog(
           'Matrix.auth',
           'register first failed; login request user_id="$userId" error="$e"',
@@ -267,6 +275,14 @@ class AuthService {
             'login response usable despite post-login error user_id="$userId" error="$e"',
           );
         } else {
+          if (_isMatrixTransportFailure(e)) {
+            apkLog(
+              'Matrix.auth',
+              'register fallback skipped; homeserver unavailable '
+                  'user_id="$userId" error="$e"',
+            );
+            rethrow;
+          }
           if (!await _isCurrentMatrixBootstrap(userId, generation)) {
             debugPrint(
               '[AuthService] Matrix register skipped for stale user $userId.',
@@ -1389,6 +1405,12 @@ class AuthService {
     } catch (e) {
       debugPrint('[AuthService] Matrix bootstrap skipped: $e');
     }
+  }
+
+  bool _isMatrixTransportFailure(Object error) {
+    return error is TimeoutException ||
+        error is SocketException ||
+        error is HandshakeException;
   }
 
   Future<bool> _isCurrentMatrixBootstrap(String userId, int? generation) async {
