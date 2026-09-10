@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
@@ -20,7 +21,6 @@ class AuthEntryScreen extends StatefulWidget {
 class _AuthEntryScreenState extends State<AuthEntryScreen> {
   Future<String>? _signupRegion;
   bool _agreed = false;
-  bool _collectingDeviceInfo = false;
 
   @override
   Widget build(BuildContext context) {
@@ -66,12 +66,8 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                       _termsText(context),
                       const SizedBox(height: 24),
                       _buildPrimaryButton(
-                        text:
-                            _collectingDeviceInfo
-                                ? 'Loading…'
-                                : 'Agree and continue',
-                        onTap:
-                            _collectingDeviceInfo ? () {} : _agreeAndContinue,
+                        text: 'Agree and continue',
+                        onTap: _agreeAndContinue,
                       ),
                       const SizedBox(height: 32),
                     ],
@@ -234,18 +230,18 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
     );
   }
 
-  Future<void> _agreeAndContinue() async {
-    setState(() => _collectingDeviceInfo = true);
+  void _agreeAndContinue() {
+    if (_agreed) return;
+    setState(() => _agreed = true);
+    unawaited(_collectDeviceMetadata());
+  }
+
+  Future<void> _collectDeviceMetadata() async {
     try {
       await DeviceMetadataService.instance.collect();
       _signupRegion ??= DeviceRegionService.detectOnce();
-      if (!mounted) return;
-      setState(() => _agreed = true);
     } catch (error) {
       debugPrint('[AuthEntryScreen] device metadata collection failed: $error');
-      if (mounted) setState(() => _agreed = true);
-    } finally {
-      if (mounted) setState(() => _collectingDeviceInfo = false);
     }
   }
 
