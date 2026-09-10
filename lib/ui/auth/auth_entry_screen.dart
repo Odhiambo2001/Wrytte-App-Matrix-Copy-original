@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/device_metadata_service.dart';
@@ -29,39 +31,39 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
           builder: (context, constraints) {
             return SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: SizedBox(
+                height: math.max(constraints.maxHeight, 728),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 26),
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
                   child: Column(
                     children: [
-                      const SizedBox(height: 180),
+                      const SizedBox(height: 120),
                       const _TtMark(),
-                      const SizedBox(height: 100),
+                      const SizedBox(height: 52),
                       Text(
                         _agreed ? 'Sign Up' : 'Welcome to Wrytte',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 36,
+                          fontSize: 28,
                           height: 1.1,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       if (!_agreed) ...[
-                        const SizedBox(height: 36),
+                        const SizedBox(height: 20),
                         const Text(
                           'A secure social messenger for chatting,\nsharing moments, creating communities, and\nstaying connected with the people who\nmatter most.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: 18,
+                            fontSize: 17,
                             height: 1.35,
                           ),
                         ),
                         const Spacer(),
                         _termsText(context),
-                        const SizedBox(height: 34),
+                        const SizedBox(height: 24),
                         _buildPrimaryButton(
                           text:
                               _collectingDeviceInfo
@@ -70,7 +72,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                           onTap:
                               _collectingDeviceInfo ? () {} : _agreeAndContinue,
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 32),
                       ] else ...[
                         const SizedBox(height: 40),
                         _buildButton(
@@ -209,7 +211,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
   }) {
     return SizedBox(
       width: double.infinity,
-      height: 72,
+      height: 50,
       child: ElevatedButton(
         onPressed: onTap,
         style: ElevatedButton.styleFrom(
@@ -222,7 +224,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
         ),
         child: Text(
           text,
-          style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w500),
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
         ),
       ),
     );
@@ -262,8 +264,8 @@ class _TtMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 132,
-      height: 116,
+      width: 86,
+      height: 84,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -274,10 +276,10 @@ class _TtMark extends StatelessWidget {
               'tt',
               style: TextStyle(
                 color: Colors.white,
-                fontSize: 108,
+                fontSize: 78,
                 height: .8,
                 fontWeight: FontWeight.w900,
-                letterSpacing: -17,
+                letterSpacing: -12,
               ),
             ),
           ),
@@ -285,8 +287,8 @@ class _TtMark extends StatelessWidget {
             right: 8,
             top: 0,
             child: Container(
-              width: 18,
-              height: 18,
+              width: 12,
+              height: 12,
               decoration: const BoxDecoration(
                 color: Color(0xFFFF5964),
                 shape: BoxShape.circle,
