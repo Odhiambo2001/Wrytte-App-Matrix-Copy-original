@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/face/biometric_api_service.dart';
 import 'package:wrytte/services/face/biometric_enrollment_timing.dart';
 import 'package:wrytte/services/face/camera_frame_converter.dart';
@@ -414,6 +415,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       preferMatrixRegisterFirst: true,
       deferNonEssentialInitialization: true,
     );
+    try {
+      await DeviceMetadataService.instance.registerWithBackend();
+    } catch (error) {
+      debugPrint('[KFaceScan] Wrytte-ID device registration deferred: $error');
+    }
     // This task retains no image. It waits only for the opaque delivery ticket
     // and completes the client-owned LDPC commitment after navigation.
     unawaited(_completeEnrollmentInBackground(provision));
@@ -499,6 +505,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         challenge: verification.challenge,
         signature: signature,
       );
+      try {
+        await DeviceMetadataService.instance.registerWithBackend();
+      } catch (error) {
+        debugPrint('[KFaceScan] sign-in device registration deferred: $error');
+      }
       if (!mounted) return;
       final user = await AuthService.instance.getCurrentUser();
       if (!mounted) return;

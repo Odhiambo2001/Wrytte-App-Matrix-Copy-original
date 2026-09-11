@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/device_region_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
@@ -18,6 +19,7 @@ class SignInPage extends StatefulWidget {
 class _SignInPageState extends State<SignInPage> {
   final TextEditingController _inputCtrl = TextEditingController();
   final FocusNode _focusNode = FocusNode();
+  final RealNumberService _realNumberService = RealNumberService();
   static const int _minLoginDigits = 8;
 
   bool _isValid = false;
@@ -59,10 +61,7 @@ class _SignInPageState extends State<SignInPage> {
           context,
           MaterialPageRoute<void>(
             builder:
-                (_) => KFaceIntroPage(
-                  wrytteId: digits,
-                  userId: search.userId,
-                ),
+                (_) => KFaceIntroPage(wrytteId: digits, userId: search.userId),
           ),
         );
         return;
@@ -70,6 +69,12 @@ class _SignInPageState extends State<SignInPage> {
       final phone = CountryPhoneNumber.normalizeInternational(input);
       if (phone == null) {
         throw const FormatException('Invalid international phone number');
+      }
+
+      final exists = await _realNumberService.searchPhoneExists(phone);
+      if (!mounted) return;
+      if (!exists) {
+        throw const FormatException('Phone account not found');
       }
 
       Navigator.push(

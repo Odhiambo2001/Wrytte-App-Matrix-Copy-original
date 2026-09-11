@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
+import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
 class LoginOtpPage extends StatefulWidget {
@@ -103,6 +104,11 @@ class _LoginOtpPageState extends State<LoginOtpPage>
         fullPhone: widget.phoneNumber,
         code: enteredCode,
       );
+      try {
+        await DeviceMetadataService.instance.registerWithBackend();
+      } catch (error) {
+        debugPrint('[LoginOtp] device registration deferred: $error');
+      }
       final resolvedUserId = result.userId;
 
       if (!mounted) return;

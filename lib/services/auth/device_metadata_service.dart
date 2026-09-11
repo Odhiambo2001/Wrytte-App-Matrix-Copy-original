@@ -39,8 +39,22 @@ class DeviceMetadataService {
   static final DeviceMetadataService instance = DeviceMetadataService._();
   static const _installationKey = 'wrytte.installation.id';
   DeviceMetadata? _cached;
+  Future<DeviceMetadata>? _collectInFlight;
 
   Future<DeviceMetadata> collect() async {
+    if (_cached != null) return _cached!;
+    final inFlight = _collectInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _collectInternal();
+    _collectInFlight = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_collectInFlight, future)) _collectInFlight = null;
+    }
+  }
+
+  Future<DeviceMetadata> _collectInternal() async {
     if (_cached != null) return _cached!;
     final region = await DeviceRegionService.detectOnce();
     final locale = PlatformDispatcher.instance.locale;

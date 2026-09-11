@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/utils/countries.dart';
 
@@ -41,7 +42,10 @@ class RealNumberService {
       '/api/auth/register/phone/search',
     ]) {
       try {
-        final response = await ApiService.postMultipart(path, {'phone': phone});
+        final response = await ApiService.postMultipart(
+          path,
+          await _withDeviceMetadata({'phone': phone}),
+        );
         final exists = _parseExists(response);
         if (exists != null) return exists;
       } catch (error) {
@@ -49,6 +53,20 @@ class RealNumberService {
       }
     }
     throw Exception('Unable to check this phone number.');
+  }
+
+  Future<Map<String, String>> _withDeviceMetadata(
+    Map<String, String> fields,
+  ) async {
+    try {
+      final metadata = await DeviceMetadataService.instance.collect();
+      return {...fields, ...metadata.toJson()};
+    } catch (error) {
+      // Account lookup remains available if a platform cannot expose optional
+      // device metadata. The authenticated device-registration step retries it.
+      debugPrint('[RealNumberService] device metadata unavailable: $error');
+      return fields;
+    }
   }
 
   // ---------------------------------------------------------------------------

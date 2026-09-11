@@ -15,6 +15,7 @@ import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/auth/api_service.dart';
+import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/attachment_local_store.dart';
 import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
@@ -716,7 +717,7 @@ class AuthService {
     final backendWrytteId = WrytteId.forBackend(wrytteId);
     final response = await ApiService.postMultipart(
       '/auth/signin/wrytteid/search',
-      {'wrytteId': backendWrytteId},
+      await _withDeviceMetadata({'wrytteId': backendWrytteId}),
     );
     if (response is! Map) {
       throw Exception('Invalid Wrytte ID search response.');
@@ -732,6 +733,18 @@ class AuthService {
       throw Exception('Invalid Wrytte ID search response: missing userid.');
     }
     return WrytteIdSignInSearchResult(exists: exists, userId: userId);
+  }
+
+  Future<Map<String, String>> _withDeviceMetadata(
+    Map<String, String> fields,
+  ) async {
+    try {
+      final metadata = await DeviceMetadataService.instance.collect();
+      return {...fields, ...metadata.toJson()};
+    } catch (error) {
+      debugPrint('[AuthService] device metadata unavailable: $error');
+      return fields;
+    }
   }
 
   Future<KFaceRecoveryData> getKFaceRecoveryData({

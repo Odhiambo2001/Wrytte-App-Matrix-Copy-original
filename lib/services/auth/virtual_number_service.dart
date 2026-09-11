@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/auth_models/auth_user.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 
@@ -106,7 +107,7 @@ class VirtualNumberService {
     try {
       final response = await ApiService.postMultipart(
         '/auth/register/wrytteid/search',
-        {'wrytteId': backendId},
+        await _withDeviceMetadata({'wrytteId': backendId}),
       );
       if (response is Map) {
         final raw = response['exists'] ?? response['value'];
@@ -117,6 +118,19 @@ class VirtualNumberService {
       return false;
     }
     return false;
+  }
+
+  Future<Map<String, String>> _withDeviceMetadata(
+    Map<String, String> fields,
+  ) async {
+    try {
+      final metadata = await DeviceMetadataService.instance.collect();
+      return {...fields, ...metadata.toJson()};
+    } catch (_) {
+      // Availability search remains usable when optional platform metadata is
+      // unavailable; authenticated registration can retry it later.
+      return fields;
+    }
   }
 
   /// Invalidates the cached candidate and guarantees the next generated
