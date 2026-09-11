@@ -5,6 +5,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/auth/active_device_challenge_service.dart';
 import 'package:wrytte/services/backend/backend_realtime_service.dart';
 import 'package:wrytte/services/call_listener_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
@@ -46,6 +47,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _backendRefreshInFlight = false;
   UserProfile? _bottomNavProfile;
   final CallListenerService _callListener = CallListenerService();
+  final ActiveDeviceChallengeService _activeDeviceChallenges =
+      ActiveDeviceChallengeService();
 
   @override
   void initState() {
@@ -67,6 +70,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _refreshBackendTokenIfNeeded();
     _scheduleBackendTokenRefresh();
     unawaited(BackendRealtimeService.instance.connect());
+    unawaited(_activeDeviceChallenges.start());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _callListener.startListening(context);
@@ -148,6 +152,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _callListener.stopListening();
+    unawaited(_activeDeviceChallenges.stop());
     _backendTokenTimer?.cancel();
     unawaited(BackendRealtimeService.instance.disconnect());
     super.dispose();
@@ -159,10 +164,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _refreshBackendTokenIfNeeded();
       _scheduleBackendTokenRefresh();
       unawaited(BackendRealtimeService.instance.connect());
+      unawaited(_activeDeviceChallenges.start());
     } else {
       _backendTokenTimer?.cancel();
       _backendTokenTimer = null;
       unawaited(BackendRealtimeService.instance.disconnect());
+      unawaited(_activeDeviceChallenges.stop());
     }
   }
 

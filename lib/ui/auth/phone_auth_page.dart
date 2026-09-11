@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/ui/auth/country_picker_page.dart';
+import 'package:wrytte/ui/auth/active_device_login_page.dart';
+import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/screens/terms_privacy_page.dart';
 import 'package:wrytte/utils/countries.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
@@ -239,12 +241,40 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       // The signup entry point also supports returning users. Search first so
       // an existing number receives the sign-in SMS flow instead of being
       // blocked with a "use Log In" message.
-      final existingAccount =
-          widget.isSignInFlow ||
-          await _realNumberService.searchPhoneExists(phone);
+      final lookup = await _realNumberService.searchPhoneAuthMethods(phone);
+      final existingAccount = lookup.exists;
+      if (existingAccount && lookup.keyface) {
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute<void>(
+            builder:
+                (_) => KFaceIntroPage(wrytteId: phone, userId: lookup.userId),
+          ),
+        );
+        return;
+      }
+      if (existingAccount && lookup.activeDevice) {
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) => ActiveDeviceLoginPage(account: phone),
+          ),
+        );
+        return;
+      }
       if (existingAccount) {
+        if (!lookup.sms) {
+          throw Exception(
+            'No verification method is available for this account.',
+          );
+        }
         await _realNumberService.sendLoginSmsCode(phone);
       } else {
+        if (widget.isSignInFlow) {
+          throw Exception('Phone account not found.');
+        }
         await _realNumberService.sendSmsCode(phone);
       }
 

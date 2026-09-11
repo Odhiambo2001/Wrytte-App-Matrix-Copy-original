@@ -27,6 +27,61 @@ class RealNumberRegisterResult {
   });
 }
 
+/// Capabilities returned by the backend account search.  The preferred method
+/// is ordered by backend policy: KFace, then an active Wrytte device, then SMS.
+class PhoneAuthLookup {
+  const PhoneAuthLookup({
+    required this.exists,
+    required this.userId,
+    required this.sms,
+    required this.activeDevice,
+    required this.keyface,
+    required this.preferredMethod,
+    required this.methods,
+  });
+
+  final bool exists;
+  final String userId;
+  final bool sms;
+  final bool activeDevice;
+  final bool keyface;
+  final String preferredMethod;
+  final List<String> methods;
+
+  factory PhoneAuthLookup.fromJson(Map<String, dynamic> json) {
+    bool flag(String key) {
+      final value = json[key];
+      return value is bool ? value : value?.toString().toLowerCase() == 'true';
+    }
+
+    final methods = (json['methods'] is List
+            ? json['methods'] as List
+            : const [])
+        .map((value) => value.toString().trim())
+        .where((value) => value.isNotEmpty)
+        .toList(growable: false);
+    return PhoneAuthLookup(
+      exists: flag('exists'),
+      userId: (json['userid'] ?? json['userId'] ?? '').toString().trim(),
+      sms: flag('sms'),
+      activeDevice: flag('activeDevice'),
+      keyface: flag('keyface'),
+      preferredMethod: (json['preferredMethod'] ?? '').toString().trim(),
+      methods: methods,
+    );
+  }
+}
+
+class ActiveDeviceChallengeStart {
+  const ActiveDeviceChallengeStart({
+    required this.challengeId,
+    required this.expiresAt,
+  });
+
+  final String challengeId;
+  final DateTime expiresAt;
+}
+
 // =============================================================================
 //  RealNumberService
 // =============================================================================
@@ -35,7 +90,7 @@ class RealNumberService {
 
   /// Checks whether the number belongs to an existing account before choosing
   /// the registration or sign-in SMS flow.
-  Future<bool> searchPhoneExists(String fullPhone) async {
+  Future<PhoneAuthLookup> searchPhoneAuthMethods(String fullPhone) async {
     final phone = _toFullInternational(fullPhone);
     for (final path in const [
       '/auth/register/phone/search',
@@ -46,13 +101,19 @@ class RealNumberService {
           path,
           await _withDeviceMetadata({'phone': phone}),
         );
-        final exists = _parseExists(response);
-        if (exists != null) return exists;
+        if (response is Map) {
+          return PhoneAuthLookup.fromJson(Map<String, dynamic>.from(response));
+        }
       } catch (error) {
         debugPrint('[RealNumberService] phone search $path failed: $error');
       }
     }
     throw Exception('Unable to check this phone number.');
+  }
+
+  Future<bool> searchPhoneExists(String fullPhone) async {
+    final lookup = await searchPhoneAuthMethods(fullPhone);
+    return lookup.exists;
   }
 
   Future<Map<String, String>> _withDeviceMetadata(
@@ -91,6 +152,48 @@ class RealNumberService {
     debugPrint('[RealNumberService] requesting sign-in SMS verification');
 
     await ApiService.postMultipart('/auth/login/sendsmscode', {'phone': phone});
+  }
+
+  Future<ActiveDeviceChallengeStart> startActiveDeviceLogin({
+    required String account,
+    required String installationId,
+  }) async {
+    final response = await ApiService.postMultipart(
+      '/auth/login/active-device/start',
+      {'account': account.trim(), 'installationId': installationId.trim()},
+    );
+    if (response is! Map) throw Exception('Invalid active-device response.');
+    final map = Map<String, dynamic>.from(response);
+    final challengeId = (map['challengeId'] ?? '').toString().trim();
+    final expires = DateTime.tryParse((map['expiresAt'] ?? '').toString());
+    if (challengeId.isEmpty || expires == null) {
+      throw Exception('Invalid active-device response.');
+    }
+    return ActiveDeviceChallengeStart(
+      challengeId: challengeId,
+      expiresAt: expires,
+    );
+  }
+
+  Future<RealNumberRegisterResult> completeActiveDeviceLogin({
+    required String challengeId,
+    required String code,
+    required String fallbackAccount,
+  }) async {
+    final response = await ApiService.postMultipart(
+      '/auth/login/active-device/complete',
+      {'challengeId': challengeId, 'code': code.trim()},
+    );
+    final accountForSession =
+        response is Map &&
+                (response['phone'] ?? '').toString().trim().isNotEmpty
+            ? (response['phone'] ?? '').toString().trim()
+            : fallbackAccount;
+    return _handleRegisterResponse(
+      response,
+      fallbackPhone: accountForSession,
+      serverIndicatesNewUser: false,
+    );
   }
 
   // ---------------------------------------------------------------------------

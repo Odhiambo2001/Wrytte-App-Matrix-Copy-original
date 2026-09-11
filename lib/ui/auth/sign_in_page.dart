@@ -5,6 +5,7 @@ import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
+import 'package:wrytte/ui/auth/active_device_login_page.dart';
 import 'package:wrytte/ui/auth/virtual_number_page.dart';
 import 'package:wrytte/ui/auth/wrytte_id_not_found_page.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
@@ -57,13 +58,27 @@ class _SignInPageState extends State<SignInPage> {
         _focusNode.unfocus();
         await Future<void>.delayed(const Duration(milliseconds: 100));
         if (!mounted) return;
-        await Navigator.push(
-          context,
-          MaterialPageRoute<void>(
-            builder:
-                (_) => KFaceIntroPage(wrytteId: digits, userId: search.userId),
-          ),
-        );
+        if (search.keyface) {
+          await Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder:
+                  (_) =>
+                      KFaceIntroPage(wrytteId: digits, userId: search.userId),
+            ),
+          );
+        } else if (search.activeDevice) {
+          await Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => ActiveDeviceLoginPage(account: digits),
+            ),
+          );
+        } else {
+          throw const FormatException(
+            'No login method is available for this account',
+          );
+        }
         return;
       }
       final phone = CountryPhoneNumber.normalizeInternational(input);
@@ -71,18 +86,39 @@ class _SignInPageState extends State<SignInPage> {
         throw const FormatException('Invalid international phone number');
       }
 
-      final exists = await _realNumberService.searchPhoneExists(phone);
+      final lookup = await _realNumberService.searchPhoneAuthMethods(phone);
       if (!mounted) return;
-      if (!exists) {
+      if (!lookup.exists) {
         throw const FormatException('Phone account not found');
       }
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => LoginOtpPage(phoneNumber: phone, userId: ''),
-        ),
-      );
+      if (lookup.keyface) {
+        Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+            builder:
+                (_) => KFaceIntroPage(wrytteId: phone, userId: lookup.userId),
+          ),
+        );
+      } else if (lookup.activeDevice) {
+        Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) => ActiveDeviceLoginPage(account: phone),
+          ),
+        );
+      } else if (lookup.sms) {
+        Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+            builder:
+                (_) => LoginOtpPage(phoneNumber: phone, userId: lookup.userId),
+          ),
+        );
+      } else {
+        throw const FormatException(
+          'No login method is available for this account',
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {

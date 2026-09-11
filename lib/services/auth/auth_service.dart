@@ -65,10 +65,20 @@ class WrytteIdSignInSearchResult {
   const WrytteIdSignInSearchResult({
     required this.exists,
     required this.userId,
+    required this.sms,
+    required this.activeDevice,
+    required this.keyface,
+    required this.preferredMethod,
+    required this.methods,
   });
 
   final bool exists;
   final String userId;
+  final bool sms;
+  final bool activeDevice;
+  final bool keyface;
+  final String preferredMethod;
+  final List<String> methods;
 }
 
 class KFaceRecoveryData {
@@ -732,7 +742,26 @@ class AuthService {
     if (exists && userId.isEmpty) {
       throw Exception('Invalid Wrytte ID search response: missing userid.');
     }
-    return WrytteIdSignInSearchResult(exists: exists, userId: userId);
+    bool flag(String key) {
+      final value = response[key];
+      return value is bool ? value : value?.toString().toLowerCase() == 'true';
+    }
+
+    final methods = (response['methods'] is List
+            ? response['methods'] as List
+            : const [])
+        .map((value) => value.toString().trim())
+        .where((value) => value.isNotEmpty)
+        .toList(growable: false);
+    return WrytteIdSignInSearchResult(
+      exists: exists,
+      userId: userId,
+      sms: flag('sms'),
+      activeDevice: flag('activeDevice'),
+      keyface: flag('keyface'),
+      preferredMethod: (response['preferredMethod'] ?? '').toString().trim(),
+      methods: methods,
+    );
   }
 
   Future<Map<String, String>> _withDeviceMetadata(
@@ -787,12 +816,19 @@ class AuthService {
     required String challenge,
     required String signature,
   }) async {
-    final backendWrytteId = WrytteId.forBackend(wrytteId);
+    // The same KFace verifier is used for phone accounts. Preserve an E.164
+    // phone identifier; only Wrytte-ID input is converted to the W-prefixed
+    // backend form.
+    final suppliedIdentifier = wrytteId.trim();
+    final backendIdentifier =
+        suppliedIdentifier.startsWith('+')
+            ? suppliedIdentifier
+            : WrytteId.forBackend(suppliedIdentifier);
     final response = await ApiService.postJson(
       '/auth/signin/wrytteid/complete',
       body: {
         'userid': userId,
-        'wrytteId': backendWrytteId,
+        'wrytteId': backendIdentifier,
         'challenge': challenge,
         'signature': signature,
       },
@@ -1464,6 +1500,10 @@ class AuthService {
   }
 
   String _normalizePhone(String phone) {
+    final trimmed = phone.trim();
+    if (RegExp(r'^w', caseSensitive: false).hasMatch(trimmed)) {
+      return WrytteId.forBackend(trimmed);
+    }
     var cleaned = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
     if (cleaned.startsWith('00')) cleaned = '+${cleaned.substring(2)}';
     if (!cleaned.startsWith('+') && cleaned.isNotEmpty) cleaned = '+$cleaned';

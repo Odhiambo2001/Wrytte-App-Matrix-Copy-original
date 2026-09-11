@@ -21,6 +21,7 @@ class NotificationService {
 
   static const _messageChannelId = 'wrytte_messages';
   static const _callChannelId = 'wrytte_calls';
+  static const _authChannelId = 'wrytte_auth';
   static const _conversationNotificationIdsKey =
       'wrytte_conversation_notification_ids';
 
@@ -69,6 +70,16 @@ class NotificationService {
         _messageChannelId,
         'Messages',
         description: 'Incoming chat message notifications',
+        importance: Importance.max,
+        playSound: true,
+        enableVibration: true,
+      ),
+    );
+    await androidPlugin?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _authChannelId,
+        'Login approvals',
+        description: 'One-time codes for approving a Wrytte login',
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
@@ -307,6 +318,41 @@ class NotificationService {
     );
   }
 
+  Future<void> showActiveDeviceLoginCode(
+    String code,
+    String challengeId,
+  ) async {
+    await initialize();
+    if (kIsWeb) return;
+    final safeCode = code.trim();
+    if (safeCode.isEmpty) return;
+    await _plugin.show(
+      challengeId.hashCode,
+      'Wrytte login approval',
+      'Use code $safeCode on the device signing in.',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _authChannelId,
+          'Login approvals',
+          channelDescription: 'One-time codes for approving a Wrytte login',
+          importance: Importance.max,
+          priority: Priority.max,
+          category: AndroidNotificationCategory.message,
+          ticker: 'Wrytte login approval',
+          playSound: true,
+          enableVibration: true,
+          visibility: NotificationVisibility.public,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentSound: true,
+          presentBadge: true,
+        ),
+      ),
+      payload: 'active-device-login:$challengeId',
+    );
+  }
+
   Future<void> _showMessage(ChatMessage message) async {
     if (!_initialized ||
         message.isDeleted ||
@@ -488,14 +534,12 @@ class NotificationService {
 
     final readAt = _readMarkersByConversation[message.conversationId];
 
-    if (readAt != null &&
-        !message.timestamp.isAfter(readAt)) {
+    if (readAt != null && !message.timestamp.isAfter(readAt)) {
       return true;
     }
 
     return false;
   }
-
 
   bool _isLiveIncomingMessage(ChatMessage message) {
     final startedAt = _localMessageNotificationsStartedAt;
