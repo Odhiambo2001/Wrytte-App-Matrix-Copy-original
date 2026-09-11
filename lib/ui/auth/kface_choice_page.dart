@@ -92,7 +92,7 @@ class KFaceChoicePage extends StatelessWidget {
                       ),
                       (_) => false,
                     ),
-                child: const Text('Skip for now'),
+                child: const Text('Skip'),
               ),
             ],
           ),
