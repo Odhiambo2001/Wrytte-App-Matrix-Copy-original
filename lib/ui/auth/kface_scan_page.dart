@@ -349,8 +349,24 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
     try {
       final enrollment = await _createLocalEnrollment(input.ldpcBits);
+      final metadata = await DeviceMetadataService.instance.collect();
+      var deviceId = await DeviceMetadataService.instance.rememberedDeviceId(
+        userId: widget.userId!,
+        installationId: metadata.installationId,
+      );
+      if (deviceId == null || deviceId.trim().isEmpty) {
+        // Recover the device identity for installations that completed signup
+        // before durable device-id storage was available.
+        final registered =
+            await DeviceMetadataService.instance.registerWithBackend();
+        deviceId = (registered?['deviceId'] ?? '').toString().trim();
+      }
+      if (deviceId.trim().isEmpty) {
+        throw StateError('Current device identity is unavailable.');
+      }
       await AuthService.instance.savePhoneKFaceRecoveryData(
         userId: widget.userId!,
+        deviceId: deviceId,
         kmap: enrollment.commitment.toJson(),
         publicKey: enrollment.publicKey,
       );

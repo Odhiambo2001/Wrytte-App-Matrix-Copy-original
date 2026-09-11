@@ -654,6 +654,7 @@ class AuthService {
 
   Future<void> savePhoneKFaceRecoveryData({
     required String userId,
+    required String deviceId,
     required Map<String, dynamic> kmap,
     required String publicKey,
   }) async {
@@ -665,7 +666,12 @@ class AuthService {
     await ApiService.postJson(
       '/auth/register/phone/kface',
       token: token,
-      body: {'userId': userId, 'kmap': kmap, 'publicKey': publicKey},
+      body: {
+        'userId': userId,
+        'deviceId': deviceId,
+        'kmap': kmap,
+        'publicKey': publicKey,
+      },
     );
   }
 
