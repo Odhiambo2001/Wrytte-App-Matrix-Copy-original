@@ -587,6 +587,20 @@ class RealNumberService {
       expiresAt: expiresAt,
       preferMatrixRegisterFirst: serverIndicatesNewUser,
     );
+    if (deviceId.isNotEmpty) {
+      try {
+        final metadata = await DeviceMetadataService.instance.collect();
+        await DeviceMetadataService.instance.rememberDeviceId(
+          userId: userId,
+          installationId: metadata.installationId,
+          deviceId: deviceId,
+        );
+      } catch (error) {
+        debugPrint(
+          '[RealNumberService] device id persistence deferred: $error',
+        );
+      }
+    }
     await AuthService.instance.persistLoginPayloadCache(
       payload: map,
       ownerUserId: userId,

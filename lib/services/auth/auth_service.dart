@@ -1264,6 +1264,19 @@ class AuthService {
   // Logout
   // ---------------------------------------------------------------------------
   Future<void> logout() async {
+    final logoutUserId = await _storage.read(key: _userIdKey) ?? '';
+    final logoutToken = await _storage.read(key: _tokenKey) ?? '';
+    try {
+      await DeviceMetadataService.instance
+          .markCurrentDeviceLoggedOut(userId: logoutUserId, token: logoutToken)
+          .timeout(const Duration(seconds: 5));
+      apkLog('Auth.logout', 'backend device marked LOGGED_OUT');
+    } catch (error) {
+      // Local logout must still complete if the server is unavailable. The
+      // next authenticated registration can restore the device status.
+      apkLog('Auth.logout', 'backend device status update skipped: $error');
+      debugPrint('[AuthService] device logout update failed: $error');
+    }
     apkLog(
       'Auth.logout',
       'START secure logout; all local account data will be deleted',
@@ -1329,14 +1342,27 @@ class AuthService {
           (entry) => entry.key.startsWith('kface_ldpc_'),
         ),
       );
+      final deviceIdentities = Map<String, String>.fromEntries(
+        secureValues.entries.where(
+          (entry) =>
+              entry.key.startsWith(
+                DeviceMetadataService.deviceIdentityKeyPrefix,
+              ) ||
+              entry.key == DeviceMetadataService.deviceInstallationKey,
+        ),
+      );
       await _storage.deleteAll();
       for (final entry in kfaceCommitments.entries) {
+        await _storage.write(key: entry.key, value: entry.value);
+      }
+      for (final entry in deviceIdentities.entries) {
         await _storage.write(key: entry.key, value: entry.value);
       }
       apkLog(
         'Auth.logout',
         'secure session storage deleted; preserved '
-            '${kfaceCommitments.length} KFace commitment(s)',
+            '${kfaceCommitments.length} KFace commitment(s) and '
+            '${deviceIdentities.length} device identity(ies)',
       );
     } catch (e) {
       apkLog('Auth.logout', 'secure storage delete FAILED: $e');
