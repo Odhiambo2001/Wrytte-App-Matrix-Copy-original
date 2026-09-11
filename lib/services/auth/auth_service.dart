@@ -1354,11 +1354,9 @@ class AuthService {
       );
       final deviceIdentities = Map<String, String>.fromEntries(
         secureValues.entries.where(
-          (entry) =>
-              entry.key.startsWith(
-                DeviceMetadataService.deviceIdentityKeyPrefix,
-              ) ||
-              entry.key == DeviceMetadataService.deviceInstallationKey,
+          (entry) => entry.key.startsWith(
+            DeviceMetadataService.deviceIdentityKeyPrefix,
+          ),
         ),
       );
       await _storage.deleteAll();

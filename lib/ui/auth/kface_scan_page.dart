@@ -243,7 +243,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                     wrytteId: widget.wrytteId,
                     candidateIndex: candidateIndex,
                     captureSessionId: _captureSessionId,
-                    installationId: signupDeviceMetadata?.installationId,
                     deviceModel: signupDeviceMetadata?.model,
                     language: signupDeviceMetadata?.language,
                     region: signupDeviceMetadata?.region,
@@ -363,14 +362,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
     try {
       final enrollment = await _createLocalEnrollment(input.ldpcBits);
-      final metadata = await DeviceMetadataService.instance.collect();
       var deviceId = await DeviceMetadataService.instance.rememberedDeviceId(
         userId: widget.userId!,
-        installationId: metadata.installationId,
       );
       if (deviceId == null || deviceId.trim().isEmpty) {
-        // Recover the device identity for installations that completed signup
-        // before durable device-id storage was available.
+        // Recover the device identity if the earlier signup response was not
+        // persisted locally.
         final registered = await DeviceMetadataService.instance
             .registerWithBackend(userId: widget.userId);
         deviceId = (registered?['deviceId'] ?? '').toString().trim();
@@ -447,10 +444,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     );
     if (provision.deviceId.trim().isNotEmpty) {
       try {
-        final metadata = await DeviceMetadataService.instance.collect();
         await DeviceMetadataService.instance.rememberDeviceId(
           userId: provision.userId,
-          installationId: metadata.installationId,
           deviceId: provision.deviceId,
         );
       } catch (error) {

@@ -178,7 +178,6 @@ class BiometricApiService {
     required String wrytteId,
     required int candidateIndex,
     String? captureSessionId,
-    String? installationId,
     String? deviceModel,
     String? language,
     String? region,
@@ -189,7 +188,6 @@ class BiometricApiService {
       wrytteId: WrytteId.forBackend(wrytteId),
       candidateIndex: candidateIndex,
       captureSessionId: captureSessionId,
-      installationId: installationId,
       deviceModel: deviceModel,
       language: language,
       region: region,
@@ -598,7 +596,6 @@ class BiometricApiService {
     String? token,
     required int candidateIndex,
     required String? captureSessionId,
-    String? installationId,
     String? deviceModel,
     String? language,
     String? region,
@@ -636,8 +633,6 @@ class BiometricApiService {
           'candidateIndex': '$candidateIndex',
           if (captureSessionId != null && captureSessionId.isNotEmpty)
             'captureSessionId': captureSessionId,
-          if (installationId != null && installationId.trim().isNotEmpty)
-            'installationId': installationId.trim(),
           if (deviceModel != null && deviceModel.trim().isNotEmpty)
             'deviceModel': deviceModel.trim(),
           if (language != null && language.trim().isNotEmpty)

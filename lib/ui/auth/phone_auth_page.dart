@@ -259,7 +259,11 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute<void>(
-            builder: (_) => ActiveDeviceLoginPage(account: phone),
+            builder:
+                (_) => ActiveDeviceLoginPage(
+                  account: phone,
+                  userId: lookup.userId,
+                ),
           ),
         );
         return;

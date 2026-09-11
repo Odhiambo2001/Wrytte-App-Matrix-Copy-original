@@ -9,9 +9,10 @@ import 'package:wrytte/ui/screens/home_screen.dart';
 /// Completes a login using a one-time code displayed on an already-active
 /// Wrytte app. No Twilio request is made on this route.
 class ActiveDeviceLoginPage extends StatefulWidget {
-  const ActiveDeviceLoginPage({super.key, required this.account});
+  const ActiveDeviceLoginPage({super.key, required this.account, this.userId});
 
   final String account;
+  final String? userId;
 
   @override
   State<ActiveDeviceLoginPage> createState() => _ActiveDeviceLoginPageState();
@@ -38,10 +39,16 @@ class _ActiveDeviceLoginPageState extends State<ActiveDeviceLoginPage> {
 
   Future<void> _start() async {
     try {
-      final metadata = await DeviceMetadataService.instance.collect();
+      final userId = widget.userId?.trim() ?? '';
+      final deviceId =
+          userId.isEmpty
+              ? null
+              : await DeviceMetadataService.instance.rememberedDeviceId(
+                userId: userId,
+              );
       final challenge = await _service.startActiveDeviceLogin(
         account: widget.account,
-        installationId: metadata.installationId,
+        requestingDeviceId: deviceId,
       );
       if (!mounted) return;
       setState(() {

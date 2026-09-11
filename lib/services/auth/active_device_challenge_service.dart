@@ -34,11 +34,19 @@ class ActiveDeviceChallengeService {
     try {
       final token = await AuthService.instance.getValidBackendToken();
       if (token == null || token.isEmpty) return;
-      final metadata = await DeviceMetadataService.instance.collect();
+      final userId = await AuthService.instance.getCurrentUserId();
+      final deviceId =
+          userId == null
+              ? null
+              : await DeviceMetadataService.instance.rememberedDeviceId(
+                userId: userId,
+              );
       final response = await ApiService.get(
         '/api/devices/login-challenges/pending',
         token: token,
-        queryParameters: {'installationId': metadata.installationId},
+        queryParameters: {
+          if (deviceId != null && deviceId.isNotEmpty) 'deviceId': deviceId,
+        },
       );
       if (response is! List) return;
       for (final raw in response.whereType<Map>()) {

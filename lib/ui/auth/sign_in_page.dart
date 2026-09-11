@@ -71,7 +71,11 @@ class _SignInPageState extends State<SignInPage> {
           await Navigator.push(
             context,
             MaterialPageRoute<void>(
-              builder: (_) => ActiveDeviceLoginPage(account: digits),
+              builder:
+                  (_) => ActiveDeviceLoginPage(
+                    account: digits,
+                    userId: search.userId,
+                  ),
             ),
           );
         } else {
@@ -103,7 +107,11 @@ class _SignInPageState extends State<SignInPage> {
         Navigator.push(
           context,
           MaterialPageRoute<void>(
-            builder: (_) => ActiveDeviceLoginPage(account: phone),
+            builder:
+                (_) => ActiveDeviceLoginPage(
+                  account: phone,
+                  userId: lookup.userId,
+                ),
           ),
         );
       } else if (lookup.sms) {

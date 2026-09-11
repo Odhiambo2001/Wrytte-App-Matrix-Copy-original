@@ -162,11 +162,15 @@ class RealNumberService {
 
   Future<ActiveDeviceChallengeStart> startActiveDeviceLogin({
     required String account,
-    required String installationId,
+    String? requestingDeviceId,
   }) async {
+    final fields = <String, String>{'account': account.trim()};
+    if (requestingDeviceId != null && requestingDeviceId.trim().isNotEmpty) {
+      fields['deviceId'] = requestingDeviceId.trim();
+    }
     final response = await ApiService.postMultipart(
       '/auth/login/active-device/start',
-      {'account': account.trim(), 'installationId': installationId.trim()},
+      fields,
     );
     if (response is! Map) throw Exception('Invalid active-device response.');
     final map = Map<String, dynamic>.from(response);
@@ -230,9 +234,8 @@ class RealNumberService {
       if (nickname.isNotEmpty) 'username': nickname,
       'login': login.toString(),
     };
-    // The backend links the device created by signup to the metadata staged
-    // during the account search. Re-send the installation id so that the
-    // signup response can include that device id immediately.
+    // Send the same device metadata collected during account search so the
+    // backend can create the device record with the signup response.
     try {
       fields.addAll((await DeviceMetadataService.instance.collect()).toJson());
     } catch (error) {
@@ -593,10 +596,8 @@ class RealNumberService {
     );
     if (deviceId.isNotEmpty) {
       try {
-        final metadata = await DeviceMetadataService.instance.collect();
         await DeviceMetadataService.instance.rememberDeviceId(
           userId: userId,
-          installationId: metadata.installationId,
           deviceId: deviceId,
         );
       } catch (error) {
