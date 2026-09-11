@@ -14,6 +14,7 @@ class RealNumberRegisterResult {
   final String username;
   final String userId;
   final String secret;
+  final String deviceId;
 
   /// True  → brand-new account (must set profile name on AddProfilePage)
   /// False → existing account   (may be offered KFace before HomeScreen)
@@ -23,6 +24,7 @@ class RealNumberRegisterResult {
     required this.username,
     required this.userId,
     required this.secret,
+    this.deviceId = '',
     required this.isNewUser,
   });
 }
@@ -224,6 +226,16 @@ class RealNumberService {
       if (nickname.isNotEmpty) 'username': nickname,
       'login': login.toString(),
     };
+    // The backend links the device created by signup to the metadata staged
+    // during the account search. Re-send the installation id so that the
+    // signup response can include that device id immediately.
+    try {
+      fields.addAll((await DeviceMetadataService.instance.collect()).toJson());
+    } catch (error) {
+      debugPrint(
+        '[RealNumberService] signup device metadata unavailable: $error',
+      );
+    }
 
     try {
       final response = await ApiService.postMultipart(
@@ -536,6 +548,11 @@ class RealNumberService {
             .trim();
     final secret = (map['secret'] as String? ?? '').trim();
     final token = (map['token'] as String? ?? '').trim();
+    final device = map['device'];
+    final deviceId =
+        ((map['deviceId'] ?? (device is Map ? device['deviceId'] : null)) ?? '')
+            .toString()
+            .trim();
     final expiresAt = DateTime.tryParse((map['expires'] ?? '').toString());
 
     if (userId.isEmpty) {
@@ -590,6 +607,7 @@ class RealNumberService {
       username: displayName,
       userId: userId,
       secret: secret.isNotEmpty ? secret : archivedProfile?.secret ?? '',
+      deviceId: deviceId,
       isNewUser: isNewUser,
     );
   }
