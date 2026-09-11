@@ -548,11 +548,7 @@ class RealNumberService {
             .trim();
     final secret = (map['secret'] as String? ?? '').trim();
     final token = (map['token'] as String? ?? '').trim();
-    final device = map['device'];
-    final deviceId =
-        ((map['deviceId'] ?? (device is Map ? device['deviceId'] : null)) ?? '')
-            .toString()
-            .trim();
+    final deviceId = (map['deviceId'] ?? '').toString().trim();
     final expiresAt = DateTime.tryParse((map['expires'] ?? '').toString());
 
     if (userId.isEmpty) {
