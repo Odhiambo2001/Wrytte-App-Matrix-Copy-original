@@ -105,7 +105,9 @@ class _LoginOtpPageState extends State<LoginOtpPage>
         code: enteredCode,
       );
       try {
-        await DeviceMetadataService.instance.registerWithBackend();
+        await DeviceMetadataService.instance.registerWithBackend(
+          userId: result.userId,
+        );
       } catch (error) {
         debugPrint('[LoginOtp] device registration deferred: $error');
       }

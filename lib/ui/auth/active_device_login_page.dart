@@ -75,7 +75,9 @@ class _ActiveDeviceLoginPageState extends State<ActiveDeviceLoginPage> {
         fallbackAccount: widget.account,
       );
       try {
-        await DeviceMetadataService.instance.registerWithBackend();
+        await DeviceMetadataService.instance.registerWithBackend(
+          userId: result.userId,
+        );
       } catch (_) {
         // The session remains valid; registration can be retried on Home.
       }

@@ -371,8 +371,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       if (deviceId == null || deviceId.trim().isEmpty) {
         // Recover the device identity for installations that completed signup
         // before durable device-id storage was available.
-        final registered =
-            await DeviceMetadataService.instance.registerWithBackend();
+        final registered = await DeviceMetadataService.instance
+            .registerWithBackend(userId: widget.userId);
         deviceId = (registered?['deviceId'] ?? '').toString().trim();
       }
       if (deviceId.trim().isEmpty) {
@@ -460,7 +460,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       }
     }
     try {
-      await DeviceMetadataService.instance.registerWithBackend();
+      await DeviceMetadataService.instance.registerWithBackend(
+        userId: provision.userId,
+      );
     } catch (error) {
       debugPrint('[KFaceScan] Wrytte-ID device registration deferred: $error');
     }
@@ -543,14 +545,16 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         hkdfKeyHex: recoveredKey,
         challengeBase64Url: verification.challenge,
       );
-      await AuthService.instance.completeWrytteIdSignIn(
+      final signedInUser = await AuthService.instance.completeWrytteIdSignIn(
         userId: widget.userId!,
         wrytteId: widget.wrytteId,
         challenge: verification.challenge,
         signature: signature,
       );
       try {
-        await DeviceMetadataService.instance.registerWithBackend();
+        await DeviceMetadataService.instance.registerWithBackend(
+          userId: signedInUser.userId,
+        );
       } catch (error) {
         debugPrint('[KFaceScan] sign-in device registration deferred: $error');
       }

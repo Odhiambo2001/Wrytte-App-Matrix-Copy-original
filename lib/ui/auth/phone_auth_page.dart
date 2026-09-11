@@ -243,7 +243,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       // blocked with a "use Log In" message.
       final lookup = await _realNumberService.searchPhoneAuthMethods(phone);
       final existingAccount = lookup.exists;
-      if (existingAccount && lookup.keyface) {
+      if (existingAccount && lookup.kface) {
         if (!mounted) return;
         Navigator.pushReplacement(
           context,

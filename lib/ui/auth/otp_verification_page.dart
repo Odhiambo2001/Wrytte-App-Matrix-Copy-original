@@ -118,7 +118,9 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
         // Device registration is non-blocking for account creation: a network
         // retry can safely call the idempotent endpoint later.
         try {
-          await DeviceMetadataService.instance.registerWithBackend();
+          await DeviceMetadataService.instance.registerWithBackend(
+            userId: result.userId,
+          );
         } catch (error) {
           debugPrint(
             '[OtpVerificationPage] device registration deferred: $error',
@@ -143,7 +145,9 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
         // authenticated session remains usable and the choice page can retry.
         Map<String, dynamic>? device;
         try {
-          device = await DeviceMetadataService.instance.registerWithBackend();
+          device = await DeviceMetadataService.instance.registerWithBackend(
+            userId: result.userId,
+          );
         } catch (error) {
           debugPrint(
             '[OtpVerificationPage] returning-user device registration deferred: $error',

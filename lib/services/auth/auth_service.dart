@@ -67,7 +67,7 @@ class WrytteIdSignInSearchResult {
     required this.userId,
     required this.sms,
     required this.activeDevice,
-    required this.keyface,
+    required this.kface,
     required this.preferredMethod,
     required this.methods,
   });
@@ -76,7 +76,11 @@ class WrytteIdSignInSearchResult {
   final String userId;
   final bool sms;
   final bool activeDevice;
-  final bool keyface;
+  final bool kface;
+
+  /// Compatibility accessor for older callers. New code should use [kface].
+  @Deprecated('Use kface instead.')
+  bool get keyface => kface;
   final String preferredMethod;
   final List<String> methods;
 }
@@ -764,7 +768,7 @@ class AuthService {
       userId: userId,
       sms: flag('sms'),
       activeDevice: flag('activeDevice'),
-      keyface: flag('keyface'),
+      kface: flag('kface') || flag('keyface'),
       preferredMethod: (response['preferredMethod'] ?? '').toString().trim(),
       methods: methods,
     );

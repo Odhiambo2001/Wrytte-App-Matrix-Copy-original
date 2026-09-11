@@ -58,7 +58,7 @@ class _SignInPageState extends State<SignInPage> {
         _focusNode.unfocus();
         await Future<void>.delayed(const Duration(milliseconds: 100));
         if (!mounted) return;
-        if (search.keyface) {
+        if (search.kface) {
           await Navigator.push(
             context,
             MaterialPageRoute<void>(
@@ -91,7 +91,7 @@ class _SignInPageState extends State<SignInPage> {
       if (!lookup.exists) {
         throw const FormatException('Phone account not found');
       }
-      if (lookup.keyface) {
+      if (lookup.kface) {
         Navigator.push(
           context,
           MaterialPageRoute<void>(

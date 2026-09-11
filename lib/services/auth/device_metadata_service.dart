@@ -97,11 +97,20 @@ class DeviceMetadataService {
     );
   }
 
-  Future<Map<String, dynamic>?> registerWithBackend() async {
+  /// Registers the device after authentication and returns the authoritative
+  /// backend record. When [userId] is supplied it is the ID from the just-
+  /// completed login response; this avoids accidentally associating a device
+  /// with a stale local session during an account switch.
+  Future<Map<String, dynamic>?> registerWithBackend({String? userId}) async {
     final token = await AuthService.instance.getValidBackendToken();
     if (token == null || token.isEmpty) return null;
     final metadata = await collect();
-    final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
+    final requestedUserId = userId?.trim() ?? '';
+    final currentUserId =
+        requestedUserId.isNotEmpty
+            ? requestedUserId
+            : await AuthService.instance.getCurrentUserId() ?? '';
+    if (currentUserId.trim().isEmpty) return null;
     final remembered = await _rememberedDeviceId(
       currentUserId,
       metadata.installationId,
@@ -117,6 +126,13 @@ class DeviceMetadataService {
     );
     if (response is! Map) return null;
     final result = Map<String, dynamic>.from(response);
+    final returnedUserId =
+        (result['userId'] ?? result['userid'] ?? '').toString().trim();
+    if (returnedUserId.isNotEmpty &&
+        currentUserId.trim().isNotEmpty &&
+        returnedUserId != currentUserId.trim()) {
+      throw StateError('Device registration returned a different account.');
+    }
     final deviceId = (result['deviceId'] ?? '').toString().trim();
     if (currentUserId.trim().isNotEmpty && deviceId.isNotEmpty) {
       await rememberDeviceId(

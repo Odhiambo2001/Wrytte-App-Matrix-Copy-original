@@ -37,7 +37,7 @@ class PhoneAuthLookup {
     required this.userId,
     required this.sms,
     required this.activeDevice,
-    required this.keyface,
+    required this.kface,
     required this.preferredMethod,
     required this.methods,
   });
@@ -46,7 +46,11 @@ class PhoneAuthLookup {
   final String userId;
   final bool sms;
   final bool activeDevice;
-  final bool keyface;
+  final bool kface;
+
+  /// Compatibility accessor for older callers. New code should use [kface].
+  @Deprecated('Use kface instead.')
+  bool get keyface => kface;
   final String preferredMethod;
   final List<String> methods;
 
@@ -67,7 +71,7 @@ class PhoneAuthLookup {
       userId: (json['userid'] ?? json['userId'] ?? '').toString().trim(),
       sms: flag('sms'),
       activeDevice: flag('activeDevice'),
-      keyface: flag('keyface'),
+      kface: flag('kface') || flag('keyface'),
       preferredMethod: (json['preferredMethod'] ?? '').toString().trim(),
       methods: methods,
     );
