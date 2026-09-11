@@ -53,6 +53,7 @@ class BiometricEnrollmentProvision {
     required this.phone,
     required this.secret,
     required this.token,
+    this.deviceId = '',
     required this.ldpcInputTicket,
   });
 
@@ -61,6 +62,7 @@ class BiometricEnrollmentProvision {
   final String phone;
   final String secret;
   final String token;
+  final String deviceId;
   final String ldpcInputTicket;
 }
 
@@ -176,6 +178,10 @@ class BiometricApiService {
     required String wrytteId,
     required int candidateIndex,
     String? captureSessionId,
+    String? installationId,
+    String? deviceModel,
+    String? language,
+    String? region,
     required BiometricCropSet capture,
   }) async {
     final response = await _sendCandidate(
@@ -183,6 +189,10 @@ class BiometricApiService {
       wrytteId: WrytteId.forBackend(wrytteId),
       candidateIndex: candidateIndex,
       captureSessionId: captureSessionId,
+      installationId: installationId,
+      deviceModel: deviceModel,
+      language: language,
+      region: region,
       capture: capture,
     );
     return _candidateResultFromResponse(response, isEnrollment: true);
@@ -424,6 +434,7 @@ class BiometricApiService {
     final phone = response['phone']?.toString().trim() ?? '';
     final secret = response['secret']?.toString().trim() ?? '';
     final token = response['token']?.toString().trim() ?? '';
+    final deviceId = response['deviceId']?.toString().trim() ?? '';
     final ldpcInputTicket =
         response['ldpcInputTicket']?.toString().trim() ?? '';
     if (userId.isEmpty ||
@@ -439,6 +450,7 @@ class BiometricApiService {
       phone: phone,
       secret: secret,
       token: token,
+      deviceId: deviceId,
       ldpcInputTicket: ldpcInputTicket,
     );
   }
@@ -586,6 +598,10 @@ class BiometricApiService {
     String? token,
     required int candidateIndex,
     required String? captureSessionId,
+    String? installationId,
+    String? deviceModel,
+    String? language,
+    String? region,
     required BiometricCropSet capture,
   }) async {
     // Five *accepted* candidates are required. A liveness-rejected upload is
@@ -620,6 +636,14 @@ class BiometricApiService {
           'candidateIndex': '$candidateIndex',
           if (captureSessionId != null && captureSessionId.isNotEmpty)
             'captureSessionId': captureSessionId,
+          if (installationId != null && installationId.trim().isNotEmpty)
+            'installationId': installationId.trim(),
+          if (deviceModel != null && deviceModel.trim().isNotEmpty)
+            'deviceModel': deviceModel.trim(),
+          if (language != null && language.trim().isNotEmpty)
+            'language': language.trim(),
+          if (region != null && region.trim().isNotEmpty)
+            'region': region.trim(),
           'livenessGeometry': jsonEncode(<Object>[encoded['geometry']!]),
           'adafaceLandmarks': jsonEncode(<Object>[encoded['landmarks']!]),
         },

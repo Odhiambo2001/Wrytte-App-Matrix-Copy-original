@@ -218,6 +218,16 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     int candidateIndex,
   ) async {
     try {
+      DeviceMetadata? signupDeviceMetadata;
+      if (_enrolling && !widget.attachToExistingUser) {
+        try {
+          signupDeviceMetadata = await DeviceMetadataService.instance.collect();
+        } catch (error) {
+          debugPrint(
+            '[KFaceScan] Wrytte-ID device metadata unavailable: $error',
+          );
+        }
+      }
       final result =
           _enrolling
               ? widget.attachToExistingUser
@@ -233,6 +243,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                     wrytteId: widget.wrytteId,
                     candidateIndex: candidateIndex,
                     captureSessionId: _captureSessionId,
+                    installationId: signupDeviceMetadata?.installationId,
+                    deviceModel: signupDeviceMetadata?.model,
+                    language: signupDeviceMetadata?.language,
+                    region: signupDeviceMetadata?.region,
                     capture: capture,
                   )
               : await BiometricApiService.verifyCandidate(
@@ -431,6 +445,20 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       preferMatrixRegisterFirst: true,
       deferNonEssentialInitialization: true,
     );
+    if (provision.deviceId.trim().isNotEmpty) {
+      try {
+        final metadata = await DeviceMetadataService.instance.collect();
+        await DeviceMetadataService.instance.rememberDeviceId(
+          userId: provision.userId,
+          installationId: metadata.installationId,
+          deviceId: provision.deviceId,
+        );
+      } catch (error) {
+        debugPrint(
+          '[KFaceScan] Wrytte-ID device identity persistence deferred: $error',
+        );
+      }
+    }
     try {
       await DeviceMetadataService.instance.registerWithBackend();
     } catch (error) {
