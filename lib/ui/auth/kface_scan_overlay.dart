@@ -165,7 +165,9 @@ class _ScanOverlayPainter extends CustomPainter {
     // the poles and spread across the face, producing the ribbed light sheet.
     final longitude =
         vertical
-            ? (movement - 0.5) * 1.5 + math.sin(phase) * 0.04
+            // This is a UI scan: it sweeps left and right continuously even
+            // when the head is still. Face position adds a small offset.
+            ? math.sin(phase) * 0.95 + (movement - 0.5) * 0.18
             : math.cos(phase) * 0.65;
     const spread = 0.42;
     const ribs = 28;
