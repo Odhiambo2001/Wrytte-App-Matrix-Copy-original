@@ -787,7 +787,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               color: Colors.black,
               padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
               child: Column(
-                mainAxisSize: MainAxisSize.min,
+                mainAxisSize: MainAxisSize.max,
                 children: [
                   Text(
                     _status,
@@ -799,7 +799,30 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                       color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 64),
+                  const Spacer(),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: OutlinedButton(
+                      onPressed: () {},
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: const Color(0xFF171717),
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Color(0xFF292929)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(26),
+                        ),
+                      ),
+                      child: const Text(
+                        'Accessibility Options',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     height: 52,
