@@ -1,4 +1,5 @@
 import 'dart:ui' as ui;
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -10,6 +11,7 @@ void main() {
     'scan motion never creates accepted progress and resets cleanly',
     (tester) async {
       final boundaryKey = GlobalKey();
+      var frameNumber = 0;
       Future<void> show({
         bool ticks = false,
         bool scanning = false,
@@ -51,6 +53,18 @@ void main() {
             final image = await boundary.toImage();
             final bytes =
                 (await image.toByteData(format: ui.ImageByteFormat.rawRgba))!;
+            // Optional frame exports for comparing the ribbon with reference
+            // footage: --dart-define=KFACE_RENDER_DIR=/tmp/kface-frames.
+            const renderDirectory = String.fromEnvironment('KFACE_RENDER_DIR');
+            if (renderDirectory.isNotEmpty) {
+              await Directory(renderDirectory).create(recursive: true);
+              final png = await image.toByteData(
+                format: ui.ImageByteFormat.png,
+              );
+              await File(
+                '$renderDirectory/frame-${frameNumber++}.png',
+              ).writeAsBytes(png!.buffer.asUint8List());
+            }
             var green = 0;
             var cyan = 0;
             for (var i = 0; i < bytes.lengthInBytes; i += 4) {
@@ -69,9 +83,12 @@ void main() {
       await show(ticks: true, scanning: true);
       final scanning = await colors();
       expect(scanning.green, 0);
-      expect(scanning.cyan, greaterThan(0));
+      // The reference has a broad ribbed sheet, not a single glowing line.
+      expect(scanning.cyan, greaterThan(1500));
       await tester.pump(const Duration(seconds: 4));
-      expect((await colors()).green, 0);
+      final moved = await colors();
+      expect(moved.green, 0);
+      expect(moved.cyan, isNot(scanning.cyan));
 
       await show(ticks: true, scanning: true, progress: 0.4);
       final partial = await colors();

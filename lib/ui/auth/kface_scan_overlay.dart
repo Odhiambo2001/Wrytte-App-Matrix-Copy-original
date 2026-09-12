@@ -155,39 +155,94 @@ class _ScanOverlayPainter extends CustomPainter {
     double radius, {
     required bool vertical,
   }) {
-    final tilt = vertical ? math.sin(phase) * 0.75 : math.cos(phase) * 0.5;
-    const steps = 100;
-    for (var i = 0; i < steps; i++) {
-      Offset point(double t) {
-        final across = math.sin(t) * radius;
-        final depth = math.cos(t) * radius;
-        return center +
-            (vertical
-                ? Offset(depth * tilt, across)
-                : Offset(across, depth * tilt));
-      }
+    // A fan of meridians, not a thick stroked arc: the lines converge at
+    // the poles and spread across the face, producing the ribbed light sheet.
+    final longitude =
+        vertical ? math.sin(phase) * 0.95 - 0.12 : math.cos(phase) * 0.65;
+    const spread = 0.42;
+    const ribs = 28;
+    const steps = 80;
 
-      final t = -math.pi / 2 + math.pi * i / steps;
-      final next = t + math.pi / steps;
-      final depth = math.cos((t + next) / 2);
-      final width = 1.0 + depth * radius * 0.075 * (0.35 + tilt.abs());
-      final paint =
-          Paint()
-            ..strokeCap = StrokeCap.round
-            ..strokeWidth = width + 5
-            ..color = const Color(0xFF52FFE8).withValues(alpha: 0.18 * depth)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
-      canvas.drawLine(point(t), point(next), paint);
-      paint
-        ..maskFilter = null
-        ..strokeWidth = width
-        ..color = const Color(0xFF7FFFF0).withValues(alpha: 0.65 * depth);
-      canvas.drawLine(point(t), point(next), paint);
-      paint
-        ..strokeWidth = 0.8
-        ..color = Colors.white.withValues(alpha: 0.8 * depth);
-      canvas.drawLine(point(t), point(next), paint);
+    Offset point(double latitude, double meridian) {
+      final across = math.sin(latitude) * radius;
+      final depth = math.cos(latitude) * radius;
+      final sweep = math.sin(meridian) * depth;
+      return center +
+          (vertical ? Offset(sweep, across) : Offset(across, sweep));
     }
+
+    Path meridian(double angle) {
+      final path = Path();
+      for (var i = 0; i <= steps; i++) {
+        final p = point(-math.pi / 2 + math.pi * i / steps, angle);
+        if (i == 0) {
+          path.moveTo(p.dx, p.dy);
+        } else {
+          path.lineTo(p.dx, p.dy);
+        }
+      }
+      return path;
+    }
+
+    Path strip(double start, double end) {
+      final path = meridian(start);
+      for (var i = steps; i >= 0; i--) {
+        final p = point(-math.pi / 2 + math.pi * i / steps, end);
+        path.lineTo(p.dx, p.dy);
+      }
+      return path..close();
+    }
+
+    final bounds = Rect.fromCircle(center: center, radius: radius);
+    final gradient = LinearGradient(
+      begin: vertical ? Alignment.topCenter : Alignment.centerLeft,
+      end: vertical ? Alignment.bottomCenter : Alignment.centerRight,
+      colors: const [
+        Color(0xFF62FFE4),
+        Color(0xFF9FFFF3),
+        Color(0xFFF1FFFF),
+        Color(0xFF84FFE9),
+      ],
+      stops: const [0, 0.35, 0.68, 1],
+    ).createShader(bounds);
+
+    // One soft halo behind the entire sheet keeps the fine gaps crisp.
+    canvas.drawPath(
+      strip(longitude, longitude + spread),
+      Paint()
+        ..color = const Color(0xFF6EFFE2).withValues(alpha: 0.15)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * 0.018),
+    );
+    for (var rib = 0; rib < ribs; rib++) {
+      final fraction = rib / ribs;
+      final angle = longitude + spread * fraction;
+      final next = longitude + spread * (rib + 1) / ribs;
+      final fade = math.pow(1 - fraction, 1.4).toDouble();
+      // Translucent body plus discrete luminous ribs; the camera is visible
+      // through both the sheet and the spaces between its parallel lines.
+      canvas.drawPath(
+        strip(angle, next),
+        Paint()
+          ..shader = gradient
+          ..color = Colors.white.withValues(alpha: 0.32 * fade),
+      );
+      canvas.drawPath(
+        meridian(angle),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = radius * 0.0045
+          ..shader = gradient
+          ..color = Colors.white.withValues(alpha: 0.92 * fade),
+      );
+    }
+    canvas.drawPath(
+      meridian(longitude),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = radius * 0.007
+        ..shader = gradient
+        ..color = Colors.white.withValues(alpha: 0.9),
+    );
   }
 
   @override
