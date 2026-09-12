@@ -712,7 +712,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     final ringLeft = (size.width - ringSize) / 2;
     const tickRingMargin = 20.0;
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
       extendBody: true,
       body: Stack(
@@ -727,6 +727,25 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               controller: _camera,
               error: _cameraError,
               onRetry: _initialize,
+            ),
+          ),
+          Positioned(
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: _bottomPanelHeight,
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _ScanMaskPainter(
+                  faceRect: Rect.fromLTWH(
+                    ringLeft,
+                    ringTop,
+                    ringSize,
+                    ringSize,
+                  ),
+                  topInset: MediaQuery.paddingOf(context).top,
+                ),
+              ),
             ),
           ),
           SafeArea(
@@ -876,6 +895,42 @@ class _ScanCamera extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ScanMaskPainter extends CustomPainter {
+  const _ScanMaskPainter({required this.faceRect, required this.topInset});
+
+  final Rect faceRect;
+  final double topInset;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final mask =
+        Path()
+          ..fillType = PathFillType.evenOdd
+          ..addRect(Offset.zero & size)
+          ..addOval(faceRect);
+    canvas.drawPath(mask, Paint()..color = Colors.black);
+
+    final frame = Rect.fromLTRB(
+      8,
+      topInset + 8,
+      size.width - 8,
+      size.height - 8,
+    );
+    if (frame.isEmpty) return;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(frame, const Radius.circular(44)),
+      Paint()
+        ..color = const Color(0xFF282828)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScanMaskPainter oldDelegate) =>
+      oldDelegate.faceRect != faceRect || oldDelegate.topInset != topInset;
 }
 
 class _TickRing extends StatelessWidget {
