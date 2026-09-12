@@ -47,6 +47,7 @@ class KFaceScanPage extends StatefulWidget {
 class _KFaceScanPageState extends State<KFaceScanPage> {
   bool _scanStarted = false;
   bool _faceAligned = false;
+  double _headMovement = 0.5;
   // A continuous scan can inspect far more than five target frames, but only
   // this many multipart uploads may consume device/network resources at once.
   static const _maxConcurrentCandidateUploads = 15;
@@ -143,6 +144,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             analysis.targetFaceSelected &&
             analysis.alignmentAccepted;
         if (_faceAligned) _scanStarted = true;
+        if (analysis.faceCenterX != null) {
+          _headMovement = (analysis.faceCenterX! / 640).clamp(0.0, 1.0);
+        }
       });
       if (!analysis.faceDetected) {
         setState(() => _status = 'No face detected.');
@@ -777,6 +781,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                   !_sending &&
                   _captureSessionId != null,
               progress: progress,
+              movement: _headMovement,
             ),
           ),
           Align(

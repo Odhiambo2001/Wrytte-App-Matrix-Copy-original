@@ -10,12 +10,14 @@ class KFaceScanOverlay extends StatefulWidget {
     required this.showTicks,
     required this.scanning,
     required this.progress,
+    this.movement = 0.5,
   });
 
   final double faceDiameter;
   final bool showTicks;
   final bool scanning;
   final double progress;
+  final double movement;
 
   @override
   State<KFaceScanOverlay> createState() => _KFaceScanOverlayState();
@@ -74,6 +76,7 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
                       showTicks: widget.showTicks,
                       scanning: widget.scanning && !reduceMotion,
                       progress: progress,
+                      movement: widget.movement,
                       // Capture progress is driven by valid head movement. The small
                       // time component keeps the light alive between accepted frames.
                       phase: progress * math.pi * 2 + _motion.value * 0.15,
@@ -92,6 +95,7 @@ class _ScanOverlayPainter extends CustomPainter {
     required this.showTicks,
     required this.scanning,
     required this.progress,
+    required this.movement,
     required this.phase,
   });
 
@@ -99,6 +103,7 @@ class _ScanOverlayPainter extends CustomPainter {
   final bool showTicks;
   final bool scanning;
   final double progress;
+  final double movement;
   final double phase;
 
   @override
@@ -159,7 +164,9 @@ class _ScanOverlayPainter extends CustomPainter {
     // A fan of meridians, not a thick stroked arc: the lines converge at
     // the poles and spread across the face, producing the ribbed light sheet.
     final longitude =
-        vertical ? math.sin(phase) * 0.95 - 0.12 : math.cos(phase) * 0.65;
+        vertical
+            ? (movement - 0.5) * 1.5 + math.sin(phase) * 0.04
+            : math.cos(phase) * 0.65;
     const spread = 0.42;
     const ribs = 28;
     const steps = 80;
@@ -252,5 +259,6 @@ class _ScanOverlayPainter extends CustomPainter {
       oldDelegate.showTicks != showTicks ||
       oldDelegate.scanning != scanning ||
       oldDelegate.progress != progress ||
+      oldDelegate.movement != movement ||
       oldDelegate.phase != phase;
 }

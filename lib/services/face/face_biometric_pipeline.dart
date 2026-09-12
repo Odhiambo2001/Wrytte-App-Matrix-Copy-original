@@ -44,6 +44,8 @@ class FrameAnalysis {
     required this.targetFaceSelected,
     required this.alignmentAccepted,
     required this.processingMilliseconds,
+    this.faceCenterX,
+    this.faceCenterY,
     this.capture,
   });
 
@@ -51,6 +53,8 @@ class FrameAnalysis {
   final bool targetFaceSelected;
   final bool alignmentAccepted;
   final int processingMilliseconds;
+  final double? faceCenterX;
+  final double? faceCenterY;
   final BiometricCropSet? capture;
 }
 
@@ -257,6 +261,8 @@ class FaceBiometricPipeline {
         targetFaceSelected: true,
         alignmentAccepted: true,
         processingMilliseconds: stopwatch.elapsedMilliseconds,
+        faceCenterX: target.centerX,
+        faceCenterY: target.centerY,
         capture: capture,
       );
     } finally {
