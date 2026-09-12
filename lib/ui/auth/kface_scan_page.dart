@@ -785,7 +785,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               width: double.infinity,
               height: bottomPanelHeight,
               color: Colors.black,
-              padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 40),
               child: Column(
                 mainAxisSize: MainAxisSize.max,
                 children: [
