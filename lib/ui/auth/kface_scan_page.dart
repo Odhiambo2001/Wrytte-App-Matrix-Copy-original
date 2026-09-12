@@ -16,6 +16,7 @@ import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/services/face/local_face_signature_service.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
 import 'package:wrytte/ui/auth/kface_access_result_page.dart';
+import 'package:wrytte/ui/auth/kface_scan_overlay.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
 /// Camera and RetinaFace stay on-device. The backend owns alignment, AdaFace,
@@ -45,8 +46,8 @@ class KFaceScanPage extends StatefulWidget {
 
 class _KFaceScanPageState extends State<KFaceScanPage> {
   static const _bottomPanelHeight = 250.0;
-  // Keep the tick indicator available until it is needed again.
-  static const _showScanTicks = false;
+  bool _scanStarted = false;
+  bool _faceAligned = false;
   // A continuous scan can inspect far more than five target frames, but only
   // this many multipart uploads may consume device/network resources at once.
   static const _maxConcurrentCandidateUploads = 15;
@@ -137,6 +138,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // processing the previous frame. Such a skipped frame has no timing and
       // must not replace the useful on-screen capture status with "No face".
       if (analysis.processingMilliseconds == 0) return;
+      setState(() {
+        _faceAligned =
+            analysis.faceDetected &&
+            analysis.targetFaceSelected &&
+            analysis.alignmentAccepted;
+        if (_faceAligned) _scanStarted = true;
+      });
       if (!analysis.faceDetected) {
         setState(() => _status = 'No face detected.');
       } else if (!analysis.targetFaceSelected) {
@@ -277,6 +285,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                 ? math.max(_acceptedCandidateCount, result.acceptedCandidates)
                 : result.acceptedCandidates;
         if (result.captureSessionId == null) {
+          _scanStarted = false;
+          _faceAligned = false;
           _discardPendingCandidateCaptures();
           _nextCandidateSubmissionIndex = 0;
           unawaited(_startCaptureSession());
@@ -308,7 +318,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // Stop OpenCV/RetinaFace extraction as soon as the backend has accepted
       // the five live candidates. Keep the camera stream open so the preview
       // remains visible while LDPC recovery and challenge signing complete.
-      _complete = true;
+      setState(() => _complete = true);
       _discardPendingCandidateCaptures();
       if (_enrolling) {
         if (widget.attachToExistingUser) {
@@ -629,6 +639,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _captureToTransitionTimer = null;
     _complete = false;
     _acceptedCandidateCount = 0;
+    _scanStarted = false;
+    _faceAligned = false;
     _nextCandidateSubmissionIndex = 0;
     _captureSessionId = null;
     _discardPendingCandidateCaptures();
@@ -680,6 +692,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     setState(() {
       _complete = false;
       _acceptedCandidateCount = 0;
+      _scanStarted = false;
+      _faceAligned = false;
       _nextCandidateSubmissionIndex = 0;
       _captureSessionId = null;
       _status = 'Center your face inside the ring.';
@@ -755,25 +769,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             top: ringTop - tickRingMargin,
             width: ringSize + tickRingMargin * 2,
             height: ringSize + tickRingMargin * 2,
-            child: Visibility(
-              visible: _showScanTicks,
-              replacement: Center(
-                child: Container(
-                  width: ringSize + 10,
-                  height: ringSize + 10,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: const Color(0xFF999999),
-                      width: 3,
-                    ),
-                  ),
-                ),
-              ),
-              child: _TickRing(
-                size: ringSize + tickRingMargin * 2,
-                activeTickFraction: progress,
-              ),
+            child: KFaceScanOverlay(
+              faceDiameter: ringSize,
+              showTicks: _scanStarted,
+              scanning:
+                  _faceAligned &&
+                  !_complete &&
+                  !_sending &&
+                  _captureSessionId != null,
+              progress: progress,
             ),
           ),
           Align(
@@ -925,47 +929,4 @@ class _ScanMaskPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _ScanMaskPainter oldDelegate) =>
       oldDelegate.faceRect != faceRect || oldDelegate.topInset != topInset;
-}
-
-class _TickRing extends StatelessWidget {
-  const _TickRing({required this.size, required this.activeTickFraction});
-  final double size;
-  final double activeTickFraction;
-  @override
-  Widget build(BuildContext context) => SizedBox.square(
-    dimension: size,
-    child: CustomPaint(painter: _TickRingPainter(activeTickFraction)),
-  );
-}
-
-class _TickRingPainter extends CustomPainter {
-  const _TickRingPainter(this.activeTickFraction);
-  final double activeTickFraction;
-  @override
-  void paint(Canvas canvas, Size size) {
-    const count = 72, length = 14.0, width = 4.0;
-    final center = size.center(Offset.zero),
-        outer = size.shortestSide / 2,
-        inner = outer - length;
-    final active = (activeTickFraction.clamp(0.0, 1.0) * count).ceil();
-    final paint =
-        Paint()
-          ..strokeWidth = width
-          ..strokeCap = StrokeCap.round;
-    for (var index = 0; index < count; index++) {
-      final angle = 2 * math.pi * index / count - math.pi / 2;
-      final direction = Offset(math.cos(angle), math.sin(angle));
-      paint.color =
-          index < active ? const Color(0xFF00E676) : const Color(0xFFBFC6CF);
-      canvas.drawLine(
-        center + direction * inner,
-        center + direction * outer,
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _TickRingPainter old) =>
-      old.activeTickFraction != activeTickFraction;
 }
