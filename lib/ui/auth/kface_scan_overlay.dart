@@ -74,7 +74,9 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
                       showTicks: widget.showTicks,
                       scanning: widget.scanning && !reduceMotion,
                       progress: progress,
-                      phase: _motion.value * math.pi * 2,
+                      // Capture progress is driven by valid head movement. The small
+                      // time component keeps the light alive between accepted frames.
+                      phase: progress * math.pi * 2 + _motion.value * 0.15,
                     ),
                     child: const SizedBox.expand(),
                   ),
@@ -144,7 +146,6 @@ class _ScanOverlayPainter extends CustomPainter {
     );
     // Project two perpendicular ribbons onto a sphere. Their front halves
     // sweep over the live preview while their back halves remain hidden.
-    _drawRibbon(canvas, center, radius, vertical: false);
     _drawRibbon(canvas, center, radius, vertical: true);
     canvas.restore();
   }
