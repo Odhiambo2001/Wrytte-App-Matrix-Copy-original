@@ -45,6 +45,8 @@ class KFaceScanPage extends StatefulWidget {
 
 class _KFaceScanPageState extends State<KFaceScanPage> {
   static const _bottomPanelHeight = 250.0;
+  // Keep the tick indicator available until it is needed again.
+  static const _showScanTicks = false;
   // A continuous scan can inspect far more than five target frames, but only
   // this many multipart uploads may consume device/network resources at once.
   static const _maxConcurrentCandidateUploads = 15;
@@ -777,9 +779,25 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             top: ringTop - tickRingMargin,
             width: ringSize + tickRingMargin * 2,
             height: ringSize + tickRingMargin * 2,
-            child: _TickRing(
-              size: ringSize + tickRingMargin * 2,
-              activeTickFraction: progress,
+            child: Visibility(
+              visible: _showScanTicks,
+              replacement: Center(
+                child: Container(
+                  width: ringSize + 10,
+                  height: ringSize + 10,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xFF999999),
+                      width: 3,
+                    ),
+                  ),
+                ),
+              ),
+              child: _TickRing(
+                size: ringSize + tickRingMargin * 2,
+                activeTickFraction: progress,
+              ),
             ),
           ),
           Align(
