@@ -803,29 +803,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                   SizedBox(
                     width: double.infinity,
                     height: 52,
-                    child: OutlinedButton(
-                      onPressed: () {},
-                      style: OutlinedButton.styleFrom(
-                        backgroundColor: const Color(0xFF171717),
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Color(0xFF292929)),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(26),
-                        ),
-                      ),
-                      child: const Text(
-                        'Accessibility Options',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
                     child: ElevatedButton(
                       onPressed: _startOver,
                       style: ElevatedButton.styleFrom(
