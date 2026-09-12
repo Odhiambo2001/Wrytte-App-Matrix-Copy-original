@@ -780,7 +780,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                   !_complete &&
                   !_sending &&
                   _captureSessionId != null,
-              progress: progress,
+              progress: _complete ? 1.0 : progress,
               movement: _headMovement,
             ),
           ),
