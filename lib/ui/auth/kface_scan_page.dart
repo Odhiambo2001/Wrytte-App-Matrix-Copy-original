@@ -799,7 +799,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                       color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 64),
                   SizedBox(
                     width: double.infinity,
                     height: 52,
