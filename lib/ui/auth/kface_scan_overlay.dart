@@ -79,7 +79,8 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
                       movement: widget.movement,
                       // Capture progress is driven by valid head movement. The small
                       // time component keeps the light alive between accepted frames.
-                      phase: progress * math.pi * 2 + _motion.value * 0.15,
+                      phase:
+                          progress * math.pi * 2 + _motion.value * math.pi * 2,
                     ),
                     child: const SizedBox.expand(),
                   ),
