@@ -145,6 +145,23 @@ class _ScanOverlayPainter extends CustomPainter {
       );
     }
 
+    if (progress >= 0.999) {
+      final check =
+          Path()
+            ..moveTo(center.dx - radius * 0.22, center.dy + radius * 0.02)
+            ..lineTo(center.dx - radius * 0.06, center.dy + radius * 0.18)
+            ..lineTo(center.dx + radius * 0.27, center.dy - radius * 0.20);
+      canvas.drawPath(
+        check,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.5
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..color = const Color(0xFF32E875),
+      );
+    }
+
     if (!scanning) return;
     canvas.save();
     canvas.clipPath(
