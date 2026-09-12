@@ -45,7 +45,6 @@ class KFaceScanPage extends StatefulWidget {
 }
 
 class _KFaceScanPageState extends State<KFaceScanPage> {
-  static const _bottomPanelHeight = 250.0;
   bool _scanStarted = false;
   bool _faceAligned = false;
   // A continuous scan can inspect far more than five target frames, but only
@@ -164,9 +163,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _pendingCandidateCaptures.addLast(capture);
         _dispatchPendingCandidateCaptures();
         setState(
-          () =>
-              _status =
-                  'Capturing $_acceptedCandidateCount of ${FaceBiometricPipeline.framesToUse}…',
+          () => _status = 'Move your head slowly to complete the circle.',
         );
       }
     } catch (_) {
@@ -308,9 +305,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
       if (!result.complete) {
         setState(
-          () =>
-              _status =
-                  'Capturing $_acceptedCandidateCount of ${FaceBiometricPipeline.framesToUse}…',
+          () => _status = 'Move your head slowly to complete the circle.',
         );
         return;
       }
@@ -722,7 +717,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             FaceBiometricPipeline.framesToUse)
         .clamp(0.0, 1.0);
     final size = MediaQuery.sizeOf(context);
-    final previewHeight = size.height - _bottomPanelHeight;
+    // The reference keeps the camera card in the upper half and reserves the
+    // lower half for the instruction and controls.
+    final cameraHeight = size.height * 0.52;
+    final bottomPanelHeight = size.height - cameraHeight;
+    final previewHeight = cameraHeight;
     final ringSize = (size.width * 0.75).clamp(240.0, 340.0);
     final ringTop = (previewHeight * 0.50) - (ringSize / 2);
     final ringLeft = (size.width - ringSize) / 2;
@@ -738,7 +737,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             left: 0,
             top: 0,
             right: 0,
-            bottom: _bottomPanelHeight,
+            bottom: bottomPanelHeight,
             child: _ScanCamera(
               controller: _camera,
               error: _cameraError,
@@ -749,7 +748,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             left: 0,
             top: 0,
             right: 0,
-            bottom: _bottomPanelHeight,
+            bottom: bottomPanelHeight,
             child: IgnorePointer(
               child: CustomPaint(
                 painter: _ScanMaskPainter(
@@ -759,7 +758,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                     ringSize,
                     ringSize,
                   ),
-                  topInset: MediaQuery.paddingOf(context).top,
+                  topInset: 0,
                 ),
               ),
             ),
@@ -784,45 +783,60 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             alignment: Alignment.bottomCenter,
             child: Container(
               width: double.infinity,
-              height: _bottomPanelHeight,
+              height: bottomPanelHeight,
               color: Colors.black,
               padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    'Look at the camera',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
                   Text(
                     _status,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      fontSize: 14,
-                      height: 1.4,
-                      color: Color(0xFFBFC6CF),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w600,
+                      height: 1.3,
+                      color: Colors.white,
                     ),
                   ),
                   const SizedBox(height: 20),
                   SizedBox(
                     width: double.infinity,
                     height: 52,
+                    child: OutlinedButton(
+                      onPressed: () {},
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: const Color(0xFF171717),
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Color(0xFF292929)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(26),
+                        ),
+                      ),
+                      child: const Text(
+                        'Accessibility Options',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
                     child: ElevatedButton(
                       onPressed: _startOver,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF4285DF),
+                        backgroundColor: const Color(0xFF171717),
                         foregroundColor: Colors.white,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(26),
                         ),
                       ),
                       child: const Text(
-                        'Start over',
+                        'Start Over',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
