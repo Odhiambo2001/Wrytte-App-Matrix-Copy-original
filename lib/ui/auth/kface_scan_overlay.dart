@@ -226,10 +226,10 @@ class _ScanOverlayPainter extends CustomPainter {
       begin: vertical ? Alignment.topCenter : Alignment.centerLeft,
       end: vertical ? Alignment.bottomCenter : Alignment.centerRight,
       colors: const [
-        Color(0xFF62FFE4),
-        Color(0xFF9FFFF3),
-        Color(0xFFF1FFFF),
-        Color(0xFF84FFE9),
+        Color(0xFF1565D8),
+        Color(0xFF258BFF),
+        Color(0xFFEAF4FF),
+        Color(0xFF4AA3FF),
       ],
       stops: const [0, 0.35, 0.68, 1],
     ).createShader(bounds);
@@ -238,7 +238,7 @@ class _ScanOverlayPainter extends CustomPainter {
     canvas.drawPath(
       strip(longitude, longitude + spread),
       Paint()
-        ..color = const Color(0xFF6EFFE2).withValues(alpha: 0.15)
+        ..color = const Color(0xFF1976FF).withValues(alpha: 0.18)
         ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * 0.018),
     );
     for (var rib = 0; rib < ribs; rib++) {
