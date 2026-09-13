@@ -761,7 +761,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                     ringTop,
                     ringSize,
                     ringSize,
-                  ),
+                  ).inflate(6),
                 ),
               ),
             ),
