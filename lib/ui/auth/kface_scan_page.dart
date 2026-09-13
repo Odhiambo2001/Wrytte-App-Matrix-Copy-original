@@ -46,6 +46,8 @@ class KFaceScanPage extends StatefulWidget {
 
 class _KFaceScanPageState extends State<KFaceScanPage> {
   bool _scanStarted = false;
+  bool _scanPhaseReady = false;
+  Timer? _scanStartTimer;
   bool _faceAligned = false;
   double _headMovement = 0.5;
   // A continuous scan can inspect far more than five target frames, but only
@@ -109,6 +111,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _camera = camera;
         _ready = true;
       });
+      _scanStartTimer?.cancel();
+      _scanStartTimer = Timer(const Duration(milliseconds: 1500), () {
+        if (!mounted) return;
+        setState(() {
+          _scanPhaseReady = true;
+          _scanStarted = true;
+          _status = 'Scanning…';
+        });
+      });
       unawaited(_startCaptureSession());
     } catch (_) {
       if (mounted) {
@@ -121,7 +132,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   }
 
   Future<void> _onFrame(CameraImage frame) async {
-    if (!_ready || _sending || _complete || !_hasCandidateUploadCapacity) {
+    if (!_ready ||
+        !_scanPhaseReady ||
+        _sending ||
+        _complete ||
+        !_hasCandidateUploadCapacity) {
       return;
     }
     if (_captureSessionId == null) return;
@@ -143,7 +158,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             analysis.faceDetected &&
             analysis.targetFaceSelected &&
             analysis.alignmentAccepted;
-        if (_faceAligned) _scanStarted = true;
+        if (_faceAligned && _scanPhaseReady) _scanStarted = true;
         if (analysis.faceCenterX != null) {
           _headMovement = (analysis.faceCenterX! / 640).clamp(0.0, 1.0);
         }
@@ -639,6 +654,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _complete = false;
     _acceptedCandidateCount = 0;
     _scanStarted = false;
+    _scanPhaseReady = false;
+    _scanStartTimer?.cancel();
     _faceAligned = false;
     _nextCandidateSubmissionIndex = 0;
     _captureSessionId = null;
@@ -692,6 +709,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _complete = false;
       _acceptedCandidateCount = 0;
       _scanStarted = false;
+      _scanPhaseReady = false;
+      _scanStartTimer?.cancel();
       _faceAligned = false;
       _nextCandidateSubmissionIndex = 0;
       _captureSessionId = null;
@@ -709,6 +728,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   @override
   void dispose() {
+    _scanStartTimer?.cancel();
     _discardPendingCandidateCaptures();
     unawaited(_camera?.dispose());
     unawaited(_pipeline.dispose());
@@ -775,6 +795,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               faceDiameter: ringSize,
               showTicks: false,
               scanning:
+                  _scanStarted &&
                   _faceAligned &&
                   !_complete &&
                   !_sending &&
