@@ -12,6 +12,7 @@ class KFaceScanOverlay extends StatefulWidget {
     required this.progress,
     this.movement = 0.5,
     this.waiting = false,
+    this.success = false,
   });
 
   final double faceDiameter;
@@ -20,6 +21,7 @@ class KFaceScanOverlay extends StatefulWidget {
   final double progress;
   final double movement;
   final bool waiting;
+  final bool success;
 
   @override
   State<KFaceScanOverlay> createState() => _KFaceScanOverlayState();
@@ -45,7 +47,8 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
   }
 
   void _updateMotion() {
-    if (widget.scanning && !MediaQuery.disableAnimationsOf(context)) {
+    if ((widget.scanning || widget.waiting) &&
+        !MediaQuery.disableAnimationsOf(context)) {
       if (!_motion.isAnimating) _motion.repeat();
     } else {
       _motion.stop();
@@ -80,6 +83,7 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
                       progress: progress,
                       movement: widget.movement,
                       waiting: widget.waiting,
+                      success: widget.success,
                       // Capture progress is driven by valid head movement. The small
                       // time component keeps the light alive between accepted frames.
                       phase:
@@ -101,6 +105,7 @@ class _ScanOverlayPainter extends CustomPainter {
     required this.progress,
     required this.movement,
     required this.waiting,
+    required this.success,
     required this.phase,
   });
 
@@ -110,6 +115,7 @@ class _ScanOverlayPainter extends CustomPainter {
   final double progress;
   final double movement;
   final bool waiting;
+  final bool success;
   final double phase;
 
   @override
@@ -122,10 +128,10 @@ class _ScanOverlayPainter extends CustomPainter {
         center,
         radius + 3.5,
         paint
-          ..color = const Color(0xFFF5F5F5)
+          ..color = success ? const Color(0xFF18D85B) : const Color(0xFFF5F5F5)
           ..strokeWidth = 3,
       );
-      if (!scanning) return;
+      if (!scanning && !waiting) return;
     }
 
     const count = 72;
@@ -304,5 +310,6 @@ class _ScanOverlayPainter extends CustomPainter {
       oldDelegate.progress != progress ||
       oldDelegate.movement != movement ||
       oldDelegate.waiting != waiting ||
+      oldDelegate.success != success ||
       oldDelegate.phase != phase;
 }

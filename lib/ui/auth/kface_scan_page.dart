@@ -339,6 +339,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _status = 'Please wait…';
       });
       await Future<void>.delayed(const Duration(seconds: 3));
+      if (mounted) {
+        setState(() {
+          _backendWaiting = false;
+          _status = 'Done';
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+      }
       _discardPendingCandidateCaptures();
       if (_enrolling) {
         if (widget.attachToExistingUser) {
@@ -810,6 +817,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                   _captureSessionId != null,
               progress: _complete ? 1.0 : progress,
               waiting: _backendWaiting,
+              success: _complete && !_backendWaiting,
               movement: _headMovement,
             ),
           ),
