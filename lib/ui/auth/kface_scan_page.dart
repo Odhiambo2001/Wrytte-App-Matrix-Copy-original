@@ -773,7 +773,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             height: ringSize + tickRingMargin * 2,
             child: KFaceScanOverlay(
               faceDiameter: ringSize,
-              showTicks: _scanStarted,
+              showTicks: false,
               scanning:
                   _faceAligned &&
                   !_complete &&

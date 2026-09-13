@@ -120,29 +120,31 @@ class _ScanOverlayPainter extends CustomPainter {
           ..color = const Color(0xFFF5F5F5)
           ..strokeWidth = 3,
       );
-      return;
+      if (!scanning) return;
     }
 
     const count = 72;
-    for (var index = 0; index < count; index++) {
-      // Begin on the right, then advance clockwise, as in the reference.
-      final angle = 2 * math.pi * index / count;
-      final direction = Offset(math.cos(angle), math.sin(angle));
-      final filled = (progress * count - index).clamp(0.0, 1.0);
-      paint
-        ..color =
-            Color.lerp(
-              const Color(0xFF999999),
-              const Color(0xFF32E875),
-              filled,
-            )!
-        ..strokeWidth = 2
-        ..strokeCap = StrokeCap.round;
-      canvas.drawLine(
-        center + direction * (radius + 5),
-        center + direction * (radius + 10 + filled * 7),
-        paint,
-      );
+    if (showTicks) {
+      for (var index = 0; index < count; index++) {
+        // Begin on the right, then advance clockwise, as in the reference.
+        final angle = 2 * math.pi * index / count;
+        final direction = Offset(math.cos(angle), math.sin(angle));
+        final filled = (progress * count - index).clamp(0.0, 1.0);
+        paint
+          ..color =
+              Color.lerp(
+                const Color(0xFF999999),
+                const Color(0xFF32E875),
+                filled,
+              )!
+          ..strokeWidth = 2
+          ..strokeCap = StrokeCap.round;
+        canvas.drawLine(
+          center + direction * (radius + 5),
+          center + direction * (radius + 10 + filled * 7),
+          paint,
+        );
+      }
     }
 
     if (progress >= 0.999) {
