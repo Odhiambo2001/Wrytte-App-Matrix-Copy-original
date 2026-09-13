@@ -762,7 +762,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                     ringSize,
                     ringSize,
                   ),
-                  topInset: 0,
                 ),
               ),
             ),
@@ -892,10 +891,9 @@ class _ScanCamera extends StatelessWidget {
 }
 
 class _ScanMaskPainter extends CustomPainter {
-  const _ScanMaskPainter({required this.faceRect, required this.topInset});
+  const _ScanMaskPainter({required this.faceRect});
 
   final Rect faceRect;
-  final double topInset;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -905,24 +903,9 @@ class _ScanMaskPainter extends CustomPainter {
           ..addRect(Offset.zero & size)
           ..addOval(faceRect);
     canvas.drawPath(mask, Paint()..color = Colors.black);
-
-    final frame = Rect.fromLTRB(
-      8,
-      topInset + 8,
-      size.width - 8,
-      size.height - 8,
-    );
-    if (frame.isEmpty) return;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(frame, const Radius.circular(44)),
-      Paint()
-        ..color = const Color(0xFF282828)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
-    );
   }
 
   @override
   bool shouldRepaint(covariant _ScanMaskPainter oldDelegate) =>
-      oldDelegate.faceRect != faceRect || oldDelegate.topInset != topInset;
+      oldDelegate.faceRect != faceRect;
 }

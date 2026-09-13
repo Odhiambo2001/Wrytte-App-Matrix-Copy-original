@@ -117,7 +117,7 @@ class _ScanOverlayPainter extends CustomPainter {
         center,
         radius + 3.5,
         paint
-          ..color = const Color(0xFF999999)
+          ..color = const Color(0xFFF5F5F5)
           ..strokeWidth = 3,
       );
       return;
