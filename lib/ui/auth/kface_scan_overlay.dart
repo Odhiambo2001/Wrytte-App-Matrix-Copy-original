@@ -11,6 +11,7 @@ class KFaceScanOverlay extends StatefulWidget {
     required this.scanning,
     required this.progress,
     this.movement = 0.5,
+    this.waiting = false,
   });
 
   final double faceDiameter;
@@ -18,6 +19,7 @@ class KFaceScanOverlay extends StatefulWidget {
   final bool scanning;
   final double progress;
   final double movement;
+  final bool waiting;
 
   @override
   State<KFaceScanOverlay> createState() => _KFaceScanOverlayState();
@@ -77,6 +79,7 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
                       scanning: widget.scanning && !reduceMotion,
                       progress: progress,
                       movement: widget.movement,
+                      waiting: widget.waiting,
                       // Capture progress is driven by valid head movement. The small
                       // time component keeps the light alive between accepted frames.
                       phase:
@@ -97,6 +100,7 @@ class _ScanOverlayPainter extends CustomPainter {
     required this.scanning,
     required this.progress,
     required this.movement,
+    required this.waiting,
     required this.phase,
   });
 
@@ -105,6 +109,7 @@ class _ScanOverlayPainter extends CustomPainter {
   final bool scanning;
   final double progress;
   final double movement;
+  final bool waiting;
   final double phase;
 
   @override
@@ -164,6 +169,22 @@ class _ScanOverlayPainter extends CustomPainter {
       );
     }
 
+    if (waiting) {
+      final arcPaint =
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 5
+            ..strokeCap = StrokeCap.round
+            ..color = const Color(0xFF18D85B);
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius + 3.5),
+        phase,
+        math.pi * 0.32,
+        false,
+        arcPaint,
+      );
+      return;
+    }
     if (!scanning) return;
     canvas.save();
     canvas.clipPath(
@@ -282,5 +303,6 @@ class _ScanOverlayPainter extends CustomPainter {
       oldDelegate.scanning != scanning ||
       oldDelegate.progress != progress ||
       oldDelegate.movement != movement ||
+      oldDelegate.waiting != waiting ||
       oldDelegate.phase != phase;
 }

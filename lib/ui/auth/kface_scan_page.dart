@@ -47,6 +47,7 @@ class KFaceScanPage extends StatefulWidget {
 class _KFaceScanPageState extends State<KFaceScanPage> {
   bool _scanStarted = false;
   bool _scanPhaseReady = false;
+  bool _backendWaiting = false;
   Timer? _scanStartTimer;
   bool _faceAligned = false;
   double _headMovement = 0.5;
@@ -332,7 +333,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // Stop OpenCV/RetinaFace extraction as soon as the backend has accepted
       // the five live candidates. Keep the camera stream open so the preview
       // remains visible while LDPC recovery and challenge signing complete.
-      setState(() => _complete = true);
+      setState(() {
+        _complete = true;
+        _backendWaiting = true;
+        _status = 'Please wait…';
+      });
+      await Future<void>.delayed(const Duration(seconds: 3));
       _discardPendingCandidateCaptures();
       if (_enrolling) {
         if (widget.attachToExistingUser) {
@@ -652,6 +658,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _captureToTransitionTimer?.stop();
     _captureToTransitionTimer = null;
     _complete = false;
+    _backendWaiting = false;
     _acceptedCandidateCount = 0;
     _scanStarted = false;
     _scanPhaseReady = false;
@@ -707,6 +714,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _pipeline.reset();
     setState(() {
       _complete = false;
+      _backendWaiting = false;
       _acceptedCandidateCount = 0;
       _scanStarted = false;
       _scanPhaseReady = false;
@@ -801,6 +809,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                   !_sending &&
                   _captureSessionId != null,
               progress: _complete ? 1.0 : progress,
+              waiting: _backendWaiting,
               movement: _headMovement,
             ),
           ),
@@ -829,10 +838,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                     width: double.infinity,
                     height: 52,
                     child: ElevatedButton(
-                      onPressed: _startOver,
+                      onPressed: _backendWaiting ? null : _startOver,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF171717),
-                        foregroundColor: Colors.white,
+                        backgroundColor: const Color(0xFF23262C),
+                        foregroundColor: const Color(0xFFB8BDC5),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(26),
                         ),
