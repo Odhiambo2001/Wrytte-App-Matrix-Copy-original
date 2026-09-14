@@ -33,7 +33,7 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _motion = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 5000),
+    duration: const Duration(milliseconds: 3000),
   );
 
   @override

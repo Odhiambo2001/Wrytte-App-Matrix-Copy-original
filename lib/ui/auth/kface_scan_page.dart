@@ -358,7 +358,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _backendWaiting = true;
         _status = 'Please wait…';
       });
-      await Future<void>.delayed(const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(seconds: 3));
       if (mounted) {
         setState(() {
           _backendWaiting = false;
