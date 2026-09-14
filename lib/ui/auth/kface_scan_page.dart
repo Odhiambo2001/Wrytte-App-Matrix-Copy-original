@@ -70,6 +70,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   int _acceptedCandidateCount = 0;
   int _nextCandidateSubmissionIndex = 0;
   String? _captureSessionId;
+  bool _startingCaptureSession = false;
   Stopwatch? _captureToTransitionTimer;
   String _status = 'Center your face inside the ring.';
   String? _cameraError;
@@ -210,6 +211,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   /// The camera opens immediately. This tiny request only obtains the opaque
   /// backend session that lets valid target frames stream in a bounded queue.
   Future<void> _startCaptureSession() async {
+    if (_startingCaptureSession || _captureSessionId != null || _complete) {
+      return;
+    }
+    _startingCaptureSession = true;
     try {
       final sessionId =
           _enrolling
@@ -230,6 +235,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _dispatchPendingCandidateCaptures();
     } catch (_) {
       // Keep the scanner visible. A later restart obtains a fresh session.
+    } finally {
+      _startingCaptureSession = false;
     }
   }
 
@@ -260,6 +267,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     BiometricCropSet capture,
     int candidateIndex,
   ) async {
+    final requestSessionId = _captureSessionId;
     try {
       DeviceMetadata? signupDeviceMetadata;
       if (_enrolling && !widget.attachToExistingUser) {
@@ -301,6 +309,14 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       if (!mounted) return;
       if (_complete) return;
 
+      // Candidate uploads complete out of order. A response from a different
+      // backend session is stale and must never replace this scan's session.
+      if (requestSessionId == null ||
+          result.captureSessionId != null &&
+              result.captureSessionId != requestSessionId) {
+        return;
+      }
+
       final validAcceptedResult =
           result.accepted &&
           result.index >= 0 &&
@@ -310,20 +326,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         // A false result reveals neither liveness nor account information.
         // Keep a valid server session so the same index can be replaced; an
         // absent session means this client must start a fresh five-frame set.
-        _captureSessionId = result.captureSessionId;
-        _acceptedCandidateCount =
-            result.captureSessionId == null
-                ? 0
-                : _enrolling
-                ? math.max(_acceptedCandidateCount, result.acceptedCandidates)
-                : result.acceptedCandidates;
-        if (result.captureSessionId == null) {
-          _scanStarted = false;
-          _faceAligned = false;
-          _discardPendingCandidateCaptures();
-          _nextCandidateSubmissionIndex = 0;
-          unawaited(_startCaptureSession());
-        }
+        _acceptedCandidateCount = math.max(
+          _acceptedCandidateCount,
+          result.acceptedCandidates,
+        );
         final errorCode = result.errorCode?.toUpperCase();
         final fakeFrame =
             errorCode == 'FACE_NOT_LIVE' ||
@@ -340,7 +346,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         return;
       }
 
-      _captureSessionId = result.captureSessionId;
+      _captureSessionId = requestSessionId;
       _acceptedCandidateCount = math.max(
         _acceptedCandidateCount,
         result.acceptedCandidates,
