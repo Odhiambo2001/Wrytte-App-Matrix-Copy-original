@@ -13,6 +13,7 @@ class KFaceScanOverlay extends StatefulWidget {
     this.movement = 0.5,
     this.waiting = false,
     this.success = false,
+    this.failure = false,
   });
 
   final double faceDiameter;
@@ -22,6 +23,7 @@ class KFaceScanOverlay extends StatefulWidget {
   final double movement;
   final bool waiting;
   final bool success;
+  final bool failure;
 
   @override
   State<KFaceScanOverlay> createState() => _KFaceScanOverlayState();
@@ -31,7 +33,7 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _motion = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 3200),
+    duration: const Duration(milliseconds: 5000),
   );
 
   @override
@@ -43,6 +45,12 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
   @override
   void didUpdateWidget(covariant KFaceScanOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.waiting && !oldWidget.waiting) {
+      _motion
+        ..stop()
+        ..value = 0
+        ..repeat();
+    }
     _updateMotion();
   }
 
@@ -84,10 +92,14 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
                       movement: widget.movement,
                       waiting: widget.waiting,
                       success: widget.success,
+                      failure: widget.failure,
                       // Capture progress is driven by valid head movement. The small
                       // time component keeps the light alive between accepted frames.
                       phase:
-                          progress * math.pi * 2 + _motion.value * math.pi * 2,
+                          widget.waiting
+                              ? _motion.value * math.pi * 2
+                              : progress * math.pi * 2 +
+                                  _motion.value * math.pi * 2,
                     ),
                     child: const SizedBox.expand(),
                   ),
@@ -106,6 +118,7 @@ class _ScanOverlayPainter extends CustomPainter {
     required this.movement,
     required this.waiting,
     required this.success,
+    required this.failure,
     required this.phase,
   });
 
@@ -116,6 +129,7 @@ class _ScanOverlayPainter extends CustomPainter {
   final double movement;
   final bool waiting;
   final bool success;
+  final bool failure;
   final double phase;
 
   @override
@@ -128,10 +142,15 @@ class _ScanOverlayPainter extends CustomPainter {
         center,
         radius + 3.5,
         paint
-          ..color = success ? const Color(0xFF18D85B) : const Color(0xFFF5F5F5)
+          ..color =
+              failure
+                  ? const Color(0xFFFF4655)
+                  : success
+                  ? const Color(0xFF18D85B)
+                  : const Color(0xFFF5F5F5)
           ..strokeWidth = 3,
       );
-      if (!scanning && !waiting) return;
+      if (!scanning && !waiting && !success) return;
     }
 
     const count = 72;
@@ -158,7 +177,7 @@ class _ScanOverlayPainter extends CustomPainter {
       }
     }
 
-    if (progress >= 0.999) {
+    if (success) {
       final check =
           Path()
             ..moveTo(center.dx - radius * 0.22, center.dy + radius * 0.02)
@@ -184,8 +203,8 @@ class _ScanOverlayPainter extends CustomPainter {
             ..color = const Color(0xFF18D85B);
       canvas.drawArc(
         Rect.fromCircle(center: center, radius: radius + 3.5),
-        phase,
-        math.pi * 0.32,
+        -math.pi / 2,
+        (phase / (math.pi * 2)).clamp(0.0, 1.0) * math.pi * 2,
         false,
         arcPaint,
       );
@@ -311,5 +330,6 @@ class _ScanOverlayPainter extends CustomPainter {
       oldDelegate.movement != movement ||
       oldDelegate.waiting != waiting ||
       oldDelegate.success != success ||
+      oldDelegate.failure != failure ||
       oldDelegate.phase != phase;
 }

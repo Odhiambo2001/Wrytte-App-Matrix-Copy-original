@@ -306,12 +306,17 @@ class BiometricApiService {
     final sessionId = response['captureSessionId']?.toString().trim();
     final normalizedSessionId =
         sessionId == null || sessionId.isEmpty ? null : sessionId;
-    if (response['accepted'] != true) {
+    final realAnswer =
+        response['real'] ?? response['isReal'] ?? response['live'];
+    if (response['accepted'] != true || realAnswer == false) {
       return BiometricCandidateResult.rejected(
         captureSessionId: normalizedSessionId,
         index: index,
         acceptedCandidates: acceptedCandidates,
-        errorCode: _errorCode(response['error']),
+        errorCode:
+            realAnswer == false
+                ? 'FACE_NOT_LIVE'
+                : _errorCode(response['error']),
       );
     }
     if (index < 0 ||

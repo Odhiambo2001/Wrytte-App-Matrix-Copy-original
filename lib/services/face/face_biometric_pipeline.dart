@@ -46,6 +46,9 @@ class FrameAnalysis {
     required this.processingMilliseconds,
     this.faceCenterX,
     this.faceCenterY,
+    this.faceTooFar = false,
+    this.faceTooClose = false,
+    this.multipleFaces = false,
     this.capture,
   });
 
@@ -55,6 +58,9 @@ class FrameAnalysis {
   final int processingMilliseconds;
   final double? faceCenterX;
   final double? faceCenterY;
+  final bool faceTooFar;
+  final bool faceTooClose;
+  final bool multipleFaces;
   final BiometricCropSet? capture;
 }
 
@@ -245,6 +251,13 @@ class FaceBiometricPipeline {
           targetFaceSelected: false,
           alignmentAccepted: false,
           processingMilliseconds: stopwatch.elapsedMilliseconds,
+          faceTooFar:
+              faces.isNotEmpty &&
+              faces.every((face) => measureFaceDistance(face).label == 'FAR'),
+          faceTooClose:
+              faces.isNotEmpty &&
+              faces.every((face) => measureFaceDistance(face).label == 'CLOSE'),
+          multipleFaces: faces.length > 1,
         );
       }
       final livenessFaceBox = openCv.mapFaceToOriginalBox(prepared, target);

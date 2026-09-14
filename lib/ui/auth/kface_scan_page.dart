@@ -48,6 +48,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   bool _scanStarted = false;
   bool _scanPhaseReady = false;
   bool _backendWaiting = false;
+  bool _verificationFailed = false;
   Timer? _scanStartTimer;
   bool _faceAligned = false;
   double _headMovement = 0.5;
@@ -165,12 +166,29 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         }
       });
       if (!analysis.faceDetected) {
-        setState(() => _status = 'No face detected.');
-      } else if (!analysis.targetFaceSelected) {
+        setState(
+          () =>
+              _status =
+                  'Face not detected.\nPosition your face within the circle',
+        );
+      } else if (analysis.multipleFaces) {
+        setState(
+          () =>
+              _status =
+                  'Multiple faces detected.\nCenter one face within the circle',
+        );
+      } else if (analysis.faceTooFar) {
+        setState(() => _status = 'Move your face closer to the camera');
+      } else if (analysis.faceTooClose) {
+        setState(() => _status = 'Move your face farther from the camera');
+      } else if (!_scanPhaseReady && !analysis.targetFaceSelected) {
         setState(() => _status = 'Keep one whole face centered in the ring.');
-      } else if (!analysis.alignmentAccepted) {
+      } else if (!_scanPhaseReady && !analysis.alignmentAccepted) {
         setState(() => _status = 'Hold still and look at the camera.');
-      } else {
+      }
+      if (analysis.faceDetected &&
+          analysis.targetFaceSelected &&
+          analysis.alignmentAccepted) {
         final capture = analysis.capture;
         if (capture == null) return;
         if (_captureToTransitionTimer == null) {
@@ -182,9 +200,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         // uploads concurrently. Submission numbers are not accepted slots.
         _pendingCandidateCaptures.addLast(capture);
         _dispatchPendingCandidateCaptures();
-        setState(
-          () => _status = 'Move your head slowly to complete the circle.',
-        );
+        setState(() => _status = 'Scanning…');
       }
     } catch (_) {
       // Frames are disposable; an invalid transient camera frame is ignored.
@@ -308,11 +324,17 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _nextCandidateSubmissionIndex = 0;
           unawaited(_startCaptureSession());
         }
+        final errorCode = result.errorCode?.toUpperCase();
+        final fakeFrame =
+            errorCode == 'FACE_NOT_LIVE' ||
+            errorCode == 'FAKE_FACE' ||
+            errorCode == 'LIVENESS_FAILED' ||
+            errorCode == 'SPOOF_DETECTED';
         setState(
           () =>
               _status =
-                  result.errorCode == 'FACE_NOT_LIVE'
-                      ? 'Face could not be verified. Try again.'
+                  fakeFrame || !result.accepted
+                      ? 'Face not detected.\nPosition your face within the circle'
                       : 'Center your face inside the ring.',
         );
         return;
@@ -324,9 +346,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         result.acceptedCandidates,
       );
       if (!result.complete) {
-        setState(
-          () => _status = 'Move your head slowly to complete the circle.',
-        );
+        setState(() => _status = 'Scanning…');
         return;
       }
 
@@ -338,7 +358,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _backendWaiting = true;
         _status = 'Please wait…';
       });
-      await Future<void>.delayed(const Duration(seconds: 3));
+      await Future<void>.delayed(const Duration(seconds: 5));
       if (mounted) {
         setState(() {
           _backendWaiting = false;
@@ -615,7 +635,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       if (mounted) {
         if (_enrolling) BiometricEnrollmentTiming.cancel();
         _logTransitionTiming('failure_result');
-        await _showResult(false);
+        setState(() {
+          _complete = true;
+          _backendWaiting = false;
+          _verificationFailed = true;
+          _status = 'Verification failed.\nTap “Start over” to try again';
+        });
       }
     } finally {
       _sending = false;
@@ -666,6 +691,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _captureToTransitionTimer = null;
     _complete = false;
     _backendWaiting = false;
+    _verificationFailed = false;
     _acceptedCandidateCount = 0;
     _scanStarted = false;
     _scanPhaseReady = false;
@@ -698,30 +724,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     );
   }
 
-  Future<void> _showResult(bool accepted) =>
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder:
-              (_) => KFaceAccessResultPage(
-                accepted: accepted,
-                retryPageBuilder:
-                    (_) => KFaceScanPage(
-                      wrytteId: widget.wrytteId,
-                      userId: widget.userId,
-                      recoveryData: widget.recoveryData,
-                      isEnrollment: widget.isEnrollment,
-                      attachToExistingUser: widget.attachToExistingUser,
-                    ),
-              ),
-        ),
-      );
-
   Future<void> _startOver() async {
     if (_sending || _inFlightCandidateUploads > 0) return;
     _pipeline.reset();
     setState(() {
       _complete = false;
       _backendWaiting = false;
+      _verificationFailed = false;
       _acceptedCandidateCount = 0;
       _scanStarted = false;
       _scanPhaseReady = false;
@@ -818,6 +827,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               progress: _complete ? 1.0 : progress,
               waiting: _backendWaiting,
               success: _complete && !_backendWaiting,
+              failure: _verificationFailed,
               movement: _headMovement,
             ),
           ),
@@ -848,8 +858,14 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                     child: ElevatedButton(
                       onPressed: _backendWaiting ? null : _startOver,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF23262C),
-                        foregroundColor: const Color(0xFFB8BDC5),
+                        backgroundColor:
+                            _backendWaiting
+                                ? const Color(0xFF23262C)
+                                : const Color(0xFF4285DF),
+                        foregroundColor:
+                            _backendWaiting
+                                ? const Color(0xFFB8BDC5)
+                                : Colors.white,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(26),
                         ),
