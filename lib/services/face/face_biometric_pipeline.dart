@@ -241,9 +241,23 @@ class FaceBiometricPipeline {
     }
     _processing = true;
     final stopwatch = Stopwatch()..start();
+    final openCvTimer = Stopwatch()..start();
     final prepared = openCv.prepare(cameraFrame);
+    openCvTimer.stop();
+    // ignore: avoid_print
+    print(
+      '[BiometricTiming] pipeline=OpenCV stage=prepare '
+      'elapsed_ms=${openCvTimer.elapsedMilliseconds}',
+    );
     try {
+      final retinaTimer = Stopwatch()..start();
       final faces = await retinaFace.detectBgr(prepared.bgr);
+      retinaTimer.stop();
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] pipeline=RetinaFace stage=inference_decode '
+        'elapsed_ms=${retinaTimer.elapsedMilliseconds}',
+      );
       final target = _selectTargetFace(faces);
       if (target == null) {
         return FrameAnalysis(

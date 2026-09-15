@@ -15,7 +15,6 @@ import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/services/face/local_face_signature_service.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
-import 'package:wrytte/ui/auth/kface_access_result_page.dart';
 import 'package:wrytte/ui/auth/kface_scan_overlay.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
@@ -50,6 +49,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   bool _backendWaiting = false;
   bool _verificationFailed = false;
   Timer? _scanStartTimer;
+  Timer? _frameRateTimer;
+  int _framesThisSecond = 0;
   bool _faceAligned = false;
   double _headMovement = 0.5;
   // A continuous scan can inspect far more than five target frames, but only
@@ -123,6 +124,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _status = 'Scanning…';
         });
       });
+      _frameRateTimer?.cancel();
+      _frameRateTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        debugPrint(
+          '[BiometricTiming] pipeline=Camera stage=extracted_frames_per_second fps=$_framesThisSecond',
+        );
+        _framesThisSecond = 0;
+      });
       unawaited(_startCaptureSession());
     } catch (_) {
       if (mounted) {
@@ -135,6 +143,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   }
 
   Future<void> _onFrame(CameraImage frame) async {
+    _framesThisSecond++;
     if (!_ready ||
         !_scanPhaseReady ||
         _sending ||
@@ -557,14 +566,14 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
       // Deliberately no identity, ticket, image, score, vector, or key data.
       // ignore: avoid_print
-      print(
+      debugPrint(
         '[BiometricTiming] stage=background_enrollment_finalization outcome=accepted',
       );
     } catch (error) {
       // The account session remains valid while a transient background task is
       // retried by the next app launch or explicit biometric recovery flow.
       // ignore: avoid_print
-      print(
+      debugPrint(
         '[BiometricTiming] stage=background_enrollment_finalization type=${error.runtimeType}',
       );
     }
@@ -654,6 +663,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   }
 
   Future<_ClientEnrollment> _createLocalEnrollment(Uint8List ldpcBits) async {
+    final timer = Stopwatch()..start();
     try {
       await _ldpc.initialize();
       final commitment = _ldpc.enrollQuantizedBits(ldpcBits);
@@ -667,6 +677,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         publicKey: signing.publicKeyBase64,
       );
     } finally {
+      timer.stop();
+      debugPrint(
+        '[BiometricTiming] pipeline=LDPC stage=enrollment elapsed_ms=${timer.elapsedMilliseconds}',
+      );
       ldpcBits.fillRange(0, ldpcBits.length, 0);
     }
   }
@@ -675,6 +689,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     Uint8List ldpcBits,
     Map<String, dynamic> serializedCommitment,
   ) async {
+    final timer = Stopwatch()..start();
     try {
       await _ldpc.initialize();
       final result = _ldpc.recoverQuantizedBits(
@@ -683,6 +698,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
       return result.accepted ? result.derivedKey : null;
     } finally {
+      timer.stop();
+      debugPrint(
+        '[BiometricTiming] pipeline=LDPC stage=recovery elapsed_ms=${timer.elapsedMilliseconds}',
+      );
       ldpcBits.fillRange(0, ldpcBits.length, 0);
     }
   }
@@ -758,6 +777,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   @override
   void dispose() {
+    _frameRateTimer?.cancel();
     _scanStartTimer?.cancel();
     _discardPendingCandidateCaptures();
     unawaited(_camera?.dispose());
