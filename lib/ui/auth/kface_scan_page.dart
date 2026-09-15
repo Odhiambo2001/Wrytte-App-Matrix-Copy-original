@@ -72,7 +72,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   String? _captureSessionId;
   bool _startingCaptureSession = false;
   Stopwatch? _captureToTransitionTimer;
-  String _status = 'Center your face inside the ring.';
+  String _status = 'Position your face\nwithin the circle';
   String? _cameraError;
 
   bool get _enrolling => widget.isEnrollment;
@@ -404,7 +404,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         '[BiometricTiming] stage=candidate_failure type=${error.runtimeType}',
       );
       if (mounted) {
-        setState(() => _status = 'Center your face inside the ring.');
+        setState(() => _status = 'Position your face\nwithin the circle');
       }
     } finally {
       capture.clear();
@@ -709,7 +709,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _sending = false;
     unawaited(_startCaptureSession());
     if (!mounted) return;
-    setState(() => _status = 'Center your face inside the ring.');
+    setState(() => _status = 'Position your face\nwithin the circle');
     final camera = _camera;
     if (camera != null &&
         camera.value.isInitialized &&
@@ -744,7 +744,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _faceAligned = false;
       _nextCandidateSubmissionIndex = 0;
       _captureSessionId = null;
-      _status = 'Center your face inside the ring.';
+      _status = 'Position your face\nwithin the circle';
     });
     _discardPendingCandidateCaptures();
     final camera = _camera;
@@ -832,7 +832,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                   _captureSessionId != null,
               progress: _complete ? 1.0 : progress,
               waiting: _backendWaiting,
-              success: _complete && !_backendWaiting,
+              success: _complete && !_backendWaiting && !_verificationFailed,
               failure: _verificationFailed,
               movement: _headMovement,
             ),
@@ -862,22 +862,30 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                     width: double.infinity,
                     height: 52,
                     child: ElevatedButton(
-                      onPressed: _backendWaiting ? null : _startOver,
+                      onPressed:
+                          (_backendWaiting ||
+                                  (_complete && !_verificationFailed))
+                              ? null
+                              : _startOver,
                       style: ElevatedButton.styleFrom(
                         backgroundColor:
-                            _backendWaiting
+                            (_backendWaiting ||
+                                    (_complete && !_verificationFailed))
                                 ? const Color(0xFF23262C)
                                 : const Color(0xFF4285DF),
                         foregroundColor:
-                            _backendWaiting
+                            (_backendWaiting ||
+                                    (_complete && !_verificationFailed))
                                 ? const Color(0xFFB8BDC5)
                                 : Colors.white,
+                        disabledBackgroundColor: const Color(0xFF23262C),
+                        disabledForegroundColor: const Color(0xFFB8BDC5),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(26),
                         ),
                       ),
                       child: const Text(
-                        'Start Over',
+                        'Start over',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,

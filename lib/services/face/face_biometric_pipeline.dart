@@ -128,7 +128,7 @@ class FaceBiometricPipeline {
   static const targetConfidenceThreshold = 0.83;
   static const fullBboxVisibleThreshold = 0.90;
   static const normalFaceSizeMinimum = 0.34;
-  static const normalFaceSizeMaximum = 0.72;
+  static const normalFaceSizeMaximum = 0.74;
 
   final RetinaFaceDetector retinaFace = RetinaFaceDetector();
   final OpenCvFacePreprocessor openCv = OpenCvFacePreprocessor();
