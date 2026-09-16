@@ -227,9 +227,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       } else if (analysis.faceTooClose) {
         setState(() => _status = 'Move your face farther from the camera');
       } else if (!_scanPhaseReady && !analysis.targetFaceSelected) {
-        setState(() => _status = 'Keep one whole face centered in the ring.');
+        setState(() => _status = 'Position your face\nwithin the circle');
       } else if (!_scanPhaseReady && !analysis.alignmentAccepted) {
-        setState(() => _status = 'Hold still and look at the camera.');
+        setState(() => _status = 'Position your face\nwithin the circle');
       }
       if (analysis.faceDetected &&
           analysis.targetFaceSelected &&
@@ -638,7 +638,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     // Sign-in keeps the camera preview/stream alive, but [_complete] makes
     // [_onFrame] return before OpenCV/RetinaFace performs any more extraction.
     // The page disposes the camera normally after navigation.
-    if (mounted) setState(() => _status = 'Verifying securely…');
+    if (mounted) setState(() => _status = 'Please wait…');
     try {
       final recoveredKey = await _recoverLocalKey(
         verification.input.ldpcBits,
