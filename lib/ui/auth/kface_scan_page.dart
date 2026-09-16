@@ -78,6 +78,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   Stopwatch? _captureToTransitionTimer;
   String _status = 'Position your face\nwithin the circle';
   String? _cameraError;
+  DateTime? _lastFrameDiagnostic;
 
   bool get _enrolling => widget.isEnrollment;
   bool get _hasCandidateUploadCapacity =>
@@ -158,6 +159,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _scanStarted = true;
           _status = 'Scanning…';
         });
+        debugPrint('[BiometricTiming] pipeline=Camera stage=scan_phase_ready');
       });
       _frameRateTimer?.cancel();
       _frameRateTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -167,7 +169,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _framesThisSecond = 0;
       });
       unawaited(_startCaptureSession());
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
         setState(() {
           _cameraError = 'Unable to initialize the face scanner.';
@@ -185,6 +187,17 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _complete ||
         _candidateExtractionClosed ||
         !_hasCandidateUploadCapacity) {
+      final now = DateTime.now();
+      if (_lastFrameDiagnostic == null ||
+          now.difference(_lastFrameDiagnostic!).inSeconds >= 1) {
+        _lastFrameDiagnostic = now;
+        debugPrint(
+          '[BiometricTiming] pipeline=Frame stage=skipped '
+          'ready=$_ready scan_ready=$_scanPhaseReady sending=$_sending '
+          'complete=$_complete extraction_closed=$_candidateExtractionClosed '
+          'session=${_captureSessionId != null}',
+        );
+      }
       return;
     }
     final now = DateTime.now();
@@ -265,8 +278,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         }
         setState(() => _status = 'Scanning…');
       }
-    } catch (_) {
+    } catch (error) {
       // Frames are disposable; an invalid transient camera frame is ignored.
+      debugPrint(
+        '[BiometricTiming] pipeline=Frame stage=processing_error '
+        'error=${error.runtimeType}',
+      );
     }
   }
 
