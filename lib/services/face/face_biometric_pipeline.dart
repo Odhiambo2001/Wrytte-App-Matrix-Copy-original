@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import 'package:wrytte/services/face/opencv_face_preprocessor.dart';
 import 'package:wrytte/services/face/retinaface_detector.dart';
+import 'package:wrytte/services/face/minifasnet_v2_liveness.dart';
 
 /// One frontend-prepared capture set. No Umeyama alignment, embedding,
 /// liveness score, biometric key, quantization, or commitment is created on
@@ -131,10 +132,14 @@ class FaceBiometricPipeline {
   static const normalFaceSizeMaximum = 0.74;
 
   final RetinaFaceDetector retinaFace = RetinaFaceDetector();
+  final MiniFasNetV2Liveness miniFasNetV2 = MiniFasNetV2Liveness();
   final OpenCvFacePreprocessor openCv = OpenCvFacePreprocessor();
   bool _processing = false;
 
-  Future<void> initializeDetector() => retinaFace.initialize();
+  Future<void> initializeDetector() async {
+    await retinaFace.initialize();
+    await miniFasNetV2.initialize();
+  }
 
   static FaceDistance measureFaceDistance(FaceDetection face) {
     final widthRatio = face.width / 640;
@@ -272,6 +277,16 @@ class FaceBiometricPipeline {
               faces.isNotEmpty &&
               faces.every((face) => measureFaceDistance(face).label == 'CLOSE'),
           multipleFaces: faces.length > 1,
+        );
+      }
+      final livenessCrops = openCv.cropForMiniFasNet(prepared, target);
+      final live = await miniFasNetV2.isReal(livenessCrops.v2Bgr);
+      if (!live) {
+        return FrameAnalysis(
+          faceDetected: true,
+          targetFaceSelected: false,
+          alignmentAccepted: false,
+          processingMilliseconds: stopwatch.elapsedMilliseconds,
         );
       }
       final livenessFaceBox = openCv.mapFaceToOriginalBox(prepared, target);
