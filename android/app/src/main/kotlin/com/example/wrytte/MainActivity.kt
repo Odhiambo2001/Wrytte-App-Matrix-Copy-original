@@ -95,7 +95,13 @@ class MainActivity: FlutterActivity() {
                 when (call.method) {
                     "createSession" -> {
                         val asset = requireNotNull(call.argument<String>("asset"))
-                        val threads = call.argument<Int>("threads") ?: 2
+                        val requestedThreads = call.argument<Int>("threads") ?: 4
+                        // Keep one persistent session, but let RetinaFace use
+                        // the CPU available on the device. Two threads made
+                        // 640x640 inference take ~1.5–2.2s per frame.
+                        val threads = requestedThreads
+                            .coerceAtLeast(1)
+                            .coerceAtMost(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
                         val model = materializeFlutterAsset(asset)
                         val options = OrtSession.SessionOptions().apply {
                             setIntraOpNumThreads(threads)

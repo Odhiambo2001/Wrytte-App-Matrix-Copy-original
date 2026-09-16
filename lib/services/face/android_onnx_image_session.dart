@@ -21,7 +21,10 @@ class AndroidOnnxImageSession {
 
   static Future<AndroidOnnxImageSession> create(
     String asset, {
-    int threads = 2,
+    // RetinaFace inference is CPU-bound on Android. Four workers materially
+    // improve throughput on modern phones while avoiding excessive contention
+    // on smaller devices. The native side caps this to the available cores.
+    int threads = 4,
   }) async {
     final value = await _channel.invokeMapMethod<String, dynamic>(
       'createSession',
