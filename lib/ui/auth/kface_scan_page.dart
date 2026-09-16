@@ -90,7 +90,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   Future<void> _initialize() async {
     try {
+      final detectorTimer = Stopwatch()..start();
       await _pipeline.initializeDetector();
+      detectorTimer.stop();
+      debugPrint(
+        '[BiometricTiming] pipeline=RetinaFace stage=initialize '
+        'elapsed_ms=${detectorTimer.elapsedMilliseconds}',
+      );
       final cameras = await availableCameras();
       final description = cameras.firstWhere(
         (camera) => camera.lensDirection == CameraLensDirection.front,
@@ -373,6 +379,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _backendWaiting = true;
         _status = 'Please wait…';
       });
+      // No more candidates may be dispatched once the backend has completed
+      // the session. Clear the queue immediately; already in-flight requests
+      // are ignored by the completion guard below when they return.
+      _discardPendingCandidateCaptures();
       await Future<void>.delayed(const Duration(seconds: 3));
       if (mounted) {
         setState(() {
@@ -381,7 +391,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         });
         await Future<void>.delayed(const Duration(milliseconds: 900));
       }
-      _discardPendingCandidateCaptures();
       if (_enrolling) {
         if (widget.attachToExistingUser) {
           final input = result.completedInput;

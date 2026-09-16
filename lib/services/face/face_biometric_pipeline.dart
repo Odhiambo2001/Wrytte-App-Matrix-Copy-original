@@ -293,6 +293,15 @@ class FaceBiometricPipeline {
         capture: capture,
       );
     } finally {
+      // This is the end-to-end FE cost for one frame, including preprocessing,
+      // RetinaFace inference/decode, and target selection/crop preparation.
+      // Keep it alongside the stage timers so device logs expose the complete
+      // per-frame budget.
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] pipeline=FaceFrame stage=total '
+        'elapsed_ms=${stopwatch.elapsedMilliseconds}',
+      );
       prepared.dispose();
       _processing = false;
     }
