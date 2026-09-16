@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/face/biometric_api_service.dart';
@@ -51,6 +51,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   Timer? _scanStartTimer;
   Timer? _frameRateTimer;
   int _framesThisSecond = 0;
+  DateTime? _lastSelectedFrameAt;
   bool _faceAligned = false;
   double _headMovement = 0.5;
   // A continuous scan can inspect far more than five target frames, but only
@@ -102,13 +103,34 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         (camera) => camera.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
+      const capabilities = MethodChannel('com.example.wrytte/camera_capabilities');
+      try {
+        final ranges = await capabilities.invokeMethod<List<dynamic>>(
+          'getFpsRanges',
+          {'cameraId': description.name},
+        );
+        debugPrint(
+          '[BiometricTiming] pipeline=Camera stage=supported_fps_ranges '
+          'camera_id=${description.name} ranges=${ranges ?? const []} requested_fps=15',
+        );
+        final supports30 = (ranges ?? const []).any((range) {
+          final values = List<dynamic>.from(range as List);
+          return values.length >= 2 && (values[0] as num).toInt() <= 30 &&
+              (values[1] as num).toInt() >= 30;
+        });
+        if (!supports30) {
+          throw StateError('This camera does not advertise 30 FPS support.');
+        }
+      } catch (error) {
+        debugPrint('[BiometricTiming] pipeline=Camera stage=supported_fps_ranges_error error=$error');
+      }
       final camera = CameraController(
         description,
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false,
         // Request a consistent scan cadence. The platform uses the nearest
         // supported range if this specific device cannot provide exactly 15.
-        fps: 15,
+        fps: 30,
         imageFormatGroup:
             Platform.isIOS
                 ? ImageFormatGroup.bgra8888
@@ -157,6 +179,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         !_hasCandidateUploadCapacity) {
       return;
     }
+    final now = DateTime.now();
+    final previous = _lastSelectedFrameAt;
+    if (previous != null &&
+        now.difference(previous).inMilliseconds < 133) {
+      return;
+    }
+    _lastSelectedFrameAt = now;
     if (_captureSessionId == null) return;
     try {
       final camera = _camera;

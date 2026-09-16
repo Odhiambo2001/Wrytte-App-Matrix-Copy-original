@@ -124,17 +124,12 @@ class OpenCvFacePreprocessor {
     // ROI matrices are lightweight views. resize reads them synchronously, so
     // copying the complete square before resizing is unnecessary.
     final cropped = cv.Mat.fromMat(source, roi: roi);
-    cv.Mat? resized;
     var retainCroppedAsRetinaMat = false;
     try {
-      final output =
-          cropSide == retinaSize
-              ? cropped
-              : (resized = cv.resize(cropped, (
-                retinaSize,
-                retinaSize,
-              ), interpolation: cv.INTER_LINEAR));
-      retainCroppedAsRetinaMat = resized == null;
+      // Preserve the native square crop. RetinaFace accepts dynamic spatial
+      // dimensions, so smaller camera frames are no longer upscaled.
+      final output = cropped;
+      retainCroppedAsRetinaMat = true;
       return RetinaFrame(
         // data already returns an owned Dart Uint8List. Wrapping it in
         // fromList duplicated the complete 640x640 image on every frame.
@@ -151,7 +146,6 @@ class OpenCvFacePreprocessor {
         sourceBuffer: sourceBytes,
       );
     } catch (_) {
-      resized?.dispose();
       source.dispose();
       calloc.free(sourceBytes);
       rethrow;

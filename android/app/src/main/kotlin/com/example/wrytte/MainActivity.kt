@@ -4,6 +4,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
+import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
@@ -32,12 +33,31 @@ class MainActivity: FlutterActivity() {
     private val deviceRegionChannel = "com.example.wrytte/device_region"
     private val callerRingbackChannel = "com.example.wrytte/caller_ringback"
     private val onnxImageChannel = "com.example.wrytte/onnx_image"
+    private val cameraCapabilitiesChannel = "com.example.wrytte/camera_capabilities"
     private var callerRingback: ToneGenerator? = null
     private val ortEnvironment by lazy { OrtEnvironment.getEnvironment() }
     private val ortSessions = ConcurrentHashMap<String, NativeOrtSession>()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, cameraCapabilitiesChannel)
+            .setMethodCallHandler { call, result ->
+                if (call.method != "getFpsRanges") {
+                    result.notImplemented(); return@setMethodCallHandler
+                }
+                try {
+                    val cameraId = call.argument<String>("cameraId")
+                        ?: throw IllegalArgumentException("cameraId is required")
+                    val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    val ranges = manager.getCameraCharacteristics(cameraId)
+                        .get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                        ?.map { listOf(it.lower, it.upper) }
+                        ?: emptyList()
+                    result.success(ranges)
+                } catch (error: Throwable) {
+                    result.error("CAMERA_CAPABILITIES_ERROR", error.message, null)
+                }
+            }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             deviceRegionChannel,

@@ -77,7 +77,7 @@ class RetinaFaceDetector {
   OrtSession? _session;
   AndroidOnnxImageSession? _androidSession;
   late final Float32List _inputBuffer = Float32List(inputSize * inputSize * 3);
-  late final List<_Prior> _priors = _createPriors();
+  final Map<int, List<_Prior>> _priorsBySize = {};
 
   bool get isReady => _session != null || _androidSession != null;
 
@@ -114,25 +114,27 @@ class RetinaFaceDetector {
   }
 
   Future<List<FaceDetection>> detectBgr(Uint8List bgr) async {
-    if (bgr.length != inputSize * inputSize * 3) {
+    final side = math.sqrt(bgr.length / 3).toInt();
+    if (side * side * 3 != bgr.length) {
       throw ArgumentError(
-        'RetinaFace requires ${inputSize}x$inputSize BGR bytes.',
+        'RetinaFace requires a square BGR image; received ${bgr.length} bytes.',
       );
     }
     final android = _androidSession;
     if (android != null) {
       final outputs = await android.runBgr(
         bgr: bgr,
-        width: inputSize,
-        height: inputSize,
+        width: side,
+        height: side,
         mode: 'retina_rgb',
       );
       return _decode(
         outputs['loc']!,
         outputs['conf']!,
         outputs['landmarks']!,
-        inputSize,
-        inputSize,
+        side,
+        side,
+        _priorsForSize(side),
       );
     }
     final plane = inputSize * inputSize;
@@ -169,7 +171,14 @@ class RetinaFaceDetector {
       final locations = _numbers(await outputs['loc']!.asFlattenedList());
       final scores = _numbers(await outputs['conf']!.asFlattenedList());
       final landmarks = _numbers(await outputs['landmarks']!.asFlattenedList());
-      return _decode(locations, scores, landmarks, outputWidth, outputHeight);
+      return _decode(
+        locations,
+        scores,
+        landmarks,
+        outputWidth,
+        outputHeight,
+        _priorsForSize(inputSize),
+      );
     } finally {
       await input.dispose();
       if (outputs != null) {
@@ -224,9 +233,10 @@ class RetinaFaceDetector {
     List<double> landmarkValues,
     int originalWidth,
     int originalHeight,
+    List<_Prior> priors,
   ) {
     final count = math.min(
-      _priors.length,
+      priors.length,
       math.min(locations.length ~/ 4, scores.length ~/ 2),
     );
     final candidates = <FaceDetection>[];
@@ -234,7 +244,7 @@ class RetinaFaceDetector {
       final confidence = scores[(index * 2) + 1];
       if (confidence < confidenceThreshold) continue;
 
-      final prior = _priors[index];
+      final prior = priors[index];
       final locationOffset = index * 4;
       final centerX =
           prior.centerX + locations[locationOffset] * 0.1 * prior.width;
@@ -290,20 +300,22 @@ class RetinaFaceDetector {
     return selected;
   }
 
-  List<_Prior> _createPriors() {
+  List<_Prior> _priorsForSize(int size) => _priorsBySize.putIfAbsent(size, () => _createPriors(size));
+
+  List<_Prior> _createPriors(int size) {
     final priors = <_Prior>[];
     for (var level = 0; level < _steps.length; level++) {
       final step = _steps[level];
-      final featureSize = (inputSize / step).ceil();
+      final featureSize = (size / step).ceil();
       for (var y = 0; y < featureSize; y++) {
         for (var x = 0; x < featureSize; x++) {
           for (final minSize in _minSizes[level]) {
             priors.add(
               _Prior(
-                centerX: (x + 0.5) * step / inputSize,
-                centerY: (y + 0.5) * step / inputSize,
-                width: minSize / inputSize,
-                height: minSize / inputSize,
+                centerX: (x + 0.5) * step / size,
+                centerY: (y + 0.5) * step / size,
+                width: minSize / size,
+                height: minSize / size,
               ),
             );
           }
