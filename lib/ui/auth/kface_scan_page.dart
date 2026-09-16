@@ -233,6 +233,14 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         setState(() => _status = 'Move your face closer to the camera');
       } else if (analysis.faceTooClose) {
         setState(() => _status = 'Move your face farther from the camera');
+      } else if (analysis.livenessRejected) {
+        // A full, normal RetinaFace result followed by a local liveness
+        // rejection owns the status until a later frame passes liveness.
+        setState(
+          () =>
+              _status =
+                  'Face not detected.\nPosition your face within the circle',
+        );
       } else if (!analysis.targetFaceSelected) {
         setState(() => _status = 'Position your face\nwithin the circle');
       }

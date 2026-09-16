@@ -50,6 +50,7 @@ class FrameAnalysis {
     this.faceTooFar = false,
     this.faceTooClose = false,
     this.multipleFaces = false,
+    this.livenessRejected = false,
     this.capture,
   });
 
@@ -62,6 +63,9 @@ class FrameAnalysis {
   final bool faceTooFar;
   final bool faceTooClose;
   final bool multipleFaces;
+
+  /// RetinaFace found a valid target, but FE MiniFASNetV2 rejected it.
+  final bool livenessRejected;
   final BiometricCropSet? capture;
 }
 
@@ -287,6 +291,7 @@ class FaceBiometricPipeline {
           targetFaceSelected: false,
           alignmentAccepted: false,
           processingMilliseconds: stopwatch.elapsedMilliseconds,
+          livenessRejected: true,
         );
       }
       final livenessFaceBox = openCv.mapFaceToOriginalBox(prepared, target);
