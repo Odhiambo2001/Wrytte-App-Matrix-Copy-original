@@ -263,9 +263,16 @@ class FaceBiometricPipeline {
       final faces = await retinaFace.detectBgr(prepared.bgr);
       retinaTimer.stop();
       // ignore: avoid_print
+      // ignore: avoid_print
       print(
         '[BiometricTiming] pipeline=RetinaFace stage=inference_decode '
         'elapsed_ms=${retinaTimer.elapsedMilliseconds}',
+      );
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] pipeline=RetinaFace stage=detections '
+        'count=${faces.length} '
+        'details=${faces.map((face) => 'confidence=${face.confidence.toStringAsFixed(3)},size=${measureFaceDistance(face).sizeRatio.toStringAsFixed(3)},distance=${measureFaceDistance(face).label}').join('|')}',
       );
       final target = _selectTargetFace(faces);
       if (target == null) {
