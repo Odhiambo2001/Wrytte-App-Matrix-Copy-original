@@ -70,6 +70,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       Queue<BiometricCropSet>();
   bool _complete = false;
   int _acceptedCandidateCount = 0;
+  int _locallyLiveCandidateCount = 0;
+  bool _candidateExtractionClosed = false;
   int _nextCandidateSubmissionIndex = 0;
   String? _captureSessionId;
   bool _startingCaptureSession = false;
@@ -103,7 +105,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         (camera) => camera.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
-      const capabilities = MethodChannel('com.example.wrytte/camera_capabilities');
+      const capabilities = MethodChannel(
+        'com.example.wrytte/camera_capabilities',
+      );
       try {
         final ranges = await capabilities.invokeMethod<List<dynamic>>(
           'getFpsRanges',
@@ -115,14 +119,17 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         );
         final supports30 = (ranges ?? const []).any((range) {
           final values = List<dynamic>.from(range as List);
-          return values.length >= 2 && (values[0] as num).toInt() <= 30 &&
+          return values.length >= 2 &&
+              (values[0] as num).toInt() <= 30 &&
               (values[1] as num).toInt() >= 30;
         });
         if (!supports30) {
           throw StateError('This camera does not advertise 30 FPS support.');
         }
       } catch (error) {
-        debugPrint('[BiometricTiming] pipeline=Camera stage=supported_fps_ranges_error error=$error');
+        debugPrint(
+          '[BiometricTiming] pipeline=Camera stage=supported_fps_ranges_error error=$error',
+        );
       }
       final camera = CameraController(
         description,
@@ -176,13 +183,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         !_scanPhaseReady ||
         _sending ||
         _complete ||
+        _candidateExtractionClosed ||
         !_hasCandidateUploadCapacity) {
       return;
     }
     final now = DateTime.now();
     final previous = _lastSelectedFrameAt;
-    if (previous != null &&
-        now.difference(previous).inMilliseconds < 133) {
+    if (previous != null && now.difference(previous).inMilliseconds < 133) {
       return;
     }
     _lastSelectedFrameAt = now;
@@ -226,9 +233,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         setState(() => _status = 'Move your face closer to the camera');
       } else if (analysis.faceTooClose) {
         setState(() => _status = 'Move your face farther from the camera');
-      } else if (!_scanPhaseReady && !analysis.targetFaceSelected) {
-        setState(() => _status = 'Position your face\nwithin the circle');
-      } else if (!_scanPhaseReady && !analysis.alignmentAccepted) {
+      } else if (!analysis.targetFaceSelected) {
         setState(() => _status = 'Position your face\nwithin the circle');
       }
       if (analysis.faceDetected &&
@@ -242,7 +247,14 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         }
         // Queue each locally-live target capture; uploads are serialized.
         _pendingCandidateCaptures.addLast(capture);
+        _locallyLiveCandidateCount++;
         _dispatchPendingCandidateCaptures();
+        if (_locallyLiveCandidateCount >= FaceBiometricPipeline.framesToUse) {
+          _candidateExtractionClosed = true;
+          while (_pendingCandidateCaptures.length > 1) {
+            _pendingCandidateCaptures.removeLast().clear();
+          }
+        }
         setState(() => _status = 'Scanning…');
       }
     } catch (_) {
@@ -383,6 +395,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                       ? 'Face not detected.\nPosition your face within the circle'
                       : 'Center your face inside the ring.',
         );
+        if (fakeFrame) {
+          await _resumeAfterBiometricRejection();
+        }
         return;
       }
 
@@ -752,6 +767,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _backendWaiting = false;
     _verificationFailed = false;
     _acceptedCandidateCount = 0;
+    _locallyLiveCandidateCount = 0;
+    _candidateExtractionClosed = false;
     _scanStarted = false;
     _scanPhaseReady = false;
     _scanStartTimer?.cancel();
@@ -791,6 +808,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _backendWaiting = false;
       _verificationFailed = false;
       _acceptedCandidateCount = 0;
+      _locallyLiveCandidateCount = 0;
+      _candidateExtractionClosed = false;
       _scanStarted = false;
       _scanPhaseReady = false;
       _scanStartTimer?.cancel();
