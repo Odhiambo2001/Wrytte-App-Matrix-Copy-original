@@ -54,9 +54,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   DateTime? _lastSelectedFrameAt;
   bool _faceAligned = false;
   double _headMovement = 0.5;
-  // A continuous scan can inspect far more than five target frames, but only
-  // this many multipart uploads may consume device/network resources at once.
-  static const _maxConcurrentCandidateUploads = 15;
+  // Candidate requests are serialized; each frame receives its own backend
+  // decision before the next frame is submitted.
+  static const _maxConcurrentCandidateUploads = 1;
   static const _maxBufferedCandidateCaptures = 30;
   static const _maxCandidateSubmissions = 300;
   final _pipeline = FaceBiometricPipeline();
@@ -240,9 +240,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _captureToTransitionTimer = Stopwatch()..start();
           if (_enrolling) BiometricEnrollmentTiming.start();
         }
-        // The BE selects the five live frames. Queue every local target
-        // capture for both signup and sign-in, then drain up to fifteen
-        // uploads concurrently. Submission numbers are not accepted slots.
+        // Queue each locally-live target capture; uploads are serialized.
         _pendingCandidateCaptures.addLast(capture);
         _dispatchPendingCandidateCaptures();
         setState(() => _status = 'Scanning…');
@@ -284,10 +282,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
   }
 
-  /// Sends every locally valid target frame for signup or sign-in. The BE
-  /// selects whichever five submissions pass both liveness models; it is not
-  /// restricted to the first five. Every local image buffer is cleared after
-  /// upload.
+  /// Sends locally valid target frames one at a time. The backend accepts five
+  /// frames only after its two-model liveness check.
   void _dispatchPendingCandidateCaptures() {
     if (_complete || _sending || _captureSessionId == null) {
       return;
