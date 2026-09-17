@@ -125,6 +125,9 @@ class BiometricCandidateResult {
 }
 
 class BiometricApiService {
+  // Balanced PNG compression: smaller payloads than level 1 without the full
+  // CPU cost of level 6 on lower-end devices.
+  static const _pngCompressionLevel = 3;
   static const ldpcInputBitCount = 832;
   static const _packedLdpcInputByteCount = ldpcInputBitCount ~/ 8;
   static const _maximumLivenessFrameWidth = 1280;
@@ -710,7 +713,11 @@ class BiometricApiService {
       numChannels: 3,
       order: img.ChannelOrder.bgr,
     );
-    return Uint8List.fromList(img.encodePng(image, level: 6));
+    // Level 1 substantially reduces CPU time on low/mid-range phones. These
+    // images are biometric transport payloads, so avoid lossy JPEG conversion.
+    return Uint8List.fromList(
+      img.encodePng(image, level: _pngCompressionLevel),
+    );
   }
 
   /// This top-level-compatible static callback is run by [compute]. It keeps
@@ -753,7 +760,7 @@ class BiometricApiService {
       'retinaFace': _png(capture['retinaFace']! as Uint8List, 640, 640),
       'landmarks': capture['landmarks']! as Map<String, double>,
       'livenessFrame': Uint8List.fromList(
-        img.encodePng(livenessImage, level: 6),
+        img.encodePng(livenessImage, level: _pngCompressionLevel),
       ),
       'geometry': scaleLivenessFaceBox(
         sourceBox,
