@@ -156,11 +156,23 @@ class ApiService {
       debugPrint("📎 FILES: ${files.map((file) => file.field).join(', ')}");
     }
 
+    final requestTimer = Stopwatch()..start();
     final streamedResponse = await request.send().timeout(
       const Duration(seconds: 20),
     );
+    requestTimer.stop();
+    debugPrint(
+      '[BiometricTiming] pipeline=Network stage=multipart_send '
+      'elapsed_ms=${requestTimer.elapsedMilliseconds}',
+    );
 
+    final responseTimer = Stopwatch()..start();
     final response = await http.Response.fromStream(streamedResponse);
+    responseTimer.stop();
+    debugPrint(
+      '[BiometricTiming] pipeline=Network stage=response_body_read '
+      'elapsed_ms=${responseTimer.elapsedMilliseconds}',
+    );
 
     debugPrint("⬅️ STATUS: ${response.statusCode}");
     debugPrint("⬅️ RESPONSE: ${_redactResponse(response.body)}");
