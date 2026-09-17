@@ -45,6 +45,7 @@ class KFaceScanPage extends StatefulWidget {
 }
 
 class _KFaceScanPageState extends State<KFaceScanPage> {
+  FrontendTimingTotal _frontendTiming = FrontendTimingTotal();
   final _scanTotalTimer = Stopwatch()..start();
   Stopwatch? _captureBatchTimer;
   Stopwatch? _uploadBatchTimer;
@@ -92,7 +93,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   @override
   void initState() {
     super.initState();
-    unawaited(_initialize());
+    unawaited(_frontendTiming.run(_initialize));
   }
 
   Future<void> _initialize() async {
@@ -190,7 +191,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
   }
 
-  Future<void> _onFrame(CameraImage frame) async {
+  Future<void> _onFrame(CameraImage frame) =>
+      _frontendTiming.run(() => _processCameraFrame(frame));
+
+  Future<void> _processCameraFrame(CameraImage frame) async {
     _framesThisSecond++;
     if (!_ready ||
         !_scanPhaseReady ||
@@ -236,7 +240,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           sensorOrientation: camera.description.sensorOrientation,
         ),
       );
-      final analysis = await _pipeline.processFrame(image);
+      final analysis = await BiometricStageTiming.measureAsync(
+        'FaceFrame',
+        'processing',
+        () => _pipeline.processFrame(image),
+      );
       if (!mounted || frameSessionId != _captureSessionId || _complete) {
         analysis.capture?.clear();
         return;
@@ -370,7 +378,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       final capture = _pendingCandidateCaptures.removeFirst();
       final candidateIndex = _nextCandidateSubmissionIndex++;
       _inFlightCandidateUploads++;
-      unawaited(_uploadCandidate(capture, candidateIndex));
+      unawaited(
+        _frontendTiming.run(() => _uploadCandidate(capture, candidateIndex)),
+      );
     }
   }
 
@@ -570,7 +580,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
     }
     try {
-      final enrollment = await _createLocalEnrollment(input.ldpcBits);
+      final enrollment = await BiometricStageTiming.measureAsync(
+        'LDPC',
+        'local_enrollment',
+        () => _createLocalEnrollment(input.ldpcBits),
+      );
       var deviceId = await DeviceMetadataService.instance.rememberedDeviceId(
         userId: widget.userId!,
       );
@@ -686,7 +700,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
     // This task retains no image. It waits only for the opaque delivery ticket
     // and completes the client-owned LDPC commitment after navigation.
-    unawaited(_completeEnrollmentInBackground(provision));
+    unawaited(
+      runZoned(
+        () => _completeEnrollmentInBackground(provision),
+        zoneValues: {FrontendTimingTotal.zoneKey: null},
+      ),
+    );
     if (!mounted) return;
     _logTransitionTiming('profile_setup');
     await Navigator.of(context).pushReplacement(
@@ -759,9 +778,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     // The page disposes the camera normally after navigation.
     if (mounted) setState(() => _status = 'Please wait…');
     try {
-      final recoveredKey = await _recoverLocalKey(
-        verification.input.ldpcBits,
-        verification.kmap,
+      final recoveredKey = await BiometricStageTiming.measureAsync(
+        'LDPC',
+        'local_recovery',
+        () => _recoverLocalKey(verification.input.ldpcBits, verification.kmap),
       );
       if (recoveredKey == null) {
         await _resumeAfterBiometricRejection();
@@ -875,6 +895,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _uploadBatchTimer?.stop();
     _captureBatchTimer = null;
     _uploadBatchTimer = null;
+    _frontendTiming = FrontendTimingTotal();
     _scanTotalTimer
       ..reset()
       ..start();
@@ -907,6 +928,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   }
 
   void _logTransitionTiming(String destination) {
+    _frontendTiming.log(destination);
     BiometricStageTiming.log(
       'Scan',
       'attempt_to_$destination',
@@ -929,6 +951,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _uploadBatchTimer?.stop();
     _captureBatchTimer = null;
     _uploadBatchTimer = null;
+    _frontendTiming = FrontendTimingTotal();
     _scanTotalTimer
       ..reset()
       ..start();
