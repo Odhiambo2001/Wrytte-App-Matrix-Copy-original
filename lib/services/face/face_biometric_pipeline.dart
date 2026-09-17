@@ -1,3 +1,4 @@
+import 'package:wrytte/services/face/biometric_stage_timing.dart';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -274,7 +275,11 @@ class FaceBiometricPipeline {
         'count=${faces.length} '
         'details=${faces.map((face) => 'confidence=${face.confidence.toStringAsFixed(3)},size=${measureFaceDistance(face).sizeRatio.toStringAsFixed(3)},distance=${measureFaceDistance(face).label}').join('|')}',
       );
-      final target = _selectTargetFace(faces);
+      final target = BiometricStageTiming.measure(
+        'FaceSelection',
+        'geometry_and_target',
+        () => _selectTargetFace(faces),
+      );
       if (target == null) {
         return FrameAnalysis(
           faceDetected: faces.isNotEmpty,
@@ -290,8 +295,16 @@ class FaceBiometricPipeline {
           multipleFaces: faces.length > 1,
         );
       }
-      final livenessCrops = openCv.cropForMiniFasNet(prepared, target);
-      final live = await miniFasNetV2.isReal(livenessCrops.v2Bgr);
+      final livenessCrops = BiometricStageTiming.measure(
+        'OpenCV',
+        'liveness_crops',
+        () => openCv.cropForMiniFasNet(prepared, target),
+      );
+      final live = await BiometricStageTiming.measureAsync(
+        'MiniFASNet',
+        'inference',
+        () => miniFasNetV2.isReal(livenessCrops.v2Bgr),
+      );
       if (!live) {
         return FrameAnalysis(
           faceDetected: true,

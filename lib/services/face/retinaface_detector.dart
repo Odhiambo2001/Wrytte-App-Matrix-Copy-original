@@ -1,10 +1,8 @@
 import 'dart:math' as math;
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import 'package:image/image.dart' as img;
-import 'package:wrytte/services/face/android_onnx_image_session.dart';
 
 class FaceLandmarks {
   const FaceLandmarks({
@@ -75,19 +73,14 @@ class RetinaFaceDetector {
   final double confidenceThreshold;
   final double nmsThreshold;
   OrtSession? _session;
-  AndroidOnnxImageSession? _androidSession;
   late final Float32List _inputBuffer = Float32List(inputSize * inputSize * 3);
   final Map<int, List<_Prior>> _priorsBySize = {};
 
-  bool get isReady => _session != null || _androidSession != null;
+  bool get isReady => _session != null;
 
   Future<void> initialize() async {
-    if (_session != null || _androidSession != null) return;
-    if (Platform.isAndroid) {
-      _androidSession = await AndroidOnnxImageSession.create(modelAsset);
-      _validateNames(_androidSession!.inputNames, _androidSession!.outputNames);
-      return;
-    }
+    if (_session != null) return;
+    // Preprocessing supplies packed BGR pixels for this model's NCHW input.
     _session = await OnnxRuntime().createSessionFromAsset(
       modelAsset,
       options: OrtSessionOptions(intraOpNumThreads: 2),
@@ -114,27 +107,10 @@ class RetinaFaceDetector {
   }
 
   Future<List<FaceDetection>> detectBgr(Uint8List bgr) async {
-    final side = math.sqrt(bgr.length / 3).toInt();
-    if (side * side * 3 != bgr.length) {
+    if (bgr.length != inputSize * inputSize * 3) {
       throw ArgumentError(
-        'RetinaFace requires a square BGR image; received ${bgr.length} bytes.',
-      );
-    }
-    final android = _androidSession;
-    if (android != null) {
-      final outputs = await android.runBgr(
-        bgr: bgr,
-        width: side,
-        height: side,
-        mode: 'retina_rgb',
-      );
-      return _decode(
-        outputs['loc']!,
-        outputs['conf']!,
-        outputs['landmarks']!,
-        side,
-        side,
-        _priorsForSize(side),
+        'RetinaFace requires a ${inputSize}x$inputSize packed BGR image; '
+        'received ${bgr.length} bytes.',
       );
     }
     final plane = inputSize * inputSize;
@@ -143,11 +119,20 @@ class RetinaFaceDetector {
     final tensorData = _inputBuffer;
     for (var pixel = 0; pixel < plane; pixel++) {
       final offset = pixel * 3;
-      tensorData[pixel] = bgr[offset + 2].toDouble() - 104.0;
+      tensorData[pixel] = bgr[offset].toDouble() - 104.0;
       tensorData[plane + pixel] = bgr[offset + 1].toDouble() - 117.0;
-      tensorData[(plane * 2) + pixel] = bgr[offset].toDouble() - 123.0;
+      tensorData[(plane * 2) + pixel] = bgr[offset + 2].toDouble() - 123.0;
     }
     return _run(tensorData, inputSize, inputSize);
+  }
+
+  double _bestFaceConfidence(List<double>? values) {
+    if (values == null) return 0;
+    var best = 0.0;
+    for (var i = 1; i < values.length; i += 2) {
+      if (values[i] > best) best = values[i];
+    }
+    return best;
   }
 
   Future<List<FaceDetection>> _run(
@@ -171,6 +156,13 @@ class RetinaFaceDetector {
       final locations = _numbers(await outputs['loc']!.asFlattenedList());
       final scores = _numbers(await outputs['conf']!.asFlattenedList());
       final landmarks = _numbers(await outputs['landmarks']!.asFlattenedList());
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] pipeline=RetinaFace stage=onnx_diagnostics '
+        'input_floats=${tensorData.length} loc=${locations.length} '
+        'conf=${scores.length} landmarks=${landmarks.length} '
+        'best_face_conf=${_bestFaceConfidence(List<double>.from(scores)).toStringAsFixed(4)}',
+      );
       return _decode(
         locations,
         scores,
@@ -191,13 +183,8 @@ class RetinaFaceDetector {
 
   Future<void> dispose() async {
     final session = _session;
-    final android = _androidSession;
     _session = null;
-    _androidSession = null;
-    await Future.wait([
-      if (session != null) session.close(),
-      if (android != null) android.close(),
-    ]);
+    await Future.wait([if (session != null) session.close()]);
   }
 
   static void _validateNames(List<String> inputs, List<String> outputs) {
@@ -300,7 +287,8 @@ class RetinaFaceDetector {
     return selected;
   }
 
-  List<_Prior> _priorsForSize(int size) => _priorsBySize.putIfAbsent(size, () => _createPriors(size));
+  List<_Prior> _priorsForSize(int size) =>
+      _priorsBySize.putIfAbsent(size, () => _createPriors(size));
 
   List<_Prior> _createPriors(int size) {
     final priors = <_Prior>[];

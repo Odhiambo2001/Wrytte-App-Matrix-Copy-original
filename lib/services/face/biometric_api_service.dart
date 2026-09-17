@@ -1,3 +1,4 @@
+import 'package:wrytte/services/face/biometric_stage_timing.dart';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -614,17 +615,21 @@ class BiometricApiService {
     }
     // PNG encoding remains off the UI isolate while the camera preview keeps
     // running. This is a single candidate pair, not a five-frame batch.
-    final encoded = await compute(_encodeCapture, <String, Object>{
-      'retinaFace': capture.retinaFaceBgr,
-      'landmarks': _landmarks(capture.adafaceLandmarks),
-      'livenessFrame': capture.livenessFrameBgr,
-      'livenessFrameWidth': capture.livenessFrameWidth,
-      'livenessFrameHeight': capture.livenessFrameHeight,
-      'x': capture.livenessFaceBox.x,
-      'y': capture.livenessFaceBox.y,
-      'width': capture.livenessFaceBox.width,
-      'height': capture.livenessFaceBox.height,
-    });
+    final encoded = await BiometricStageTiming.measureAsync(
+      'Upload',
+      'png_encoding',
+      () => compute(_encodeCapture, <String, Object>{
+        'retinaFace': capture.retinaFaceBgr,
+        'landmarks': _landmarks(capture.adafaceLandmarks),
+        'livenessFrame': capture.livenessFrameBgr,
+        'livenessFrameWidth': capture.livenessFrameWidth,
+        'livenessFrameHeight': capture.livenessFrameHeight,
+        'x': capture.livenessFaceBox.x,
+        'y': capture.livenessFaceBox.y,
+        'width': capture.livenessFaceBox.width,
+        'height': capture.livenessFaceBox.height,
+      }),
+    );
     final requestId = _requestId();
     final stopwatch = Stopwatch()..start();
     try {

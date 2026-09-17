@@ -27,17 +27,17 @@ class MiniFasNetV2Liveness {
     }
   }
 
-  Future<bool> isReal(Uint8List rgbBytes) async {
-    if (rgbBytes.length != inputSize * inputSize * 3) {
-      throw ArgumentError('MiniFASNetV2 requires an 80x80 RGB crop.');
+  Future<bool> isReal(Uint8List bgrBytes) async {
+    if (bgrBytes.length != inputSize * inputSize * 3) {
+      throw ArgumentError('MiniFASNetV2 requires an 80x80 BGR crop.');
     }
     final android = _android;
     if (android != null) {
       final output = await android.runBgr(
-        bgr: rgbBytes,
+        bgr: bgrBytes,
         width: inputSize,
         height: inputSize,
-        mode: 'mini_fas_rgb',
+        mode: 'mini_fas',
       );
       return _classOneProbability(output.values.first) > threshold;
     }
@@ -46,9 +46,9 @@ class MiniFasNetV2Liveness {
     final plane = inputSize * inputSize;
     final tensor = Float32List(plane * 3);
     for (var i = 0; i < plane; i++) {
-      tensor[i] = rgbBytes[i * 3].toDouble();
-      tensor[plane + i] = rgbBytes[i * 3 + 1].toDouble();
-      tensor[2 * plane + i] = rgbBytes[i * 3 + 2].toDouble();
+      tensor[i] = bgrBytes[i * 3].toDouble();
+      tensor[plane + i] = bgrBytes[i * 3 + 1].toDouble();
+      tensor[2 * plane + i] = bgrBytes[i * 3 + 2].toDouble();
     }
     final input = await OrtValue.fromList(tensor, [1, 3, inputSize, inputSize]);
     Map<String, OrtValue>? outputs;

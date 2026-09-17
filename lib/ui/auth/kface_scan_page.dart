@@ -1,3 +1,4 @@
+import 'package:wrytte/services/face/biometric_stage_timing.dart';
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
@@ -44,6 +45,9 @@ class KFaceScanPage extends StatefulWidget {
 }
 
 class _KFaceScanPageState extends State<KFaceScanPage> {
+  final _scanTotalTimer = Stopwatch()..start();
+  Stopwatch? _captureBatchTimer;
+  Stopwatch? _uploadBatchTimer;
   bool _scanStarted = false;
   bool _scanPhaseReady = false;
   bool _backendWaiting = false;
@@ -57,7 +61,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   // Candidate requests are serialized; each frame receives its own backend
   // decision before the next frame is submitted.
   static const _maxConcurrentCandidateUploads = 1;
-  static const _maxBufferedCandidateCaptures = 30;
   static const _maxCandidateSubmissions = 300;
   final _pipeline = FaceBiometricPipeline();
   final _ldpc = LdpcFuzzyCommitment();
@@ -70,7 +73,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       Queue<BiometricCropSet>();
   bool _complete = false;
   int _acceptedCandidateCount = 0;
-  int _locallyLiveCandidateCount = 0;
+  bool _processingFrame = false;
   bool _candidateExtractionClosed = false;
   int _nextCandidateSubmissionIndex = 0;
   String? _captureSessionId;
@@ -84,7 +87,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   bool get _hasCandidateUploadCapacity =>
       _nextCandidateSubmissionIndex < _maxCandidateSubmissions &&
       _inFlightCandidateUploads + _pendingCandidateCaptures.length <
-          _maxConcurrentCandidateUploads + _maxBufferedCandidateCaptures;
+          FaceBiometricPipeline.framesToUse;
 
   @override
   void initState() {
@@ -94,14 +97,16 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   Future<void> _initialize() async {
     try {
-      final detectorTimer = Stopwatch()..start();
-      await _pipeline.initializeDetector();
-      detectorTimer.stop();
-      debugPrint(
-        '[BiometricTiming] pipeline=RetinaFace stage=initialize '
-        'elapsed_ms=${detectorTimer.elapsedMilliseconds}',
+      await BiometricStageTiming.measureAsync(
+        'Models',
+        'initialize',
+        () => _pipeline.initializeDetector(),
       );
-      final cameras = await availableCameras();
+      final cameras = await BiometricStageTiming.measureAsync(
+        'Camera',
+        'enumerate',
+        () => availableCameras(),
+      );
       final description = cameras.firstWhere(
         (camera) => camera.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
@@ -144,7 +149,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                 ? ImageFormatGroup.bgra8888
                 : ImageFormatGroup.yuv420,
       );
-      await camera.initialize();
+      await BiometricStageTiming.measureAsync(
+        'Camera',
+        'initialize',
+        () => camera.initialize(),
+      );
       await camera.startImageStream(_onFrame);
       if (!mounted) return;
       setState(() {
@@ -152,8 +161,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _ready = true;
       });
       _scanStartTimer?.cancel();
+      final startupWaitTimer = Stopwatch()..start();
       _scanStartTimer = Timer(const Duration(milliseconds: 1500), () {
         if (!mounted) return;
+        BiometricStageTiming.log('UI', 'startup_wait', startupWaitTimer);
         setState(() {
           _scanPhaseReady = true;
           _scanStarted = true;
@@ -164,7 +175,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _frameRateTimer?.cancel();
       _frameRateTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         debugPrint(
-          '[BiometricTiming] pipeline=Camera stage=extracted_frames_per_second fps=$_framesThisSecond',
+          '[BiometricTiming] pipeline=Camera stage=incoming_frames_per_second fps=$_framesThisSecond',
         );
         _framesThisSecond = 0;
       });
@@ -185,6 +196,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         !_scanPhaseReady ||
         _sending ||
         _complete ||
+        _processingFrame ||
         _candidateExtractionClosed ||
         !_hasCandidateUploadCapacity) {
       final now = DateTime.now();
@@ -194,7 +206,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         debugPrint(
           '[BiometricTiming] pipeline=Frame stage=skipped '
           'ready=$_ready scan_ready=$_scanPhaseReady sending=$_sending '
-          'complete=$_complete extraction_closed=$_candidateExtractionClosed '
+          'complete=$_complete processing=$_processingFrame '
+          'extraction_closed=$_candidateExtractionClosed '
+          'accepted=$_acceptedCandidateCount queued=${_pendingCandidateCaptures.length} '
+          'in_flight=$_inFlightCandidateUploads '
           'session=${_captureSessionId != null}',
         );
       }
@@ -207,15 +222,25 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
     _lastSelectedFrameAt = now;
     if (_captureSessionId == null) return;
+    _captureBatchTimer ??= Stopwatch()..start();
+    final frameSessionId = _captureSessionId;
+    _processingFrame = true;
     try {
       final camera = _camera;
       if (camera == null) return;
-      final image = CameraFrameConverter.convert(
-        frame,
-        sensorOrientation: camera.description.sensorOrientation,
+      final image = BiometricStageTiming.measure(
+        'Camera',
+        'convert_and_rotate',
+        () => CameraFrameConverter.convert(
+          frame,
+          sensorOrientation: camera.description.sensorOrientation,
+        ),
       );
       final analysis = await _pipeline.processFrame(image);
-      if (!mounted) return;
+      if (!mounted || frameSessionId != _captureSessionId || _complete) {
+        analysis.capture?.clear();
+        return;
+      }
       // The image stream can invoke this callback while RetinaFace is still
       // processing the previous frame. Such a skipped frame has no timing and
       // must not replace the useful on-screen capture status with "No face".
@@ -266,15 +291,18 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _captureToTransitionTimer = Stopwatch()..start();
           if (_enrolling) BiometricEnrollmentTiming.start();
         }
-        // Queue each locally-live target capture; uploads are serialized.
+        // Capture the complete local set before starting any upload.
         _pendingCandidateCaptures.addLast(capture);
-        _locallyLiveCandidateCount++;
-        _dispatchPendingCandidateCaptures();
-        if (_locallyLiveCandidateCount >= FaceBiometricPipeline.framesToUse) {
+        if (_pendingCandidateCaptures.length >=
+            FaceBiometricPipeline.framesToUse) {
+          BiometricStageTiming.log(
+            'Capture',
+            'five_live_frames',
+            _captureBatchTimer!,
+          );
+          _uploadBatchTimer = Stopwatch()..start();
           _candidateExtractionClosed = true;
-          while (_pendingCandidateCaptures.length > 1) {
-            _pendingCandidateCaptures.removeLast().clear();
-          }
+          _dispatchPendingCandidateCaptures();
         }
         setState(() => _status = 'Scanning…');
       }
@@ -284,6 +312,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         '[BiometricTiming] pipeline=Frame stage=processing_error '
         'error=${error.runtimeType}',
       );
+    } finally {
+      _processingFrame = false;
     }
   }
 
@@ -322,7 +352,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   /// Sends locally valid target frames one at a time. The backend accepts five
   /// frames only after its two-model liveness check.
   void _dispatchPendingCandidateCaptures() {
-    if (_complete || _sending || _captureSessionId == null) {
+    if (!mounted ||
+        !_candidateExtractionClosed ||
+        _complete ||
+        _sending ||
+        _captureSessionId == null) {
       return;
     }
     if (_nextCandidateSubmissionIndex >= _maxCandidateSubmissions) {
@@ -349,7 +383,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       DeviceMetadata? signupDeviceMetadata;
       if (_enrolling && !widget.attachToExistingUser) {
         try {
-          signupDeviceMetadata = await DeviceMetadataService.instance.collect();
+          signupDeviceMetadata = await BiometricStageTiming.measureAsync(
+            'Upload',
+            'device_metadata',
+            () => DeviceMetadataService.instance.collect(),
+          );
         } catch (error) {
           debugPrint(
             '[KFaceScan] Wrytte-ID device metadata unavailable: $error',
@@ -389,6 +427,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // Candidate uploads complete out of order. A response from a different
       // backend session is stale and must never replace this scan's session.
       if (requestSessionId == null ||
+          requestSessionId != _captureSessionId ||
           result.captureSessionId != null &&
               result.captureSessionId != requestSessionId) {
         return;
@@ -436,6 +475,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         return;
       }
 
+      if (_uploadBatchTimer != null) {
+        BiometricStageTiming.log(
+          'Upload',
+          'batch_to_backend_acceptance',
+          _uploadBatchTimer!,
+        );
+      }
       // Stop OpenCV/RetinaFace extraction as soon as the backend has accepted
       // the five live candidates. Keep the camera stream open so the preview
       // remains visible while LDPC recovery and challenge signing complete.
@@ -448,13 +494,21 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // the session. Clear the queue immediately; already in-flight requests
       // are ignored by the completion guard below when they return.
       _discardPendingCandidateCaptures();
-      await Future<void>.delayed(const Duration(seconds: 3));
+      await BiometricStageTiming.measureAsync(
+        'UI',
+        'completion_wait',
+        () => Future<void>.delayed(const Duration(seconds: 3)),
+      );
       if (mounted) {
         setState(() {
           _backendWaiting = false;
           _status = 'Done';
         });
-        await Future<void>.delayed(const Duration(milliseconds: 900));
+        await BiometricStageTiming.measureAsync(
+          'UI',
+          'done_display',
+          () => Future<void>.delayed(const Duration(milliseconds: 900)),
+        );
       }
       if (_enrolling) {
         if (widget.attachToExistingUser) {
@@ -492,9 +546,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     } finally {
       capture.clear();
       _inFlightCandidateUploads = math.max(0, _inFlightCandidateUploads - 1);
-      if (!_complete &&
-          _nextCandidateSubmissionIndex >= _maxCandidateSubmissions &&
-          _inFlightCandidateUploads == 0) {
+      if (mounted &&
+          !_complete &&
+          _candidateExtractionClosed &&
+          _inFlightCandidateUploads == 0 &&
+          (_pendingCandidateCaptures.isEmpty ||
+              _nextCandidateSubmissionIndex >= _maxCandidateSubmissions)) {
         unawaited(_resumeAfterBiometricRejection());
       } else {
         _dispatchPendingCandidateCaptures();
@@ -506,7 +563,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _sending = true;
     final camera = _camera;
     if (camera?.value.isStreamingImages == true) {
-      await camera!.stopImageStream();
+      await BiometricStageTiming.measureAsync(
+        'Camera',
+        'stop_stream',
+        () => camera!.stopImageStream(),
+      );
     }
     try {
       final enrollment = await _createLocalEnrollment(input.ldpcBits);
@@ -578,17 +639,27 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _sending = true;
     final camera = _camera;
     if (camera?.value.isStreamingImages == true) {
-      await camera!.stopImageStream();
+      await BiometricStageTiming.measureAsync(
+        'Camera',
+        'stop_stream',
+        () => camera!.stopImageStream(),
+      );
     }
-    await AuthService.instance.persistPhoneSession(
-      userId: provision.userId,
-      username:
-          provision.username.isNotEmpty ? provision.username : widget.wrytteId,
-      phone: provision.phone.isNotEmpty ? provision.phone : widget.wrytteId,
-      secret: provision.secret,
-      token: provision.token,
-      preferMatrixRegisterFirst: true,
-      deferNonEssentialInitialization: true,
+    await BiometricStageTiming.measureAsync(
+      'Session',
+      'persist_before_profile',
+      () => AuthService.instance.persistPhoneSession(
+        userId: provision.userId,
+        username:
+            provision.username.isNotEmpty
+                ? provision.username
+                : widget.wrytteId,
+        phone: provision.phone.isNotEmpty ? provision.phone : widget.wrytteId,
+        secret: provision.secret,
+        token: provision.token,
+        preferMatrixRegisterFirst: true,
+        deferNonEssentialInitialization: true,
+      ),
     );
     if (provision.deviceId.trim().isNotEmpty) {
       try {
@@ -603,8 +674,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       }
     }
     try {
-      await DeviceMetadataService.instance.registerWithBackend(
-        userId: provision.userId,
+      await BiometricStageTiming.measureAsync(
+        'Session',
+        'device_registration',
+        () => DeviceMetadataService.instance.registerWithBackend(
+          userId: provision.userId,
+        ),
       );
     } catch (error) {
       debugPrint('[KFaceScan] Wrytte-ID device registration deferred: $error');
@@ -625,18 +700,26 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     BiometricEnrollmentProvision provision,
   ) async {
     try {
-      final biometric = await _waitForEnrollmentLdpcInput(provision);
+      final biometric = await BiometricStageTiming.measureAsync(
+        'Enrollment',
+        'wait_for_ldpc_input',
+        () => _waitForEnrollmentLdpcInput(provision),
+      );
       if (biometric == null ||
           !biometric.accepted ||
           biometric.enrollmentTicket == null) {
         throw StateError('Biometric finalization was not accepted.');
       }
       final enrollment = await _createLocalEnrollment(biometric.ldpcBits);
-      await AuthService.instance.completeClientBiometricEnrollment(
-        wrytteId: widget.wrytteId,
-        biometricEnrollmentTicket: biometric.enrollmentTicket!,
-        kmap: enrollment.commitment.toJson(),
-        publicKey: enrollment.publicKey,
+      await BiometricStageTiming.measureAsync(
+        'Enrollment',
+        'finalize_request',
+        () => AuthService.instance.completeClientBiometricEnrollment(
+          wrytteId: widget.wrytteId,
+          biometricEnrollmentTicket: biometric.enrollmentTicket!,
+          kmap: enrollment.commitment.toJson(),
+          publicKey: enrollment.publicKey,
+        ),
       );
       // Deliberately no identity, ticket, image, score, vector, or key data.
       // ignore: avoid_print
@@ -684,9 +767,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         await _resumeAfterBiometricRejection();
         return;
       }
-      final signature = await _signatureService.signBackendChallenge(
-        hkdfKeyHex: recoveredKey,
-        challengeBase64Url: verification.challenge,
+      final signature = await BiometricStageTiming.measureAsync(
+        'Verification',
+        'sign_challenge',
+        () => _signatureService.signBackendChallenge(
+          hkdfKeyHex: recoveredKey,
+          challengeBase64Url: verification.challenge,
+        ),
       );
       final signedInUser = await AuthService.instance.completeWrytteIdSignIn(
         userId: widget.userId!,
@@ -784,6 +871,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   /// capture or an unknown Wrytte ID. Discard all candidates and continue the
   /// original scan rather than showing a result screen that reveals nothing.
   Future<void> _resumeAfterBiometricRejection() async {
+    _captureBatchTimer?.stop();
+    _uploadBatchTimer?.stop();
+    _captureBatchTimer = null;
+    _uploadBatchTimer = null;
+    _scanTotalTimer
+      ..reset()
+      ..start();
     _pipeline.reset();
     if (_enrolling) BiometricEnrollmentTiming.cancel();
     _captureToTransitionTimer?.stop();
@@ -792,10 +886,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _backendWaiting = false;
     _verificationFailed = false;
     _acceptedCandidateCount = 0;
-    _locallyLiveCandidateCount = 0;
     _candidateExtractionClosed = false;
     _scanStarted = false;
-    _scanPhaseReady = false;
+    _scanPhaseReady = _ready;
     _scanStartTimer?.cancel();
     _faceAligned = false;
     _nextCandidateSubmissionIndex = 0;
@@ -814,6 +907,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   }
 
   void _logTransitionTiming(String destination) {
+    BiometricStageTiming.log(
+      'Scan',
+      'attempt_to_$destination',
+      _scanTotalTimer,
+    );
     final timer = _captureToTransitionTimer;
     if (timer == null) return;
     timer.stop();
@@ -827,16 +925,22 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   Future<void> _startOver() async {
     if (_sending || _inFlightCandidateUploads > 0) return;
+    _captureBatchTimer?.stop();
+    _uploadBatchTimer?.stop();
+    _captureBatchTimer = null;
+    _uploadBatchTimer = null;
+    _scanTotalTimer
+      ..reset()
+      ..start();
     _pipeline.reset();
     setState(() {
       _complete = false;
       _backendWaiting = false;
       _verificationFailed = false;
       _acceptedCandidateCount = 0;
-      _locallyLiveCandidateCount = 0;
       _candidateExtractionClosed = false;
       _scanStarted = false;
-      _scanPhaseReady = false;
+      _scanPhaseReady = _ready;
       _scanStartTimer?.cancel();
       _faceAligned = false;
       _nextCandidateSubmissionIndex = 0;
@@ -1045,7 +1149,7 @@ class _ScanCamera extends StatelessWidget {
     final aspect = preview == null ? 3 / 4 : preview.height / preview.width;
     return SizedBox.expand(
       child: FittedBox(
-        fit: BoxFit.contain,
+        fit: BoxFit.cover,
         child: SizedBox(
           width: 1000,
           height: 1000 / aspect,

@@ -101,11 +101,9 @@ class OpenCvFacePreprocessor {
   RetinaFrame prepare(img.Image image) {
     final originalWidth = image.width;
     final originalHeight = image.height;
-    // Keep the camera image's native RGB layout. Crop, resize and affine warp
-    // are channel-agnostic; the Android tensor builder performs the final
-    // channel placement next to ONNX Runtime. This removes a full-frame RGB
-    // to BGR traversal and allocation from every analyzed frame.
-    final bgr = image.toUint8List();
+    // All downstream consumers (RetinaFace, MiniFASNet and PNG encoding)
+    // share packed, three-channel BGR bytes.
+    final bgr = image.getBytes(order: img.ChannelOrder.bgr);
 
     final sourceBytes = _copyToOwnedSourceBuffer(bgr);
     final source = cv.Mat.fromBuffer(
@@ -121,18 +119,19 @@ class OpenCvFacePreprocessor {
     final cropX = (originalWidth - cropSide) ~/ 2;
     final cropY = (originalHeight - cropSide) ~/ 2;
     final roi = cv.Rect(cropX, cropY, cropSide, cropSide);
-    // ROI matrices are lightweight views. resize reads them synchronously, so
-    // copying the complete square before resizing is unnecessary.
+    // A ROI retains the source row stride. Clone it even at native size so
+    // Mat.data exposes packed rows rather than interleaved source margins.
     final cropped = cv.Mat.fromMat(source, roi: roi);
-    var retainCroppedAsRetinaMat = false;
     try {
-      // Preserve the native square crop. RetinaFace accepts dynamic spatial
-      // dimensions, so smaller camera frames are no longer upscaled.
-      final output = cropped;
-      retainCroppedAsRetinaMat = true;
+      final output =
+          cropSide != retinaSize
+              ? cv.resize(cropped, (
+                retinaSize,
+                retinaSize,
+              ), interpolation: cv.INTER_LINEAR)
+              : cropped.clone();
       return RetinaFrame(
-        // data already returns an owned Dart Uint8List. Wrapping it in
-        // fromList duplicated the complete 640x640 image on every frame.
+        // This view remains valid until RetinaFrame.dispose().
         bgr: output.data,
         originalBgr: bgr,
         originalWidth: originalWidth,
@@ -150,7 +149,7 @@ class OpenCvFacePreprocessor {
       calloc.free(sourceBytes);
       rethrow;
     } finally {
-      if (!retainCroppedAsRetinaMat) cropped.dispose();
+      cropped.dispose();
       roi.dispose();
     }
   }
