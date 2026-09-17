@@ -155,6 +155,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         'initialize',
         () => camera.initialize(),
       );
+      await _restoreCameraParameters(camera);
       await camera.startImageStream(_onFrame);
       if (!mounted) return;
       setState(() {
@@ -190,6 +191,28 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _status = 'Position your face\nwithin the circle';
         });
       }
+    }
+  }
+
+  Future<void> _restoreCameraParameters(CameraController camera) async {
+    try {
+      await camera.lockCaptureOrientation(DeviceOrientation.portraitUp);
+    } catch (error) {
+      debugPrint('[Camera] lockCaptureOrientation failed: $error');
+    }
+    try {
+      await camera.setExposureMode(ExposureMode.auto);
+      final maxExposure = await camera.getMaxExposureOffset();
+      await camera.setExposureOffset(0.5.clamp(0.0, maxExposure));
+      await camera.setExposureMode(ExposureMode.locked);
+    } catch (error) {
+      debugPrint('[Camera] exposure setup failed: $error');
+    }
+    try {
+      final minZoom = await camera.getMinZoomLevel();
+      await camera.setZoomLevel(minZoom);
+    } catch (error) {
+      debugPrint('[Camera] setZoomLevel failed: $error');
     }
   }
 
