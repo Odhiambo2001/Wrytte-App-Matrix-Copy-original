@@ -101,7 +101,7 @@ class OpenCvFacePreprocessor {
   RetinaFrame prepare(img.Image image) {
     final originalWidth = image.width;
     final originalHeight = image.height;
-    // All downstream consumers (RetinaFace, MiniFASNet and PNG encoding)
+    // All downstream consumers (RetinaFace, MiniFASNet and JPEG encoding)
     // share packed, three-channel BGR bytes.
     final bgr = image.getBytes(order: img.ChannelOrder.bgr);
 

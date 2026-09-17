@@ -59,9 +59,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   DateTime? _lastSelectedFrameAt;
   bool _faceAligned = false;
   double _headMovement = 0.5;
-  // Candidate requests are serialized; each frame receives its own backend
-  // decision before the next frame is submitted.
-  static const _maxConcurrentCandidateUploads = 1;
+  // One worker can prepare the next candidate while an earlier request waits
+  // for its response. Biometric HTTP requests remain ordered by the service.
+  static const _maxConcurrentCandidateUploads = 2;
   static const _maxCandidateSubmissions = 300;
   final _pipeline = FaceBiometricPipeline();
   final _ldpc = LdpcFuzzyCommitment();
@@ -324,19 +324,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _captureToTransitionTimer = Stopwatch()..start();
           if (_enrolling) BiometricEnrollmentTiming.start();
         }
-        // Capture the complete local set before starting any upload.
+        // Send each live candidate immediately. The next frame can proceed
+        // through detection and JPEG preparation while its predecessor waits
+        // for the ordered backend request to complete.
         _pendingCandidateCaptures.addLast(capture);
-        if (_pendingCandidateCaptures.length >=
-            FaceBiometricPipeline.framesToUse) {
-          BiometricStageTiming.log(
-            'Capture',
-            'five_live_frames',
-            _captureBatchTimer!,
-          );
-          _uploadBatchTimer = Stopwatch()..start();
-          _candidateExtractionClosed = true;
-          _dispatchPendingCandidateCaptures();
-        }
+        _uploadBatchTimer ??= Stopwatch()..start();
+        _dispatchPendingCandidateCaptures();
         setState(() => _status = 'Scanning…');
       }
     } catch (error) {
@@ -382,11 +375,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
   }
 
-  /// Sends locally valid target frames one at a time. The backend accepts five
-  /// frames only after its two-model liveness check.
+  /// Sends locally valid target frames with bounded overlap. The next frame
+  /// can encode while the current request waits on transport/backend work.
   void _dispatchPendingCandidateCaptures() {
     if (!mounted ||
-        !_candidateExtractionClosed ||
+        _candidateExtractionClosed ||
         _complete ||
         _sending ||
         _captureSessionId == null) {
@@ -505,6 +498,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _acceptedCandidateCount,
         result.acceptedCandidates,
       );
+      if (_acceptedCandidateCount >= FaceBiometricPipeline.framesToUse) {
+        BiometricStageTiming.log(
+          'Capture',
+          'five_live_frames',
+          _captureBatchTimer!,
+        );
+      }
       if (!result.complete) {
         setState(() => _status = 'Scanning…');
         return;
@@ -581,16 +581,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     } finally {
       capture.clear();
       _inFlightCandidateUploads = math.max(0, _inFlightCandidateUploads - 1);
-      if (mounted &&
-          !_complete &&
-          _candidateExtractionClosed &&
-          _inFlightCandidateUploads == 0 &&
-          (_pendingCandidateCaptures.isEmpty ||
-              _nextCandidateSubmissionIndex >= _maxCandidateSubmissions)) {
-        unawaited(_resumeAfterBiometricRejection());
-      } else {
-        _dispatchPendingCandidateCaptures();
-      }
+      _dispatchPendingCandidateCaptures();
     }
   }
 

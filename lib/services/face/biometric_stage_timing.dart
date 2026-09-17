@@ -63,7 +63,7 @@ class FrontendTimingTotal {
     'Camera.convert_and_rotate',
     'Camera.stop_stream',
     'FaceFrame.processing',
-    'Upload.png_encoding',
+    'Upload.jpeg_encoding',
     'Upload.device_metadata',
     'Verification.sign_challenge',
     'LDPC.local_enrollment',

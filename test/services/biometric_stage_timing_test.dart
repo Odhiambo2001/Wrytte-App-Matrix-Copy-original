@@ -7,7 +7,7 @@ void main() {
     final total = FrontendTimingTotal();
     total.record('FaceFrame', 'processing', const Duration(seconds: 2));
     total.record('MiniFASNet', 'inference', const Duration(seconds: 1));
-    total.record('Upload', 'png_encoding', const Duration(milliseconds: 500));
+    total.record('Upload', 'jpeg_encoding', const Duration(milliseconds: 500));
     total.record(
       'Upload',
       'batch_to_backend_acceptance',

@@ -1,4 +1,4 @@
-import 'package:wrytte/services/face/biometric_stage_timing.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:image/image.dart' as img;
 import 'package:wrytte/services/auth/api_service.dart';
+import 'package:wrytte/services/face/biometric_stage_timing.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/services/face/retinaface_detector.dart';
@@ -124,10 +125,35 @@ class BiometricCandidateResult {
       verificationBootstrap != null;
 }
 
+class _UploadReservation {
+  _UploadReservation(this.previous, this._done);
+
+  final Future<void> previous;
+  final Completer<void> _done;
+
+  void release() {
+    if (!_done.isCompleted) _done.complete();
+  }
+}
+
 class BiometricApiService {
-  // Balanced PNG compression: smaller payloads than level 1 without the full
-  // CPU cost of level 6 on lower-end devices.
-  static const _pngCompressionLevel = 3;
+  // JPEG preserves the face detail required by the backend models while
+  // avoiding the large CPU and transport cost of lossless PNG frames.
+  static const _jpegQuality = 92;
+  static Future<void> _uploadTail = Future<void>.value();
+
+  static _UploadReservation _reserveUpload() {
+    final previous = _uploadTail;
+    final done = Completer<void>();
+    _uploadTail = done.future;
+    return _UploadReservation(previous, done);
+  }
+
+  static Future<T> _serializeUpload<T>(Future<T> Function() upload) {
+    final result = _uploadTail.then((_) => upload());
+    _uploadTail = result.then<void>((_) {}, onError: (_, __) {});
+    return result;
+  }
   static const ldpcInputBitCount = 832;
   static const _packedLdpcInputByteCount = ldpcInputBitCount ~/ 8;
   static const _maximumLivenessFrameWidth = 1280;
@@ -526,7 +552,7 @@ class BiometricApiService {
     if (captures.length != FaceBiometricPipeline.framesToUse) {
       throw ArgumentError('Exactly five biometric crop sets are required.');
     }
-    // PNG encoding a full camera frame is deliberately moved off the UI
+    // JPEG encoding a full camera frame is deliberately moved off the UI
     // isolate. The scan/result screen remains responsive while five captures
     // are prepared for upload.
     final encodedCaptures = await compute(
@@ -558,16 +584,16 @@ class BiometricApiService {
           http.MultipartFile.fromBytes(
             'retinaFaceFrames',
             capture['retinaFace']! as Uint8List,
-            filename: 'retina-face.png',
-            contentType: MediaType('image', 'png'),
+            filename: 'retina-face.jpg',
+            contentType: MediaType('image', 'jpeg'),
           ),
         )
         ..add(
           http.MultipartFile.fromBytes(
             'livenessFrames',
             capture['livenessFrame']! as Uint8List,
-            filename: 'liveness-frame.png',
-            contentType: MediaType('image', 'png'),
+            filename: 'liveness-frame.jpg',
+            contentType: MediaType('image', 'jpeg'),
           ),
         );
     }
@@ -581,7 +607,7 @@ class BiometricApiService {
     );
     final stopwatch = Stopwatch()..start();
     try {
-      return await ApiService.postMultipart(
+      return await _serializeUpload(() => ApiService.postMultipart(
         path,
         {
           ...fields,
@@ -591,7 +617,7 @@ class BiometricApiService {
         files: files,
         token: token,
         headers: {'X-Biometric-Request-Id': requestId},
-      );
+      ));
     } finally {
       stopwatch.stop();
       // Deliberately no images, embeddings, scores, Wrytte ID, or token.
@@ -621,11 +647,14 @@ class BiometricApiService {
     if (candidateIndex < 0 || candidateIndex > 299) {
       throw ArgumentError('Invalid biometric candidate index.');
     }
-    // PNG encoding remains off the UI isolate while the camera preview keeps
+    // Reserve the HTTP slot before encoding. Encoding can overlap the previous
+    // upload, while the request itself waits for earlier candidates.
+    final uploadReservation = _reserveUpload();
+    // JPEG encoding remains off the UI isolate while the camera preview keeps
     // running. This is a single candidate pair, not a five-frame batch.
     final encoded = await BiometricStageTiming.measureAsync(
       'Upload',
-      'png_encoding',
+      'jpeg_encoding',
       () => compute(_encodeCapture, <String, Object>{
         'retinaFace': capture.retinaFaceBgr,
         'landmarks': _landmarks(capture.adafaceLandmarks),
@@ -646,6 +675,16 @@ class BiometricApiService {
     );
     final stopwatch = Stopwatch()..start();
     try {
+      final uploadGateWait = Stopwatch()..start();
+      await uploadReservation.previous;
+      uploadGateWait.stop();
+      // This isolates ordered-request queueing from JPEG preparation and the
+      // network request below; it contains no biometric or account data.
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] pipeline=Upload stage=candidate_upload_gate '
+        'index=$candidateIndex wait_ms=${uploadGateWait.elapsedMilliseconds}',
+      );
       return await ApiService.postMultipart(
         path,
         <String, String>{
@@ -669,20 +708,21 @@ class BiometricApiService {
           http.MultipartFile.fromBytes(
             'retinaFaceFrame',
             encoded['retinaFace']! as Uint8List,
-            filename: 'retina-face.png',
-            contentType: MediaType('image', 'png'),
+            filename: 'retina-face.jpg',
+            contentType: MediaType('image', 'jpeg'),
           ),
           http.MultipartFile.fromBytes(
             'livenessFrame',
             encoded['livenessFrame']! as Uint8List,
-            filename: 'liveness-frame.png',
-            contentType: MediaType('image', 'png'),
+            filename: 'liveness-frame.jpg',
+            contentType: MediaType('image', 'jpeg'),
           ),
         ],
         token: token,
         headers: <String, String>{'X-Biometric-Request-Id': requestId},
       );
     } finally {
+      uploadReservation.release();
       stopwatch.stop();
       // No image, embedding, Wrytte ID, session ID, score, or token is logged.
       // ignore: avoid_print
@@ -705,7 +745,7 @@ class BiometricApiService {
         '${value.substring(20)}';
   }
 
-  static Uint8List _png(Uint8List bgr, int width, int height) {
+  static Uint8List _jpeg(Uint8List bgr, int width, int height) {
     final image = img.Image.fromBytes(
       width: width,
       height: height,
@@ -713,11 +753,7 @@ class BiometricApiService {
       numChannels: 3,
       order: img.ChannelOrder.bgr,
     );
-    // Level 1 substantially reduces CPU time on low/mid-range phones. These
-    // images are biometric transport payloads, so avoid lossy JPEG conversion.
-    return Uint8List.fromList(
-      img.encodePng(image, level: _pngCompressionLevel),
-    );
+    return Uint8List.fromList(img.encodeJpg(image, quality: _jpegQuality));
   }
 
   /// This top-level-compatible static callback is run by [compute]. It keeps
@@ -757,10 +793,10 @@ class BiometricApiService {
       'height': capture['height']! as int,
     };
     return <String, Object>{
-      'retinaFace': _png(capture['retinaFace']! as Uint8List, 640, 640),
+      'retinaFace': _jpeg(capture['retinaFace']! as Uint8List, 640, 640),
       'landmarks': capture['landmarks']! as Map<String, double>,
       'livenessFrame': Uint8List.fromList(
-        img.encodePng(livenessImage, level: _pngCompressionLevel),
+        img.encodeJpg(livenessImage, quality: _jpegQuality),
       ),
       'geometry': scaleLivenessFaceBox(
         sourceBox,
