@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:image/image.dart' as img;
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/face/biometric_stage_timing.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
@@ -139,7 +140,8 @@ class _UploadReservation {
 class BiometricApiService {
   // JPEG preserves the face detail required by the backend models while
   // avoiding the large CPU and transport cost of lossless PNG frames.
-  static const _jpegQuality = 85;
+  static const _retinaJpegQuality = 85;
+  static const _livenessJpegQuality = 80;
   static Future<void> _uploadTail = Future<void>.value();
   static final Set<String> _completedCaptureSessions = <String>{};
 
@@ -157,12 +159,12 @@ class BiometricApiService {
   }
   static const ldpcInputBitCount = 832;
   static const _packedLdpcInputByteCount = ldpcInputBitCount ~/ 8;
-  // MiniFASNet receives a small face crop on the backend. An 800x450 source
-  // retains enough context for the fixed 80x80 model crop while reducing
-  // JPEG work and transport pixels by 31% from the verified 960x540 size.
-  static const _maximumLivenessFrameWidth = 800;
-  static const _maximumLivenessFrameHeight = 800;
-  static const _maximumLivenessFramePixels = 360000;
+  // MiniFASNet receives an 80x80 face crop on the backend. A 640x360 source
+  // retains that facial detail while requiring 56% fewer pixels than the
+  // former 960x540 transport source.
+  static const _maximumLivenessFrameWidth = 640;
+  static const _maximumLivenessFrameHeight = 640;
+  static const _maximumLivenessFramePixels = 230400;
 
   static Future<BiometricLdpcInput> enroll({
     required String token,
@@ -654,12 +656,12 @@ class BiometricApiService {
     // Reserve the HTTP slot before encoding. Encoding can overlap the previous
     // upload, while the request itself waits for earlier candidates.
     final uploadReservation = _reserveUpload();
-    // JPEG encoding remains off the UI isolate while the camera preview keeps
-    // running. This is a single candidate pair, not a five-frame batch.
-    final encoded = await BiometricStageTiming.measureAsync(
+    // OpenCV performs JPEG compression in native code. This avoids launching
+    // a Dart isolate and copying two image buffers for every candidate.
+    final encoded = BiometricStageTiming.measure(
       'Upload',
       'jpeg_encoding',
-      () => compute(_encodeCapture, <String, Object>{
+      () => _encodeCandidateWithOpenCv(<String, Object>{
         'retinaFace': capture.retinaFaceBgr,
         'landmarks': _landmarks(capture.adafaceLandmarks),
         'livenessFrame': capture.livenessFrameBgr,
@@ -771,7 +773,12 @@ class BiometricApiService {
         '${value.substring(20)}';
   }
 
-  static Uint8List _jpeg(Uint8List bgr, int width, int height) {
+  static Uint8List _jpeg(
+    Uint8List bgr,
+    int width,
+    int height, {
+    required int quality,
+  }) {
     final image = img.Image.fromBytes(
       width: width,
       height: height,
@@ -779,7 +786,7 @@ class BiometricApiService {
       numChannels: 3,
       order: img.ChannelOrder.bgr,
     );
-    return Uint8List.fromList(img.encodeJpg(image, quality: _jpegQuality));
+    return Uint8List.fromList(img.encodeJpg(image, quality: quality));
   }
 
   /// This top-level-compatible static callback is run by [compute]. It keeps
@@ -788,10 +795,15 @@ class BiometricApiService {
   static List<Map<String, Object>> _encodeCaptures(
     List<Map<String, Object>> captures,
   ) {
-    return captures.map(_encodeCapture).toList(growable: false);
+    return captures.map(_encodeCaptureWithDart).toList(growable: false);
   }
 
-  static Map<String, Object> _encodeCapture(Map<String, Object> capture) {
+  /// Legacy batch compatibility path. Immediate candidates use
+  /// [_encodeCandidateWithOpenCv] so normal enrollment does not pay Dart
+  /// isolate startup or pure-Dart JPEG encoding costs.
+  static Map<String, Object> _encodeCaptureWithDart(
+    Map<String, Object> capture,
+  ) {
     final sourceWidth = capture['livenessFrameWidth']! as int;
     final sourceHeight = capture['livenessFrameHeight']! as int;
     final sourceBgr = capture['livenessFrame']! as Uint8List;
@@ -819,10 +831,15 @@ class BiometricApiService {
       'height': capture['height']! as int,
     };
     return <String, Object>{
-      'retinaFace': _jpeg(capture['retinaFace']! as Uint8List, 640, 640),
+      'retinaFace': _jpeg(
+        capture['retinaFace']! as Uint8List,
+        640,
+        640,
+        quality: _retinaJpegQuality,
+      ),
       'landmarks': capture['landmarks']! as Map<String, double>,
       'livenessFrame': Uint8List.fromList(
-        img.encodeJpg(livenessImage, quality: _jpegQuality),
+        img.encodeJpg(livenessImage, quality: _livenessJpegQuality),
       ),
       'geometry': scaleLivenessFaceBox(
         sourceBox,
@@ -832,6 +849,85 @@ class BiometricApiService {
         targetHeight: target.$2,
       ),
     };
+  }
+
+  /// Native JPEG path for the normal one-candidate-at-a-time scanner.
+  /// OpenCV's libjpeg implementation is substantially faster than the Dart
+  /// encoder and keeps the two images in-process, avoiding a per-frame
+  /// isolate creation and multi-megabyte message copy.
+  static Map<String, Object> _encodeCandidateWithOpenCv(
+    Map<String, Object> capture,
+  ) {
+    final sourceWidth = capture['livenessFrameWidth']! as int;
+    final sourceHeight = capture['livenessFrameHeight']! as int;
+    final target = livenessTargetSize(sourceWidth, sourceHeight);
+    final retina = _openCvJpeg(
+      capture['retinaFace']! as Uint8List,
+      width: 640,
+      height: 640,
+      quality: _retinaJpegQuality,
+    );
+    final liveness = _openCvJpeg(
+      capture['livenessFrame']! as Uint8List,
+      width: sourceWidth,
+      height: sourceHeight,
+      targetWidth: target.$1,
+      targetHeight: target.$2,
+      quality: _livenessJpegQuality,
+    );
+    final sourceBox = <String, int>{
+      'x': capture['x']! as int,
+      'y': capture['y']! as int,
+      'width': capture['width']! as int,
+      'height': capture['height']! as int,
+    };
+    return <String, Object>{
+      'retinaFace': retina,
+      'landmarks': capture['landmarks']! as Map<String, double>,
+      'livenessFrame': liveness,
+      'geometry': scaleLivenessFaceBox(
+        sourceBox,
+        sourceWidth: sourceWidth,
+        sourceHeight: sourceHeight,
+        targetWidth: target.$1,
+        targetHeight: target.$2,
+      ),
+    };
+  }
+
+  static Uint8List _openCvJpeg(
+    Uint8List bgr, {
+    required int width,
+    required int height,
+    int? targetWidth,
+    int? targetHeight,
+    required int quality,
+  }) {
+    final source = cv.Mat.fromList(height, width, cv.MatType.CV_8UC3, bgr);
+    cv.Mat? resized;
+    final parameters = cv.VecI32.fromList(<int>[
+      cv.IMWRITE_JPEG_QUALITY,
+      quality,
+    ]);
+    try {
+      final output =
+          targetWidth == null ||
+                  targetHeight == null ||
+                  (targetWidth == width && targetHeight == height)
+              ? source
+              : (resized = cv.resize(
+                source,
+                (targetWidth, targetHeight),
+                interpolation: cv.INTER_LINEAR,
+              ));
+      final (success, bytes) = cv.imencode('.jpg', output, params: parameters);
+      if (!success) throw StateError('Native JPEG encoding failed.');
+      return bytes;
+    } finally {
+      parameters.dispose();
+      resized?.dispose();
+      source.dispose();
+    }
   }
 
   static Map<String, double> _landmarks(FaceLandmarks landmarks) =>

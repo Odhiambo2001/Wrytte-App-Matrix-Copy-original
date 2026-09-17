@@ -59,13 +59,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   DateTime? _lastSelectedFrameAt;
   bool _faceAligned = false;
   double _headMovement = 0.5;
-  // One worker can prepare the next candidate while an earlier request waits
-  // for its response. Biometric HTTP requests remain ordered by the service.
-  static const _maxConcurrentCandidateUploads = 2;
-  // Permit only the request being sent and one candidate being prepared.
-  // Larger look-ahead creates unnecessary RetinaFace and JPEG work after the
-  // backend has already accepted the five required candidates.
-  static const _maxOutstandingCandidateCaptures = 2;
+  // Keep three local pipeline stages moving: one request may be on the wire,
+  // the next candidate may be encoding, and a third may pass RetinaFace and
+  // local liveness. [BiometricApiService] still gates HTTP requests in index
+  // order, so backend submissions cannot arrive out of order.
+  static const _maxConcurrentCandidateUploads = 3;
+  // Three candidates eliminate response-driven gaps between frames without
+  // rebuilding the former unbounded speculative capture queue. Any work that
+  // survives the fifth acceptance is cancelled before it enters HTTP.
+  static const _maxOutstandingCandidateCaptures = 3;
   static const _maxCandidateSubmissions = 300;
   final _pipeline = FaceBiometricPipeline();
   final _ldpc = LdpcFuzzyCommitment();
