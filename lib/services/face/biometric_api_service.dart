@@ -139,8 +139,9 @@ class _UploadReservation {
 class BiometricApiService {
   // JPEG preserves the face detail required by the backend models while
   // avoiding the large CPU and transport cost of lossless PNG frames.
-  static const _jpegQuality = 92;
+  static const _jpegQuality = 85;
   static Future<void> _uploadTail = Future<void>.value();
+  static final Set<String> _completedCaptureSessions = <String>{};
 
   static _UploadReservation _reserveUpload() {
     final previous = _uploadTail;
@@ -156,11 +157,12 @@ class BiometricApiService {
   }
   static const ldpcInputBitCount = 832;
   static const _packedLdpcInputByteCount = ldpcInputBitCount ~/ 8;
-  // MiniFASNet receives a small face crop on the backend. A 960x540 source
-  // retains facial context while cutting JPEG pixels by 44% from 1280x720.
-  static const _maximumLivenessFrameWidth = 960;
-  static const _maximumLivenessFrameHeight = 960;
-  static const _maximumLivenessFramePixels = 518400;
+  // MiniFASNet receives a small face crop on the backend. An 800x450 source
+  // retains enough context for the fixed 80x80 model crop while reducing
+  // JPEG work and transport pixels by 31% from the verified 960x540 size.
+  static const _maximumLivenessFrameWidth = 800;
+  static const _maximumLivenessFrameHeight = 800;
+  static const _maximumLivenessFramePixels = 360000;
 
   static Future<BiometricLdpcInput> enroll({
     required String token,
@@ -348,7 +350,7 @@ class BiometricApiService {
         errorCode:
             realAnswer == false
                 ? 'FACE_NOT_LIVE'
-                : _errorCode(response['error']),
+                : _errorCode(response['rejectionCode'] ?? response['error']),
       );
     }
     if (index < 0 ||
@@ -687,7 +689,21 @@ class BiometricApiService {
         '[BiometricTiming] pipeline=Upload stage=candidate_upload_gate '
         'index=$candidateIndex wait_ms=${uploadGateWait.elapsedMilliseconds}',
       );
-      return await ApiService.postMultipart(
+      if (captureSessionId != null &&
+          _completedCaptureSessions.contains(captureSessionId)) {
+        print(
+          '[BiometricTiming] pipeline=Upload stage=candidate_upload_cancelled '
+          'index=$candidateIndex reason=session_completed',
+        );
+        return <String, Object>{
+          'accepted': false,
+          'index': candidateIndex,
+          'acceptedCandidates': FaceBiometricPipeline.framesToUse,
+          'captureSessionId': captureSessionId,
+          'error': 'CLIENT_SESSION_COMPLETE',
+        };
+      }
+      final response = await ApiService.postMultipart(
         path,
         <String, String>{
           if (wrytteId != null && wrytteId.trim().isNotEmpty)
@@ -723,6 +739,14 @@ class BiometricApiService {
         token: token,
         headers: <String, String>{'X-Biometric-Request-Id': requestId},
       );
+      if (captureSessionId != null &&
+          response is Map &&
+          (response['completed'] == true ||
+              _asInt(response['acceptedCandidates']) ==
+                  FaceBiometricPipeline.framesToUse)) {
+        _completedCaptureSessions.add(captureSessionId);
+      }
+      return response;
     } finally {
       uploadReservation.release();
       stopwatch.stop();

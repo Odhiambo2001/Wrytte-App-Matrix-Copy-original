@@ -3,15 +3,15 @@ import 'package:wrytte/services/face/biometric_api_service.dart';
 
 void main() {
   test('scales a 1280x720 liveness frame to the JPEG transport limit', () {
-    expect(BiometricApiService.livenessTargetSize(1280, 720), (960, 540));
+    expect(BiometricApiService.livenessTargetSize(1280, 720), (800, 450));
   });
 
   test('constrains a larger device frame to the backend pixel limit', () {
     final size = BiometricApiService.livenessTargetSize(1280, 960);
 
-    expect(size.$1, lessThanOrEqualTo(960));
-    expect(size.$2, lessThanOrEqualTo(960));
-    expect(size.$1 * size.$2, lessThanOrEqualTo(518400));
+    expect(size.$1, lessThanOrEqualTo(800));
+    expect(size.$2, lessThanOrEqualTo(800));
+    expect(size.$1 * size.$2, lessThanOrEqualTo(360000));
   });
 
   test(

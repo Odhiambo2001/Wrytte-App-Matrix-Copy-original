@@ -62,6 +62,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   // One worker can prepare the next candidate while an earlier request waits
   // for its response. Biometric HTTP requests remain ordered by the service.
   static const _maxConcurrentCandidateUploads = 2;
+  // Permit only the request being sent and one candidate being prepared.
+  // Larger look-ahead creates unnecessary RetinaFace and JPEG work after the
+  // backend has already accepted the five required candidates.
+  static const _maxOutstandingCandidateCaptures = 2;
   static const _maxCandidateSubmissions = 300;
   final _pipeline = FaceBiometricPipeline();
   final _ldpc = LdpcFuzzyCommitment();
@@ -88,7 +92,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   bool get _hasCandidateUploadCapacity =>
       _nextCandidateSubmissionIndex < _maxCandidateSubmissions &&
       _inFlightCandidateUploads + _pendingCandidateCaptures.length <
-          FaceBiometricPipeline.framesToUse;
+          _maxOutstandingCandidateCaptures;
 
   @override
   void initState() {
