@@ -184,8 +184,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     } catch (error) {
       if (mounted) {
         setState(() {
-          _cameraError = 'Unable to initialize the face scanner.';
-          _status = 'Unable to initialize the face scanner.';
+          // Keep the scanner's approved status vocabulary even when camera
+          // setup fails; the camera area remains available for retry.
+          _cameraError = null;
+          _status = 'Position your face\nwithin the circle';
         });
       }
     }
@@ -467,7 +469,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               _status =
                   fakeFrame || !result.accepted
                       ? 'Face not detected.\nPosition your face within the circle'
-                      : 'Center your face inside the ring.',
+                      : 'Face not detected.\nPosition your face within the circle',
         );
         if (fakeFrame) {
           await _resumeAfterBiometricRejection();
