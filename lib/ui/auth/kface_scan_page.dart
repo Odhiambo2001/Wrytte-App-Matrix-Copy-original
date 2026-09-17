@@ -480,6 +480,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             errorCode == 'FAKE_FACE' ||
             errorCode == 'LIVENESS_FAILED' ||
             errorCode == 'SPOOF_DETECTED';
+        final invalidGeometry = errorCode == 'INVALID_GEOMETRY';
         setState(
           () =>
               _status =
@@ -487,7 +488,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                       ? 'Face not detected.\nPosition your face within the circle'
                       : 'Face not detected.\nPosition your face within the circle',
         );
-        if (fakeFrame) {
+        // The backend cannot accept further candidates in a geometry-invalid
+        // session. Start a fresh session instead of advancing its index.
+        if (fakeFrame || invalidGeometry) {
           await _resumeAfterBiometricRejection();
         }
         return;

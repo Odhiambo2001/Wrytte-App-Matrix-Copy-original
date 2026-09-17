@@ -83,7 +83,9 @@ class RetinaFaceDetector {
     // Preprocessing supplies packed BGR pixels for this model's NCHW input.
     _session = await OnnxRuntime().createSessionFromAsset(
       modelAsset,
-      options: OrtSessionOptions(intraOpNumThreads: 2),
+      // One frame is inferred at a time, so use more device cores for that
+      // single model invocation instead of leaving the CPU underutilized.
+      options: OrtSessionOptions(intraOpNumThreads: 4),
     );
     final session = _session!;
     try {
@@ -126,11 +128,12 @@ class RetinaFaceDetector {
     return _run(tensorData, inputSize, inputSize);
   }
 
-  double _bestFaceConfidence(List<double>? values) {
+  double _bestFaceConfidence(List<dynamic>? values) {
     if (values == null) return 0;
     var best = 0.0;
     for (var i = 1; i < values.length; i += 2) {
-      if (values[i] > best) best = values[i];
+      final value = (values[i] as num).toDouble();
+      if (value > best) best = value;
     }
     return best;
   }
@@ -153,15 +156,15 @@ class RetinaFaceDetector {
     Map<String, OrtValue>? outputs;
     try {
       outputs = await session.run({'input': input});
-      final locations = _numbers(await outputs['loc']!.asFlattenedList());
-      final scores = _numbers(await outputs['conf']!.asFlattenedList());
-      final landmarks = _numbers(await outputs['landmarks']!.asFlattenedList());
+      final locations = await outputs['loc']!.asFlattenedList();
+      final scores = await outputs['conf']!.asFlattenedList();
+      final landmarks = await outputs['landmarks']!.asFlattenedList();
       // ignore: avoid_print
       print(
         '[BiometricTiming] pipeline=RetinaFace stage=onnx_diagnostics '
         'input_floats=${tensorData.length} loc=${locations.length} '
         'conf=${scores.length} landmarks=${landmarks.length} '
-        'best_face_conf=${_bestFaceConfidence(List<double>.from(scores)).toStringAsFixed(4)}',
+        'best_face_conf=${_bestFaceConfidence(scores).toStringAsFixed(4)}',
       );
       return _decode(
         locations,
@@ -215,31 +218,35 @@ class RetinaFaceDetector {
   }
 
   List<FaceDetection> _decode(
-    List<double> locations,
-    List<double> scores,
-    List<double> landmarkValues,
+    List<dynamic> locations,
+    List<dynamic> scores,
+    List<dynamic> landmarkValues,
     int originalWidth,
     int originalHeight,
     List<_Prior> priors,
   ) {
+    double valueAt(List<dynamic> values, int index) =>
+        (values[index] as num).toDouble();
     final count = math.min(
       priors.length,
       math.min(locations.length ~/ 4, scores.length ~/ 2),
     );
     final candidates = <FaceDetection>[];
     for (var index = 0; index < count; index++) {
-      final confidence = scores[(index * 2) + 1];
+      final confidence = valueAt(scores, (index * 2) + 1);
       if (confidence < confidenceThreshold) continue;
 
       final prior = priors[index];
       final locationOffset = index * 4;
       final centerX =
-          prior.centerX + locations[locationOffset] * 0.1 * prior.width;
+          prior.centerX + valueAt(locations, locationOffset) * 0.1 * prior.width;
       final centerY =
-          prior.centerY + locations[locationOffset + 1] * 0.1 * prior.height;
-      final width = prior.width * math.exp(locations[locationOffset + 2] * 0.2);
+          prior.centerY +
+              valueAt(locations, locationOffset + 1) * 0.1 * prior.height;
+      final width =
+          prior.width * math.exp(valueAt(locations, locationOffset + 2) * 0.2);
       final height =
-          prior.height * math.exp(locations[locationOffset + 3] * 0.2);
+          prior.height * math.exp(valueAt(locations, locationOffset + 3) * 0.2);
       final rawLeft = (centerX - width / 2) * originalWidth;
       final rawTop = (centerY - height / 2) * originalHeight;
       final rawRight = (centerX + width / 2) * originalWidth;
@@ -248,9 +255,10 @@ class RetinaFaceDetector {
       math.Point<double> landmark(int point) {
         final offset = (index * 10) + (point * 2);
         return math.Point<double>(
-          (prior.centerX + landmarkValues[offset] * 0.1 * prior.width) *
+          (prior.centerX + valueAt(landmarkValues, offset) * 0.1 * prior.width) *
               originalWidth,
-          (prior.centerY + landmarkValues[offset + 1] * 0.1 * prior.height) *
+          (prior.centerY +
+                  valueAt(landmarkValues, offset + 1) * 0.1 * prior.height) *
               originalHeight,
         );
       }
@@ -327,8 +335,6 @@ class RetinaFaceDetector {
     return union <= 0 ? 0 : intersection / union;
   }
 
-  static List<double> _numbers(List<dynamic> values) =>
-      values.map((value) => (value as num).toDouble()).toList(growable: false);
 }
 
 class _Prior {

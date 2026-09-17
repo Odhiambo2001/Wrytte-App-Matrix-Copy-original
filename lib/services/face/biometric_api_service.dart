@@ -156,9 +156,11 @@ class BiometricApiService {
   }
   static const ldpcInputBitCount = 832;
   static const _packedLdpcInputByteCount = ldpcInputBitCount ~/ 8;
-  static const _maximumLivenessFrameWidth = 1280;
-  static const _maximumLivenessFrameHeight = 1280;
-  static const _maximumLivenessFramePixels = 921600;
+  // MiniFASNet receives a small face crop on the backend. A 960x540 source
+  // retains facial context while cutting JPEG pixels by 44% from 1280x720.
+  static const _maximumLivenessFrameWidth = 960;
+  static const _maximumLivenessFrameHeight = 960;
+  static const _maximumLivenessFramePixels = 518400;
 
   static Future<BiometricLdpcInput> enroll({
     required String token,
