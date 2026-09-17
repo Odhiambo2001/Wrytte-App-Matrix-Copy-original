@@ -141,6 +141,7 @@ class ApiService {
   }) async {
     final uri = Uri.parse("$baseUrl$path");
 
+    final buildTimer = Stopwatch()..start();
     final request = http.MultipartRequest("POST", uri);
     request.fields.addAll(fields);
     request.files.addAll(files);
@@ -149,11 +150,18 @@ class ApiService {
       request.headers["Authorization"] = "Bearer $token";
     }
     request.headers.addAll(headers);
+    buildTimer.stop();
 
     debugPrint("➡️ POST MULTIPART $uri");
     debugPrint("📦 FIELDS: ${_redactMap(fields)}");
     if (files.isNotEmpty) {
       debugPrint("📎 FILES: ${files.map((file) => file.field).join(', ')}");
+      debugPrint(
+        '[BiometricTiming] pipeline=Network stage=multipart_build '
+        'elapsed_ms=${buildTimer.elapsedMilliseconds} '
+        'content_length=${request.contentLength} '
+        'file_sizes=${files.map((file) => '${file.field}:${file.length}').join(',')}',
+      );
     }
 
     final requestTimer = Stopwatch()..start();

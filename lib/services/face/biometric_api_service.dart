@@ -571,6 +571,11 @@ class BiometricApiService {
     // Correlates duration-only frontend and backend diagnostics. It identifies
     // neither the person nor their biometric data.
     final requestId = _requestId();
+    print(
+      '[BiometricTiming] pipeline=Upload stage=batch_payload_ready '
+      'candidates=${encodedCaptures.length} '
+      'total_bytes=${files.fold<int>(0, (sum, file) => sum + file.length)}',
+    );
     final stopwatch = Stopwatch()..start();
     try {
       return await ApiService.postMultipart(
@@ -631,6 +636,11 @@ class BiometricApiService {
       }),
     );
     final requestId = _requestId();
+    print(
+      '[BiometricTiming] pipeline=Upload stage=candidate_payload_ready '
+      'index=$candidateIndex retina_face_bytes=${(encoded['retinaFace']! as Uint8List).length} '
+      'liveness_frame_bytes=${(encoded['livenessFrame']! as Uint8List).length}',
+    );
     final stopwatch = Stopwatch()..start();
     try {
       return await ApiService.postMultipart(
