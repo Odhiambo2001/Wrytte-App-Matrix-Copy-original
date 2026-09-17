@@ -81,37 +81,18 @@ class RetinaFaceDetector {
   Future<void> initialize() async {
     if (_session != null) return;
     // Preprocessing supplies packed BGR pixels for this model's NCHW input.
-    final runtime = OnnxRuntime();
-    try {
-      // One frame is inferred at a time, so use more device cores for that
-      // single model invocation instead of leaving the CPU underutilized.
-      // XNNPACK is the optimized ARM CPU execution provider bundled by the
-      // Android runtime. CPU remains a fallback on platforms without it.
-      _session = await runtime.createSessionFromAsset(
-        modelAsset,
-        options: OrtSessionOptions(
-          intraOpNumThreads: 4,
-          interOpNumThreads: 1,
-          providers: const <OrtProvider>[
-            OrtProvider.XNNPACK,
-            OrtProvider.CPU,
-          ],
-          useArena: true,
-        ),
-      );
-    } catch (_) {
-      // Keep scanning on a build that omits XNNPACK rather than failing model
-      // initialization. Android release builds take the fast path above.
-      _session = await runtime.createSessionFromAsset(
-        modelAsset,
-        options: OrtSessionOptions(
-          intraOpNumThreads: 4,
-          interOpNumThreads: 1,
-          providers: const <OrtProvider>[OrtProvider.CPU],
-          useArena: true,
-        ),
-      );
-    }
+    // The Android ONNX Runtime binary bundled with this app aborts during
+    // XNNPACK session creation on the Redmi 25028RN03A. Keep the compatible
+    // CPU provider and use four intra-op threads for this single inference.
+    _session = await OnnxRuntime().createSessionFromAsset(
+      modelAsset,
+      options: OrtSessionOptions(
+        intraOpNumThreads: 4,
+        interOpNumThreads: 1,
+        providers: const <OrtProvider>[OrtProvider.CPU],
+        useArena: true,
+      ),
+    );
     final session = _session!;
     try {
       _validateNames(session.inputNames, session.outputNames);
