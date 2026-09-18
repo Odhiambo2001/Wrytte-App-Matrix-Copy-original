@@ -70,6 +70,51 @@ class FrameAnalysis {
   final BiometricCropSet? capture;
 }
 
+/// A RetinaFace-approved original plus the independent local-only crop that
+/// awaits MiniFASNet. The crop is wiped after liveness; the original survives
+/// only when liveness accepts it and is then JPEG encoded for the backend.
+class PendingLivenessCapture {
+  PendingLivenessCapture({
+    required this.capture,
+    required this.livenessBgr,
+    required this.faceCenterX,
+    required this.faceCenterY,
+  });
+
+  final BiometricCropSet capture;
+  final Uint8List livenessBgr;
+  final double faceCenterX;
+  final double faceCenterY;
+
+  void clear() {
+    livenessBgr.fillRange(0, livenessBgr.length, 0);
+    capture.clear();
+  }
+}
+
+/// Owns the OpenCV frame between RetinaFace and the BBOX worker. The native
+/// Mats are released by [cropForLiveness] or [clear], never by RetinaFace.
+class PendingCropCapture {
+  PendingCropCapture({required this.frame, required this.target});
+
+  final RetinaFrame frame;
+  final FaceDetection target;
+  bool _released = false;
+
+  void clear() {
+    if (_released) return;
+    _released = true;
+    frame.dispose();
+  }
+}
+
+class RetinaFrameResult {
+  const RetinaFrameResult({required this.analysis, this.pendingCrop});
+
+  final FrameAnalysis analysis;
+  final PendingCropCapture? pendingCrop;
+}
+
 class FaceDistance {
   const FaceDistance(
     this.label,
@@ -240,13 +285,18 @@ class FaceBiometricPipeline {
     );
   }
 
-  Future<FrameAnalysis> processFrame(img.Image cameraFrame) async {
+  /// Runs only OpenCV preparation, RetinaFace and target selection. It
+  /// deliberately does not crop or await MiniFASNet, allowing the
+  /// caller to put the next camera frame through RetinaFace immediately.
+  Future<RetinaFrameResult> processRetinaFrame(img.Image cameraFrame) async {
     if (_processing) {
-      return FrameAnalysis(
-        faceDetected: false,
-        targetFaceSelected: false,
-        alignmentAccepted: false,
-        processingMilliseconds: 0,
+      return RetinaFrameResult(
+        analysis: FrameAnalysis(
+          faceDetected: false,
+          targetFaceSelected: false,
+          alignmentAccepted: false,
+          processingMilliseconds: 0,
+        ),
       );
     }
     _processing = true;
@@ -259,6 +309,7 @@ class FaceBiometricPipeline {
       '[BiometricTiming] pipeline=OpenCV stage=prepare '
       'elapsed_ms=${openCvTimer.elapsedMilliseconds}',
     );
+    var handedToCropWorker = false;
     try {
       final retinaTimer = Stopwatch()..start();
       final faces = await retinaFace.detectBgr(prepared.bgr);
@@ -281,56 +332,37 @@ class FaceBiometricPipeline {
         () => _selectTargetFace(faces),
       );
       if (target == null) {
-        return FrameAnalysis(
-          faceDetected: faces.isNotEmpty,
-          targetFaceSelected: false,
-          alignmentAccepted: false,
-          processingMilliseconds: stopwatch.elapsedMilliseconds,
-          faceTooFar:
-              faces.isNotEmpty &&
-              faces.every((face) => measureFaceDistance(face).label == 'FAR'),
-          faceTooClose:
-              faces.isNotEmpty &&
-              faces.every((face) => measureFaceDistance(face).label == 'CLOSE'),
-          multipleFaces: faces.length > 1,
+        return RetinaFrameResult(
+          analysis: FrameAnalysis(
+            faceDetected: faces.isNotEmpty,
+            targetFaceSelected: false,
+            alignmentAccepted: false,
+            processingMilliseconds: stopwatch.elapsedMilliseconds,
+            faceTooFar:
+                faces.isNotEmpty &&
+                faces.every((face) => measureFaceDistance(face).label == 'FAR'),
+            faceTooClose:
+                faces.isNotEmpty &&
+                faces.every(
+                  (face) => measureFaceDistance(face).label == 'CLOSE',
+                ),
+            multipleFaces: faces.length > 1,
+          ),
         );
       }
-      final livenessCrops = BiometricStageTiming.measure(
-        'OpenCV',
-        'liveness_crops',
-        () => openCv.cropForMiniFasNet(prepared, target),
-      );
-      final live = await BiometricStageTiming.measureAsync(
-        'MiniFASNet',
-        'inference',
-        () => miniFasNetV2.isReal(livenessCrops.v2Bgr),
-      );
-      if (!live) {
-        return FrameAnalysis(
+      // A valid target transfers OpenCV ownership to the BBOX worker. No
+      // copy is made for rejected frames, which are disposed below.
+      handedToCropWorker = true;
+      return RetinaFrameResult(
+        analysis: FrameAnalysis(
           faceDetected: true,
-          targetFaceSelected: false,
-          alignmentAccepted: false,
+          targetFaceSelected: true,
+          alignmentAccepted: true,
           processingMilliseconds: stopwatch.elapsedMilliseconds,
-          livenessRejected: true,
-        );
-      }
-      final livenessFaceBox = openCv.mapFaceToOriginalBox(prepared, target);
-      final capture = BiometricCropSet(
-        retinaFaceBgr: Uint8List.fromList(prepared.bgr),
-        adafaceLandmarks: target.landmarks,
-        livenessFrameBgr: Uint8List.fromList(prepared.originalBgr),
-        livenessFrameWidth: prepared.originalWidth,
-        livenessFrameHeight: prepared.originalHeight,
-        livenessFaceBox: livenessFaceBox,
-      );
-      return FrameAnalysis(
-        faceDetected: true,
-        targetFaceSelected: true,
-        alignmentAccepted: true,
-        processingMilliseconds: stopwatch.elapsedMilliseconds,
-        faceCenterX: target.centerX,
-        faceCenterY: target.centerY,
-        capture: capture,
+          faceCenterX: target.centerX,
+          faceCenterY: target.centerY,
+        ),
+        pendingCrop: PendingCropCapture(frame: prepared, target: target),
       );
     } finally {
       // This is the end-to-end FE cost for one frame, including preprocessing,
@@ -342,9 +374,83 @@ class FaceBiometricPipeline {
         '[BiometricTiming] pipeline=FaceFrame stage=total '
         'elapsed_ms=${stopwatch.elapsedMilliseconds}',
       );
-      prepared.dispose();
+      if (!handedToCropWorker) prepared.dispose();
       _processing = false;
     }
+  }
+
+  /// BBOX worker. It makes the local-only liveness crop plus the original
+  /// retained frame used only after MiniFASNet says the face is real.
+  PendingLivenessCapture cropForLiveness(PendingCropCapture pending) {
+    try {
+      final crops = BiometricStageTiming.measure(
+        'OpenCV',
+        'liveness_crops',
+        () => openCv.cropForMiniFasNet(pending.frame, pending.target),
+      );
+      final faceBox = openCv.mapFaceToOriginalBox(
+        pending.frame,
+        pending.target,
+      );
+      final capture = BiometricCropSet(
+        retinaFaceBgr: Uint8List.fromList(pending.frame.bgr),
+        adafaceLandmarks: pending.target.landmarks,
+        livenessFrameBgr: Uint8List.fromList(pending.frame.originalBgr),
+        livenessFrameWidth: pending.frame.originalWidth,
+        livenessFrameHeight: pending.frame.originalHeight,
+        livenessFaceBox: faceBox,
+      );
+      crops.v1seBgr.fillRange(0, crops.v1seBgr.length, 0);
+      return PendingLivenessCapture(
+        capture: capture,
+        livenessBgr: crops.v2Bgr,
+        faceCenterX: pending.target.centerX,
+        faceCenterY: pending.target.centerY,
+      );
+    } finally {
+      pending.clear();
+    }
+  }
+
+  /// Runs the local-only liveness stage. The supplied crop is always wiped.
+  Future<bool> checkLiveness(PendingLivenessCapture pending) async {
+    try {
+      return await BiometricStageTiming.measureAsync(
+        'MiniFASNet',
+        'inference',
+        () => miniFasNetV2.isReal(pending.livenessBgr),
+      );
+    } finally {
+      pending.livenessBgr.fillRange(0, pending.livenessBgr.length, 0);
+    }
+  }
+
+  /// Compatibility entry point for callers outside the scanner.
+  Future<FrameAnalysis> processFrame(img.Image cameraFrame) async {
+    final retina = await processRetinaFrame(cameraFrame);
+    final crop = retina.pendingCrop;
+    if (crop == null) return retina.analysis;
+    final pending = cropForLiveness(crop);
+    final live = await checkLiveness(pending);
+    if (!live) {
+      pending.capture.clear();
+      return FrameAnalysis(
+        faceDetected: true,
+        targetFaceSelected: false,
+        alignmentAccepted: false,
+        processingMilliseconds: retina.analysis.processingMilliseconds,
+        livenessRejected: true,
+      );
+    }
+    return FrameAnalysis(
+      faceDetected: true,
+      targetFaceSelected: true,
+      alignmentAccepted: true,
+      processingMilliseconds: retina.analysis.processingMilliseconds,
+      faceCenterX: pending.faceCenterX,
+      faceCenterY: pending.faceCenterY,
+      capture: pending.capture,
+    );
   }
 
   FaceDetection? _selectTargetFace(List<FaceDetection> faces) {

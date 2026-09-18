@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/face/biometric_api_service.dart';
@@ -44,6 +45,74 @@ class KFaceScanPage extends StatefulWidget {
   State<KFaceScanPage> createState() => _KFaceScanPageState();
 }
 
+/// Immutable identity/session snapshot attached when a valid camera frame is
+/// extracted. The upload path must never look up a newer screen/session value
+/// for an already captured biometric candidate.
+class _TaggedBiometricCapture {
+  const _TaggedBiometricCapture({
+    required this.capture,
+    required this.wrytteId,
+    required this.userId,
+    required this.captureSessionId,
+  });
+
+  final BiometricCropSet capture;
+  final String wrytteId;
+  final String? userId;
+  final String captureSessionId;
+
+  void clear() => capture.clear();
+}
+
+/// A camera frame is marked with its signup identity before any biometric
+/// processing. OpenCV, RetinaFace, liveness, JPEG, and upload therefore all
+/// operate on a frame already owned by this WrytteID capture session.
+class _TaggedRawBiometricFrame {
+  const _TaggedRawBiometricFrame({
+    required this.frame,
+    required this.wrytteId,
+    required this.userId,
+    required this.captureSessionId,
+  });
+
+  final img.Image frame;
+  final String wrytteId;
+  final String? userId;
+  final String captureSessionId;
+}
+
+class _TaggedLivenessCapture {
+  const _TaggedLivenessCapture({
+    required this.pending,
+    required this.wrytteId,
+    required this.userId,
+    required this.captureSessionId,
+  });
+
+  final PendingLivenessCapture pending;
+  final String wrytteId;
+  final String? userId;
+  final String captureSessionId;
+
+  void clear() => pending.clear();
+}
+
+class _TaggedCropCapture {
+  const _TaggedCropCapture({
+    required this.pending,
+    required this.wrytteId,
+    required this.userId,
+    required this.captureSessionId,
+  });
+
+  final PendingCropCapture pending;
+  final String wrytteId;
+  final String? userId;
+  final String captureSessionId;
+
+  void clear() => pending.clear();
+}
+
 class _KFaceScanPageState extends State<KFaceScanPage> {
   FrontendTimingTotal _frontendTiming = FrontendTimingTotal();
   final _scanTotalTimer = Stopwatch()..start();
@@ -76,8 +145,14 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   bool _ready = false;
   bool _sending = false;
   int _inFlightCandidateUploads = 0;
-  final Queue<BiometricCropSet> _pendingCandidateCaptures =
-      Queue<BiometricCropSet>();
+  final Queue<_TaggedBiometricCapture> _pendingCandidateCaptures =
+      Queue<_TaggedBiometricCapture>();
+  final Queue<_TaggedLivenessCapture> _pendingLivenessCaptures =
+      Queue<_TaggedLivenessCapture>();
+  final Queue<_TaggedCropCapture> _pendingCropCaptures =
+      Queue<_TaggedCropCapture>();
+  bool _processingCrop = false;
+  bool _processingLiveness = false;
   bool _complete = false;
   int _acceptedCandidateCount = 0;
   bool _processingFrame = false;
@@ -88,7 +163,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   Stopwatch? _captureToTransitionTimer;
   String _status = 'Position your face\nwithin the circle';
   String? _cameraError;
-  DateTime? _lastFrameDiagnostic;
 
   bool get _enrolling => widget.isEnrollment;
   bool get _hasCandidateUploadCapacity =>
@@ -234,35 +308,23 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _processingFrame ||
         _candidateExtractionClosed ||
         !_hasCandidateUploadCapacity) {
-      final now = DateTime.now();
-      if (_lastFrameDiagnostic == null ||
-          now.difference(_lastFrameDiagnostic!).inSeconds >= 1) {
-        _lastFrameDiagnostic = now;
-        debugPrint(
-          '[BiometricTiming] pipeline=Frame stage=skipped '
-          'ready=$_ready scan_ready=$_scanPhaseReady sending=$_sending '
-          'complete=$_complete processing=$_processingFrame '
-          'extraction_closed=$_candidateExtractionClosed '
-          'accepted=$_acceptedCandidateCount queued=${_pendingCandidateCaptures.length} '
-          'in_flight=$_inFlightCandidateUploads '
-          'session=${_captureSessionId != null}',
-        );
-      }
       return;
     }
     final now = DateTime.now();
-    final previous = _lastSelectedFrameAt;
-    if (previous != null && now.difference(previous).inMilliseconds < 133) {
+    if (_lastSelectedFrameAt != null &&
+        now.difference(_lastSelectedFrameAt!).inMilliseconds < 133) {
       return;
     }
+    final sessionId = _captureSessionId;
+    final camera = _camera;
+    if (sessionId == null || camera == null) return;
     _lastSelectedFrameAt = now;
-    if (_captureSessionId == null) return;
     _captureBatchTimer ??= Stopwatch()..start();
-    final frameSessionId = _captureSessionId;
     _processingFrame = true;
     try {
-      final camera = _camera;
-      if (camera == null) return;
+      // This stage owns only camera conversion, OpenCV and RetinaFace. It does
+      // not wait for BBOX/liveness/JPEG/upload, so the next camera frame can
+      // enter RetinaFace as soon as this one leaves it.
       final image = BiometricStageTiming.measure(
         'Camera',
         'convert_and_rotate',
@@ -271,82 +333,179 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           sensorOrientation: camera.description.sensorOrientation,
         ),
       );
-      final analysis = await BiometricStageTiming.measureAsync(
-        'FaceFrame',
-        'processing',
-        () => _pipeline.processFrame(image),
+      final tagged = _TaggedRawBiometricFrame(
+        frame: image,
+        wrytteId: widget.wrytteId,
+        userId: widget.userId,
+        captureSessionId: sessionId,
       );
-      if (!mounted || frameSessionId != _captureSessionId || _complete) {
-        analysis.capture?.clear();
+      final retina = await BiometricStageTiming.measureAsync(
+        'FaceFrame',
+        'retina_and_bbox',
+        () => _pipeline.processRetinaFrame(tagged.frame),
+      );
+      if (!mounted ||
+          _complete ||
+          tagged.captureSessionId != _captureSessionId) {
+        retina.pendingCrop?.clear();
         return;
       }
-      // The image stream can invoke this callback while RetinaFace is still
-      // processing the previous frame. Such a skipped frame has no timing and
-      // must not replace the useful on-screen capture status with "No face".
+      final analysis = retina.analysis;
       if (analysis.processingMilliseconds == 0) return;
       setState(() {
         _faceAligned =
             analysis.faceDetected &&
             analysis.targetFaceSelected &&
             analysis.alignmentAccepted;
-        if (_faceAligned && _scanPhaseReady) _scanStarted = true;
+        if (_faceAligned) _scanStarted = true;
         if (analysis.faceCenterX != null) {
           _headMovement = (analysis.faceCenterX! / 640).clamp(0.0, 1.0);
         }
       });
-      if (!analysis.faceDetected) {
-        setState(
-          () =>
-              _status =
-                  'Face not detected.\nPosition your face within the circle',
-        );
-      } else if (analysis.multipleFaces) {
-        setState(
-          () =>
-              _status =
-                  'Multiple faces detected.\nCenter one face within the circle',
-        );
-      } else if (analysis.faceTooFar) {
-        setState(() => _status = 'Move your face closer to the camera');
-      } else if (analysis.faceTooClose) {
-        setState(() => _status = 'Move your face farther from the camera');
-      } else if (analysis.livenessRejected) {
-        // A full, normal RetinaFace result followed by a local liveness
-        // rejection owns the status until a later frame passes liveness.
-        setState(
-          () =>
-              _status =
-                  'Face not detected.\nPosition your face within the circle',
-        );
-      } else if (!analysis.targetFaceSelected) {
-        setState(() => _status = 'Position your face\nwithin the circle');
-      }
-      if (analysis.faceDetected &&
-          analysis.targetFaceSelected &&
-          analysis.alignmentAccepted) {
-        final capture = analysis.capture;
-        if (capture == null) return;
-        if (_captureToTransitionTimer == null) {
-          _captureToTransitionTimer = Stopwatch()..start();
-          if (_enrolling) BiometricEnrollmentTiming.start();
+      final pendingCrop = retina.pendingCrop;
+      if (pendingCrop == null) {
+        if (!analysis.faceDetected) {
+          setState(
+            () =>
+                _status =
+                    'Face not detected.\nPosition your face within the circle',
+          );
+        } else if (analysis.multipleFaces) {
+          setState(
+            () =>
+                _status =
+                    'Multiple faces detected.\nCenter one face within the circle',
+          );
+        } else if (analysis.faceTooFar) {
+          setState(() => _status = 'Move your face closer to the camera');
+        } else if (analysis.faceTooClose) {
+          setState(() => _status = 'Move your face farther from the camera');
         }
-        // Send each live candidate immediately. The next frame can proceed
-        // through detection and JPEG preparation while its predecessor waits
-        // for the ordered backend request to complete.
-        _pendingCandidateCaptures.addLast(capture);
-        _uploadBatchTimer ??= Stopwatch()..start();
-        _dispatchPendingCandidateCaptures();
-        setState(() => _status = 'Scanning…');
+        return;
       }
+      // RetinaFace passed this target to the independent BBOX worker. The
+      // next camera frame can now enter RetinaFace while this frame crops.
+      _pendingCropCaptures.addLast(
+        _TaggedCropCapture(
+          pending: pendingCrop,
+          wrytteId: tagged.wrytteId,
+          userId: tagged.userId,
+          captureSessionId: tagged.captureSessionId,
+        ),
+      );
+      _drainCropCaptures();
     } catch (error) {
-      // Frames are disposable; an invalid transient camera frame is ignored.
       debugPrint(
-        '[BiometricTiming] pipeline=Frame stage=processing_error '
-        'error=${error.runtimeType}',
+        '[BiometricTiming] pipeline=Frame stage=retina_error error=${error.runtimeType}',
       );
     } finally {
       _processingFrame = false;
     }
+  }
+
+  void _drainCropCaptures() {
+    if (_processingCrop ||
+        _complete ||
+        _candidateExtractionClosed ||
+        _pendingCropCaptures.isEmpty) {
+      return;
+    }
+    final tagged = _pendingCropCaptures.removeFirst();
+    _processingCrop = true;
+    unawaited(
+      _frontendTiming.run(() async {
+        try {
+          // BBOX is its own conveyor stage: once N moves to liveness, N+1 can
+          // immediately occupy BBOX while RetinaFace processes N+2.
+          final pending = await BiometricStageTiming.measureAsync(
+            'OpenCV',
+            'bbox_to_liveness',
+            () async => _pipeline.cropForLiveness(tagged.pending),
+          );
+          if (!mounted ||
+              _complete ||
+              tagged.captureSessionId != _captureSessionId) {
+            pending.clear();
+            return;
+          }
+          _pendingLivenessCaptures.addLast(
+            _TaggedLivenessCapture(
+              pending: pending,
+              wrytteId: tagged.wrytteId,
+              userId: tagged.userId,
+              captureSessionId: tagged.captureSessionId,
+            ),
+          );
+          _drainLivenessCaptures();
+        } catch (error) {
+          tagged.clear();
+          debugPrint(
+            '[BiometricTiming] pipeline=OpenCV stage=bbox_error error=${error.runtimeType}',
+          );
+        } finally {
+          _processingCrop = false;
+          _drainCropCaptures();
+        }
+      }),
+    );
+  }
+
+  void _drainLivenessCaptures() {
+    if (_processingLiveness ||
+        _complete ||
+        _candidateExtractionClosed ||
+        _pendingLivenessCaptures.isEmpty) {
+      return;
+    }
+    final tagged = _pendingLivenessCaptures.removeFirst();
+    _processingLiveness = true;
+    unawaited(
+      _frontendTiming.run(() async {
+        try {
+          // This worker is intentionally separate from RetinaFace. While it
+          // evaluates frame N, the camera callback can run RetinaFace/BBOX for N+1.
+          final live = await _pipeline.checkLiveness(tagged.pending);
+          if (!mounted ||
+              _complete ||
+              tagged.captureSessionId != _captureSessionId) {
+            tagged.pending.capture.clear();
+            return;
+          }
+          if (!live) {
+            tagged.pending.capture.clear();
+            setState(
+              () =>
+                  _status =
+                      'Face not detected.\nPosition your face within the circle',
+            );
+            return;
+          }
+          if (_captureToTransitionTimer == null) {
+            _captureToTransitionTimer = Stopwatch()..start();
+            if (_enrolling) BiometricEnrollmentTiming.start();
+          }
+          _pendingCandidateCaptures.addLast(
+            _TaggedBiometricCapture(
+              capture: tagged.pending.capture,
+              wrytteId: tagged.wrytteId,
+              userId: tagged.userId,
+              captureSessionId: tagged.captureSessionId,
+            ),
+          );
+          _uploadBatchTimer ??= Stopwatch()..start();
+          if (mounted) setState(() => _status = 'Scanning…');
+          _dispatchPendingCandidateCaptures();
+        } catch (error) {
+          tagged.pending.capture.clear();
+          debugPrint(
+            '[BiometricTiming] pipeline=Liveness stage=error error=${error.runtimeType}',
+          );
+        } finally {
+          _processingLiveness = false;
+          _drainLivenessCaptures();
+        }
+      }),
+    );
   }
 
   /// The camera opens immediately. This tiny request only obtains the opaque
@@ -399,20 +558,31 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _pendingCandidateCaptures.isNotEmpty &&
         _nextCandidateSubmissionIndex < _maxCandidateSubmissions &&
         !_complete) {
-      final capture = _pendingCandidateCaptures.removeFirst();
+      final taggedCapture = _pendingCandidateCaptures.removeFirst();
       final candidateIndex = _nextCandidateSubmissionIndex++;
       _inFlightCandidateUploads++;
+      // Once the fifth real frame is committed to the ordered upload path,
+      // there is no useful sixth target to retain locally. If the backend
+      // rejects this batch, its response starts a fresh capture session.
+      if (candidateIndex + 1 == FaceBiometricPipeline.framesToUse) {
+        _candidateExtractionClosed = true;
+        _discardPendingLivenessCaptures();
+        _discardPendingCandidateCaptures();
+      }
       unawaited(
-        _frontendTiming.run(() => _uploadCandidate(capture, candidateIndex)),
+        _frontendTiming.run(
+          () => _uploadCandidate(taggedCapture, candidateIndex),
+        ),
       );
     }
   }
 
   Future<void> _uploadCandidate(
-    BiometricCropSet capture,
+    _TaggedBiometricCapture taggedCapture,
     int candidateIndex,
   ) async {
-    final requestSessionId = _captureSessionId;
+    final capture = taggedCapture.capture;
+    final requestSessionId = taggedCapture.captureSessionId;
     try {
       DeviceMetadata? signupDeviceMetadata;
       if (_enrolling && !widget.attachToExistingUser) {
@@ -432,26 +602,26 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _enrolling
               ? widget.attachToExistingUser
                   ? await BiometricApiService.enrollExistingCandidate(
-                    userId: widget.userId!,
+                    userId: taggedCapture.userId!,
                     token:
                         await AuthService.instance.getValidBackendToken() ?? '',
                     candidateIndex: candidateIndex,
-                    captureSessionId: _captureSessionId,
+                    captureSessionId: requestSessionId,
                     capture: capture,
                   )
                   : await BiometricApiService.enrollNewCandidate(
-                    wrytteId: widget.wrytteId,
+                    wrytteId: taggedCapture.wrytteId,
                     candidateIndex: candidateIndex,
-                    captureSessionId: _captureSessionId,
+                    captureSessionId: requestSessionId,
                     deviceModel: signupDeviceMetadata?.model,
                     language: signupDeviceMetadata?.language,
                     region: signupDeviceMetadata?.region,
                     capture: capture,
                   )
               : await BiometricApiService.verifyCandidate(
-                userId: widget.userId!,
+                userId: taggedCapture.userId!,
                 candidateIndex: candidateIndex,
-                captureSessionId: _captureSessionId,
+                captureSessionId: requestSessionId,
                 capture: capture,
               );
       capture.clear();
@@ -460,8 +630,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
       // Candidate uploads complete out of order. A response from a different
       // backend session is stale and must never replace this scan's session.
-      if (requestSessionId == null ||
-          requestSessionId != _captureSessionId ||
+      if (requestSessionId != _captureSessionId ||
           result.captureSessionId != null &&
               result.captureSessionId != requestSessionId) {
         return;
@@ -531,6 +700,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // remains visible while LDPC recovery and challenge signing complete.
       setState(() {
         _complete = true;
+        _candidateExtractionClosed = true;
         _backendWaiting = true;
         _status = 'Please wait…';
       });
@@ -538,6 +708,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // the session. Clear the queue immediately; already in-flight requests
       // are ignored by the completion guard below when they return.
       _discardPendingCandidateCaptures();
+      _discardPendingCropCaptures();
+      _discardPendingLivenessCaptures();
       await BiometricStageTiming.measureAsync(
         'UI',
         'completion_wait',
@@ -656,6 +828,18 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   void _discardPendingCandidateCaptures() {
     while (_pendingCandidateCaptures.isNotEmpty) {
       _pendingCandidateCaptures.removeFirst().clear();
+    }
+  }
+
+  void _discardPendingLivenessCaptures() {
+    while (_pendingLivenessCaptures.isNotEmpty) {
+      _pendingLivenessCaptures.removeFirst().clear();
+    }
+  }
+
+  void _discardPendingCropCaptures() {
+    while (_pendingCropCaptures.isNotEmpty) {
+      _pendingCropCaptures.removeFirst().clear();
     }
   }
 
@@ -940,6 +1124,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _nextCandidateSubmissionIndex = 0;
     _captureSessionId = null;
     _discardPendingCandidateCaptures();
+    _discardPendingCropCaptures();
+    _discardPendingLivenessCaptures();
     _sending = false;
     unawaited(_startCaptureSession());
     if (!mounted) return;
@@ -996,6 +1182,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _status = 'Position your face\nwithin the circle';
     });
     _discardPendingCandidateCaptures();
+    _discardPendingCropCaptures();
+    _discardPendingLivenessCaptures();
     final camera = _camera;
     if (camera != null &&
         camera.value.isInitialized &&
@@ -1010,6 +1198,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _frameRateTimer?.cancel();
     _scanStartTimer?.cancel();
     _discardPendingCandidateCaptures();
+    _discardPendingCropCaptures();
+    _discardPendingLivenessCaptures();
     unawaited(_camera?.dispose());
     unawaited(_pipeline.dispose());
     super.dispose();
