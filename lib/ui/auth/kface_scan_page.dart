@@ -620,7 +620,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     bool live,
   ) async {
     try {
-      await _pipeline.resolveRetinaOriginal(tagged.pending, live);
+      // Server liveness is authoritative. The on-device MiniFASNet result is
+      // retained as a fast diagnostic/quality signal, but must not starve a
+      // batch forever by deleting every selected frame under difficult phone
+      // lighting. Keep the RetinaFace original and let both backend models
+      // make the security decision for the five-frame batch.
+      await _pipeline.resolveRetinaOriginal(tagged.pending, true);
       if (!mounted ||
           _complete ||
           _processingPaused ||
@@ -629,13 +634,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         return;
       }
       if (!live) {
-        tagged.pending.capture.clear();
-        setState(
-          () =>
-              _status =
-                  'Face not detected.\nPosition your face within the circle',
+        debugPrint(
+          '[BiometricTiming] pipeline=Liveness stage=local_verdict '
+          'outcome=rejected authority=backend',
         );
-        return;
       }
       await _prepareAndQueueCandidate(tagged);
     } catch (error) {
