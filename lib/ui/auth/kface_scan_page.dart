@@ -117,6 +117,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   FrontendTimingTotal _frontendTiming = FrontendTimingTotal();
   final _scanTotalTimer = Stopwatch()..start();
   Stopwatch? _captureBatchTimer;
+  Stopwatch? _normalFramesFrontendTimer;
   Stopwatch? _uploadBatchTimer;
   bool _scanStarted = false;
   bool _scanPhaseReady = false;
@@ -177,6 +178,18 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   @override
   void initState() {
     super.initState();
+    BiometricApiService.onFrontendPayloadReady = (candidateIndex) {
+      if (candidateIndex == FaceBiometricPipeline.framesToUse - 1 &&
+          _normalFramesFrontendTimer != null) {
+        final timer = _normalFramesFrontendTimer!;
+        timer.stop();
+        BiometricStageTiming.log(
+          'Frontend',
+          'five_normal_frames_only',
+          timer,
+        );
+      }
+    };
     unawaited(_frontendTiming.run(_initialize));
   }
 
@@ -399,6 +412,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           captureSessionId: tagged.captureSessionId,
         ),
       );
+      _normalFramesFrontendTimer ??= Stopwatch()..start();
       _drainCropCaptures();
     } catch (error) {
       debugPrint(
@@ -1123,6 +1137,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   /// original scan rather than showing a result screen that reveals nothing.
   Future<void> _resumeAfterBiometricRejection() async {
     _captureBatchTimer?.stop();
+    _normalFramesFrontendTimer?.stop();
+    _normalFramesFrontendTimer = null;
     _uploadBatchTimer?.stop();
     _captureBatchTimer = null;
     _uploadBatchTimer = null;
@@ -1182,6 +1198,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   Future<void> _startOver() async {
     if (_sending || _inFlightCandidateUploads > 0) return;
     _captureBatchTimer?.stop();
+    _normalFramesFrontendTimer?.stop();
+    _normalFramesFrontendTimer = null;
     _uploadBatchTimer?.stop();
     _captureBatchTimer = null;
     _uploadBatchTimer = null;
@@ -1219,6 +1237,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   @override
   void dispose() {
+    if (BiometricApiService.onFrontendPayloadReady != null) {
+      BiometricApiService.onFrontendPayloadReady = null;
+    }
     _frameRateTimer?.cancel();
     _scanStartTimer?.cancel();
     _discardPendingCandidateCaptures();

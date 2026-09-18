@@ -138,11 +138,15 @@ class _UploadReservation {
 }
 
 class BiometricApiService {
+  /// Scanner-owned callback fired after frontend JPEG preparation and before
+  /// the candidate enters the network upload gate.
+  static void Function(int candidateIndex)? onFrontendPayloadReady;
   // JPEG preserves the face detail required by the backend models while
   // avoiding the large CPU and transport cost of lossless PNG frames.
   static const _retinaJpegQuality = 85;
   static const _livenessJpegQuality = 80;
   static Future<void> _uploadTail = Future<void>.value();
+  static Stopwatch? _fiveFrameFrontendTimer;
   static final Set<String> _completedCaptureSessions = <String>{};
 
   static _UploadReservation _reserveUpload() {
@@ -661,6 +665,9 @@ class BiometricApiService {
     final uploadReservation = _reserveUpload();
     // OpenCV performs JPEG compression in native code. This avoids launching
     // a Dart isolate and copying two image buffers for every candidate.
+    if (candidateIndex == 0) {
+      _fiveFrameFrontendTimer = Stopwatch()..start();
+    }
     final encoded = BiometricStageTiming.measure(
       'Upload',
       'jpeg_encoding',
@@ -676,12 +683,25 @@ class BiometricApiService {
         'height': capture.livenessFaceBox.height,
       }),
     );
+    if (candidateIndex + 1 == FaceBiometricPipeline.framesToUse &&
+        _fiveFrameFrontendTimer != null) {
+      _fiveFrameFrontendTimer!.stop();
+      debugPrint(
+        '[BiometricTiming] pipeline=FE stage=five_normal_frames_frontend_only '
+        'elapsed_ms=${_fiveFrameFrontendTimer!.elapsedMilliseconds} '
+        'boundary=before_backend_upload '
+        'components=CameraExcluded;RetinaFace/OpenCV/BBOX/Liveness/JPEG '
+        'individual_stage_timers_logged_above',
+      );
+      _fiveFrameFrontendTimer = null;
+    }
     final requestId = _requestId();
     print(
       '[BiometricTiming] pipeline=Upload stage=candidate_payload_ready '
       'index=$candidateIndex retina_face_bytes=${(encoded['retinaFace']! as Uint8List).length} '
       'liveness_frame_bytes=${(encoded['livenessFrame']! as Uint8List).length}',
     );
+    onFrontendPayloadReady?.call(candidateIndex);
     final stopwatch = Stopwatch()..start();
     try {
       final uploadGateWait = Stopwatch()..start();
