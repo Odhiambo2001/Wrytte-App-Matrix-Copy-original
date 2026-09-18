@@ -84,7 +84,9 @@ class RetinaFaceDetector {
   Future<void> initialize() async {
     if (isReady) return;
     if (Platform.isAndroid) {
-      _android = await AndroidOnnxImageSession.create(modelAsset, threads: 4);
+      // Two threads avoid oversubscribing dual-core Android phones while
+      // leaving CPU capacity for the other conveyor-belt workers.
+      _android = await AndroidOnnxImageSession.create(modelAsset, threads: 2);
       try {
         _validateNames(_android!.inputNames, _android!.outputNames);
       } catch (_) {

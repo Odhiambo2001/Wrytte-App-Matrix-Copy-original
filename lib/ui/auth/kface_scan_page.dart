@@ -337,7 +337,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _complete ||
         _candidateExtractionClosed ||
         _processingPaused ||
-        _pendingRetinaFrames.isNotEmpty ||
         !_hasCandidateUploadCapacity) {
       return;
     }
