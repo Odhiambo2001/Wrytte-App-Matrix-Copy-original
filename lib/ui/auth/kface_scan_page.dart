@@ -175,6 +175,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   String? _cameraError;
 
   bool get _enrolling => widget.isEnrollment;
+  bool _isExpectedCancellation(Object error) =>
+      error is StateError &&
+      (error.message.contains('Cancelled') ||
+          error.message.contains('Stale generation'));
+
   bool get _hasCandidateUploadCapacity =>
       _nextCandidateSubmissionIndex < _maxCandidateSubmissions &&
       _inFlightCandidateUploads +
@@ -340,6 +345,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         !_hasCandidateUploadCapacity) {
       return;
     }
+    // Do not convert camera buffers that cannot be admitted. Conversion is
+    // one of the most expensive root-isolate operations; dropping here keeps
+    // the bounded queue from repeatedly converting and then overwriting old
+    // frames while RetinaFace is busy.
+    if (_pendingRetinaFrames.length >= 2 || _retinaWorkerRunning) {
+      return;
+    }
     final now = DateTime.now();
     if (_lastSelectedFrameAt != null &&
         now.difference(_lastSelectedFrameAt!).inMilliseconds < 133) {
@@ -450,9 +462,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _normalFramesFrontendTimer ??= Stopwatch()..start();
           _drainCropCaptures();
         } catch (error) {
-          debugPrint(
-            '[BiometricTiming] pipeline=Frame stage=retina_error error=${error.runtimeType}',
-          );
+          if (!_isExpectedCancellation(error)) {
+            debugPrint(
+              '[BiometricTiming] pipeline=Frame stage=retina_error error=${error.runtimeType}',
+            );
+          }
         } finally {
           _wipeCameraFrame(tagged.frame);
           _retinaWorkerRunning = false;
@@ -503,9 +517,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _drainLivenessCaptures();
         } catch (error) {
           tagged.clear();
-          debugPrint(
-            '[BiometricTiming] pipeline=OpenCV stage=bbox_error error=${error.runtimeType}',
-          );
+          if (!_isExpectedCancellation(error)) {
+            debugPrint(
+              '[BiometricTiming] pipeline=OpenCV stage=bbox_error error=${error.runtimeType}',
+            );
+          }
         } finally {
           // The normal hand-off above releases the worker early. Error and
           // stale-generation paths still release it here.
@@ -624,10 +640,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       await _prepareAndQueueCandidate(tagged);
     } catch (error) {
       tagged.pending.capture.clear();
-      debugPrint(
-        '[BiometricTiming] pipeline=RetinaFace stage=original_error '
-        'error=${error.runtimeType}',
-      );
+      if (!_isExpectedCancellation(error)) {
+        debugPrint(
+          '[BiometricTiming] pipeline=RetinaFace stage=original_error '
+          'error=${error.runtimeType}',
+        );
+      }
     }
   }
 
