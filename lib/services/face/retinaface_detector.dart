@@ -61,6 +61,7 @@ class RetinaFaceDetector {
     this.inputSize = 640,
     this.confidenceThreshold = 0.60,
     this.nmsThreshold = 0.40,
+    this.inferenceThreads = 4,
   });
 
   static const modelAsset = 'assets/models/retinaface_mv2.onnx';
@@ -74,6 +75,7 @@ class RetinaFaceDetector {
   final int inputSize;
   final double confidenceThreshold;
   final double nmsThreshold;
+  final int inferenceThreads;
   OrtSession? _session;
   AndroidOnnxImageSession? _android;
   late final Float32List _inputBuffer = Float32List(inputSize * inputSize * 3);
@@ -87,7 +89,10 @@ class RetinaFaceDetector {
       // RetinaFace is the dominant scan cost. The native bridge caps this to
       // available cores; four intra-op threads materially reduce latency on
       // current Android devices while preserving the required BGR contract.
-      _android = await AndroidOnnxImageSession.create(modelAsset, threads: 4);
+      _android = await AndroidOnnxImageSession.create(
+        modelAsset,
+        threads: inferenceThreads,
+      );
       try {
         _validateNames(_android!.inputNames, _android!.outputNames);
       } catch (_) {
@@ -104,7 +109,7 @@ class RetinaFaceDetector {
     _session = await OnnxRuntime().createSessionFromAsset(
       modelAsset,
       options: OrtSessionOptions(
-        intraOpNumThreads: 4,
+        intraOpNumThreads: inferenceThreads,
         interOpNumThreads: 1,
         providers: const <OrtProvider>[OrtProvider.CPU],
         useArena: true,

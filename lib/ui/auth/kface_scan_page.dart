@@ -152,12 +152,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       Queue<_TaggedLivenessCapture>();
   final Queue<_TaggedCropCapture> _pendingCropCaptures =
       Queue<_TaggedCropCapture>();
-  // RetinaFace is a single ordered worker. Frames waiting for it are kept in
-  // this bounded queue, so handing frame N to BBOX immediately admits frame
-  // N+1 without waiting for BBOX or liveness.
+  // RetinaFace has a small bounded worker pool. Frames waiting for it are
+  // kept in this queue, so handing frame N to BBOX immediately admits N+1.
   final Queue<_TaggedRawBiometricFrame> _pendingRetinaFrames =
       Queue<_TaggedRawBiometricFrame>();
-  bool _retinaWorkerRunning = false;
+  int _retinaWorkersRunning = 0;
   bool _processingCrop = false;
   bool _processingLiveness = false;
   bool _complete = false;
@@ -349,7 +348,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     // one of the most expensive root-isolate operations; dropping here keeps
     // the bounded queue from repeatedly converting and then overwriting old
     // frames while RetinaFace is busy.
-    if (_pendingRetinaFrames.length >= 2 || _retinaWorkerRunning) {
+    if (_pendingRetinaFrames.length >= 4 ||
+        _retinaWorkersRunning >= IsolateFacePipeline.retinaWorkerCount) {
       return;
     }
     final now = DateTime.now();
@@ -390,90 +390,93 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   }
 
   void _drainRetinaFrames() {
-    if (_retinaWorkerRunning ||
+    if (_retinaWorkersRunning >= IsolateFacePipeline.retinaWorkerCount ||
         _complete ||
         _processingPaused ||
         _candidateExtractionClosed ||
         _pendingRetinaFrames.isEmpty) {
       return;
     }
-    final tagged = _pendingRetinaFrames.removeFirst();
-    _retinaWorkerRunning = true;
-    unawaited(
-      _frontendTiming.run(() async {
-        try {
-          final retina = await BiometricStageTiming.measureAsync(
-            'FaceFrame',
-            'retina_and_bbox',
-            () => _pipeline.processRetinaFrame(tagged.frame),
-          );
-          if (!mounted ||
-              _complete ||
-              _processingPaused ||
-              tagged.captureSessionId != _captureSessionId) {
-            retina.pendingCrop?.clear();
-            return;
-          }
-          final analysis = retina.analysis;
-          if (analysis.processingMilliseconds == 0) return;
-          setState(() {
-            _faceAligned =
-                analysis.faceDetected &&
-                analysis.targetFaceSelected &&
-                analysis.alignmentAccepted;
-            if (_faceAligned) _scanStarted = true;
-            if (analysis.faceCenterX != null) {
-              _headMovement = (analysis.faceCenterX! / 640).clamp(0.0, 1.0);
-            }
-          });
-          final pendingCrop = retina.pendingCrop;
-          if (pendingCrop == null) {
-            if (!analysis.faceDetected) {
-              setState(
-                () =>
-                    _status =
-                        'Face not detected.\nPosition your face within the circle',
-              );
-            } else if (analysis.multipleFaces) {
-              setState(
-                () =>
-                    _status =
-                        'Multiple faces detected.\nCenter one face within the circle',
-              );
-            } else if (analysis.faceTooFar) {
-              setState(() => _status = 'Move your face closer to the camera');
-            } else if (analysis.faceTooClose) {
-              setState(
-                () => _status = 'Move your face farther from the camera',
-              );
-            }
-            return;
-          }
-          // RetinaFace passed this target to the independent BBOX worker. The
-          // next camera frame can now enter RetinaFace while this frame crops.
-          _pendingCropCaptures.addLast(
-            _TaggedCropCapture(
-              pending: pendingCrop,
-              wrytteId: tagged.wrytteId,
-              userId: tagged.userId,
-              captureSessionId: tagged.captureSessionId,
-            ),
-          );
-          _normalFramesFrontendTimer ??= Stopwatch()..start();
-          _drainCropCaptures();
-        } catch (error) {
-          if (!_isExpectedCancellation(error)) {
-            debugPrint(
-              '[BiometricTiming] pipeline=Frame stage=retina_error error=${error.runtimeType}',
+    while (_retinaWorkersRunning < IsolateFacePipeline.retinaWorkerCount &&
+        _pendingRetinaFrames.isNotEmpty) {
+      final tagged = _pendingRetinaFrames.removeFirst();
+      _retinaWorkersRunning++;
+      unawaited(
+        _frontendTiming.run(() async {
+          try {
+            final retina = await BiometricStageTiming.measureAsync(
+              'FaceFrame',
+              'retina_and_bbox',
+              () => _pipeline.processRetinaFrame(tagged.frame),
             );
+            if (!mounted ||
+                _complete ||
+                _processingPaused ||
+                tagged.captureSessionId != _captureSessionId) {
+              retina.pendingCrop?.clear();
+              return;
+            }
+            final analysis = retina.analysis;
+            if (analysis.processingMilliseconds == 0) return;
+            setState(() {
+              _faceAligned =
+                  analysis.faceDetected &&
+                  analysis.targetFaceSelected &&
+                  analysis.alignmentAccepted;
+              if (_faceAligned) _scanStarted = true;
+              if (analysis.faceCenterX != null) {
+                _headMovement = (analysis.faceCenterX! / 640).clamp(0.0, 1.0);
+              }
+            });
+            final pendingCrop = retina.pendingCrop;
+            if (pendingCrop == null) {
+              if (!analysis.faceDetected) {
+                setState(
+                  () =>
+                      _status =
+                          'Face not detected.\nPosition your face within the circle',
+                );
+              } else if (analysis.multipleFaces) {
+                setState(
+                  () =>
+                      _status =
+                          'Multiple faces detected.\nCenter one face within the circle',
+                );
+              } else if (analysis.faceTooFar) {
+                setState(() => _status = 'Move your face closer to the camera');
+              } else if (analysis.faceTooClose) {
+                setState(
+                  () => _status = 'Move your face farther from the camera',
+                );
+              }
+              return;
+            }
+            // RetinaFace passed this target to the independent BBOX worker. The
+            // next camera frame can now enter RetinaFace while this frame crops.
+            _pendingCropCaptures.addLast(
+              _TaggedCropCapture(
+                pending: pendingCrop,
+                wrytteId: tagged.wrytteId,
+                userId: tagged.userId,
+                captureSessionId: tagged.captureSessionId,
+              ),
+            );
+            _normalFramesFrontendTimer ??= Stopwatch()..start();
+            _drainCropCaptures();
+          } catch (error) {
+            if (!_isExpectedCancellation(error)) {
+              debugPrint(
+                '[BiometricTiming] pipeline=Frame stage=retina_error error=${error.runtimeType}',
+              );
+            }
+          } finally {
+            _wipeCameraFrame(tagged.frame);
+            _retinaWorkersRunning--;
+            _drainRetinaFrames();
           }
-        } finally {
-          _wipeCameraFrame(tagged.frame);
-          _retinaWorkerRunning = false;
-          _drainRetinaFrames();
-        }
-      }),
-    );
+        }),
+      );
+    }
   }
 
   void _drainCropCaptures() {

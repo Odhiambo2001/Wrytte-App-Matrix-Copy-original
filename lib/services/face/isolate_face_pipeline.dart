@@ -104,6 +104,7 @@ class WorkerCropCapture {
   WorkerCropCapture(
     this.generation,
     this.index,
+    this.retinaWorker,
     this.target,
     this.source,
     this.width,
@@ -111,6 +112,7 @@ class WorkerCropCapture {
     this.box,
   );
   final int generation, index, width, height;
+  final String retinaWorker;
   final FaceDetection target;
   final LivenessFaceBox box;
   Uint8List source;
@@ -124,6 +126,7 @@ class WorkerLivenessCapture {
   WorkerLivenessCapture(
     this.generation,
     this.index,
+    this.retinaWorker,
     this.target,
     this.crop,
     this.width,
@@ -135,6 +138,7 @@ class WorkerLivenessCapture {
         livenessFaceBox: box,
       );
   final int generation, index, width, height;
+  final String retinaWorker;
   final FaceDetection target;
   final LivenessFaceBox box;
   final Uint8List crop;
@@ -154,6 +158,12 @@ class WorkerRetinaResult {
 /// Camera/UI stay on the root isolate. Each heavy stage has one persistent
 /// isolate, and only pixels, geometry, frame IDs and generations cross ports.
 class IsolateFacePipeline {
+  /// Tune these together. Two model sessions with two native ONNX threads
+  /// each use the same four CPU threads as the former single session, while
+  /// allowing two candidate frames to infer concurrently.
+  static const retinaWorkerCount = 2;
+  static const retinaThreadsPerWorker = 2;
+
   Map<String, BiometricWorker> _workers = {};
   int _generation = 0, _index = 0;
   Future<void>? _initializing;
@@ -168,7 +178,15 @@ class IsolateFacePipeline {
     try {
       // OpenCV preparation and BBOX each get their own worker so preparation
       // of N+1 never queues behind cropping of N.
-      for (final stage in ['opencv', 'retina', 'bbox', 'liveness', 'jpeg']) {
+      for (final stage in ['opencv', 'bbox', 'liveness', 'jpeg']) {
+        created[stage] = await BiometricWorker.start(
+          stage,
+          generation,
+          _workerMain,
+        );
+      }
+      for (var index = 0; index < retinaWorkerCount; index++) {
+        final stage = 'retina-$index';
         created[stage] = await BiometricWorker.start(
           stage,
           generation,
@@ -219,8 +237,10 @@ class IsolateFacePipeline {
       _wipe(_bytes(prepared['source']));
       throw StateError('Cancelled frame');
     }
+    final retinaWorker = 'retina-${index % retinaWorkerCount}';
     final result =
-        await _call('retina', generation, 'process', [index, prepared]) as Map;
+        await _call(retinaWorker, generation, 'process', [index, prepared])
+            as Map;
     final analysis = _analysisFromWire(
       result['analysis']! as Map<Object?, Object?>,
     );
@@ -236,6 +256,7 @@ class IsolateFacePipeline {
           : WorkerCropCapture(
             generation,
             index,
+            retinaWorker,
             _targetFromWire(result['target']! as Map<Object?, Object?>),
             _bytes(source),
             result['width'] as int,
@@ -264,6 +285,7 @@ class IsolateFacePipeline {
       return WorkerLivenessCapture(
         pending.generation,
         pending.index,
+        pending.retinaWorker,
         pending.target,
         crop,
         pending.width,
@@ -298,7 +320,7 @@ class IsolateFacePipeline {
     bool live,
   ) async {
     final original = await _call(
-      'retina',
+      pending.retinaWorker,
       pending.generation,
       live ? 'takeOriginal' : 'discardOriginal',
       pending.index,
@@ -364,10 +386,12 @@ Future<void> _workerMain(List<Object> arguments) async {
   initializeBiometricWorker(arguments[2] as RootIsolateToken);
   final replies = arguments[3] as SendPort;
   final commands = ReceivePort();
-  final retina = RetinaFaceDetector();
+  final retina = RetinaFaceDetector(
+    inferenceThreads: IsolateFacePipeline.retinaThreadsPerWorker,
+  );
   final liveness = MiniFasNetV2Liveness();
   final originals = <int, Uint8List>{};
-  if (stage == 'retina') await retina.initialize();
+  if (stage.startsWith('retina-')) await retina.initialize();
   if (stage == 'liveness') await liveness.initialize();
   replies.send(commands.sendPort);
   var cancelled = false;
@@ -421,7 +445,7 @@ Future<void> _workerMain(List<Object> arguments) async {
               0,
             );
           }
-        } else if (stage == 'retina') {
+        } else if (stage.startsWith('retina-')) {
           if (command == 'takeOriginal' || command == 'discardOriginal') {
             final original = originals.remove(data as int);
             if (original != null) {
@@ -572,7 +596,7 @@ Future<void> _workerMain(List<Object> arguments) async {
       replies.send([id, generation, true, result]);
       final pipeline = switch (stage) {
         'opencv' => 'OpenCV',
-        'retina' => 'RetinaFace',
+        _ when stage.startsWith('retina-') => 'RetinaFace',
         'bbox' => 'BBOX',
         'liveness' => 'Liveness',
         'jpeg' => 'JPEG',
