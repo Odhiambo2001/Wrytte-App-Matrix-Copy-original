@@ -813,7 +813,11 @@ class BiometricApiService {
   ) {
     final sourceWidth = capture['livenessFrameWidth']! as int;
     final sourceHeight = capture['livenessFrameHeight']! as int;
-    final sourceBgr = capture['livenessFrame']! as Uint8List;
+    final sourceBgr = _packedBgr(
+      capture['livenessFrame']! as Uint8List,
+      width: sourceWidth,
+      height: sourceHeight,
+    );
     final sourceImage = img.Image.fromBytes(
       width: sourceWidth,
       height: sourceHeight,
@@ -839,7 +843,11 @@ class BiometricApiService {
     };
     return <String, Object>{
       'retinaFace': _jpeg(
-        capture['retinaFace']! as Uint8List,
+        _packedBgr(
+          capture['retinaFace']! as Uint8List,
+          width: 640,
+          height: 640,
+        ),
         640,
         640,
         quality: _retinaJpegQuality,
@@ -865,17 +873,38 @@ class BiometricApiService {
   static Map<String, Object> _encodeCandidateWithOpenCv(
     Map<String, Object> capture,
   ) {
+    try {
+      return _encodeCandidateWithOpenCvNative(capture);
+    } catch (error, stackTrace) {
+      debugPrint('[JPEG] OpenCV encoding failed: $error');
+      debugPrint('$stackTrace');
+      return _encodeCaptureWithDart(capture);
+    }
+  }
+
+  static Map<String, Object> _encodeCandidateWithOpenCvNative(
+    Map<String, Object> capture,
+  ) {
     final sourceWidth = capture['livenessFrameWidth']! as int;
     final sourceHeight = capture['livenessFrameHeight']! as int;
+    final retinaBytes = capture['retinaFace']! as Uint8List;
+    final livenessBytes = capture['livenessFrame']! as Uint8List;
+    debugPrint(
+      '[JPEG] retina bytes=${retinaBytes.length}, expected=${640 * 640 * 3}',
+    );
+    debugPrint(
+      '[JPEG] liveness bytes=${livenessBytes.length}, '
+      'expected=${sourceWidth * sourceHeight * 3}',
+    );
     final target = livenessTargetSize(sourceWidth, sourceHeight);
     final retina = _openCvJpeg(
-      capture['retinaFace']! as Uint8List,
+      retinaBytes,
       width: 640,
       height: 640,
       quality: _retinaJpegQuality,
     );
     final liveness = _openCvJpeg(
-      capture['livenessFrame']! as Uint8List,
+      livenessBytes,
       width: sourceWidth,
       height: sourceHeight,
       targetWidth: target.$1,

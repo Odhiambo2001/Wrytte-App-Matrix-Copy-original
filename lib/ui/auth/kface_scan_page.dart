@@ -758,11 +758,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         return;
       }
       await _completeSubmission(verification);
-    } catch (error) {
+    } catch (error, stackTrace) {
       // Type-only diagnostic: no request data, identity, image, or token.
       // ignore: avoid_print
       debugPrint(
-        '[BiometricTiming] stage=candidate_failure type=${error.runtimeType}',
+        '[KFaceScan] candidate upload failed: $error\n$stackTrace',
       );
       if (mounted) {
         setState(() => _status = 'Position your face\nwithin the circle');
