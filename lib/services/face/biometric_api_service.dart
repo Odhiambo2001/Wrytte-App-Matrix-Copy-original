@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
@@ -567,37 +568,70 @@ class BiometricApiService {
     if (captures.length != FaceBiometricPipeline.framesToUse) {
       throw ArgumentError('Exactly five biometric crop sets are required.');
     }
-    // JPEG encoding a full camera frame is deliberately moved off the UI
-    // isolate. The scan/result screen remains responsive while five captures
-    // are prepared for upload.
-    final encodedCaptures = await compute(
-      _encodeCaptures,
-      captures
-          .map(
-            (capture) => <String, Object>{
-              'retinaFace': capture.retinaFaceBgr,
-              'landmarks': _landmarks(capture.adafaceLandmarks),
-              'x': capture.livenessFaceBox.x,
-              'y': capture.livenessFaceBox.y,
-              'width': capture.livenessFaceBox.width,
-              'height': capture.livenessFaceBox.height,
-            },
-          )
-          .toList(growable: false),
+    // `prepareJpeg` transfers the raw BGR buffer to the JPEG isolate.  After
+    // that transfer, only the JPEG retained by this crop set is safe to send.
+    // Re-encoding the old BGR buffer here can upload cleared/reused pixels
+    // while retaining landmarks from the original frame.
+    final usePreparedRetinaJpegs = captures.every(
+      (capture) => capture.retinaFaceJpeg != null,
     );
+    final encodedCaptures =
+        usePreparedRetinaJpegs
+            ? null
+            : await compute(
+              _encodeCaptures,
+              captures
+                  .map(
+                    (capture) => <String, Object>{
+                      'retinaFace': capture.retinaFaceBgr,
+                      'landmarks': _landmarks(capture.adafaceLandmarks),
+                      'x': capture.livenessFaceBox.x,
+                      'y': capture.livenessFaceBox.y,
+                      'width': capture.livenessFaceBox.width,
+                      'height': capture.livenessFaceBox.height,
+                    },
+                  )
+                  .toList(growable: false),
+            );
     final files = <http.MultipartFile>[];
     final livenessGeometry = <Map<String, int>>[];
     final adafaceLandmarks = <Map<String, double>>[];
-    for (final capture in encodedCaptures) {
-      livenessGeometry.add(capture['geometry']! as Map<String, int>);
-      adafaceLandmarks.add(capture['landmarks']! as Map<String, double>);
+    for (var index = 0; index < captures.length; index++) {
+      final preparedCapture = captures[index];
+      final encodedCapture = encodedCaptures?[index];
+      final retinaFace =
+          usePreparedRetinaJpegs
+              ? preparedCapture.retinaFaceJpeg!
+              : encodedCapture!['retinaFace']! as Uint8List;
+      final landmarks =
+          usePreparedRetinaJpegs
+              ? _landmarks(preparedCapture.adafaceLandmarks)
+              : encodedCapture!['landmarks']! as Map<String, double>;
+      final geometry =
+          usePreparedRetinaJpegs
+              ? <String, int>{
+                'x': preparedCapture.livenessFaceBox.x,
+                'y': preparedCapture.livenessFaceBox.y,
+                'width': preparedCapture.livenessFaceBox.width,
+                'height': preparedCapture.livenessFaceBox.height,
+              }
+              : encodedCapture!['geometry']! as Map<String, int>;
+      livenessGeometry.add(geometry);
+      adafaceLandmarks.add(landmarks);
       files.add(
         http.MultipartFile.fromBytes(
           'retinaFaceFrames',
-          capture['retinaFace']! as Uint8List,
+          retinaFace,
           filename: 'retina-face.jpg',
           contentType: MediaType('image', 'jpeg'),
         ),
+      );
+      print(
+        '[BiometricTiming] pipeline=Upload stage=batch_candidate_payload '
+        'index=$index jpeg_bytes=${retinaFace.length} '
+        'jpeg_sha256=${sha256.convert(retinaFace)} '
+        'landmark_bounds=${_landmarkBounds(landmarks)} '
+        'source=${usePreparedRetinaJpegs ? 'prepared_jpeg' : 'bgr_fallback'}',
       );
     }
     // Correlates duration-only frontend and backend diagnostics. It identifies
@@ -605,7 +639,7 @@ class BiometricApiService {
     final requestId = _requestId();
     print(
       '[BiometricTiming] pipeline=Upload stage=batch_payload_ready '
-      'candidates=${encodedCaptures.length} '
+      'candidates=${captures.length} '
       'total_bytes=${files.fold<int>(0, (sum, file) => sum + file.length)}',
     );
     final stopwatch = Stopwatch()..start();
@@ -968,6 +1002,29 @@ class BiometricApiService {
         'rightMouthX': landmarks.rightMouth.x,
         'rightMouthY': landmarks.rightMouth.y,
       };
+
+  /// Diagnostic-only bounds prove that the uploaded JPEG and its landmark
+  /// coordinates share the expected 640x640 RetinaFace canvas without
+  /// emitting individual facial landmark values into device logs.
+  static String _landmarkBounds(Map<String, double> landmarks) {
+    final xs = <double>[
+      landmarks['leftEyeX']!,
+      landmarks['rightEyeX']!,
+      landmarks['noseX']!,
+      landmarks['leftMouthX']!,
+      landmarks['rightMouthX']!,
+    ];
+    final ys = <double>[
+      landmarks['leftEyeY']!,
+      landmarks['rightEyeY']!,
+      landmarks['noseY']!,
+      landmarks['leftMouthY']!,
+      landmarks['rightMouthY']!,
+    ];
+    String format(double value) => value.toStringAsFixed(1);
+    return '${format(xs.reduce(math.min))},${format(ys.reduce(math.min))},'
+        '${format(xs.reduce(math.max))},${format(ys.reduce(math.max))}';
+  }
 
   @visibleForTesting
   static (int, int) livenessTargetSize(int sourceWidth, int sourceHeight) {
