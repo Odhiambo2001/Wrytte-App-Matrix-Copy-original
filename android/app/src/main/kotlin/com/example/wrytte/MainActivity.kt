@@ -28,6 +28,7 @@ class MainActivity: FlutterActivity() {
         val session: OrtSession,
         var inputBuffer: ByteBuffer? = null,
         val outputBuffers: ConcurrentHashMap<String, FloatArray> = ConcurrentHashMap(),
+        var closed: Boolean = false,
     )
 
     private val deviceRegionChannel = "com.example.wrytte/device_region"
@@ -128,7 +129,11 @@ class MainActivity: FlutterActivity() {
                             setInterOpNumThreads(1)
                             setCPUArenaAllocator(true)
                         }
-                        val session = ortEnvironment.createSession(model.absolutePath, options)
+                        val session = try {
+                            ortEnvironment.createSession(model.absolutePath, options)
+                        } finally {
+                            options.close()
+                        }
                         val id = UUID.randomUUID().toString()
                         ortSessions[id] = NativeOrtSession(session)
                         result.success(
@@ -142,7 +147,7 @@ class MainActivity: FlutterActivity() {
                     "runBgr" -> result.success(runBgr(call.arguments as Map<*, *>))
                     "closeSession" -> {
                         call.argument<String>("sessionId")?.let { id ->
-                            ortSessions.remove(id)?.session?.close()
+                            ortSessions.remove(id)?.let { closeOrtSession(it) }
                         }
                         result.success(null)
                     }
@@ -172,7 +177,10 @@ class MainActivity: FlutterActivity() {
         val mode = requireNotNull(arguments["mode"] as? String)
         require(bytes.size == width * height * 3) { "Invalid BGR buffer length" }
         val nativeSession = requireNotNull(ortSessions[sessionId]) { "Session is closed" }
-        val session = nativeSession.session
+        return synchronized(nativeSession) {
+            check(!nativeSession.closed) { "Session is closed" }
+            try {
+                val session = nativeSession.session
 
         val plane = width * height
         val requiredBytes = plane * 3 * Float.SIZE_BYTES
@@ -230,33 +238,60 @@ class MainActivity: FlutterActivity() {
             }
         }
 
-        OnnxTensor.createTensor(
-            ortEnvironment,
-            floats,
-            longArrayOf(1, 3, height.toLong(), width.toLong()),
-        ).use { input ->
-            session.run(mapOf(inputName to input)).use { outputs ->
-                return session.outputNames.associateWith { name ->
-                    val tensor = outputs[name].get() as OnnxTensor
-                    val buffer: FloatBuffer = tensor.floatBuffer
-                    val valueCount = buffer.remaining()
-                    val values = nativeSession.outputBuffers.compute(name) { _, current ->
-                        if (current == null || current.size != valueCount) {
-                            FloatArray(valueCount)
-                        } else {
-                            current
+                OnnxTensor.createTensor(
+                    ortEnvironment,
+                    floats,
+                    longArrayOf(1, 3, height.toLong(), width.toLong()),
+                ).use { input ->
+                    session.run(mapOf(inputName to input)).use { outputs ->
+                        session.outputNames.associateWith { name ->
+                            val tensor = outputs[name].get() as OnnxTensor
+                            val buffer: FloatBuffer = tensor.floatBuffer
+                            val valueCount = buffer.remaining()
+                            val values = nativeSession.outputBuffers.compute(name) { _, current ->
+                                if (current == null || current.size != valueCount) {
+                                    FloatArray(valueCount)
+                                } else {
+                                    current
+                                }
+                            }!!
+                            buffer.get(values, 0, valueCount)
+                            // The channel owns the returned snapshot; reusable session
+                            // buffers can be erased before another worker call arrives.
+                            values.copyOf()
                         }
-                    }!!
-                    buffer.get(values, 0, valueCount)
-                    values
+                    }
                 }
+            } finally {
+                bytes.fill(0)
+                wipeOrtBuffers(nativeSession)
+            }
+        }
+    }
+
+    private fun wipeOrtBuffers(native: NativeOrtSession) {
+        native.inputBuffer?.let { buffer ->
+            buffer.clear()
+            while (buffer.hasRemaining()) buffer.put(0.toByte())
+            buffer.clear()
+        }
+        native.outputBuffers.values.forEach { it.fill(0f) }
+    }
+
+    private fun closeOrtSession(native: NativeOrtSession) = synchronized(native) {
+        if (!native.closed) {
+            native.closed = true
+            try { native.session.close() } finally {
+                wipeOrtBuffers(native)
+                native.inputBuffer = null
+                native.outputBuffers.clear()
             }
         }
     }
 
     override fun onDestroy() {
         stopCallerRingback()
-        ortSessions.values.forEach { it.session.close() }
+        ortSessions.values.forEach { closeOrtSession(it) }
         ortSessions.clear()
         super.onDestroy()
     }

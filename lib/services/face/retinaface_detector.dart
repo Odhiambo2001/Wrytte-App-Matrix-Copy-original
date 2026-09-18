@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:wrytte/services/face/android_onnx_image_session.dart';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -73,13 +75,25 @@ class RetinaFaceDetector {
   final double confidenceThreshold;
   final double nmsThreshold;
   OrtSession? _session;
+  AndroidOnnxImageSession? _android;
   late final Float32List _inputBuffer = Float32List(inputSize * inputSize * 3);
   final Map<int, List<_Prior>> _priorsBySize = {};
 
-  bool get isReady => _session != null;
+  bool get isReady => _session != null || _android != null;
 
   Future<void> initialize() async {
-    if (_session != null) return;
+    if (isReady) return;
+    if (Platform.isAndroid) {
+      _android = await AndroidOnnxImageSession.create(modelAsset, threads: 4);
+      try {
+        _validateNames(_android!.inputNames, _android!.outputNames);
+      } catch (_) {
+        await _android!.close();
+        _android = null;
+        rethrow;
+      }
+      return;
+    }
     // Preprocessing supplies packed BGR pixels for this model's NCHW input.
     // The Android ONNX Runtime binary bundled with this app aborts during
     // XNNPACK session creation on the Redmi 25028RN03A. Keep the compatible
@@ -110,6 +124,14 @@ class RetinaFaceDetector {
       height: inputSize,
       interpolation: img.Interpolation.linear,
     );
+    if (_android != null) {
+      final bytes = resized.getBytes(order: img.ChannelOrder.bgr);
+      try {
+        return await detectBgr(bytes);
+      } finally {
+        bytes.fillRange(0, bytes.length, 0);
+      }
+    }
     final tensorData = _toBgrTensor(resized);
     return _run(tensorData, image.width, image.height);
   }
@@ -120,6 +142,29 @@ class RetinaFaceDetector {
         'RetinaFace requires a ${inputSize}x$inputSize packed BGR image; '
         'received ${bgr.length} bytes.',
       );
+    }
+    final android = _android;
+    if (android != null) {
+      final outputs = await android.runBgr(
+        bgr: bgr,
+        width: inputSize,
+        height: inputSize,
+        mode: 'retina',
+      );
+      try {
+        return _decode(
+          outputs['loc']!,
+          outputs['conf']!,
+          outputs['landmarks']!,
+          inputSize,
+          inputSize,
+          _priorsForSize(inputSize),
+        );
+      } finally {
+        for (final output in outputs.values) {
+          output.fillRange(0, output.length, 0);
+        }
+      }
     }
     final plane = inputSize * inputSize;
     // Reuse the ~4.7 MiB RetinaFace tensor instead of allocating it for every
@@ -195,6 +240,9 @@ class RetinaFaceDetector {
   }
 
   Future<void> dispose() async {
+    final android = _android;
+    _android = null;
+    if (android != null) await android.close();
     final session = _session;
     _session = null;
     await Future.wait([if (session != null) session.close()]);

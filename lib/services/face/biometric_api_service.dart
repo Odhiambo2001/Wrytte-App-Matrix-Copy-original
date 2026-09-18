@@ -144,7 +144,6 @@ class BiometricApiService {
   // JPEG preserves the face detail required by the backend models while
   // avoiding the large CPU and transport cost of lossless PNG frames.
   static const _retinaJpegQuality = 85;
-  static const _livenessJpegQuality = 80;
   static Future<void> _uploadTail = Future<void>.value();
   static Stopwatch? _fiveFrameFrontendTimer;
   static final Set<String> _completedCaptureSessions = <String>{};
@@ -573,9 +572,6 @@ class BiometricApiService {
             (capture) => <String, Object>{
               'retinaFace': capture.retinaFaceBgr,
               'landmarks': _landmarks(capture.adafaceLandmarks),
-              'livenessFrame': capture.livenessFrameBgr,
-              'livenessFrameWidth': capture.livenessFrameWidth,
-              'livenessFrameHeight': capture.livenessFrameHeight,
               'x': capture.livenessFaceBox.x,
               'y': capture.livenessFaceBox.y,
               'width': capture.livenessFaceBox.width,
@@ -590,23 +586,14 @@ class BiometricApiService {
     for (final capture in encodedCaptures) {
       livenessGeometry.add(capture['geometry']! as Map<String, int>);
       adafaceLandmarks.add(capture['landmarks']! as Map<String, double>);
-      files
-        ..add(
-          http.MultipartFile.fromBytes(
-            'retinaFaceFrames',
-            capture['retinaFace']! as Uint8List,
-            filename: 'retina-face.jpg',
-            contentType: MediaType('image', 'jpeg'),
-          ),
-        )
-        ..add(
-          http.MultipartFile.fromBytes(
-            'livenessFrames',
-            capture['livenessFrame']! as Uint8List,
-            filename: 'liveness-frame.jpg',
-            contentType: MediaType('image', 'jpeg'),
-          ),
-        );
+      files.add(
+        http.MultipartFile.fromBytes(
+          'retinaFaceFrames',
+          capture['retinaFace']! as Uint8List,
+          filename: 'retina-face.jpg',
+          contentType: MediaType('image', 'jpeg'),
+        ),
+      );
     }
     // Correlates duration-only frontend and backend diagnostics. It identifies
     // neither the person nor their biometric data.
@@ -671,17 +658,26 @@ class BiometricApiService {
     final encoded = BiometricStageTiming.measure(
       'Upload',
       'jpeg_encoding',
-      () => _encodeCandidateWithOpenCv(<String, Object>{
-        'retinaFace': capture.retinaFaceBgr,
-        'landmarks': _landmarks(capture.adafaceLandmarks),
-        'livenessFrame': capture.livenessFrameBgr,
-        'livenessFrameWidth': capture.livenessFrameWidth,
-        'livenessFrameHeight': capture.livenessFrameHeight,
-        'x': capture.livenessFaceBox.x,
-        'y': capture.livenessFaceBox.y,
-        'width': capture.livenessFaceBox.width,
-        'height': capture.livenessFaceBox.height,
-      }),
+      () =>
+          capture.retinaFaceJpeg != null
+              ? <String, Object>{
+                'retinaFace': capture.retinaFaceJpeg!,
+                'landmarks': _landmarks(capture.adafaceLandmarks),
+                'geometry': <String, int>{
+                  'x': capture.livenessFaceBox.x,
+                  'y': capture.livenessFaceBox.y,
+                  'width': capture.livenessFaceBox.width,
+                  'height': capture.livenessFaceBox.height,
+                },
+              }
+              : _encodeCandidateWithOpenCv(<String, Object>{
+                'retinaFace': capture.retinaFaceBgr,
+                'landmarks': _landmarks(capture.adafaceLandmarks),
+                'x': capture.livenessFaceBox.x,
+                'y': capture.livenessFaceBox.y,
+                'width': capture.livenessFaceBox.width,
+                'height': capture.livenessFaceBox.height,
+              }),
     );
     if (candidateIndex + 1 == FaceBiometricPipeline.framesToUse &&
         _fiveFrameFrontendTimer != null) {
@@ -825,9 +821,6 @@ class BiometricApiService {
   static Map<String, Object> _encodeCaptureWithDart(
     Map<String, Object> capture,
   ) {
-    final sourceWidth = capture['livenessFrameWidth']! as int;
-    final sourceHeight = capture['livenessFrameHeight']! as int;
-    final target = livenessTargetSize(sourceWidth, sourceHeight);
     final sourceBox = <String, int>{
       'x': capture['x']! as int,
       'y': capture['y']! as int,
@@ -846,13 +839,7 @@ class BiometricApiService {
         quality: _retinaJpegQuality,
       ),
       'landmarks': capture['landmarks']! as Map<String, double>,
-      'geometry': scaleLivenessFaceBox(
-        sourceBox,
-        sourceWidth: sourceWidth,
-        sourceHeight: sourceHeight,
-        targetWidth: target.$1,
-        targetHeight: target.$2,
-      ),
+      'geometry': sourceBox,
     };
   }
 
@@ -875,13 +862,10 @@ class BiometricApiService {
   static Map<String, Object> _encodeCandidateWithOpenCvNative(
     Map<String, Object> capture,
   ) {
-    final sourceWidth = capture['livenessFrameWidth']! as int;
-    final sourceHeight = capture['livenessFrameHeight']! as int;
     final retinaBytes = capture['retinaFace']! as Uint8List;
     debugPrint(
       '[JPEG] retina bytes=${retinaBytes.length}, expected=${640 * 640 * 3}',
     );
-    final target = livenessTargetSize(sourceWidth, sourceHeight);
     final retina = _openCvJpeg(
       retinaBytes,
       width: 640,
@@ -897,13 +881,7 @@ class BiometricApiService {
     return <String, Object>{
       'retinaFace': retina,
       'landmarks': capture['landmarks']! as Map<String, double>,
-      'geometry': scaleLivenessFaceBox(
-        sourceBox,
-        sourceWidth: sourceWidth,
-        sourceHeight: sourceHeight,
-        targetWidth: target.$1,
-        targetHeight: target.$2,
-      ),
+      'geometry': sourceBox,
     };
   }
 

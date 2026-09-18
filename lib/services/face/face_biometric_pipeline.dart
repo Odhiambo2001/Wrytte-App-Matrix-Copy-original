@@ -11,32 +11,28 @@ import 'package:wrytte/services/face/minifasnet_v2_liveness.dart';
 /// liveness score, biometric key, quantization, or commitment is created on
 /// the device.
 class BiometricCropSet {
-  const BiometricCropSet({
+  BiometricCropSet({
     required this.retinaFaceBgr,
     required this.adafaceLandmarks,
-    required this.livenessFrameBgr,
-    required this.livenessFrameWidth,
-    required this.livenessFrameHeight,
     required this.livenessFaceBox,
   });
 
   /// The 640x640 RetinaFace image and its landmark coordinates. The backend
   /// uses them to run Umeyama and create the 112x112 AdaFace input.
   final Uint8List retinaFaceBgr;
+  Uint8List? retinaFaceJpeg;
   final FaceLandmarks adafaceLandmarks;
 
-  /// A correctly-oriented camera frame. The backend derives both fixed
-  /// MiniFASNet context crops from this one source image.
-  final Uint8List livenessFrameBgr;
-  final int livenessFrameWidth;
-  final int livenessFrameHeight;
+  /// Geometry retained after local liveness. No liveness image survives this
+  /// stage or crosses into the upload payload.
   final LivenessFaceBox livenessFaceBox;
 
   /// Clears the frontend-owned candidate bytes immediately after its upload
   /// has completed. The backend never asks the device to retain candidates.
   void clear() {
+    final jpeg = retinaFaceJpeg;
+    if (jpeg != null) jpeg.fillRange(0, jpeg.length, 0);
     retinaFaceBgr.fillRange(0, retinaFaceBgr.length, 0);
-    livenessFrameBgr.fillRange(0, livenessFrameBgr.length, 0);
   }
 }
 
@@ -179,7 +175,7 @@ class FaceBiometricPipeline {
   static const targetConfidenceThreshold = 0.83;
   static const fullBboxVisibleThreshold = 0.90;
   static const normalFaceSizeMinimum = 0.34;
-  static const normalFaceSizeMaximum = 0.74;
+  static const normalFaceSizeMaximum = 0.72;
 
   final RetinaFaceDetector retinaFace = RetinaFaceDetector();
   final MiniFasNetV2Liveness miniFasNetV2 = MiniFasNetV2Liveness();
@@ -329,7 +325,7 @@ class FaceBiometricPipeline {
       final target = BiometricStageTiming.measure(
         'FaceSelection',
         'geometry_and_target',
-        () => _selectTargetFace(faces),
+        () => chooseTarget(faces),
       );
       if (target == null) {
         return RetinaFrameResult(
@@ -395,9 +391,6 @@ class FaceBiometricPipeline {
       final capture = BiometricCropSet(
         retinaFaceBgr: Uint8List.fromList(pending.frame.bgr),
         adafaceLandmarks: pending.target.landmarks,
-        livenessFrameBgr: Uint8List.fromList(pending.frame.originalBgr),
-        livenessFrameWidth: pending.frame.originalWidth,
-        livenessFrameHeight: pending.frame.originalHeight,
         livenessFaceBox: faceBox,
       );
       crops.v1seBgr.fillRange(0, crops.v1seBgr.length, 0);
@@ -453,7 +446,7 @@ class FaceBiometricPipeline {
     );
   }
 
-  FaceDetection? _selectTargetFace(List<FaceDetection> faces) {
+  static FaceDetection? chooseTarget(List<FaceDetection> faces) {
     // A biometric capture is permitted for one qualifying normal-distance
     // face, or for exactly two faces only when the other is far and at least
     // 0.20 smaller by the detector's size ratio. This intentionally rejects
@@ -501,5 +494,6 @@ class FaceBiometricPipeline {
   Future<void> dispose() async {
     reset();
     await retinaFace.dispose();
+    await miniFasNetV2.dispose();
   }
 }
