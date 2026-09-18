@@ -699,7 +699,7 @@ class BiometricApiService {
     print(
       '[BiometricTiming] pipeline=Upload stage=candidate_payload_ready '
       'index=$candidateIndex retina_face_bytes=${(encoded['retinaFace']! as Uint8List).length} '
-      'liveness_frame_bytes=${(encoded['livenessFrame']! as Uint8List).length}',
+      'liveness_frame=deleted_local_only',
     );
     onFrontendPayloadReady?.call(candidateIndex);
     final stopwatch = Stopwatch()..start();
@@ -754,12 +754,6 @@ class BiometricApiService {
             filename: 'retina-face.jpg',
             contentType: MediaType('image', 'jpeg'),
           ),
-          http.MultipartFile.fromBytes(
-            'livenessFrame',
-            encoded['livenessFrame']! as Uint8List,
-            filename: 'liveness-frame.jpg',
-            contentType: MediaType('image', 'jpeg'),
-          ),
         ],
         token: token,
         headers: <String, String>{'X-Biometric-Request-Id': requestId},
@@ -773,7 +767,7 @@ class BiometricApiService {
       }
       return response;
     } finally {
-      for (final key in const ['retinaFace', 'livenessFrame']) {
+      for (final key in const ['retinaFace']) {
         final bytes = encoded[key];
         if (bytes is Uint8List) bytes.fillRange(0, bytes.length, 0);
       }
@@ -833,28 +827,7 @@ class BiometricApiService {
   ) {
     final sourceWidth = capture['livenessFrameWidth']! as int;
     final sourceHeight = capture['livenessFrameHeight']! as int;
-    final sourceBgr = _packedBgr(
-      capture['livenessFrame']! as Uint8List,
-      width: sourceWidth,
-      height: sourceHeight,
-    );
-    final sourceImage = img.Image.fromBytes(
-      width: sourceWidth,
-      height: sourceHeight,
-      bytes: sourceBgr.buffer,
-      numChannels: 3,
-      order: img.ChannelOrder.bgr,
-    );
     final target = livenessTargetSize(sourceWidth, sourceHeight);
-    final livenessImage =
-        target.$1 == sourceWidth && target.$2 == sourceHeight
-            ? sourceImage
-            : img.copyResize(
-              sourceImage,
-              width: target.$1,
-              height: target.$2,
-              interpolation: img.Interpolation.linear,
-            );
     final sourceBox = <String, int>{
       'x': capture['x']! as int,
       'y': capture['y']! as int,
@@ -873,9 +846,6 @@ class BiometricApiService {
         quality: _retinaJpegQuality,
       ),
       'landmarks': capture['landmarks']! as Map<String, double>,
-      'livenessFrame': Uint8List.fromList(
-        img.encodeJpg(livenessImage, quality: _livenessJpegQuality),
-      ),
       'geometry': scaleLivenessFaceBox(
         sourceBox,
         sourceWidth: sourceWidth,
@@ -908,13 +878,8 @@ class BiometricApiService {
     final sourceWidth = capture['livenessFrameWidth']! as int;
     final sourceHeight = capture['livenessFrameHeight']! as int;
     final retinaBytes = capture['retinaFace']! as Uint8List;
-    final livenessBytes = capture['livenessFrame']! as Uint8List;
     debugPrint(
       '[JPEG] retina bytes=${retinaBytes.length}, expected=${640 * 640 * 3}',
-    );
-    debugPrint(
-      '[JPEG] liveness bytes=${livenessBytes.length}, '
-      'expected=${sourceWidth * sourceHeight * 3}',
     );
     final target = livenessTargetSize(sourceWidth, sourceHeight);
     final retina = _openCvJpeg(
@@ -922,14 +887,6 @@ class BiometricApiService {
       width: 640,
       height: 640,
       quality: _retinaJpegQuality,
-    );
-    final liveness = _openCvJpeg(
-      livenessBytes,
-      width: sourceWidth,
-      height: sourceHeight,
-      targetWidth: target.$1,
-      targetHeight: target.$2,
-      quality: _livenessJpegQuality,
     );
     final sourceBox = <String, int>{
       'x': capture['x']! as int,
@@ -940,7 +897,6 @@ class BiometricApiService {
     return <String, Object>{
       'retinaFace': retina,
       'landmarks': capture['landmarks']! as Map<String, double>,
-      'livenessFrame': liveness,
       'geometry': scaleLivenessFaceBox(
         sourceBox,
         sourceWidth: sourceWidth,
