@@ -197,6 +197,7 @@ class BiometricApiService {
       '/api/biometrics/enroll/new',
       captures,
       fields: {'wrytteId': backendWrytteId},
+      retinaFaceOnly: true,
     );
     return _ldpcInputFromResponse(response, needsEnrollmentTicket: true);
   }
@@ -561,6 +562,7 @@ class BiometricApiService {
     List<BiometricCropSet> captures, {
     String? token,
     Map<String, String> fields = const {},
+    bool retinaFaceOnly = false,
   }) async {
     if (captures.length != FaceBiometricPipeline.framesToUse) {
       throw ArgumentError('Exactly five biometric crop sets are required.');
@@ -613,8 +615,9 @@ class BiometricApiService {
           path,
           {
             ...fields,
-            'livenessGeometry': jsonEncode(livenessGeometry),
             'adafaceLandmarks': jsonEncode(adafaceLandmarks),
+            if (!retinaFaceOnly)
+              'livenessGeometry': jsonEncode(livenessGeometry),
           },
           files: files,
           token: token,

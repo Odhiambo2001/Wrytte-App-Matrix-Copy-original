@@ -695,6 +695,27 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _discardPendingCandidateCaptures();
       return;
     }
+    // New Wrytte-ID registration has a compact five-JPEG backend contract.
+    // Do not turn those five frames into five round trips: retain the bounded
+    // local captures, then submit one multipart batch for concurrent server
+    // liveness/alignment/AdaFace processing.
+    if (_enrolling && !widget.attachToExistingUser) {
+      if (_pendingCandidateCaptures.length <
+          FaceBiometricPipeline.framesToUse) {
+        return;
+      }
+      final batch = <_TaggedBiometricCapture>[];
+      for (var index = 0; index < FaceBiometricPipeline.framesToUse; index++) {
+        batch.add(_pendingCandidateCaptures.removeFirst());
+      }
+      _candidateExtractionClosed = true;
+      _discardPendingRetinaFrames();
+      _discardPendingCropCaptures();
+      _discardPendingLivenessCaptures();
+      _inFlightCandidateUploads++;
+      unawaited(_frontendTiming.run(() => _uploadNewEnrollmentBatch(batch)));
+      return;
+    }
     while (_inFlightCandidateUploads < _maxConcurrentCandidateUploads &&
         _pendingCandidateCaptures.isNotEmpty &&
         _nextCandidateSubmissionIndex < _maxCandidateSubmissions &&
@@ -716,6 +737,92 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           () => _uploadCandidate(taggedCapture, candidateIndex),
         ),
       );
+    }
+  }
+
+  Future<void> _uploadNewEnrollmentBatch(
+    List<_TaggedBiometricCapture> batch,
+  ) async {
+    try {
+      final captures = batch
+          .map((item) => item.capture)
+          .toList(growable: false);
+      final input = await BiometricApiService.enrollNew(
+        wrytteId: widget.wrytteId,
+        captures: captures,
+      );
+      if (!mounted || _complete) return;
+      if (!input.accepted || input.enrollmentTicket == null) {
+        await _resumeAfterBiometricRejection();
+        return;
+      }
+      if (_captureBatchTimer != null) {
+        BiometricStageTiming.log(
+          'Capture',
+          'five_live_frames',
+          _captureBatchTimer!,
+        );
+      }
+      if (_uploadBatchTimer != null) {
+        BiometricStageTiming.log(
+          'Upload',
+          'batch_to_backend_acceptance',
+          _uploadBatchTimer!,
+        );
+      }
+      setState(() {
+        _complete = true;
+        _backendWaiting = true;
+        _status = 'Please wait…';
+      });
+      final camera = _camera;
+      if (camera?.value.isStreamingImages == true) {
+        await BiometricStageTiming.measureAsync(
+          'Camera',
+          'stop_stream',
+          () => camera!.stopImageStream(),
+        );
+      }
+      final enrollment = await BiometricStageTiming.measureAsync(
+        'LDPC',
+        'local_enrollment',
+        () => _createLocalEnrollment(input.ldpcBits),
+      );
+      final user = await BiometricStageTiming.measureAsync(
+        'Enrollment',
+        'finalize_request',
+        () => AuthService.instance.completeClientBiometricEnrollment(
+          wrytteId: widget.wrytteId,
+          biometricEnrollmentTicket: input.enrollmentTicket!,
+          kmap: enrollment.commitment.toJson(),
+          publicKey: enrollment.publicKey,
+        ),
+      );
+      // Session persistence is handled by completeClientBiometricEnrollment.
+      // Registering this device is non-biometric metadata and must not keep
+      // the scan pipeline or camera alive.
+      unawaited(
+        DeviceMetadataService.instance.registerWithBackend(userId: user.userId),
+      );
+      if (!mounted) return;
+      setState(() {
+        _backendWaiting = false;
+        _status = 'Done';
+      });
+      _logTransitionTiming('profile_setup');
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => const AddProfilePage(isNewUser: true),
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('[KFaceScan] batch enrollment failed: $error\n$stackTrace');
+      if (mounted && !_complete) await _resumeAfterBiometricRejection();
+    } finally {
+      for (final tagged in batch) {
+        tagged.clear();
+      }
+      _inFlightCandidateUploads = math.max(0, _inFlightCandidateUploads - 1);
     }
   }
 

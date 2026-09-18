@@ -84,9 +84,10 @@ class RetinaFaceDetector {
   Future<void> initialize() async {
     if (isReady) return;
     if (Platform.isAndroid) {
-      // Two threads avoid oversubscribing dual-core Android phones while
-      // leaving CPU capacity for the other conveyor-belt workers.
-      _android = await AndroidOnnxImageSession.create(modelAsset, threads: 2);
+      // RetinaFace is the dominant scan cost. The native bridge caps this to
+      // available cores; four intra-op threads materially reduce latency on
+      // current Android devices while preserving the required BGR contract.
+      _android = await AndroidOnnxImageSession.create(modelAsset, threads: 4);
       try {
         _validateNames(_android!.inputNames, _android!.outputNames);
       } catch (_) {
