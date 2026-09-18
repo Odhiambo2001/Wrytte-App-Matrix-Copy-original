@@ -910,7 +910,8 @@ class BiometricApiService {
     int? targetHeight,
     required int quality,
   }) {
-    final source = cv.Mat.fromList(height, width, cv.MatType.CV_8UC3, bgr);
+    final packed = _packedBgr(bgr, width: width, height: height);
+    final source = cv.Mat.fromList(height, width, cv.MatType.CV_8UC3, packed);
     cv.Mat? resized;
     final parameters = cv.VecI32.fromList(<int>[
       cv.IMWRITE_JPEG_QUALITY,
@@ -933,7 +934,36 @@ class BiometricApiService {
       parameters.dispose();
       resized?.dispose();
       source.dispose();
+      packed.fillRange(0, packed.length, 0);
     }
+  }
+
+  /// Camera/image packages can preserve an alpha byte even when callers ask
+  /// for BGR. OpenCV's CV_8UC3 constructor rejects that four-channel buffer;
+  /// normalize it here so JPEG encoding never fails with a bare ArgumentError.
+  static Uint8List _packedBgr(
+    Uint8List bytes, {
+    required int width,
+    required int height,
+  }) {
+    final pixels = width * height;
+    final expected = pixels * 3;
+    if (bytes.length == expected) return Uint8List.fromList(bytes);
+    if (bytes.length == pixels * 4) {
+      final packed = Uint8List(expected);
+      for (var pixel = 0; pixel < pixels; pixel++) {
+        final source = pixel * 4;
+        final target = pixel * 3;
+        packed[target] = bytes[source];
+        packed[target + 1] = bytes[source + 1];
+        packed[target + 2] = bytes[source + 2];
+      }
+      return packed;
+    }
+    throw ArgumentError(
+      'Invalid BGR frame length: got ${bytes.length}, expected $expected '
+      'or ${pixels * 4} for ${width}x$height.',
+    );
   }
 
   static Map<String, double> _landmarks(FaceLandmarks landmarks) =>
