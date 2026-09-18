@@ -157,6 +157,7 @@ class BiometricApiService {
     _uploadTail = result.then<void>((_) {}, onError: (_, __) {});
     return result;
   }
+
   static const ldpcInputBitCount = 832;
   static const _packedLdpcInputByteCount = ldpcInputBitCount ~/ 8;
   // MiniFASNet receives an 80x80 face crop on the backend. A 640x360 source
@@ -613,17 +614,19 @@ class BiometricApiService {
     );
     final stopwatch = Stopwatch()..start();
     try {
-      return await _serializeUpload(() => ApiService.postMultipart(
-        path,
-        {
-          ...fields,
-          'livenessGeometry': jsonEncode(livenessGeometry),
-          'adafaceLandmarks': jsonEncode(adafaceLandmarks),
-        },
-        files: files,
-        token: token,
-        headers: {'X-Biometric-Request-Id': requestId},
-      ));
+      return await _serializeUpload(
+        () => ApiService.postMultipart(
+          path,
+          {
+            ...fields,
+            'livenessGeometry': jsonEncode(livenessGeometry),
+            'adafaceLandmarks': jsonEncode(adafaceLandmarks),
+          },
+          files: files,
+          token: token,
+          headers: {'X-Biometric-Request-Id': requestId},
+        ),
+      );
     } finally {
       stopwatch.stop();
       // Deliberately no images, embeddings, scores, Wrytte ID, or token.
@@ -750,6 +753,10 @@ class BiometricApiService {
       }
       return response;
     } finally {
+      for (final key in const ['retinaFace', 'livenessFrame']) {
+        final bytes = encoded[key];
+        if (bytes is Uint8List) bytes.fillRange(0, bytes.length, 0);
+      }
       uploadReservation.release();
       stopwatch.stop();
       // No image, embedding, Wrytte ID, session ID, score, or token is logged.
@@ -915,11 +922,10 @@ class BiometricApiService {
                   targetHeight == null ||
                   (targetWidth == width && targetHeight == height)
               ? source
-              : (resized = cv.resize(
-                source,
-                (targetWidth, targetHeight),
-                interpolation: cv.INTER_LINEAR,
-              ));
+              : (resized = cv.resize(source, (
+                targetWidth,
+                targetHeight,
+              ), interpolation: cv.INTER_LINEAR));
       final (success, bytes) = cv.imencode('.jpg', output, params: parameters);
       if (!success) throw StateError('Native JPEG encoding failed.');
       return bytes;

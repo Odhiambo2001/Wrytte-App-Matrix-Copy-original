@@ -157,6 +157,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   int _acceptedCandidateCount = 0;
   bool _processingFrame = false;
   bool _candidateExtractionClosed = false;
+  // Set as soon as the fifth candidate is handed to the backend. This keeps
+  // the camera preview alive while preventing any later stage from admitting
+  // or publishing another frame.
+  bool _processingPaused = false;
   int _nextCandidateSubmissionIndex = 0;
   String? _captureSessionId;
   bool _startingCaptureSession = false;
@@ -307,6 +311,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _complete ||
         _processingFrame ||
         _candidateExtractionClosed ||
+        _processingPaused ||
         !_hasCandidateUploadCapacity) {
       return;
     }
@@ -346,6 +351,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
       if (!mounted ||
           _complete ||
+          _processingPaused ||
           tagged.captureSessionId != _captureSessionId) {
         retina.pendingCrop?.clear();
         return;
@@ -406,6 +412,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   void _drainCropCaptures() {
     if (_processingCrop ||
         _complete ||
+        _processingPaused ||
         _candidateExtractionClosed ||
         _pendingCropCaptures.isEmpty) {
       return;
@@ -424,6 +431,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           );
           if (!mounted ||
               _complete ||
+              _processingPaused ||
               tagged.captureSessionId != _captureSessionId) {
             pending.clear();
             return;
@@ -453,6 +461,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   void _drainLivenessCaptures() {
     if (_processingLiveness ||
         _complete ||
+        _processingPaused ||
         _candidateExtractionClosed ||
         _pendingLivenessCaptures.isEmpty) {
       return;
@@ -467,6 +476,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           final live = await _pipeline.checkLiveness(tagged.pending);
           if (!mounted ||
               _complete ||
+              _processingPaused ||
               tagged.captureSessionId != _captureSessionId) {
             tagged.pending.capture.clear();
             return;
@@ -565,9 +575,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // there is no useful sixth target to retain locally. If the backend
       // rejects this batch, its response starts a fresh capture session.
       if (candidateIndex + 1 == FaceBiometricPipeline.framesToUse) {
-        _candidateExtractionClosed = true;
-        _discardPendingLivenessCaptures();
-        _discardPendingCandidateCaptures();
+        _pauseFrontendProcessing();
       }
       unawaited(
         _frontendTiming.run(
@@ -665,7 +673,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         );
         // The backend cannot accept further candidates in a geometry-invalid
         // session. Start a fresh session instead of advancing its index.
-        if (fakeFrame || invalidGeometry) {
+        if (fakeFrame || invalidGeometry || !result.accepted) {
           await _resumeAfterBiometricRejection();
         }
         return;
@@ -759,11 +767,25 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       if (mounted) {
         setState(() => _status = 'Position your face\nwithin the circle');
       }
+      if (_processingPaused && !_complete) {
+        await _resumeAfterBiometricRejection();
+      }
     } finally {
       capture.clear();
       _inFlightCandidateUploads = math.max(0, _inFlightCandidateUploads - 1);
       _dispatchPendingCandidateCaptures();
     }
+  }
+
+  /// Drains every frontend-owned queue and closes admission to all stages.
+  /// The CameraController is deliberately left initialized and streaming so
+  /// the preview remains visible; callbacks return before conversion.
+  void _pauseFrontendProcessing() {
+    _processingPaused = true;
+    _candidateExtractionClosed = true;
+    _discardPendingCandidateCaptures();
+    _discardPendingCropCaptures();
+    _discardPendingLivenessCaptures();
   }
 
   Future<void> _completeExistingUserEnrollment(BiometricLdpcInput input) async {
@@ -1117,6 +1139,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _verificationFailed = false;
     _acceptedCandidateCount = 0;
     _candidateExtractionClosed = false;
+    _processingPaused = false;
     _scanStarted = false;
     _scanPhaseReady = _ready;
     _scanStartTimer?.cancel();
@@ -1173,6 +1196,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _verificationFailed = false;
       _acceptedCandidateCount = 0;
       _candidateExtractionClosed = false;
+      _processingPaused = false;
       _scanStarted = false;
       _scanPhaseReady = _ready;
       _scanStartTimer?.cancel();

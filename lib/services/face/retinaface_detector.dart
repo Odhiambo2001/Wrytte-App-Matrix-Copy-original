@@ -131,7 +131,11 @@ class RetinaFaceDetector {
       tensorData[plane + pixel] = bgr[offset + 1].toDouble() - 117.0;
       tensorData[(plane * 2) + pixel] = bgr[offset + 2].toDouble() - 123.0;
     }
-    return _run(tensorData, inputSize, inputSize);
+    try {
+      return await _run(tensorData, inputSize, inputSize);
+    } finally {
+      tensorData.fillRange(0, tensorData.length, 0);
+    }
   }
 
   double _bestFaceConfidence(List<dynamic>? values) {
@@ -245,10 +249,11 @@ class RetinaFaceDetector {
       final prior = priors[index];
       final locationOffset = index * 4;
       final centerX =
-          prior.centerX + valueAt(locations, locationOffset) * 0.1 * prior.width;
+          prior.centerX +
+          valueAt(locations, locationOffset) * 0.1 * prior.width;
       final centerY =
           prior.centerY +
-              valueAt(locations, locationOffset + 1) * 0.1 * prior.height;
+          valueAt(locations, locationOffset + 1) * 0.1 * prior.height;
       final width =
           prior.width * math.exp(valueAt(locations, locationOffset + 2) * 0.2);
       final height =
@@ -261,7 +266,8 @@ class RetinaFaceDetector {
       math.Point<double> landmark(int point) {
         final offset = (index * 10) + (point * 2);
         return math.Point<double>(
-          (prior.centerX + valueAt(landmarkValues, offset) * 0.1 * prior.width) *
+          (prior.centerX +
+                  valueAt(landmarkValues, offset) * 0.1 * prior.width) *
               originalWidth,
           (prior.centerY +
                   valueAt(landmarkValues, offset + 1) * 0.1 * prior.height) *
@@ -340,7 +346,6 @@ class RetinaFaceDetector {
     final union = (a.width * a.height) + (b.width * b.height) - intersection;
     return union <= 0 ? 0 : intersection / union;
   }
-
 }
 
 class _Prior {

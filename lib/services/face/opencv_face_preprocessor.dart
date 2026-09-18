@@ -35,6 +35,10 @@ class RetinaFrame {
   final ffi.Pointer<ffi.Uint8> sourceBuffer;
 
   void dispose() {
+    // Erase both the detector copy and the retained source before releasing
+    // native storage. Rejected frames therefore leave no reusable pixel copy.
+    bgr.fillRange(0, bgr.length, 0);
+    originalBgr.fillRange(0, originalBgr.length, 0);
     retinaMat.dispose();
     originalMat.dispose();
     calloc.free(sourceBuffer);
