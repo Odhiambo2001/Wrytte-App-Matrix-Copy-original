@@ -134,7 +134,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   // the next candidate may be encoding, and a third may pass RetinaFace and
   // local liveness. [BiometricApiService] still gates HTTP requests in index
   // order, so backend submissions cannot arrive out of order.
-  static const _maxConcurrentCandidateUploads = 3;
+  static const _maxConcurrentCandidateUploads = 5;
   // Three candidates eliminate response-driven gaps between frames without
   // rebuilding the former unbounded speculative capture queue. Any work that
   // survives the fifth acceptance is cancelled before it enters HTTP.

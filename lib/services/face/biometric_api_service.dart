@@ -149,9 +149,12 @@ class BiometricApiService {
   static final Set<String> _completedCaptureSessions = <String>{};
 
   static _UploadReservation _reserveUpload() {
-    final previous = _uploadTail;
+    // Candidate requests are independent multipart uploads. Serializing them
+    // made five network round trips add up to 14 seconds on mobile networks.
+    // Keep the reservation API for cleanup, but allow the HTTP requests to
+    // run concurrently; candidateIndex preserves backend ordering semantics.
+    final previous = Future<void>.value();
     final done = Completer<void>();
-    _uploadTail = done.future;
     return _UploadReservation(previous, done);
   }
 
