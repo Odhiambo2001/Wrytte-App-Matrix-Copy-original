@@ -2,6 +2,7 @@ package com.example.wrytte
 
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtLoggingLevel
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.providers.NNAPIFlags
 import android.content.Context
@@ -12,6 +13,9 @@ import android.media.ToneGenerator
 import android.os.Bundle
 import android.telephony.TelephonyManager
 import androidx.core.view.WindowCompat
+import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.gpu.CompatibilityList
+import org.tensorflow.lite.gpu.GpuDelegate
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.FlutterInjector
@@ -35,13 +39,24 @@ class MainActivity: FlutterActivity() {
         var closed: Boolean = false,
     )
 
+    private data class NativeTfliteSession(
+        val interpreter: Interpreter,
+        val gpuDelegate: GpuDelegate?,
+        val executionProvider: String,
+        val inputBuffer: ByteBuffer,
+        val outputBuffers: List<ByteBuffer>,
+        var closed: Boolean = false,
+    )
+
     private val deviceRegionChannel = "com.example.wrytte/device_region"
     private val callerRingbackChannel = "com.example.wrytte/caller_ringback"
     private val onnxImageChannel = "com.example.wrytte/onnx_image"
+    private val tfliteImageChannel = "com.example.wrytte/tflite_image"
     private val cameraCapabilitiesChannel = "com.example.wrytte/camera_capabilities"
     private var callerRingback: ToneGenerator? = null
     private val ortEnvironment by lazy { OrtEnvironment.getEnvironment() }
     private val ortSessions = ConcurrentHashMap<String, NativeOrtSession>()
+    private val tfliteSessions = ConcurrentHashMap<String, NativeTfliteSession>()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -158,6 +173,50 @@ class MainActivity: FlutterActivity() {
                 result.error("NATIVE_ONNX_ERROR", error.message, error.stackTraceToString())
             }
         }
+
+        // GPU delegates must be created and invoked from the same thread.
+        // This serial platform queue keeps every persistent RetinaFace session
+        // thread-affine without blocking Flutter's UI isolate.
+        val tfliteQueue = flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue()
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            tfliteImageChannel,
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
+            tfliteQueue,
+        ).setMethodCallHandler { call, result ->
+            try {
+                when (call.method) {
+                    "createRetinaFaceSession" -> {
+                        val asset = requireNotNull(call.argument<String>("asset"))
+                        val threads = (call.argument<Int>("threads") ?: 4)
+                            .coerceAtLeast(1)
+                            .coerceAtMost(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
+                        val native = createTfliteRetinaFaceSession(
+                            materializeFlutterAsset(asset),
+                            threads,
+                        )
+                        val id = UUID.randomUUID().toString()
+                        tfliteSessions[id] = native
+                        result.success(
+                            mapOf(
+                                "sessionId" to id,
+                                "executionProvider" to native.executionProvider,
+                            ),
+                        )
+                    }
+                    "runBgr" -> result.success(runTfliteRetinaBgr(call.arguments as Map<*, *>))
+                    "closeSession" -> {
+                        call.argument<String>("sessionId")?.let { id ->
+                            tfliteSessions.remove(id)?.let { closeTfliteSession(it) }
+                        }
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (error: Throwable) {
+                result.error("NATIVE_TFLITE_ERROR", error.message, error.stackTraceToString())
+            }
+        }
     }
 
     /**
@@ -186,7 +245,18 @@ class MainActivity: FlutterActivity() {
                 hardwareOptions.addNnapi(
                     EnumSet.of(NNAPIFlags.CPU_DISABLED, NNAPIFlags.USE_NCHW),
                 )
+                // Make ONNX Runtime emit graph-partition diagnostics. In
+                // particular, this lets logcat report which model nodes are
+                // not assigned to NNAPI when the all-hardware session fails.
+                hardwareOptions.setSessionLogLevel(
+                    OrtLoggingLevel.ORT_LOGGING_LEVEL_VERBOSE,
+                )
+                hardwareOptions.setSessionLogVerbosityLevel(1)
                 hardwareOptions.addConfigEntry("session.disable_cpu_ep_fallback", "1")
+                Log.i(
+                    "WrytteOnnx",
+                    "Creating strict RetinaFace NNAPI session with verbose graph-partition logging",
+                )
                 return ortEnvironment.createSession(model.absolutePath, hardwareOptions) to "nnapi_hardware"
             } catch (error: Throwable) {
                 // A model/operator or device driver is not hardware capable.
@@ -217,6 +287,122 @@ class MainActivity: FlutterActivity() {
             assets.open(key).use { input -> output.outputStream().use(input::copyTo) }
         }
         return output
+    }
+
+    /**
+     * Creates a LiteRT RetinaFace interpreter with the GPU delegate when the
+     * device reports GPU support. If GPU setup is unavailable, retain a CPU
+     * interpreter as the device-compatibility fallback. The app logs the
+     * selected provider for every detector initialization.
+     */
+    private fun createTfliteRetinaFaceSession(model: File, threads: Int): NativeTfliteSession {
+        val compatibility = CompatibilityList()
+        var gpuDelegate: GpuDelegate? = null
+        var provider = "cpu"
+        val options = Interpreter.Options()
+        try {
+            if (compatibility.isDelegateSupportedOnThisDevice) {
+                // The bundled 2.16 GPU plugin's CompatibilityList exposes a
+                // factory-options type that is not source-compatible with its
+                // direct delegate constructor. The default delegate options
+                // retain GPU execution while avoiding that version mismatch.
+                gpuDelegate = GpuDelegate()
+                options.addDelegate(gpuDelegate)
+                provider = "gpu"
+                Log.i("WrytteLiteRT", "RetinaFace LiteRT GPU delegate initialized")
+            } else {
+                options.setNumThreads(threads)
+                Log.w("WrytteLiteRT", "RetinaFace GPU delegate unavailable; using CPU fallback")
+            }
+            val interpreter = Interpreter(model, options)
+            interpreter.allocateTensors()
+            val input = interpreter.getInputTensor(0)
+            require(input.numBytes() == 640 * 640 * 3 * Float.SIZE_BYTES) {
+                "Unexpected RetinaFace LiteRT input shape ${input.shape().contentToString()}"
+            }
+            val outputs = (0 until interpreter.outputTensorCount).map { index ->
+                ByteBuffer.allocateDirect(interpreter.getOutputTensor(index).numBytes())
+                    .order(ByteOrder.nativeOrder())
+            }
+            require(outputs.size == 3) { "Unexpected RetinaFace LiteRT output count ${outputs.size}" }
+            Log.i(
+                "WrytteLiteRT",
+                "RetinaFace LiteRT session ready provider=$provider " +
+                    "input=${input.shape().contentToString()} " +
+                    "outputs=${(0 until interpreter.outputTensorCount).joinToString { interpreter.getOutputTensor(it).shape().contentToString() }}",
+            )
+            return NativeTfliteSession(
+                interpreter = interpreter,
+                gpuDelegate = gpuDelegate,
+                executionProvider = provider,
+                inputBuffer = ByteBuffer.allocateDirect(input.numBytes()).order(ByteOrder.nativeOrder()),
+                outputBuffers = outputs,
+            )
+        } catch (error: Throwable) {
+            try { gpuDelegate?.close() } catch (_: Throwable) {}
+            throw error
+        }
+    }
+
+    private fun runTfliteRetinaBgr(arguments: Map<*, *>): Map<String, FloatArray> {
+        val sessionId = requireNotNull(arguments["sessionId"] as? String)
+        val bytes = requireNotNull(arguments["bgr"] as? ByteArray)
+        val width = (arguments["width"] as Number).toInt()
+        val height = (arguments["height"] as Number).toInt()
+        require(width == 640 && height == 640 && bytes.size == width * height * 3) {
+            "LiteRT RetinaFace requires packed 640x640 BGR pixels"
+        }
+        val native = requireNotNull(tfliteSessions[sessionId]) { "Session is closed" }
+        return synchronized(native) {
+            check(!native.closed) { "Session is closed" }
+            try {
+                // Converted LiteRT input is NHWC, but its channels preserve
+                // ONNX RetinaFace's B/G/R mean-subtracted semantics.
+                native.inputBuffer.clear()
+                val floats = native.inputBuffer.asFloatBuffer()
+                for (pixel in 0 until width * height) {
+                    val offset = pixel * 3
+                    floats.put((bytes[offset].toInt() and 0xff) - 104f)
+                    floats.put((bytes[offset + 1].toInt() and 0xff) - 117f)
+                    floats.put((bytes[offset + 2].toInt() and 0xff) - 123f)
+                }
+                native.inputBuffer.position(0)
+                native.outputBuffers.forEach { it.clear() }
+                native.interpreter.runForMultipleInputsOutputs(
+                    arrayOf(native.inputBuffer),
+                    native.outputBuffers.indices.associateWith { native.outputBuffers[it] },
+                )
+                val names = listOf("loc", "conf", "landmarks")
+                names.indices.associate { index ->
+                    val output = native.outputBuffers[index]
+                    output.position(0)
+                    val values = FloatArray(output.capacity() / Float.SIZE_BYTES)
+                    output.asFloatBuffer().get(values)
+                    names[index] to values
+                }
+            } finally {
+                bytes.fill(0)
+                native.inputBuffer.clear()
+                while (native.inputBuffer.hasRemaining()) native.inputBuffer.put(0.toByte())
+                native.inputBuffer.clear()
+                native.outputBuffers.forEach { buffer ->
+                    buffer.clear()
+                    while (buffer.hasRemaining()) buffer.put(0.toByte())
+                    buffer.clear()
+                }
+            }
+        }
+    }
+
+    private fun closeTfliteSession(native: NativeTfliteSession) = synchronized(native) {
+        if (!native.closed) {
+            native.closed = true
+            try { native.interpreter.close() } finally {
+                native.gpuDelegate?.close()
+                native.inputBuffer.clear()
+                native.outputBuffers.forEach { it.clear() }
+            }
+        }
     }
 
     private fun runBgr(arguments: Map<*, *>): Map<String, FloatArray> {
@@ -344,6 +530,8 @@ class MainActivity: FlutterActivity() {
 
     override fun onDestroy() {
         stopCallerRingback()
+        tfliteSessions.values.forEach { closeTfliteSession(it) }
+        tfliteSessions.clear()
         ortSessions.values.forEach { closeOrtSession(it) }
         ortSessions.clear()
         super.onDestroy()

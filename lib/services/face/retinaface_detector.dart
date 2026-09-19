@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:wrytte/services/face/android_onnx_image_session.dart';
+import 'package:wrytte/services/face/android_tflite_image_session.dart';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -65,6 +66,7 @@ class RetinaFaceDetector {
   });
 
   static const modelAsset = 'assets/models/retinaface_mv2.onnx';
+  static const androidTfliteModelAsset = 'assets/models/retinaface_mv2.tflite';
   static const _steps = [8, 16, 32];
   static const _minSizes = [
     [16, 32],
@@ -78,34 +80,28 @@ class RetinaFaceDetector {
   final int inferenceThreads;
   OrtSession? _session;
   AndroidOnnxImageSession? _android;
+  AndroidTfliteImageSession? _androidTflite;
   late final Float32List _inputBuffer = Float32List(inputSize * inputSize * 3);
   final Map<int, List<_Prior>> _priorsBySize = {};
 
-  bool get isReady => _session != null || _android != null;
+  bool get isReady =>
+      _session != null || _android != null || _androidTflite != null;
 
   Future<void> initialize() async {
     if (isReady) return;
     if (Platform.isAndroid) {
-      // RetinaFace is the dominant scan cost. The native bridge caps this to
-      // available cores; four intra-op threads materially reduce latency on
-      // current Android devices while preserving the required BGR contract.
-      _android = await AndroidOnnxImageSession.create(
-        modelAsset,
+      // The converted model is numerically validated against the bundled
+      // ONNX RetinaFace export. Android tries LiteRT GPU first; CPU is used
+      // only when this device cannot initialize its GPU delegate.
+      _androidTflite = await AndroidTfliteImageSession.create(
+        androidTfliteModelAsset,
         threads: inferenceThreads,
-        requireHardwareAcceleration: true,
       );
       // ignore: avoid_print
       print(
         '[BiometricTiming] pipeline=RetinaFace '
-        'stage=execution_provider provider=${_android!.executionProvider}',
+        'stage=execution_provider provider=${_androidTflite!.executionProvider}',
       );
-      try {
-        _validateNames(_android!.inputNames, _android!.outputNames);
-      } catch (_) {
-        await _android!.close();
-        _android = null;
-        rethrow;
-      }
       return;
     }
     // Preprocessing supplies packed BGR pixels for this model's NCHW input.
@@ -138,7 +134,7 @@ class RetinaFaceDetector {
       height: inputSize,
       interpolation: img.Interpolation.linear,
     );
-    if (_android != null) {
+    if (_android != null || _androidTflite != null) {
       final bytes = resized.getBytes(order: img.ChannelOrder.bgr);
       try {
         return await detectBgr(bytes);
@@ -158,6 +154,28 @@ class RetinaFaceDetector {
       );
     }
     final android = _android;
+    final androidTflite = _androidTflite;
+    if (androidTflite != null) {
+      final outputs = await androidTflite.runBgr(
+        bgr: bgr,
+        width: inputSize,
+        height: inputSize,
+      );
+      try {
+        return _decode(
+          outputs['loc']!,
+          outputs['conf']!,
+          outputs['landmarks']!,
+          inputSize,
+          inputSize,
+          _priorsForSize(inputSize),
+        );
+      } finally {
+        for (final output in outputs.values) {
+          output.fillRange(0, output.length, 0);
+        }
+      }
+    }
     if (android != null) {
       final outputs = await android.runBgr(
         bgr: bgr,
@@ -254,6 +272,9 @@ class RetinaFaceDetector {
   }
 
   Future<void> dispose() async {
+    final androidTflite = _androidTflite;
+    _androidTflite = null;
+    if (androidTflite != null) await androidTflite.close();
     final android = _android;
     _android = null;
     if (android != null) await android.close();

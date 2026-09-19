@@ -50,4 +50,8 @@ flutter {
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.0")
+    // RetinaFace is deployed as a validated LiteRT/TFLite model on Android.
+    // The bundled GPU delegate is tried before the CPU interpreter.
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
 }
