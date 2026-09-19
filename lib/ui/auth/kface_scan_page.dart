@@ -308,13 +308,18 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _framesThisSecond = 0;
       });
       unawaited(_startCaptureSession());
-    } catch (error) {
+    } catch (error, stackTrace) {
+      // Do not hide model startup failures: without this, the camera area
+      // remains a spinner and the native LiteRT delegate exception is lost.
+      debugPrint(
+        '[BiometricTiming] pipeline=Models stage=initialize_error '
+        'error=$error\n$stackTrace',
+      );
       if (mounted) {
         setState(() {
-          // Keep the scanner's approved status vocabulary even when camera
-          // setup fails; the camera area remains available for retry.
-          _cameraError = null;
-          _status = 'Position your face\nwithin the circle';
+          _cameraError =
+              'Face scanner could not start.\nTap Start over to retry.';
+          _status = 'Scanner startup failed';
         });
       }
     }

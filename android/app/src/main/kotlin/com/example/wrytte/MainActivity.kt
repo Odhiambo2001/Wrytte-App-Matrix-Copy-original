@@ -214,6 +214,12 @@ class MainActivity: FlutterActivity() {
                     else -> result.notImplemented()
                 }
             } catch (error: Throwable) {
+                Log.e(
+                    "WrytteLiteRT",
+                    "RetinaFace LiteRT method=${call.method} failed: " +
+                        "${error.javaClass.simpleName}: ${error.message}",
+                    error,
+                )
                 result.error("NATIVE_TFLITE_ERROR", error.message, error.stackTraceToString())
             }
         }
