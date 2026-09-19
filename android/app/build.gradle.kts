@@ -54,4 +54,6 @@ dependencies {
     // The bundled GPU delegate is tried before the CPU interpreter.
     implementation("org.tensorflow:tensorflow-lite:2.16.1")
     implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
+    // Supplies GpuDelegateFactory.Options, used internally by GpuDelegate.
+    implementation("org.tensorflow:tensorflow-lite-gpu-delegate-plugin:0.4.0")
 }
