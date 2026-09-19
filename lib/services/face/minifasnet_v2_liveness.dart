@@ -46,9 +46,10 @@ class MiniFasNetV2Liveness {
     final plane = inputSize * inputSize;
     final tensor = Float32List(plane * 3);
     for (var i = 0; i < plane; i++) {
-      tensor[i] = bgrBytes[i * 3].toDouble();
+      // Match the backend MiniFASNet input: RGB NCHW. The crop is BGR.
+      tensor[i] = bgrBytes[i * 3 + 2].toDouble();
       tensor[plane + i] = bgrBytes[i * 3 + 1].toDouble();
-      tensor[2 * plane + i] = bgrBytes[i * 3 + 2].toDouble();
+      tensor[2 * plane + i] = bgrBytes[i * 3].toDouble();
     }
     final input = await OrtValue.fromList(tensor, [1, 3, inputSize, inputSize]);
     Map<String, OrtValue>? outputs;

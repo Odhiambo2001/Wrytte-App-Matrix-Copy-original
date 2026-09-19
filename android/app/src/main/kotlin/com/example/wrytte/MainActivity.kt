@@ -7,6 +7,7 @@ import ai.onnxruntime.providers.NNAPIFlags
 import android.content.Context
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
+import android.util.Log
 import android.media.ToneGenerator
 import android.os.Bundle
 import android.telephony.TelephonyManager
@@ -187,8 +188,16 @@ class MainActivity: FlutterActivity() {
                 )
                 hardwareOptions.addConfigEntry("session.disable_cpu_ep_fallback", "1")
                 return ortEnvironment.createSession(model.absolutePath, hardwareOptions) to "nnapi_hardware"
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
                 // A model/operator or device driver is not hardware capable.
+                // This has no biometric data; it makes CPU fallback diagnosable
+                // on the affected phone.
+                Log.w(
+                    "WrytteOnnx",
+                    "RetinaFace NNAPI hardware initialization failed; using CPU fallback: " +
+                        "${error.javaClass.simpleName}: ${error.message}",
+                    error,
+                )
             } finally {
                 hardwareOptions.close()
             }
@@ -246,9 +255,11 @@ class MainActivity: FlutterActivity() {
                     floats.put((plane * 2) + pixel, red - 123f)
                 }
                 "mini_fas" -> {
-                    floats.put(pixel, blue.toFloat())
+                    // MiniFASNet's backend reference consumes RGB NCHW.
+                    // [bytes] is BGR, so write the planes in R/G/B order.
+                    floats.put(pixel, red.toFloat())
                     floats.put(plane + pixel, green.toFloat())
-                    floats.put((plane * 2) + pixel, red.toFloat())
+                    floats.put((plane * 2) + pixel, blue.toFloat())
                 }
                 "adaface" -> {
                     floats.put(pixel, (red / 127.5f) - 1f)
