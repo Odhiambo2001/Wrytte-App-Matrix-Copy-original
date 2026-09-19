@@ -6,11 +6,11 @@ import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import 'package:wrytte/services/face/android_onnx_image_session.dart';
 
 /// Frontend copy of the backend MiniFASNetV2 check.
-/// The backend's class-1 softmax probability must exceed 0.50.
+/// The backend's class-1 softmax probability must exceed 0.40.
 class MiniFasNetV2Liveness {
   static const modelAsset = 'assets/models/MiniFASNetV2.onnx';
   static const inputSize = 80;
-  static const threshold = 0.50;
+  static const threshold = 0.40;
 
   OrtSession? _session;
   AndroidOnnxImageSession? _android;
