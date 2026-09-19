@@ -158,11 +158,11 @@ class WorkerRetinaResult {
 /// Camera/UI stay on the root isolate. Each heavy stage has one persistent
 /// isolate, and only pixels, geometry, frame IDs and generations cross ports.
 class IsolateFacePipeline {
-  /// Tune these together. Two model sessions with two native ONNX threads
-  /// each use the same four CPU threads as the former single session, while
-  /// allowing two candidate frames to infer concurrently.
-  static const retinaWorkerCount = 2;
-  static const retinaThreadsPerWorker = 2;
+  // The three background workers are: RetinaFace preparation/detection,
+  // crop-plus-liveness, and JPEG encoding. Flutter's root isolate is the
+  // fourth lane: it owns animation and all widget state updates.
+  static const retinaWorkerCount = 1;
+  static const retinaThreadsPerWorker = 4;
 
   Map<String, BiometricWorker> _workers = {};
   int _generation = 0, _index = 0;
@@ -176,9 +176,7 @@ class IsolateFacePipeline {
     final generation = _generation;
     final created = <String, BiometricWorker>{};
     try {
-      // OpenCV preparation and BBOX each get their own worker so preparation
-      // of N+1 never queues behind cropping of N.
-      for (final stage in ['opencv', 'bbox', 'liveness', 'jpeg']) {
+      for (final stage in ['liveness', 'jpeg']) {
         created[stage] = await BiometricWorker.start(
           stage,
           generation,
@@ -224,22 +222,14 @@ class IsolateFacePipeline {
     await initializeDetector();
     final generation = _generation, index = _index++;
     final raw = image.getBytes(order: img.ChannelOrder.rgb);
-    final prepared =
-        await _call('opencv', generation, 'process', [
+    final retinaWorker = 'retina-${index % retinaWorkerCount}';
+    final result =
+        await _call(retinaWorker, generation, 'process', [
               index,
               image.width,
               image.height,
               _transfer(raw),
             ])
-            as Map;
-    if (generation != _generation) {
-      _wipe(_bytes(prepared['retina']));
-      _wipe(_bytes(prepared['source']));
-      throw StateError('Cancelled frame');
-    }
-    final retinaWorker = 'retina-${index % retinaWorkerCount}';
-    final result =
-        await _call(retinaWorker, generation, 'process', [index, prepared])
             as Map;
     final analysis = _analysisFromWire(
       result['analysis']! as Map<Object?, Object?>,
@@ -270,7 +260,7 @@ class IsolateFacePipeline {
     WorkerCropCapture pending,
   ) async {
     try {
-      final result = await _call('bbox', pending.generation, 'process', [
+      final result = await _call('liveness', pending.generation, 'crop', [
         pending.index,
         pending.width,
         pending.height,
@@ -300,7 +290,7 @@ class IsolateFacePipeline {
   Future<bool> checkLiveness(WorkerLivenessCapture pending) async {
     try {
       final live =
-          await _call('liveness', pending.generation, 'process', [
+          await _call('liveness', pending.generation, 'check', [
                 pending.index,
                 _transfer(pending.crop),
               ])
@@ -414,38 +404,7 @@ Future<void> _workerMain(List<Object> arguments) async {
           throw StateError('Stale generation');
         }
         final data = request[3];
-        if (stage == 'opencv') {
-          final values = data as List;
-          final rgb = _bytes(values[3]);
-          final image = img.Image.fromBytes(
-            width: values[1] as int,
-            height: values[2] as int,
-            bytes: rgb.buffer,
-            numChannels: 3,
-            order: img.ChannelOrder.rgb,
-          );
-          RetinaFrame? frame;
-          try {
-            frame = OpenCvFacePreprocessor().prepare(image);
-            result = <String, Object>{
-              'retina': _transfer(frame.bgr),
-              'source': _transfer(frame.originalBgr),
-              'width': frame.originalWidth,
-              'height': frame.originalHeight,
-              'cropX': frame.cropX,
-              'cropY': frame.cropY,
-              'cropSide': frame.cropSide,
-            };
-          } finally {
-            frame?.dispose();
-            _wipe(rgb);
-            image.data?.toUint8List().fillRange(
-              0,
-              image.data!.toUint8List().length,
-              0,
-            );
-          }
-        } else if (stage.startsWith('retina-')) {
+        if (stage.startsWith('retina-')) {
           if (command == 'takeOriginal' || command == 'discardOriginal') {
             final original = originals.remove(data as int);
             if (original != null) {
@@ -456,11 +415,23 @@ Future<void> _workerMain(List<Object> arguments) async {
               }
             }
           } else {
-            final values = data as List, prepared = values[1] as Map;
-            final bgr = _bytes(prepared['retina']),
-                source = _bytes(prepared['source']);
+            final values = data as List;
+            final rgb = _bytes(values[3]);
+            final image = img.Image.fromBytes(
+              width: values[1] as int,
+              height: values[2] as int,
+              bytes: rgb.buffer,
+              numChannels: 3,
+              order: img.ChannelOrder.rgb,
+            );
+            RetinaFrame? frame;
+            Uint8List? bgr;
             var retained = false;
             try {
+              // Worker 1 owns conversion, 640x640 crop and RetinaFace. Keep
+              // its own detector copy only when this exact frame is selected.
+              frame = OpenCvFacePreprocessor().prepare(image);
+              bgr = Uint8List.fromList(frame.bgr);
               final faces = await retina.detectBgr(bgr);
               final target = FaceBiometricPipeline.chooseTarget(faces);
               result = <String, Object>{
@@ -495,14 +466,14 @@ Future<void> _workerMain(List<Object> arguments) async {
                 ),
                 if (target != null) ...{
                   'target': _targetToWire(target),
-                  'source': _transfer(source),
-                  'width': prepared['width']!,
-                  'height': prepared['height']!,
+                  'source': _transfer(frame.originalBgr),
+                  'width': frame.originalWidth,
+                  'height': frame.originalHeight,
                   'box': _boxToWire(
                     OpenCvFacePreprocessor.mapRetinaFaceToOriginalBox(
-                      cropX: prepared['cropX'] as int,
-                      cropY: prepared['cropY'] as int,
-                      cropSide: prepared['cropSide'] as int,
+                      cropX: frame.cropX,
+                      cropY: frame.cropY,
+                      cropSide: frame.cropSide,
                       faceLeft: target.left,
                       faceTop: target.top,
                       faceWidth: target.width,
@@ -516,11 +487,17 @@ Future<void> _workerMain(List<Object> arguments) async {
                 retained = true;
               }
             } finally {
-              if (!retained) _wipe(bgr);
-              _wipe(source);
+              if (!retained && bgr != null) _wipe(bgr);
+              frame?.dispose();
+              _wipe(rgb);
+              image.data?.toUint8List().fillRange(
+                0,
+                image.data!.toUint8List().length,
+                0,
+              );
             }
           }
-        } else if (stage == 'bbox') {
+        } else if (stage == 'liveness' && command == 'crop') {
           final values = data as List;
           final box = _boxFromWire(values[3] as Map<Object?, Object?>);
           final source = _bytes(values[4]);
@@ -562,7 +539,7 @@ Future<void> _workerMain(List<Object> arguments) async {
             }
             _wipe(source);
           }
-        } else if (stage == 'liveness') {
+        } else if (stage == 'liveness' && command == 'check') {
           final crop = _bytes((data as List)[1]);
           try {
             result = await liveness.isReal(crop);
@@ -595,9 +572,7 @@ Future<void> _workerMain(List<Object> arguments) async {
       }
       replies.send([id, generation, true, result]);
       final pipeline = switch (stage) {
-        'opencv' => 'OpenCV',
         _ when stage.startsWith('retina-') => 'RetinaFace',
-        'bbox' => 'BBOX',
         'liveness' => 'Liveness',
         'jpeg' => 'JPEG',
         _ => stage,

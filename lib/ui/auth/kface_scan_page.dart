@@ -272,10 +272,17 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _ready = true;
       });
       _scanStartTimer?.cancel();
+      // Keep the camera stream active before any biometric extraction. This
+      // lets auto-exposure and auto-white-balance settle without admitting a
+      // cold-start frame to worker 1.
       final startupWaitTimer = Stopwatch()..start();
       _scanStartTimer = Timer(const Duration(milliseconds: 1500), () {
         if (!mounted) return;
         BiometricStageTiming.log('UI', 'startup_wait', startupWaitTimer);
+        debugPrint(
+          '[BiometricTiming] pipeline=Camera stage=warmup '
+          'elapsed_ms=${startupWaitTimer.elapsedMilliseconds}',
+        );
         setState(() {
           _scanPhaseReady = true;
           _scanStarted = true;
