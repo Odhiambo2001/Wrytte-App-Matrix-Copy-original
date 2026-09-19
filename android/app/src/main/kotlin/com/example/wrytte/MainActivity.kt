@@ -3,6 +3,7 @@ package com.example.wrytte
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import ai.onnxruntime.providers.NNAPIFlags
 import android.content.Context
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
@@ -20,12 +21,14 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.UUID
+import java.util.EnumSet
 import java.util.concurrent.ConcurrentHashMap
 
 class MainActivity: FlutterActivity() {
 
     private data class NativeOrtSession(
         val session: OrtSession,
+        val executionProvider: String,
         var inputBuffer: ByteBuffer? = null,
         val outputBuffers: ConcurrentHashMap<String, FloatArray> = ConcurrentHashMap(),
         var closed: Boolean = false,
@@ -117,30 +120,27 @@ class MainActivity: FlutterActivity() {
                     "createSession" -> {
                         val asset = requireNotNull(call.argument<String>("asset"))
                         val requestedThreads = call.argument<Int>("threads") ?: 4
-                        // Keep one persistent session, but let RetinaFace use
-                        // the CPU available on the device. Two threads made
-                        // 640x640 inference take ~1.5–2.2s per frame.
+                        val requireHardwareAcceleration =
+                            call.argument<Boolean>("requireHardwareAcceleration") == true
+                        // Keep one persistent session. CPU thread settings
+                        // apply only when RetinaFace must use its CPU fallback.
                         val threads = requestedThreads
                             .coerceAtLeast(1)
                             .coerceAtMost(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
                         val model = materializeFlutterAsset(asset)
-                        val options = OrtSession.SessionOptions().apply {
-                            setIntraOpNumThreads(threads)
-                            setInterOpNumThreads(1)
-                            setCPUArenaAllocator(true)
-                        }
-                        val session = try {
-                            ortEnvironment.createSession(model.absolutePath, options)
-                        } finally {
-                            options.close()
-                        }
+                        val (session, executionProvider) = createOrtSession(
+                            model = model,
+                            threads = threads,
+                            requireHardwareAcceleration = requireHardwareAcceleration,
+                        )
                         val id = UUID.randomUUID().toString()
-                        ortSessions[id] = NativeOrtSession(session)
+                        ortSessions[id] = NativeOrtSession(session, executionProvider)
                         result.success(
                             mapOf(
                                 "sessionId" to id,
                                 "inputNames" to session.inputNames.toList(),
                                 "outputNames" to session.outputNames.toList(),
+                                "executionProvider" to executionProvider,
                             ),
                         )
                     }
@@ -156,6 +156,48 @@ class MainActivity: FlutterActivity() {
             } catch (error: Throwable) {
                 result.error("NATIVE_ONNX_ERROR", error.message, error.stackTraceToString())
             }
+        }
+    }
+
+    /**
+     * RetinaFace requests NNAPI with its CPU device disabled. NNAPI may select
+     * a compatible GPU or NPU; it is not a promise that a particular Android
+     * device exposes either one. If the full model cannot run on hardware,
+     * session creation deliberately falls back to the regular ORT CPU path.
+     */
+    private fun createOrtSession(
+        model: File,
+        threads: Int,
+        requireHardwareAcceleration: Boolean,
+    ): Pair<OrtSession, String> {
+        fun cpuOptions() = OrtSession.SessionOptions().apply {
+            setIntraOpNumThreads(threads)
+            setInterOpNumThreads(1)
+            setCPUArenaAllocator(true)
+        }
+        if (requireHardwareAcceleration && android.os.Build.VERSION.SDK_INT >= 29) {
+            val hardwareOptions = cpuOptions()
+            try {
+                // CPU_DISABLED prevents NNAPI itself choosing its reference
+                // CPU device. disable_cpu_ep_fallback makes this an all-or-
+                // nothing hardware session, rather than mixing hidden CPU
+                // graph partitions into a claimed accelerated session.
+                hardwareOptions.addNnapi(
+                    EnumSet.of(NNAPIFlags.CPU_DISABLED, NNAPIFlags.USE_NCHW),
+                )
+                hardwareOptions.addConfigEntry("session.disable_cpu_ep_fallback", "1")
+                return ortEnvironment.createSession(model.absolutePath, hardwareOptions) to "nnapi_hardware"
+            } catch (_: Throwable) {
+                // A model/operator or device driver is not hardware capable.
+            } finally {
+                hardwareOptions.close()
+            }
+        }
+        val options = cpuOptions()
+        return try {
+            ortEnvironment.createSession(model.absolutePath, options) to "cpu"
+        } finally {
+            options.close()
         }
     }
 

@@ -92,6 +92,12 @@ class RetinaFaceDetector {
       _android = await AndroidOnnxImageSession.create(
         modelAsset,
         threads: inferenceThreads,
+        requireHardwareAcceleration: true,
+      );
+      // ignore: avoid_print
+      print(
+        '[BiometricTiming] pipeline=RetinaFace '
+        'stage=execution_provider provider=${_android!.executionProvider}',
       );
       try {
         _validateNames(_android!.inputNames, _android!.outputNames);

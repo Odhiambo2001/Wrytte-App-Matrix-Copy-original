@@ -266,6 +266,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
       await _restoreCameraParameters(camera);
       await camera.startImageStream(_onFrame);
+      final retinaWarmup = _pipeline.warmupRetinaFace();
       if (!mounted) return;
       setState(() {
         _camera = camera;
@@ -276,7 +277,16 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // lets auto-exposure and auto-white-balance settle without admitting a
       // cold-start frame to worker 1.
       final startupWaitTimer = Stopwatch()..start();
-      _scanStartTimer = Timer(const Duration(milliseconds: 1500), () {
+      _scanStartTimer = Timer(const Duration(milliseconds: 1500), () async {
+        if (!mounted) return;
+        try {
+          await retinaWarmup;
+        } catch (error) {
+          debugPrint(
+            '[BiometricTiming] pipeline=RetinaFace stage=warmup_error '
+            'error=${error.runtimeType}',
+          );
+        }
         if (!mounted) return;
         BiometricStageTiming.log('UI', 'startup_wait', startupWaitTimer);
         debugPrint(

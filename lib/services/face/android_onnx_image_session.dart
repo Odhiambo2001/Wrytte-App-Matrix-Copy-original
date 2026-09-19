@@ -11,6 +11,7 @@ class AndroidOnnxImageSession {
     required this.id,
     required this.inputNames,
     required this.outputNames,
+    required this.executionProvider,
   });
 
   static const _channel = MethodChannel('com.example.wrytte/onnx_image');
@@ -18,6 +19,7 @@ class AndroidOnnxImageSession {
   final String id;
   final List<String> inputNames;
   final List<String> outputNames;
+  final String executionProvider;
 
   static Future<AndroidOnnxImageSession> create(
     String asset, {
@@ -25,16 +27,20 @@ class AndroidOnnxImageSession {
     // improve throughput on modern phones while avoiding excessive contention
     // on smaller devices. The native side caps this to the available cores.
     int threads = 4,
+    bool requireHardwareAcceleration = false,
   }) async {
-    final value = await _channel.invokeMapMethod<String, dynamic>(
-      'createSession',
-      {'asset': asset, 'threads': threads},
-    );
+    final value = await _channel
+        .invokeMapMethod<String, dynamic>('createSession', {
+          'asset': asset,
+          'threads': threads,
+          'requireHardwareAcceleration': requireHardwareAcceleration,
+        });
     if (value == null) throw StateError('Native ONNX session was not created.');
     return AndroidOnnxImageSession._(
       id: value['sessionId'] as String,
       inputNames: List<String>.from(value['inputNames'] as List),
       outputNames: List<String>.from(value['outputNames'] as List),
+      executionProvider: value['executionProvider'] as String? ?? 'cpu',
     );
   }
 

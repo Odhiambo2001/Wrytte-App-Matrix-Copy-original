@@ -171,6 +171,20 @@ class IsolateFacePipeline {
   bool _disposed = false;
 
   Future<void> initializeDetector() => _initializing ??= _initialize();
+
+  /// Compile/prepare the selected RetinaFace execution provider while the
+  /// camera warms up, before any user frame is admitted for extraction.
+  Future<void> warmupRetinaFace() async {
+    await initializeDetector();
+    final generation = _generation;
+    await Future.wait(
+      List<Future<Object?>>.generate(
+        retinaWorkerCount,
+        (index) => _call('retina-$index', generation, 'warmup', null),
+      ),
+    );
+  }
+
   Future<void> _initialize() async {
     await _closing;
     final generation = _generation;
@@ -405,7 +419,15 @@ Future<void> _workerMain(List<Object> arguments) async {
         }
         final data = request[3];
         if (stage.startsWith('retina-')) {
-          if (command == 'takeOriginal' || command == 'discardOriginal') {
+          if (command == 'warmup') {
+            final blank = Uint8List(640 * 640 * 3);
+            try {
+              await retina.detectBgr(blank);
+            } finally {
+              _wipe(blank);
+            }
+          } else if (command == 'takeOriginal' ||
+              command == 'discardOriginal') {
             final original = originals.remove(data as int);
             if (original != null) {
               if (command == 'takeOriginal') {
