@@ -64,4 +64,6 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
+    implementation("com.google.guava:guava:33.5.0-android")
+    implementation("androidx.concurrent:concurrent-futures:1.2.0")
 }
