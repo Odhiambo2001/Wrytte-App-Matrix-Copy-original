@@ -20,7 +20,6 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import org.tensorflow.lite.Interpreter
@@ -32,9 +31,9 @@ import io.flutter.FlutterInjector
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.EventChannel
-import io.flutter.plugin.common.StandardMessageCodec
-import io.flutter.plugin.platform.PlatformView
-import io.flutter.plugin.platform.PlatformViewFactory
+import io.flutter.embedding.engine.renderer.FlutterRenderer
+import io.flutter.view.TextureRegistry
+import android.view.Surface
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -118,29 +117,18 @@ class MainActivity: FlutterActivity() {
                     nativeFaceEventSink = null
                 }
             })
-        flutterEngine.platformViewsController.registry.registerViewFactory(
-            "com.example.wrytte/native_face_camera/preview",
-            object : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
-                override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
-                    val preview = PreviewView(context)
-                    preview.scaleType = PreviewView.ScaleType.FILL_CENTER
-                    val scanner = nativeFaceCamera ?: NativeFaceCamera(preview).also {
-                        nativeFaceCamera = it
-                    }
-                    scanner.attachPreview(preview)
-                    scanner.start()
-                    return object : PlatformView {
-                        override fun getView() = preview
-                        override fun dispose() = scanner.detachPreview(preview)
-                    }
-                }
-            },
-        )
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, nativeFaceCameraChannel)
             .setMethodCallHandler { call, result ->
                 val scanner = nativeFaceCamera
                 try {
                     when (call.method) {
+                        "textureId" -> {
+                            val instance = scanner ?: NativeFaceCamera(flutterEngine.renderer).also {
+                                nativeFaceCamera = it
+                            }
+                            instance.start()
+                            result.success(instance.textureId)
+                        }
                         "stop" -> { scanner?.stop(); result.success(null) }
                         "reset" -> { scanner?.reset(); result.success(null) }
                         "livenessCrop" -> {
@@ -633,19 +621,18 @@ class MainActivity: FlutterActivity() {
      * Only decoded face geometry, an 80x80 liveness crop, or a final JPEG may
      * cross the process boundary.
      */
-    private inner class NativeFaceCamera(initialPreview: PreviewView) {
+    private inner class NativeFaceCamera(renderer: FlutterRenderer) {
         private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "wrytte-native-retina").apply { isDaemon = true }
         }
         private val running = AtomicBoolean(false)
-        private var previewView: PreviewView? = initialPreview
+        private val texture: TextureRegistry.SurfaceTextureEntry = renderer.createSurfaceTexture()
+        val textureId: Long get() = texture.id()
+        private val previewSurface: Surface = Surface(texture.surfaceTexture())
         private var provider: ProcessCameraProvider? = null
         private var sessionId: String? = null
         private var nextFrameId = 0
         private val retained = LinkedHashMap<Int, ByteArray>()
-
-        fun attachPreview(view: PreviewView) { previewView = view }
-        fun detachPreview(view: PreviewView) { if (previewView === view) previewView = null }
 
         fun start() {
             if (!running.compareAndSet(false, true)) return
@@ -675,7 +662,16 @@ class MainActivity: FlutterActivity() {
                     val cameraProvider = future.get()
                     provider = cameraProvider
                     val preview = Preview.Builder().build().also { useCase ->
-                        previewView?.let(useCase::setSurfaceProvider)
+                        useCase.setSurfaceProvider { request ->
+                            // CameraX owns the negotiated buffer dimensions.
+                            // Hard-coding a portrait size stretched the Flutter
+                            // texture and caused visible blue surface artefacts.
+                            texture.surfaceTexture().setDefaultBufferSize(
+                                request.resolution.width,
+                                request.resolution.height,
+                            )
+                            request.provideSurface(previewSurface, executor) { }
+                        }
                     }
                     val analysis = ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -838,7 +834,13 @@ class MainActivity: FlutterActivity() {
             if (!running.get()) start()
         }
         fun stop() { running.set(false); provider?.unbindAll(); reset() }
-        fun destroy() { stop(); sessionId?.let { tfliteSessions.remove(it)?.let(::closeTfliteSession) }; executor.shutdownNow() }
+        fun destroy() {
+            stop()
+            sessionId?.let { tfliteSessions.remove(it)?.let(::closeTfliteSession) }
+            previewSurface.release()
+            texture.release()
+            executor.shutdownNow()
+        }
         private fun emit(event: Map<String, Any>) { runOnUiThread { nativeFaceEventSink?.success(event) } }
     }
 

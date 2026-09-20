@@ -33,6 +33,12 @@ class NativeFaceCamera {
     }
   }
 
+  static Future<int> textureId() async {
+    final id = await _control.invokeMethod<int>('textureId');
+    if (id == null) throw StateError('Native camera texture was not created.');
+    return id;
+  }
+
   static Future<void> reset() async {
     if (Platform.isAndroid) await _control.invokeMethod<void>('reset');
   }
@@ -70,15 +76,38 @@ class NativeFaceCamera {
   }
 }
 
-class NativeFaceCameraPreview extends StatelessWidget {
+class NativeFaceCameraPreview extends StatefulWidget {
   const NativeFaceCameraPreview({super.key});
+
+  @override
+  State<NativeFaceCameraPreview> createState() => _NativeFaceCameraPreviewState();
+}
+
+class _NativeFaceCameraPreviewState extends State<NativeFaceCameraPreview> {
+  late final Future<int> _textureId = NativeFaceCamera.textureId();
 
   @override
   Widget build(BuildContext context) {
     if (!Platform.isAndroid) return const SizedBox.expand();
-    return const AndroidView(
-      viewType: 'com.example.wrytte/native_face_camera/preview',
-      layoutDirection: TextDirection.ltr,
+    return FutureBuilder<int>(
+      future: _textureId,
+      builder: (context, snapshot) {
+        final id = snapshot.data;
+        if (id == null) return const SizedBox.expand();
+        // Match the original CameraPreview's cover behaviour. The texture
+        // remains behind Flutter's circle/mask rather than being stretched to
+        // the page bounds.
+        return SizedBox.expand(
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: 1000,
+              height: 1000 / (3 / 4),
+              child: Texture(textureId: id),
+            ),
+          ),
+        );
+      },
     );
   }
 }
