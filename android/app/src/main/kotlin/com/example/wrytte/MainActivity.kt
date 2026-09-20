@@ -6,7 +6,6 @@ import ai.onnxruntime.OrtLoggingLevel
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.providers.NNAPIFlags
 import android.content.Context
-import android.graphics.Bitmap
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.util.Log
@@ -15,14 +14,6 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.telephony.TelephonyManager
 import androidx.core.view.WindowCompat
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.LifecycleOwner
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.gpu.CompatibilityList
 import org.tensorflow.lite.gpu.GpuDelegate
@@ -31,21 +22,13 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.FlutterInjector
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.common.EventChannel
-import io.flutter.plugin.common.StandardMessageCodec
-import io.flutter.plugin.platform.PlatformView
-import io.flutter.plugin.platform.PlatformViewFactory
 import java.io.File
-import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.UUID
 import java.util.EnumSet
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 
 private data class RetinaPrior(
     val centerX: Float,
@@ -96,71 +79,14 @@ class MainActivity: FlutterActivity() {
     private val callerRingbackChannel = "com.example.wrytte/caller_ringback"
     private val onnxImageChannel = "com.example.wrytte/onnx_image"
     private val tfliteImageChannel = "com.example.wrytte/tflite_image"
-    private val nativeFaceCameraChannel = "com.example.wrytte/native_face_camera"
-    private val nativeFaceCameraEvents = "com.example.wrytte/native_face_camera/events"
     private val cameraCapabilitiesChannel = "com.example.wrytte/camera_capabilities"
     private var callerRingback: ToneGenerator? = null
     private val ortEnvironment by lazy { OrtEnvironment.getEnvironment() }
     private val ortSessions = ConcurrentHashMap<String, NativeOrtSession>()
     private val tfliteSessions = ConcurrentHashMap<String, NativeTfliteSession>()
-    private var nativeFaceCamera: NativeFaceCamera? = null
-    private var nativeFaceEventSink: EventChannel.EventSink? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        EventChannel(flutterEngine.dartExecutor.binaryMessenger, nativeFaceCameraEvents)
-            .setStreamHandler(object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                    nativeFaceEventSink = events
-                }
-
-                override fun onCancel(arguments: Any?) {
-                    nativeFaceEventSink = null
-                }
-            })
-        flutterEngine.platformViewsController.registry.registerViewFactory(
-            "com.example.wrytte/native_face_camera/preview",
-            object : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
-                override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
-                    val preview = PreviewView(context)
-                    preview.scaleType = PreviewView.ScaleType.FILL_CENTER
-                    val scanner = nativeFaceCamera ?: NativeFaceCamera(preview).also {
-                        nativeFaceCamera = it
-                    }
-                    scanner.attachPreview(preview)
-                    scanner.start()
-                    return object : PlatformView {
-                        override fun getView() = preview
-                        override fun dispose() = scanner.detachPreview(preview)
-                    }
-                }
-            },
-        )
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, nativeFaceCameraChannel)
-            .setMethodCallHandler { call, result ->
-                val scanner = nativeFaceCamera
-                try {
-                    when (call.method) {
-                        "stop" -> { scanner?.stop(); result.success(null) }
-                        "reset" -> { scanner?.reset(); result.success(null) }
-                        "livenessCrop" -> {
-                            requireNotNull(scanner) { "Native camera is not initialized" }
-                            scanner.livenessCrop(call.arguments as Map<*, *>, result)
-                        }
-                        "takeJpeg" -> {
-                            requireNotNull(scanner) { "Native camera is not initialized" }
-                            scanner.takeJpeg(call.arguments as Map<*, *>, result)
-                        }
-                        "discard" -> {
-                            scanner?.discard((call.argument<Number>("frameId") ?: -1).toInt())
-                            result.success(null)
-                        }
-                        else -> result.notImplemented()
-                    }
-                } catch (error: Throwable) {
-                    result.error("NATIVE_CAMERA_ERROR", error.message, error.stackTraceToString())
-                }
-            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, cameraCapabilitiesChannel)
             .setMethodCallHandler { call, result ->
                 if (call.method != "getFpsRanges") {
@@ -627,221 +553,6 @@ class MainActivity: FlutterActivity() {
         }
     }
 
-    /**
-     * Owns Android's preview, CameraX analyzer and the persistent GPU session.
-     * The full 640x640 buffer deliberately never crosses a Flutter channel.
-     * Only decoded face geometry, an 80x80 liveness crop, or a final JPEG may
-     * cross the process boundary.
-     */
-    private inner class NativeFaceCamera(initialPreview: PreviewView) {
-        private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "wrytte-native-retina").apply { isDaemon = true }
-        }
-        private val running = AtomicBoolean(false)
-        private var previewView: PreviewView? = initialPreview
-        private var provider: ProcessCameraProvider? = null
-        private var sessionId: String? = null
-        private var nextFrameId = 0
-        private val retained = LinkedHashMap<Int, ByteArray>()
-
-        fun attachPreview(view: PreviewView) { previewView = view }
-        fun detachPreview(view: PreviewView) { if (previewView === view) previewView = null }
-
-        fun start() {
-            if (!running.compareAndSet(false, true)) return
-            executor.execute {
-                try {
-                    if (sessionId == null) {
-                        val native = createTfliteRetinaFaceSession(
-                            materializeFlutterAsset("assets/models/retinaface_mv2.tflite"), 4,
-                        )
-                        val id = UUID.randomUUID().toString()
-                        tfliteSessions[id] = native
-                        sessionId = id
-                        Log.i("WrytteLiteRT", "Native CameraX RetinaFace session ready provider=${native.executionProvider}")
-                    }
-                    bindCamera()
-                } catch (error: Throwable) {
-                    emit(mapOf("type" to "error", "error" to (error.message ?: "native camera startup failed")))
-                    Log.e("WrytteLiteRT", "Native CameraX scanner start failed", error)
-                }
-            }
-        }
-
-        private fun bindCamera() {
-            val future = ProcessCameraProvider.getInstance(this@MainActivity)
-            future.addListener({
-                try {
-                    val cameraProvider = future.get()
-                    provider = cameraProvider
-                    val preview = Preview.Builder().build().also { useCase ->
-                        previewView?.let(useCase::setSurfaceProvider)
-                    }
-                    val analysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                        .build()
-                    analysis.setAnalyzer(executor) { image -> analyze(image) }
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        this@MainActivity as LifecycleOwner,
-                        CameraSelector.DEFAULT_FRONT_CAMERA,
-                        preview,
-                        analysis,
-                    )
-                    Log.i("WrytteLiteRT", "Native CameraX preview and analyzer bound")
-                    emit(mapOf("type" to "ready"))
-                } catch (error: Throwable) {
-                    emit(mapOf("type" to "error", "error" to (error.message ?: "CameraX bind failed")))
-                    Log.e("WrytteLiteRT", "Native CameraX bind failed", error)
-                }
-            }, ContextCompat.getMainExecutor(this@MainActivity))
-        }
-
-        private fun analyze(image: ImageProxy) {
-            try {
-                if (!running.get()) return
-                val id = sessionId ?: return
-                val packed = imageToCenteredBgr(image)
-                val infer = packed.copyOf()
-                val result = runTfliteRetinaBgr(
-                    mapOf("sessionId" to id, "bgr" to infer, "width" to 640, "height" to 640),
-                )
-                val faces = result["faces"] as List<*>
-                if (faces.isNotEmpty()) {
-                    val frameId = ++nextFrameId
-                    synchronized(retained) {
-                        retained[frameId] = packed
-                        while (retained.size > 3) retained.remove(retained.entries.first().key)?.fill(0)
-                    }
-                    emit(mapOf("type" to "frame", "frameId" to frameId, "faces" to faces))
-                } else {
-                    packed.fill(0)
-                    emit(mapOf("type" to "frame", "frameId" to -1, "faces" to emptyList<Map<String, Any>>()))
-                }
-            } catch (error: Throwable) {
-                Log.e("WrytteLiteRT", "Native CameraX RetinaFace frame failed", error)
-                emit(mapOf("type" to "error", "error" to (error.message ?: "native RetinaFace frame failed")))
-            } finally {
-                image.close()
-            }
-        }
-
-        // ImageAnalysis RGBA output is read directly with its row stride;
-        // this is the former Dart conversion plus 640 crop, but entirely
-        // native and immediately adjacent to the GPU interpreter.
-        private fun imageToCenteredBgr(image: ImageProxy): ByteArray {
-            val plane = image.planes[0]
-            val input = plane.buffer.duplicate()
-            val stride = plane.rowStride
-            val width = image.width
-            val height = image.height
-            val side = minOf(width, height)
-            val offsetX = (width - side) / 2
-            val offsetY = (height - side) / 2
-            val bgr = ByteArray(640 * 640 * 3)
-            for (y in 0 until 640) {
-                val sourceY = offsetY + (y * side / 640).coerceAtMost(side - 1)
-                for (x in 0 until 640) {
-                    val sourceX = offsetX + (x * side / 640).coerceAtMost(side - 1)
-                    val source = sourceY * stride + sourceX * 4
-                    val target = (y * 640 + x) * 3
-                    bgr[target] = input.get(source + 2)
-                    bgr[target + 1] = input.get(source + 1)
-                    bgr[target + 2] = input.get(source)
-                }
-            }
-            return bgr
-        }
-
-        fun livenessCrop(arguments: Map<*, *>, result: MethodChannel.Result) {
-            executor.execute {
-                try {
-                    val frameId = (arguments["frameId"] as Number).toInt()
-                    val bytes = synchronized(retained) { retained[frameId]?.copyOf() }
-                        ?: error("Native RetinaFace frame has expired")
-                    val left = (arguments["left"] as Number).toDouble()
-                    val top = (arguments["top"] as Number).toDouble()
-                    val right = (arguments["right"] as Number).toDouble()
-                    val bottom = (arguments["bottom"] as Number).toDouble()
-                    val crop = cropLiveness(bytes, left, top, right, bottom)
-                    bytes.fill(0)
-                    runOnUiThread { result.success(mapOf("crop" to crop, "width" to 640, "height" to 640)) }
-                } catch (error: Throwable) {
-                    runOnUiThread { result.error("NATIVE_CAMERA_ERROR", error.message, error.stackTraceToString()) }
-                }
-            }
-        }
-
-        fun takeJpeg(arguments: Map<*, *>, result: MethodChannel.Result) {
-            executor.execute {
-                try {
-                    val frameId = (arguments["frameId"] as Number).toInt()
-                    val bgr = synchronized(retained) { retained.remove(frameId) }
-                        ?: error("Native RetinaFace frame has expired")
-                    val jpeg = bgrToJpeg(bgr)
-                    bgr.fill(0)
-                    runOnUiThread { result.success(jpeg) }
-                } catch (error: Throwable) {
-                    runOnUiThread { result.error("NATIVE_CAMERA_ERROR", error.message, error.stackTraceToString()) }
-                }
-            }
-        }
-
-        fun discard(frameId: Int) {
-            executor.execute { synchronized(retained) { retained.remove(frameId)?.fill(0) } }
-        }
-
-        private fun cropLiveness(bgr: ByteArray, left: Double, top: Double, right: Double, bottom: Double): ByteArray {
-            val faceWidth = (right - left).coerceAtLeast(1.0)
-            val faceHeight = (bottom - top).coerceAtLeast(1.0)
-            val scale = minOf(2.7, minOf(639.0 / faceWidth, 639.0 / faceHeight))
-            val cropWidth = (faceWidth * scale).toInt().coerceAtLeast(1)
-            val cropHeight = (faceHeight * scale).toInt().coerceAtLeast(1)
-            var cropLeft = (left + faceWidth / 2 - cropWidth / 2).toInt()
-            var cropTop = (top + faceHeight / 2 - cropHeight / 2).toInt()
-            cropLeft = cropLeft.coerceIn(0, 640 - cropWidth)
-            cropTop = cropTop.coerceIn(0, 640 - cropHeight)
-            val output = ByteArray(80 * 80 * 3)
-            for (y in 0 until 80) for (x in 0 until 80) {
-                val sx = cropLeft + (x * cropWidth / 80).coerceAtMost(cropWidth - 1)
-                val sy = cropTop + (y * cropHeight / 80).coerceAtMost(cropHeight - 1)
-                val source = (sy * 640 + sx) * 3
-                val target = (y * 80 + x) * 3
-                output[target] = bgr[source]
-                output[target + 1] = bgr[source + 1]
-                output[target + 2] = bgr[source + 2]
-            }
-            return output
-        }
-
-        private fun bgrToJpeg(bgr: ByteArray): ByteArray {
-            val pixels = IntArray(640 * 640)
-            for (index in pixels.indices) {
-                val source = index * 3
-                val b = bgr[source].toInt() and 0xff
-                val g = bgr[source + 1].toInt() and 0xff
-                val r = bgr[source + 2].toInt() and 0xff
-                pixels[index] = 0xff000000.toInt() or (r shl 16) or (g shl 8) or b
-            }
-            val bitmap = Bitmap.createBitmap(pixels, 640, 640, Bitmap.Config.ARGB_8888)
-            return try {
-                ByteArrayOutputStream().use { stream ->
-                    check(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream))
-                    stream.toByteArray()
-                }
-            } finally { bitmap.recycle(); pixels.fill(0) }
-        }
-
-        fun reset() {
-            synchronized(retained) { retained.values.forEach { it.fill(0) }; retained.clear() }
-            if (!running.get()) start()
-        }
-        fun stop() { running.set(false); provider?.unbindAll(); reset() }
-        fun destroy() { stop(); sessionId?.let { tfliteSessions.remove(it)?.let(::closeTfliteSession) }; executor.shutdownNow() }
-        private fun emit(event: Map<String, Any>) { runOnUiThread { nativeFaceEventSink?.success(event) } }
-    }
-
     private fun runBgr(arguments: Map<*, *>): Map<String, FloatArray> {
         val sessionId = requireNotNull(arguments["sessionId"] as? String)
         val inputName = requireNotNull(arguments["inputName"] as? String)
@@ -967,8 +678,6 @@ class MainActivity: FlutterActivity() {
 
     override fun onDestroy() {
         stopCallerRingback()
-        nativeFaceCamera?.destroy()
-        nativeFaceCamera = null
         tfliteSessions.values.forEach { closeTfliteSession(it) }
         tfliteSessions.clear()
         ortSessions.values.forEach { closeOrtSession(it) }

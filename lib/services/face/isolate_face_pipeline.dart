@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -12,7 +11,6 @@ import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/minifasnet_v2_liveness.dart';
 import 'package:wrytte/services/face/opencv_face_preprocessor.dart';
 import 'package:wrytte/services/face/retinaface_detector.dart';
-import 'package:wrytte/services/face/native_face_camera.dart';
 
 TransferableTypedData _transfer(Uint8List bytes) {
   // TransferableTypedData owns a distinct buffer. The sender can therefore
@@ -111,14 +109,12 @@ class WorkerCropCapture {
     this.source,
     this.width,
     this.height,
-    this.box, [
-    this.nativeFrameId,
-  ]);
+    this.box,
+  );
   final int generation, index, width, height;
   final String retinaWorker;
   final FaceDetection target;
   final LivenessFaceBox box;
-  final int? nativeFrameId;
   Uint8List source;
   void clear() {
     _wipe(source);
@@ -135,18 +131,16 @@ class WorkerLivenessCapture {
     this.crop,
     this.width,
     this.height,
-    this.box, [
-    this.nativeFrameId,
-  ]) : capture = BiometricCropSet(
-         retinaFaceBgr: Uint8List(0),
-         adafaceLandmarks: target.landmarks,
-         livenessFaceBox: box,
-       );
+    this.box,
+  ) : capture = BiometricCropSet(
+        retinaFaceBgr: Uint8List(0),
+        adafaceLandmarks: target.landmarks,
+        livenessFaceBox: box,
+      );
   final int generation, index, width, height;
   final String retinaWorker;
   final FaceDetection target;
   final LivenessFaceBox box;
-  final int? nativeFrameId;
   final Uint8List crop;
   BiometricCropSet capture;
   void clear() {
@@ -181,7 +175,6 @@ class IsolateFacePipeline {
   /// Compile/prepare the selected RetinaFace execution provider while the
   /// camera warms up, before any user frame is admitted for extraction.
   Future<void> warmupRetinaFace() async {
-    if (Platform.isAndroid) return;
     await initializeDetector();
     final generation = _generation;
     await Future.wait(
@@ -204,15 +197,13 @@ class IsolateFacePipeline {
           _workerMain,
         );
       }
-      if (!Platform.isAndroid) {
-        for (var index = 0; index < retinaWorkerCount; index++) {
-          final stage = 'retina-$index';
-          created[stage] = await BiometricWorker.start(
-            stage,
-            generation,
-            _workerMain,
-          );
-        }
+      for (var index = 0; index < retinaWorkerCount; index++) {
+        final stage = 'retina-$index';
+        created[stage] = await BiometricWorker.start(
+          stage,
+          generation,
+          _workerMain,
+        );
       }
       if (_disposed || generation != _generation) {
         throw StateError('Stale initialization');
@@ -279,126 +270,10 @@ class IsolateFacePipeline {
     );
   }
 
-  /// Adopts compact results emitted by Android CameraX. The corresponding
-  /// 640x640 pixels stay native under [frameId] until liveness resolves.
-  Future<WorkerRetinaResult> processNativeRetinaFrame(
-    Map<String, dynamic> event,
-  ) async {
-    await initializeDetector();
-    final generation = _generation;
-    final frameId = event['frameId'] as int;
-    final faces = (event['faces'] as List)
-        .map((value) {
-          final wire = Map<String, dynamic>.from(value as Map);
-          final landmarks = List<num>.from(wire['landmarks'] as List);
-          return FaceDetection(
-            left: (wire['left'] as num).toDouble(),
-            top: (wire['top'] as num).toDouble(),
-            right: (wire['right'] as num).toDouble(),
-            bottom: (wire['bottom'] as num).toDouble(),
-            confidence: (wire['confidence'] as num).toDouble(),
-            landmarks: FaceLandmarks(
-              leftEye: math.Point(
-                landmarks[0].toDouble(),
-                landmarks[1].toDouble(),
-              ),
-              rightEye: math.Point(
-                landmarks[2].toDouble(),
-                landmarks[3].toDouble(),
-              ),
-              nose: math.Point(
-                landmarks[4].toDouble(),
-                landmarks[5].toDouble(),
-              ),
-              leftMouth: math.Point(
-                landmarks[6].toDouble(),
-                landmarks[7].toDouble(),
-              ),
-              rightMouth: math.Point(
-                landmarks[8].toDouble(),
-                landmarks[9].toDouble(),
-              ),
-            ),
-          );
-        })
-        .toList(growable: false);
-    final target = FaceBiometricPipeline.chooseTarget(faces);
-    final analysis = FrameAnalysis(
-      faceDetected: faces.isNotEmpty,
-      targetFaceSelected: target != null,
-      alignmentAccepted: target != null,
-      processingMilliseconds: 1,
-      faceCenterX: target?.centerX,
-      faceCenterY: target?.centerY,
-      multipleFaces: faces.length > 1,
-      faceTooFar:
-          faces.isNotEmpty &&
-          faces.every(
-            (face) =>
-                FaceBiometricPipeline.measureFaceDistance(face).label == 'FAR',
-          ),
-      faceTooClose:
-          faces.isNotEmpty &&
-          faces.every(
-            (face) =>
-                FaceBiometricPipeline.measureFaceDistance(face).label ==
-                'CLOSE',
-          ),
-    );
-    if (target == null || frameId < 0) {
-      return WorkerRetinaResult(analysis, null);
-    }
-    final box = OpenCvFacePreprocessor.mapRetinaFaceToOriginalBox(
-      cropX: 0,
-      cropY: 0,
-      cropSide: 640,
-      faceLeft: target.left,
-      faceTop: target.top,
-      faceWidth: target.width,
-      faceHeight: target.height,
-    );
-    return WorkerRetinaResult(
-      analysis,
-      WorkerCropCapture(
-        generation,
-        _index++,
-        'native-camera',
-        target,
-        Uint8List(0),
-        640,
-        640,
-        box,
-        frameId,
-      ),
-    );
-  }
-
   Future<WorkerLivenessCapture> cropForLiveness(
     WorkerCropCapture pending,
   ) async {
     try {
-      final nativeFrameId = pending.nativeFrameId;
-      if (nativeFrameId != null) {
-        final native = await NativeFaceCamera.livenessCrop(
-          frameId: nativeFrameId,
-          left: pending.target.left,
-          top: pending.target.top,
-          right: pending.target.right,
-          bottom: pending.target.bottom,
-        );
-        final crop = native['crop'] as Uint8List;
-        return WorkerLivenessCapture(
-          pending.generation,
-          pending.index,
-          pending.retinaWorker,
-          pending.target,
-          crop,
-          pending.width,
-          pending.height,
-          pending.box,
-          nativeFrameId,
-        );
-      }
       final result = await _call('liveness', pending.generation, 'crop', [
         pending.index,
         pending.width,
@@ -448,20 +323,6 @@ class IsolateFacePipeline {
     WorkerLivenessCapture pending,
     bool live,
   ) async {
-    final nativeFrameId = pending.nativeFrameId;
-    if (nativeFrameId != null) {
-      if (!live) {
-        await NativeFaceCamera.discard(nativeFrameId);
-        return;
-      }
-      final jpeg = await NativeFaceCamera.takeJpeg(nativeFrameId);
-      pending.capture = BiometricCropSet(
-        retinaFaceBgr: Uint8List(0),
-        adafaceLandmarks: pending.target.landmarks,
-        livenessFaceBox: pending.box,
-      )..retinaFaceJpeg = jpeg;
-      return;
-    }
     final original = await _call(
       pending.retinaWorker,
       pending.generation,
@@ -483,7 +344,6 @@ class IsolateFacePipeline {
   }
 
   Future<void> prepareJpeg(BiometricCropSet capture) async {
-    if (capture.retinaFaceJpeg != null) return;
     final generation = _generation;
     final result = await _call(
       'jpeg',
