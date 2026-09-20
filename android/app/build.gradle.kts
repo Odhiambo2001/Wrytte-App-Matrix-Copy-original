@@ -56,4 +56,14 @@ dependencies {
     // Java API required by GpuDelegate and GpuDelegateFactory.Options.
     implementation("org.tensorflow:tensorflow-lite-gpu-api:2.16.1")
     implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
+    // The scanner owns CameraX directly on Android.  This keeps preview,
+    // ImageAnalysis and the persistent LiteRT GPU interpreter on the native
+    // side instead of copying full camera frames through Dart.
+    val cameraxVersion = "1.5.2"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
+    implementation("com.google.guava:guava:33.5.0-android")
+    implementation("androidx.concurrent:concurrent-futures:1.2.0")
 }

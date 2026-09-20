@@ -17,6 +17,7 @@ import 'package:wrytte/services/face/camera_frame_converter.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/services/face/local_face_signature_service.dart';
+import 'package:wrytte/services/face/native_face_camera.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
 import 'package:wrytte/ui/auth/kface_scan_overlay.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
@@ -143,6 +144,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   final _ldpc = LdpcFuzzyCommitment();
   final _signatureService = LocalFaceSignatureService();
   CameraController? _camera;
+  StreamSubscription<Map<String, dynamic>>? _nativeCameraEvents;
   bool _ready = false;
   bool _sending = false;
   int _inFlightCandidateUploads = 0;
@@ -174,6 +176,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   String? _cameraError;
 
   bool get _enrolling => widget.isEnrollment;
+  bool get _usesNativeCamera => Platform.isAndroid;
   bool _isExpectedCancellation(Object error) =>
       error is StateError &&
       (error.message.contains('Cancelled') ||
@@ -212,6 +215,44 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         'initialize',
         () => _pipeline.initializeDetector(),
       );
+      if (_usesNativeCamera) {
+        _nativeCameraEvents ??= NativeFaceCamera.events.listen(
+          _onNativeCameraEvent,
+          onError: (Object error) {
+            debugPrint(
+              '[BiometricTiming] pipeline=CameraX stage=event_error error=$error',
+            );
+          },
+        );
+        if (!mounted) return;
+        setState(() {
+          _ready = true;
+          _cameraError = null;
+        });
+        _scanStartTimer?.cancel();
+        final startupWaitTimer = Stopwatch()..start();
+        _scanStartTimer = Timer(const Duration(milliseconds: 1500), () {
+          if (!mounted) return;
+          BiometricStageTiming.log('UI', 'startup_wait', startupWaitTimer);
+          setState(() {
+            _scanPhaseReady = true;
+            _scanStarted = true;
+            _status = 'Scanning…';
+          });
+          debugPrint(
+            '[BiometricTiming] pipeline=CameraX stage=scan_phase_ready',
+          );
+        });
+        _frameRateTimer?.cancel();
+        _frameRateTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+          debugPrint(
+            '[BiometricTiming] pipeline=CameraX stage=incoming_frames_per_second fps=$_framesThisSecond',
+          );
+          _framesThisSecond = 0;
+        });
+        unawaited(_startCaptureSession());
+        return;
+      }
       final cameras = await BiometricStageTiming.measureAsync(
         'Camera',
         'enumerate',
@@ -322,6 +363,92 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _status = 'Scanner startup failed';
         });
       }
+    }
+  }
+
+  void _onNativeCameraEvent(Map<String, dynamic> event) {
+    final type = event['type'];
+    if (type == 'error') {
+      debugPrint(
+        '[BiometricTiming] pipeline=CameraX stage=error error=${event['error']}',
+      );
+      if (mounted) {
+        setState(
+          () =>
+              _cameraError =
+                  'Face scanner could not start.\nTap Start over to retry.',
+        );
+      }
+      return;
+    }
+    if (type != 'frame') return;
+    unawaited(_frontendTiming.run(() => _processNativeCameraFrame(event)));
+  }
+
+  Future<void> _processNativeCameraFrame(Map<String, dynamic> event) async {
+    _framesThisSecond++;
+    if (!_ready ||
+        !_scanPhaseReady ||
+        _sending ||
+        _complete ||
+        _candidateExtractionClosed ||
+        _processingPaused ||
+        !_hasCandidateUploadCapacity) {
+      final id = event['frameId'] as int? ?? -1;
+      if (id >= 0) unawaited(NativeFaceCamera.discard(id));
+      return;
+    }
+    final sessionId = _captureSessionId;
+    if (sessionId == null) return;
+    try {
+      final retina = await BiometricStageTiming.measureAsync(
+        'FaceFrame',
+        'native_retina_result',
+        () => _pipeline.processNativeRetinaFrame(event),
+      );
+      final analysis = retina.analysis;
+      if (!mounted ||
+          _complete ||
+          _processingPaused ||
+          sessionId != _captureSessionId) {
+        retina.pendingCrop?.clear();
+        return;
+      }
+      setState(() {
+        _faceAligned =
+            analysis.faceDetected &&
+            analysis.targetFaceSelected &&
+            analysis.alignmentAccepted;
+        if (analysis.faceCenterX != null) {
+          _headMovement = (analysis.faceCenterX! / 640).clamp(0.0, 1.0);
+        }
+      });
+      final pending = retina.pendingCrop;
+      if (pending == null) {
+        if (!analysis.faceDetected) {
+          setState(
+            () =>
+                _status =
+                    'Face not detected.\nPosition your face within the circle',
+          );
+        }
+        return;
+      }
+      _captureBatchTimer ??= Stopwatch()..start();
+      _normalFramesFrontendTimer ??= Stopwatch()..start();
+      _pendingCropCaptures.addLast(
+        _TaggedCropCapture(
+          pending: pending,
+          wrytteId: widget.wrytteId,
+          userId: widget.userId,
+          captureSessionId: sessionId,
+        ),
+      );
+      _drainCropCaptures();
+    } catch (error) {
+      debugPrint(
+        '[BiometricTiming] pipeline=CameraX stage=frame_error error=${error.runtimeType}',
+      );
     }
   }
 
@@ -798,7 +925,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _status = 'Please wait…';
       });
       final camera = _camera;
-      if (camera?.value.isStreamingImages == true) {
+      if (_usesNativeCamera) {
+        await BiometricStageTiming.measureAsync(
+          'CameraX',
+          'stop_stream',
+          NativeFaceCamera.stop,
+        );
+      } else if (camera?.value.isStreamingImages == true) {
         await BiometricStageTiming.measureAsync(
           'Camera',
           'stop_stream',
@@ -1058,7 +1191,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   Future<void> _completeExistingUserEnrollment(BiometricLdpcInput input) async {
     _sending = true;
     final camera = _camera;
-    if (camera?.value.isStreamingImages == true) {
+    if (_usesNativeCamera) {
+      await BiometricStageTiming.measureAsync(
+        'CameraX',
+        'stop_stream',
+        NativeFaceCamera.stop,
+      );
+    } else if (camera?.value.isStreamingImages == true) {
       await BiometricStageTiming.measureAsync(
         'Camera',
         'stop_stream',
@@ -1161,7 +1300,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   ) async {
     _sending = true;
     final camera = _camera;
-    if (camera?.value.isStreamingImages == true) {
+    if (_usesNativeCamera) {
+      await BiometricStageTiming.measureAsync(
+        'CameraX',
+        'stop_stream',
+        NativeFaceCamera.stop,
+      );
+    } else if (camera?.value.isStreamingImages == true) {
       await BiometricStageTiming.measureAsync(
         'Camera',
         'stop_stream',
@@ -1434,6 +1579,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     unawaited(_startCaptureSession());
     if (!mounted) return;
     setState(() => _status = 'Position your face\nwithin the circle');
+    if (_usesNativeCamera) {
+      await NativeFaceCamera.reset();
+      return;
+    }
     final camera = _camera;
     if (camera != null &&
         camera.value.isInitialized &&
@@ -1492,6 +1641,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _discardPendingRetinaFrames();
     _discardPendingCropCaptures();
     _discardPendingLivenessCaptures();
+    if (_usesNativeCamera) {
+      await NativeFaceCamera.reset();
+    }
     final camera = _camera;
     if (camera != null &&
         camera.value.isInitialized &&
@@ -1512,6 +1664,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _discardPendingRetinaFrames();
     _discardPendingCropCaptures();
     _discardPendingLivenessCaptures();
+    _nativeCameraEvents?.cancel();
+    unawaited(NativeFaceCamera.stop());
     unawaited(_camera?.dispose());
     unawaited(_pipeline.dispose());
     super.dispose();
@@ -1684,6 +1838,9 @@ class _ScanCamera extends StatelessWidget {
           ),
         ),
       );
+    }
+    if (Platform.isAndroid) {
+      return const SizedBox.expand(child: NativeFaceCameraPreview());
     }
     final camera = controller;
     if (camera == null || !camera.value.isInitialized) {
