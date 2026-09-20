@@ -628,7 +628,7 @@ class MainActivity: FlutterActivity() {
         private val running = AtomicBoolean(false)
         private val texture: TextureRegistry.SurfaceTextureEntry = renderer.createSurfaceTexture()
         val textureId: Long get() = texture.id()
-        private val previewSurface: Surface = Surface(texture.surfaceTexture())
+        private var previewSurface: Surface? = null
         private var provider: ProcessCameraProvider? = null
         private var sessionId: String? = null
         private var nextFrameId = 0
@@ -670,7 +670,15 @@ class MainActivity: FlutterActivity() {
                                 request.resolution.width,
                                 request.resolution.height,
                             )
-                            request.provideSurface(previewSurface, executor) { }
+                            // Create the Surface only after CameraX has
+                            // negotiated the buffer. A Surface created before
+                            // that negotiation can remain permanently black.
+                            val surface = Surface(texture.surfaceTexture())
+                            previewSurface = surface
+                            request.provideSurface(surface, executor) {
+                                surface.release()
+                                if (previewSurface === surface) previewSurface = null
+                            }
                         }
                     }
                     val analysis = ImageAnalysis.Builder()
@@ -837,7 +845,8 @@ class MainActivity: FlutterActivity() {
         fun destroy() {
             stop()
             sessionId?.let { tfliteSessions.remove(it)?.let(::closeTfliteSession) }
-            previewSurface.release()
+            previewSurface?.release()
+            previewSurface = null
             texture.release()
             executor.shutdownNow()
         }
