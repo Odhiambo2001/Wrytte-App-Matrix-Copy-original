@@ -452,9 +452,19 @@ Future<void> _workerMain(List<Object> arguments) async {
             try {
               // Worker 1 owns conversion, 640x640 crop and RetinaFace. Keep
               // its own detector copy only when this exact frame is selected.
+              final prepareTimer = Stopwatch()..start();
               frame = OpenCvFacePreprocessor().prepare(image);
+              final prepareMilliseconds = prepareTimer.elapsedMilliseconds;
               bgr = Uint8List.fromList(frame.bgr);
+              final detectorTimer = Stopwatch()..start();
               final faces = await retina.detectBgr(bgr);
+              final detectorMilliseconds = detectorTimer.elapsedMilliseconds;
+              // ignore: avoid_print
+              print(
+                '[BiometricTiming] pipeline=RetinaFace stage=worker_breakdown '
+                'frame=${values[0]} prepare_ms=$prepareMilliseconds '
+                'native_bridge_and_result_ms=$detectorMilliseconds faces=${faces.length}',
+              );
               final target = FaceBiometricPipeline.chooseTarget(faces);
               result = <String, Object>{
                 'analysis': _analysisToWire(

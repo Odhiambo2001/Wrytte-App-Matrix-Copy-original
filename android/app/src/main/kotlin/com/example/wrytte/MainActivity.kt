@@ -11,6 +11,7 @@ import android.media.AudioManager
 import android.util.Log
 import android.media.ToneGenerator
 import android.os.Bundle
+import android.os.SystemClock
 import android.telephony.TelephonyManager
 import androidx.core.view.WindowCompat
 import org.tensorflow.lite.Interpreter
@@ -29,6 +30,31 @@ import java.util.UUID
 import java.util.EnumSet
 import java.util.concurrent.ConcurrentHashMap
 
+private data class RetinaPrior(
+    val centerX: Float,
+    val centerY: Float,
+    val width: Float,
+    val height: Float,
+)
+
+private data class RetinaCandidate(
+    val left: Double,
+    val top: Double,
+    val right: Double,
+    val bottom: Double,
+    val rawLeft: Double,
+    val rawTop: Double,
+    val rawRight: Double,
+    val rawBottom: Double,
+    val confidence: Double,
+    val landmarks: DoubleArray,
+)
+
+private data class RetinaDecodeResult(
+    val faces: List<Map<String, Any>>,
+    val bestFaceConfidence: Double,
+)
+
 class MainActivity: FlutterActivity() {
 
     private data class NativeOrtSession(
@@ -45,6 +71,7 @@ class MainActivity: FlutterActivity() {
         val executionProvider: String,
         val inputBuffer: ByteBuffer,
         val outputBuffers: List<ByteBuffer>,
+        val retinaPriors: List<RetinaPrior>,
         var closed: Boolean = false,
     )
 
@@ -308,11 +335,10 @@ class MainActivity: FlutterActivity() {
         val options = Interpreter.Options()
         try {
             if (compatibility.isDelegateSupportedOnThisDevice) {
-                // The bundled 2.16 GPU plugin's CompatibilityList exposes a
-                // factory-options type that is not source-compatible with its
-                // direct delegate constructor. The default delegate options
-                // retain GPU execution while avoiding that version mismatch.
-                gpuDelegate = GpuDelegate()
+                // Use the device-specific GPU options selected by LiteRT. The
+                // delegate and interpreter are retained for the whole scan;
+                // neither is recreated for an individual camera frame.
+                gpuDelegate = GpuDelegate(compatibility.bestOptionsForThisDevice)
                 options.addDelegate(gpuDelegate)
                 provider = "gpu"
                 Log.i("WrytteLiteRT", "RetinaFace LiteRT GPU delegate initialized")
@@ -343,6 +369,7 @@ class MainActivity: FlutterActivity() {
                 executionProvider = provider,
                 inputBuffer = ByteBuffer.allocateDirect(input.numBytes()).order(ByteOrder.nativeOrder()),
                 outputBuffers = outputs,
+                retinaPriors = createRetinaPriors(),
             )
         } catch (error: Throwable) {
             try { gpuDelegate?.close() } catch (_: Throwable) {}
@@ -350,7 +377,7 @@ class MainActivity: FlutterActivity() {
         }
     }
 
-    private fun runTfliteRetinaBgr(arguments: Map<*, *>): Map<String, FloatArray> {
+    private fun runTfliteRetinaBgr(arguments: Map<*, *>): Map<String, Any> {
         val sessionId = requireNotNull(arguments["sessionId"] as? String)
         val bytes = requireNotNull(arguments["bgr"] as? ByteArray)
         val width = (arguments["width"] as Number).toInt()
@@ -362,6 +389,7 @@ class MainActivity: FlutterActivity() {
         return synchronized(native) {
             check(!native.closed) { "Session is closed" }
             try {
+                val frameStartedAt = SystemClock.elapsedRealtimeNanos()
                 // Converted LiteRT input is NHWC, but its channels preserve
                 // ONNX RetinaFace's B/G/R mean-subtracted semantics.
                 native.inputBuffer.clear()
@@ -373,19 +401,29 @@ class MainActivity: FlutterActivity() {
                     floats.put((bytes[offset + 2].toInt() and 0xff) - 123f)
                 }
                 native.inputBuffer.position(0)
+                val preprocessingMs =
+                    (SystemClock.elapsedRealtimeNanos() - frameStartedAt) / 1_000_000.0
                 native.outputBuffers.forEach { it.clear() }
+                val invokeStartedAt = SystemClock.elapsedRealtimeNanos()
                 native.interpreter.runForMultipleInputsOutputs(
                     arrayOf(native.inputBuffer),
                     native.outputBuffers.indices.associateWith { native.outputBuffers[it] },
                 )
-                val names = listOf("loc", "conf", "landmarks")
-                names.indices.associate { index ->
-                    val output = native.outputBuffers[index]
-                    output.position(0)
-                    val values = FloatArray(output.capacity() / Float.SIZE_BYTES)
-                    output.asFloatBuffer().get(values)
-                    names[index] to values
-                }
+                val invokeMs =
+                    (SystemClock.elapsedRealtimeNanos() - invokeStartedAt) / 1_000_000.0
+                val decodeStartedAt = SystemClock.elapsedRealtimeNanos()
+                val decoded = decodeRetinaFaces(native)
+                val decodeMs =
+                    (SystemClock.elapsedRealtimeNanos() - decodeStartedAt) / 1_000_000.0
+                val totalMs = (SystemClock.elapsedRealtimeNanos() - frameStartedAt) / 1_000_000.0
+                Log.i(
+                    "WrytteLiteRT",
+                    "RetinaFace frame provider=${native.executionProvider} " +
+                        "preprocess_ms=%.1f invoke_ms=%.1f decode_nms_ms=%.1f faces=%d total_native_ms=%.1f"
+                            .format(preprocessingMs, invokeMs, decodeMs, decoded.faces.size, totalMs) +
+                        " best_face_conf=%.4f".format(decoded.bestFaceConfidence),
+                )
+                mapOf("faces" to decoded.faces)
             } finally {
                 bytes.fill(0)
                 native.inputBuffer.clear()
@@ -398,6 +436,110 @@ class MainActivity: FlutterActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Decodes, confidence-filters and NMS-filters RetinaFace directly beside
+     * the LiteRT interpreter. This deliberately avoids sending ~1 MiB of
+     * raw output tensors over the platform channel for each camera frame.
+     */
+    private fun decodeRetinaFaces(native: NativeTfliteSession): RetinaDecodeResult {
+        // Interpreter writes into the supplied direct buffers. Explicitly
+        // rewind each view before reading, matching the former proven Dart
+        // bridge implementation and avoiding a stale inherited position.
+        val locations = native.outputBuffers[0].duplicate().order(ByteOrder.nativeOrder()).apply { clear() }
+            .asFloatBuffer()
+        val scores = native.outputBuffers[1].duplicate().order(ByteOrder.nativeOrder()).apply { clear() }
+            .asFloatBuffer()
+        val landmarks = native.outputBuffers[2].duplicate().order(ByteOrder.nativeOrder()).apply { clear() }
+            .asFloatBuffer()
+        val candidates = ArrayList<RetinaCandidate>()
+        val count = minOf(native.retinaPriors.size, locations.capacity() / 4, scores.capacity() / 2)
+        var bestFaceConfidence = 0.0
+        for (index in 0 until count) {
+            val confidence = scores.get(index * 2 + 1).toDouble()
+            if (confidence > bestFaceConfidence) bestFaceConfidence = confidence
+            if (confidence < 0.60) continue
+            val prior = native.retinaPriors[index]
+            val locationOffset = index * 4
+            val centerX = prior.centerX + locations.get(locationOffset) * 0.1f * prior.width
+            val centerY = prior.centerY + locations.get(locationOffset + 1) * 0.1f * prior.height
+            val width = prior.width * kotlin.math.exp(locations.get(locationOffset + 2) * 0.2f)
+            val height = prior.height * kotlin.math.exp(locations.get(locationOffset + 3) * 0.2f)
+            val rawLeft = (centerX - width / 2f) * 640.0
+            val rawTop = (centerY - height / 2f) * 640.0
+            val rawRight = (centerX + width / 2f) * 640.0
+            val rawBottom = (centerY + height / 2f) * 640.0
+            val landmarkValues = DoubleArray(10)
+            val landmarkOffset = index * 10
+            for (point in 0 until 5) {
+                landmarkValues[point * 2] =
+                    (prior.centerX + landmarks.get(landmarkOffset + point * 2) * 0.1f * prior.width) * 640.0
+                landmarkValues[point * 2 + 1] =
+                    (prior.centerY + landmarks.get(landmarkOffset + point * 2 + 1) * 0.1f * prior.height) * 640.0
+            }
+            candidates += RetinaCandidate(
+                left = rawLeft.coerceIn(0.0, 640.0),
+                top = rawTop.coerceIn(0.0, 640.0),
+                right = rawRight.coerceIn(0.0, 640.0),
+                bottom = rawBottom.coerceIn(0.0, 640.0),
+                rawLeft = rawLeft,
+                rawTop = rawTop,
+                rawRight = rawRight,
+                rawBottom = rawBottom,
+                confidence = confidence,
+                landmarks = landmarkValues,
+            )
+        }
+        candidates.sortByDescending { it.confidence }
+        val selected = ArrayList<RetinaCandidate>()
+        for (candidate in candidates) {
+            if (selected.all { iou(candidate, it) <= 0.40 }) selected += candidate
+        }
+        return RetinaDecodeResult(selected.map { face ->
+            mapOf(
+                "left" to face.left,
+                "top" to face.top,
+                "right" to face.right,
+                "bottom" to face.bottom,
+                "rawLeft" to face.rawLeft,
+                "rawTop" to face.rawTop,
+                "rawRight" to face.rawRight,
+                "rawBottom" to face.rawBottom,
+                "confidence" to face.confidence,
+                "landmarks" to face.landmarks.toList(),
+            )
+        }, bestFaceConfidence)
+    }
+
+    private fun iou(a: RetinaCandidate, b: RetinaCandidate): Double {
+        val width = (minOf(a.right, b.right) - maxOf(a.left, b.left)).coerceAtLeast(0.0)
+        val height = (minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)).coerceAtLeast(0.0)
+        val intersection = width * height
+        val union = (a.right - a.left) * (a.bottom - a.top) +
+            (b.right - b.left) * (b.bottom - b.top) - intersection
+        return if (union <= 0.0) 0.0 else intersection / union
+    }
+
+    private fun createRetinaPriors(): List<RetinaPrior> {
+        val priors = ArrayList<RetinaPrior>(16800)
+        val steps = intArrayOf(8, 16, 32)
+        val minSizes = arrayOf(intArrayOf(16, 32), intArrayOf(64, 128), intArrayOf(256, 512))
+        for (level in steps.indices) {
+            val step = steps[level]
+            val featureSize = (640 + step - 1) / step
+            for (y in 0 until featureSize) for (x in 0 until featureSize) {
+                for (minSize in minSizes[level]) {
+                    priors += RetinaPrior(
+                        centerX = (x + 0.5f) * step / 640f,
+                        centerY = (y + 0.5f) * step / 640f,
+                        width = minSize / 640f,
+                        height = minSize / 640f,
+                    )
+                }
+            }
+        }
+        return priors
     }
 
     private fun closeTfliteSession(native: NativeTfliteSession) = synchronized(native) {

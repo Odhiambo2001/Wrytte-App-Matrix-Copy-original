@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/services.dart';
 
 /// Android LiteRT bridge for the GPU-first RetinaFace model.
@@ -34,7 +32,7 @@ class AndroidTfliteImageSession {
     );
   }
 
-  Future<Map<String, Float32List>> runBgr({
+  Future<List<Map<String, dynamic>>> runBgr({
     required Uint8List bgr,
     required int width,
     required int height,
@@ -48,15 +46,13 @@ class AndroidTfliteImageSession {
     if (value == null) {
       throw StateError('Native LiteRT inference returned null.');
     }
-    return value.map((name, data) {
-      if (data is Float32List) return MapEntry(name, data);
-      return MapEntry(
-        name,
-        Float32List.fromList(
-          List<num>.from(data).map((value) => value.toDouble()).toList(),
-        ),
-      );
-    });
+    final faces = value['faces'];
+    if (faces is! List) {
+      throw StateError('Native LiteRT inference did not return face results.');
+    }
+    return faces
+        .map((face) => Map<String, dynamic>.from(face as Map))
+        .toList(growable: false);
   }
 
   Future<void> close() => _channel.invokeMethod<void>(

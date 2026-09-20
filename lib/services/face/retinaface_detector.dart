@@ -156,25 +156,12 @@ class RetinaFaceDetector {
     final android = _android;
     final androidTflite = _androidTflite;
     if (androidTflite != null) {
-      final outputs = await androidTflite.runBgr(
+      final faces = await androidTflite.runBgr(
         bgr: bgr,
         width: inputSize,
         height: inputSize,
       );
-      try {
-        return _decode(
-          outputs['loc']!,
-          outputs['conf']!,
-          outputs['landmarks']!,
-          inputSize,
-          inputSize,
-          _priorsForSize(inputSize),
-        );
-      } finally {
-        for (final output in outputs.values) {
-          output.fillRange(0, output.length, 0);
-        }
-      }
+      return faces.map(_faceFromNative).toList(growable: false);
     }
     if (android != null) {
       final outputs = await android.runBgr(
@@ -213,6 +200,32 @@ class RetinaFaceDetector {
     } finally {
       tensorData.fillRange(0, tensorData.length, 0);
     }
+  }
+
+  FaceDetection _faceFromNative(Map<String, dynamic> value) {
+    final landmarks = List<num>.from(value['landmarks'] as List);
+    math.Point<double> point(int index) => math.Point<double>(
+      landmarks[index * 2].toDouble(),
+      landmarks[index * 2 + 1].toDouble(),
+    );
+    return FaceDetection(
+      left: (value['left'] as num).toDouble(),
+      top: (value['top'] as num).toDouble(),
+      right: (value['right'] as num).toDouble(),
+      bottom: (value['bottom'] as num).toDouble(),
+      rawLeft: (value['rawLeft'] as num).toDouble(),
+      rawTop: (value['rawTop'] as num).toDouble(),
+      rawRight: (value['rawRight'] as num).toDouble(),
+      rawBottom: (value['rawBottom'] as num).toDouble(),
+      confidence: (value['confidence'] as num).toDouble(),
+      landmarks: FaceLandmarks(
+        leftEye: point(0),
+        rightEye: point(1),
+        nose: point(2),
+        leftMouth: point(3),
+        rightMouth: point(4),
+      ),
+    );
   }
 
   double _bestFaceConfidence(List<dynamic>? values) {

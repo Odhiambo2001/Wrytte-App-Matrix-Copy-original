@@ -366,12 +366,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         !_hasCandidateUploadCapacity) {
       return;
     }
-    // Do not convert camera buffers that cannot be admitted. Conversion is
-    // one of the most expensive root-isolate operations; dropping here keeps
-    // the bounded queue from repeatedly converting and then overwriting old
-    // frames while RetinaFace is busy.
-    if (_pendingRetinaFrames.length >= 4 ||
-        _retinaWorkersRunning >= IsolateFacePipeline.retinaWorkerCount) {
+    // Keep one frame ready while RetinaFace owns the preceding frame. This
+    // allows RetinaFace(N+1) to start immediately when RetinaFace(N) hands
+    // N to crop/liveness, without building an unbounded, stale frame backlog.
+    if (_pendingRetinaFrames.isNotEmpty) {
       return;
     }
     final now = DateTime.now();
@@ -399,9 +397,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         userId: widget.userId,
         captureSessionId: sessionId,
       );
-      if (_pendingRetinaFrames.length >= 3) {
-        _wipeCameraFrame(_pendingRetinaFrames.removeFirst().frame);
-      }
       _pendingRetinaFrames.addLast(tagged);
       _drainRetinaFrames();
     } catch (error) {
