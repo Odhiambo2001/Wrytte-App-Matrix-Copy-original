@@ -122,18 +122,13 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                         context: context,
                         text: 'Wrytte ID',
                         onTap: () {
-                          final regionCode =
-                              Localizations.localeOf(context).countryCode
-                                  ?.toUpperCase() ??
-                              'US';
-                          // Continue detecting/persisting the device region,
-                          // but never hold navigation behind that work.
-                          _signupRegion ??= DeviceRegionService.detectOnce();
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) =>
-                                  VirtualNumberPage(regionCode: regionCode),
+                              builder: (_) => VirtualNumberPage(
+                                regionCodeFuture: _signupRegion ??=
+                                    DeviceRegionService.detectOnce(),
+                              ),
                             ),
                           );
                         },

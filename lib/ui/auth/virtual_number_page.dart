@@ -3,9 +3,14 @@ import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 
 class VirtualNumberPage extends StatefulWidget {
-  final String regionCode;
+  final String? regionCode;
+  final Future<String>? regionCodeFuture;
 
-  const VirtualNumberPage({super.key, required this.regionCode});
+  const VirtualNumberPage({
+    super.key,
+    this.regionCode,
+    this.regionCodeFuture,
+  }) : assert(regionCode != null || regionCodeFuture != null);
 
   @override
   State<VirtualNumberPage> createState() => _VirtualNumberPageState();
@@ -18,11 +23,27 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
   bool _fetchFailed = false;
 
   String _virtualNumber = "";
+  String? _resolvedRegionCode;
 
   @override
   void initState() {
     super.initState();
-    _fetchVpn();
+    _resolveRegionThenFetch();
+  }
+
+  Future<void> _resolveRegionThenFetch() async {
+    try {
+      _resolvedRegionCode =
+          widget.regionCode ?? await widget.regionCodeFuture!;
+      await _fetchVpn();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _vpnLoading = false;
+        _fetchFailed = true;
+      });
+      debugPrint('Virtual number region detection error: $error');
+    }
   }
 
   ///  STEP 1: Fetch VPN from backend
@@ -34,12 +55,14 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     });
 
     try {
+      final regionCode = _resolvedRegionCode;
+      if (regionCode == null) throw StateError('Region is not ready');
       final candidate =
           refresh
               ? await _service.refreshAvailableVpn(
-                regionCode: widget.regionCode,
+                regionCode: regionCode,
               )
-              : await _service.getAvailableVpn(regionCode: widget.regionCode);
+              : await _service.getAvailableVpn(regionCode: regionCode);
 
       if (!mounted) return;
 
@@ -176,9 +199,12 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                                   children: [
                                     Expanded(
                                       child: Text(
-                                        _service.formatWrytteId(
+                                          _service.formatWrytteId(
                                           _virtualNumber,
-                                          regionCode: widget.regionCode,
+                                          regionCode:
+                                              _resolvedRegionCode ??
+                                              widget.regionCode ??
+                                              'US',
                                         ),
                                         style: const TextStyle(
                                           color: Colors.white,
