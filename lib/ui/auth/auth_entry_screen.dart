@@ -121,17 +121,15 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                       _buildButton(
                         context: context,
                         text: 'Wrytte ID',
-                        onTap: () async {
-                          final regionCode =
-                              await (_signupRegion ??=
-                                  DeviceRegionService.detectOnce());
-                          if (!context.mounted) return;
+                        onTap: () {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder:
-                                  (_) =>
-                                      VirtualNumberPage(regionCode: regionCode),
+                                  (_) => _ResolvingVirtualNumberPage(
+                                    region: _signupRegion ??=
+                                        DeviceRegionService.detectOnce(),
+                                  ),
                             ),
                           );
                         },
@@ -140,14 +138,15 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                       _buildButton(
                         context: context,
                         text: 'Phone number',
-                        onTap: () async {
-                          await VirtualNumberService().clearPendingWrytteId();
-                          if (!context.mounted) return;
+                        onTap: () {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) => const PhoneAuthPage(),
                             ),
+                          );
+                          unawaited(
+                            VirtualNumberService().clearPendingWrytteId(),
                           );
                         },
                       ),
@@ -276,6 +275,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
     required VoidCallback onTap,
   }) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Container(
         width: double.infinity,
@@ -296,6 +296,30 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
       ),
     );
   }
+}
+
+/// Makes the signup button respond immediately even when region detection is
+/// waiting on a platform or local-storage service.
+class _ResolvingVirtualNumberPage extends StatelessWidget {
+  const _ResolvingVirtualNumberPage({required this.region});
+
+  final Future<String> region;
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String>(
+    future: region,
+    builder: (context, snapshot) {
+      if (snapshot.hasData) {
+        return VirtualNumberPage(regionCode: snapshot.data!);
+      }
+      return const Scaffold(
+        backgroundColor: Color(0xFF08090B),
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFF4DA3FF)),
+        ),
+      );
+    },
+  );
 }
 
 class _TtMark extends StatelessWidget {
