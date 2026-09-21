@@ -22,5 +22,10 @@
         "Tomé",
         "Wrytte"
     ],
-    "cmake.sourceDirectory": "/home/victor/Documents/Desktop/Wrytte-App-Matrix/linux"
+    "cmake.sourceDirectory": "/home/victor/Documents/Desktop/Wrytte-App-Matrix/linux",
+    "cmake.configureOnOpen": false,
+    "dart.flutterSdkPath": "/opt/flutter",
+    "dart.analysisExcludedFolders": [
+        "third_party/camera_android_camerax"
+    ]
 }
