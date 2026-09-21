@@ -1698,7 +1698,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               showTicks: false,
               scanning:
                   _scanStarted &&
-                  _faceAligned &&
+                  _scanPhaseReady &&
                   !_complete &&
                   !_sending &&
                   _captureSessionId != null,

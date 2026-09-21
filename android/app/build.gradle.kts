@@ -42,11 +42,11 @@ android {
         }
     }
 
-    // Keep LiteRT model assets uncompressed in the APK. This allows Android
-    // to memory-map the model rather than first copying its bytes into a
-    // temporary file during a cold start.
+    // Keep model assets uncompressed in the APK. This allows Android to map
+    // LiteRT directly and avoids forced decompression before ONNX cache use.
     androidResources {
         noCompress += "tflite"
+        noCompress += "onnx"
     }
 }
 
