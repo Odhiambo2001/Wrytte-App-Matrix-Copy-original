@@ -23,6 +23,7 @@ import io.flutter.FlutterInjector
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -84,6 +85,10 @@ class MainActivity: FlutterActivity() {
     private val ortEnvironment by lazy { OrtEnvironment.getEnvironment() }
     private val ortSessions = ConcurrentHashMap<String, NativeOrtSession>()
     private val tfliteSessions = ConcurrentHashMap<String, NativeTfliteSession>()
+    // A prewarmed session is built on the same serial LiteRT queue that later
+    // owns inference. It is leased by createRetinaFaceSession, rather than
+    // compiled again when the scan page opens.
+    private val prewarmedTfliteSessions = ConcurrentHashMap<String, NativeTfliteSession>()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -213,15 +218,29 @@ class MainActivity: FlutterActivity() {
         ).setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
+                    "prewarmRetinaFace" -> {
+                        val asset = requireNotNull(call.argument<String>("asset"))
+                        val threads = (call.argument<Int>("threads") ?: 4)
+                            .coerceAtLeast(1)
+                            .coerceAtMost(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
+                        if (prewarmedTfliteSessions[asset] == null) {
+                            val native = createTfliteRetinaFaceSession(
+                                mapFlutterAsset(asset),
+                                threads,
+                            )
+                            val previous = prewarmedTfliteSessions.putIfAbsent(asset, native)
+                            if (previous != null) closeTfliteSession(native)
+                            Log.i("WrytteLiteRT", "RetinaFace LiteRT prewarm completed")
+                        }
+                        result.success(null)
+                    }
                     "createRetinaFaceSession" -> {
                         val asset = requireNotNull(call.argument<String>("asset"))
                         val threads = (call.argument<Int>("threads") ?: 4)
                             .coerceAtLeast(1)
                             .coerceAtMost(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
-                        val native = createTfliteRetinaFaceSession(
-                            materializeFlutterAsset(asset),
-                            threads,
-                        )
+                        val native = prewarmedTfliteSessions.remove(asset)
+                            ?: createTfliteRetinaFaceSession(mapFlutterAsset(asset), threads)
                         val id = UUID.randomUUID().toString()
                         tfliteSessions[id] = native
                         result.success(
@@ -323,12 +342,45 @@ class MainActivity: FlutterActivity() {
     }
 
     /**
+     * Maps an uncompressed Flutter LiteRT asset directly from the APK. If an
+     * older build tool compresses it despite androidResources.noCompress, the
+     * cache-file fallback is still memory-mapped and remains correct.
+     */
+    private fun mapFlutterAsset(asset: String): ByteBuffer {
+        val key = FlutterInjector.instance().flutterLoader().getLookupKeyForAsset(asset)
+        try {
+            assets.openFd(key).use { descriptor ->
+                FileInputStream(descriptor.fileDescriptor).channel.use { channel ->
+                    return channel.map(
+                        java.nio.channels.FileChannel.MapMode.READ_ONLY,
+                        descriptor.startOffset,
+                        descriptor.length,
+                    ).order(ByteOrder.nativeOrder())
+                }
+            }
+        } catch (error: Throwable) {
+            Log.w(
+                "WrytteLiteRT",
+                "RetinaFace APK asset is not directly mappable; using mapped cache fallback: ${error.message}",
+            )
+            val file = materializeFlutterAsset(asset)
+            FileInputStream(file).channel.use { channel ->
+                return channel.map(
+                    java.nio.channels.FileChannel.MapMode.READ_ONLY,
+                    0,
+                    channel.size(),
+                ).order(ByteOrder.nativeOrder())
+            }
+        }
+    }
+
+    /**
      * Creates a LiteRT RetinaFace interpreter with the GPU delegate when the
      * device reports GPU support. If GPU setup is unavailable, retain a CPU
      * interpreter as the device-compatibility fallback. The app logs the
      * selected provider for every detector initialization.
      */
-    private fun createTfliteRetinaFaceSession(model: File, threads: Int): NativeTfliteSession {
+    private fun createTfliteRetinaFaceSession(model: ByteBuffer, threads: Int): NativeTfliteSession {
         val compatibility = CompatibilityList()
         var gpuDelegate: GpuDelegate? = null
         var provider = "cpu"

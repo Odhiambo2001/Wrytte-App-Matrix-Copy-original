@@ -35,12 +35,6 @@ class AnalyzerProxyApi extends PigeonApiAnalyzer {
 
     @Override
     public void analyze(@NonNull ImageProxy image) {
-      // The application can opt in to native biometric analysis. This keeps
-      // CameraPreview's existing Flutter texture while avoiding the full-frame
-      // ImageProxy -> Dart serialization path.
-      if (NativeRetinaAnalyzer.analyze(image)) {
-        return;
-      }
       api.getPigeonRegistrar()
           .runOnMainThread(
               new ProxyApiRegistrar.FlutterMethodRunnable() {

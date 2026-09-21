@@ -84,6 +84,13 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^5.0.0
 
+# The public `camera` API remains unchanged. Android resolves its endorsed
+# CameraX implementation from this local fork, where native biometric analysis
+# is added without replacing CameraPreview's Flutter texture.
+dependency_overrides:
+  camera_android_camerax:
+    path: third_party/camera_android_camerax
+
 hooks:
   user_defines:
     dartcv4:

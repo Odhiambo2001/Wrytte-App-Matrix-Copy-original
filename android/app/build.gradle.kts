@@ -41,6 +41,13 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // Keep LiteRT model assets uncompressed in the APK. This allows Android
+    // to memory-map the model rather than first copying its bytes into a
+    // temporary file during a cold start.
+    androidResources {
+        noCompress += "tflite"
+    }
 }
 
 flutter {

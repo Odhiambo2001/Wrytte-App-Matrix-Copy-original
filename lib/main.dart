@@ -26,6 +26,7 @@ import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/notification_service.dart';
+import 'package:wrytte/services/face/android_tflite_image_session.dart';
 
 import 'firebase_options.dart';
 import 'core/theme.dart';
@@ -55,6 +56,19 @@ Future<void> main() async {
 
   await _ensureFirebaseInitialized();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // Do not make the first scanner visit compile the GPU delegate. This is
+  // deliberately unawaited so the app remains responsive while the splash and
+  // normal authentication flow are displayed.
+  unawaited(
+    AndroidTfliteImageSession.prewarm(
+      'assets/models/retinaface_mv2.tflite',
+    ).catchError((Object error, StackTrace stackTrace) {
+      debugPrint(
+        '[BiometricTiming] pipeline=RetinaFace stage=prewarm_error error=$error',
+      );
+    }),
+  );
 
   unawaited(MatrixClientService.instance.ensureInitialized());
 

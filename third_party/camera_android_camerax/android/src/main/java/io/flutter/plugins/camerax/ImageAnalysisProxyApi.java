@@ -71,10 +71,7 @@ class ImageAnalysisProxyApi extends PigeonApiImageAnalysis {
         .setClearFinalizedWeakReferencesInterval(
             CLEAR_FINALIZED_WEAK_REFERENCES_INTERVAL_FOR_IMAGE_ANALYSIS);
     pigeonInstance.setAnalyzer(
-        NativeRetinaAnalyzer.isEnabled()
-            ? NativeRetinaAnalyzer.executor()
-            : ContextCompat.getMainExecutor(getPigeonRegistrar().getContext()),
-        analyzer);
+        ContextCompat.getMainExecutor(getPigeonRegistrar().getContext()), analyzer);
   }
 
   @Override

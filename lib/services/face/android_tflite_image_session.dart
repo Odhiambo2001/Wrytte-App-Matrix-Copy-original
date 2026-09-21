@@ -35,6 +35,15 @@ class AndroidTfliteImageSession {
     );
   }
 
+  /// Starts model mapping, tensor allocation, GPU delegate creation and one
+  /// persistent session before the biometric page is shown. The scanner later
+  /// leases this exact session on Android's LiteRT serial queue.
+  static Future<void> prewarm(String asset, {int threads = 4}) =>
+      _channel.invokeMethod<void>('prewarmRetinaFace', <String, Object>{
+        'asset': asset,
+        'threads': threads,
+      });
+
   Future<List<Map<String, dynamic>>> runBgr({
     required Uint8List bgr,
     required int width,
@@ -50,8 +59,7 @@ class AndroidTfliteImageSession {
       throw StateError('Native LiteRT inference returned null.');
     }
     lastFrameProvider = value['executionProvider'] as String?;
-    lastNativeTotalMilliseconds =
-        (value['nativeTotalMs'] as num?)?.toDouble();
+    lastNativeTotalMilliseconds = (value['nativeTotalMs'] as num?)?.toDouble();
     lastInvokeMilliseconds = (value['invokeMs'] as num?)?.toDouble();
     final faces = value['faces'];
     if (faces is! List) {
