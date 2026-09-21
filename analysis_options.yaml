@@ -9,6 +9,13 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+# The vendored CameraX implementation is compiled by Gradle. Its upstream
+# package tests/examples are intentionally not part of this Flutter app, so
+# keep the app analyzer focused on Wrytte source.
+analyzer:
+  exclude:
+    - third_party/camera_android_camerax/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`
