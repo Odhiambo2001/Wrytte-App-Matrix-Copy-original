@@ -265,13 +265,28 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         () => camera.initialize(),
       );
       await _restoreCameraParameters(camera);
-      await camera.startImageStream(_onFrame);
-      final retinaWarmup = _pipeline.warmupRetinaFace();
-      if (!mounted) return;
+      if (!mounted) {
+        await camera.dispose();
+        return;
+      }
+      // CameraX must receive the Flutter preview texture before ImageAnalysis
+      // is bound. Starting the stream first can leave a live analyzer with a
+      // black preview surface on some devices.
       setState(() {
         _camera = camera;
         _ready = true;
       });
+      final previewMounted = Completer<void>();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!previewMounted.isCompleted) previewMounted.complete();
+      });
+      await previewMounted.future;
+      if (!mounted || _camera != camera) {
+        await camera.dispose();
+        return;
+      }
+      await camera.startImageStream(_onFrame);
+      final retinaWarmup = _pipeline.warmupRetinaFace();
       _scanStartTimer?.cancel();
       // Keep the camera stream active before any biometric extraction. This
       // lets auto-exposure and auto-white-balance settle without admitting a
