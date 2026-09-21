@@ -35,6 +35,12 @@ class AnalyzerProxyApi extends PigeonApiAnalyzer {
 
     @Override
     public void analyze(@NonNull ImageProxy image) {
+      // Native biometric scan mode retains ImageProxy ownership and closes it
+      // after inference. In normal camera mode this remains the upstream Dart
+      // analyzer path unchanged.
+      if (NativeBiometricAnalyzerRegistry.dispatch(image)) {
+        return;
+      }
       api.getPigeonRegistrar()
           .runOnMainThread(
               new ProxyApiRegistrar.FlutterMethodRunnable() {

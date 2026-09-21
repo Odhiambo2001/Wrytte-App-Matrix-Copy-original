@@ -390,7 +390,9 @@ class MainActivity: FlutterActivity() {
                 // Use the device-specific GPU options selected by LiteRT. The
                 // delegate and interpreter are retained for the whole scan;
                 // neither is recreated for an individual camera frame.
-                gpuDelegate = GpuDelegate(compatibility.bestOptionsForThisDevice)
+                val gpuOptions = compatibility.bestOptionsForThisDevice
+                configureGpuDelegateSerialization(gpuOptions)
+                gpuDelegate = GpuDelegate(gpuOptions)
                 options.addDelegate(gpuDelegate)
                 provider = "gpu"
                 Log.i("WrytteLiteRT", "RetinaFace LiteRT GPU delegate initialized")
@@ -426,6 +428,27 @@ class MainActivity: FlutterActivity() {
         } catch (error: Throwable) {
             try { gpuDelegate?.close() } catch (_: Throwable) {}
             throw error
+        }
+    }
+
+    /**
+     * LiteRT exposes GPU serialization through the Java API only in selected
+     * releases. Reflection keeps this APK compatible with 2.16.1 while
+     * enabling the on-disk delegate cache automatically when that API exists.
+     */
+    private fun configureGpuDelegateSerialization(options: GpuDelegate.Options) {
+        try {
+            val method = options.javaClass.methods.firstOrNull {
+                it.name == "setSerializationParams" && it.parameterTypes.size == 2
+            } ?: run {
+                Log.i("WrytteLiteRT", "GPU delegate serialization API unavailable in this LiteRT build")
+                return
+            }
+            val directory = File(codeCacheDir, "retinaface_gpu_cache").apply { mkdirs() }
+            method.invoke(options, directory.absolutePath, "retinaface_mv2_v1")
+            Log.i("WrytteLiteRT", "GPU delegate persistent cache enabled dir=${directory.name}")
+        } catch (error: Throwable) {
+            Log.w("WrytteLiteRT", "GPU delegate cache unavailable: ${error.message}")
         }
     }
 
