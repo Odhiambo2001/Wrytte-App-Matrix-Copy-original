@@ -557,8 +557,7 @@ class MainActivity: FlutterActivity() {
 
     private fun analyzeNativeBiometricFrame(native: NativeTfliteSession, image: ImageProxy) {
         val startedAt = SystemClock.elapsedRealtimeNanos()
-        val bgr = imageProxyToCenteredRetinaBgr(image)
-        val result = runTfliteRetinaBgrDirect(native, bgr)
+        val result = runTfliteRetinaImageDirect(native, image)
         val faces = result.faces.map { faceMapToDetection(it) }
         val target = chooseNativeTarget(faces)
         val elapsedMs = ((SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000_000.0).toLong()
@@ -575,18 +574,82 @@ class MainActivity: FlutterActivity() {
         event["faceTooFar"] = faces.isNotEmpty() && faces.all { measureNativeFaceDistance(it) == "FAR" }
         event["faceTooClose"] = faces.isNotEmpty() && faces.all { measureNativeFaceDistance(it) == "CLOSE" }
         target?.let {
+            val bgr = imageProxyToCenteredRetinaBgr(image)
             event["faceCenterX"] = (it.left + it.right) / 2.0
             event["faceCenterY"] = (it.top + it.bottom) / 2.0
             event["target"] = it.raw
             event["source"] = bgr
         }
-        if (target == null) bgr.fill(0)
         mainHandler.post { nativeEventSink?.success(event) }
         Log.i(
             "WrytteNativeBio",
             "frame=$index faces=${faces.size} target=${target != null} native_stream=active " +
+                "direct_imageproxy_to_litert=active " +
                 "elapsed_ms=$elapsedMs provider=${native.executionProvider}",
         )
+    }
+
+    private fun runTfliteRetinaImageDirect(
+        native: NativeTfliteSession,
+        image: ImageProxy,
+    ): TfliteRetinaRunResult {
+        return synchronized(native) {
+            check(!native.closed) { "Session is closed" }
+            try {
+                val frameStartedAt = SystemClock.elapsedRealtimeNanos()
+                native.inputBuffer.clear()
+                val floats = native.inputBuffer.asFloatBuffer()
+                writeImageProxyToRetinaInput(image, floats)
+                native.inputBuffer.position(0)
+                val preprocessingMs =
+                    (SystemClock.elapsedRealtimeNanos() - frameStartedAt) / 1_000_000.0
+                invokePreparedTfliteRetina(native, frameStartedAt, preprocessingMs)
+            } finally {
+                wipeTfliteIoBuffers(native)
+            }
+        }
+    }
+
+    private fun writeImageProxyToRetinaInput(image: ImageProxy, floats: FloatBuffer) {
+        val width = image.width
+        val height = image.height
+        val rotation = image.imageInfo.rotationDegrees
+        val rotatedWidth = if (rotation == 90 || rotation == 270) height else width
+        val rotatedHeight = if (rotation == 90 || rotation == 270) width else height
+        val cropSide = minOf(rotatedWidth, rotatedHeight)
+        val cropLeft = (rotatedWidth - cropSide) / 2
+        val cropTop = (rotatedHeight - cropSide) / 2
+        val planes = image.planes
+        val yPlane = planes[0]
+        val uPlane = planes[1]
+        val vPlane = planes[2]
+        val y = yPlane.buffer.duplicate()
+        val u = uPlane.buffer.duplicate()
+        val v = vPlane.buffer.duplicate()
+        for (dy in 0 until 640) {
+            val rotatedY = cropTop + ((dy + 0.5) * cropSide / 640.0).toInt().coerceIn(0, cropSide - 1)
+            for (dx in 0 until 640) {
+                val rotatedX = cropLeft + ((dx + 0.5) * cropSide / 640.0).toInt().coerceIn(0, cropSide - 1)
+                val source = unrotatePoint(rotatedX, rotatedY, width, height, rotation)
+                val sx = source.first.coerceIn(0, width - 1)
+                val sy = source.second.coerceIn(0, height - 1)
+                val rgb = yuvAt(
+                    sx,
+                    sy,
+                    y,
+                    u,
+                    v,
+                    yPlane.rowStride,
+                    uPlane.rowStride,
+                    vPlane.rowStride,
+                    uPlane.pixelStride,
+                    vPlane.pixelStride,
+                )
+                floats.put(rgb.blue - 104f)
+                floats.put(rgb.green - 117f)
+                floats.put(rgb.red - 123f)
+            }
+        }
     }
 
     private fun imageProxyToCenteredRetinaBgr(image: ImageProxy): ByteArray {
@@ -613,24 +676,53 @@ class MainActivity: FlutterActivity() {
                 val source = unrotatePoint(rotatedX, rotatedY, width, height, rotation)
                 val sx = source.first.coerceIn(0, width - 1)
                 val sy = source.second.coerceIn(0, height - 1)
-                val yValue = y.get(sy * yPlane.rowStride + sx).toInt() and 0xff
-                val uvX = sx / 2
-                val uvY = sy / 2
-                val uValue = u.get(uvY * uPlane.rowStride + uvX * uPlane.pixelStride).toInt() and 0xff
-                val vValue = v.get(uvY * vPlane.rowStride + uvX * vPlane.pixelStride).toInt() and 0xff
-                val c = yValue - 16
-                val d = uValue - 128
-                val e = vValue - 128
-                val red = ((298 * c + 409 * e + 128) shr 8).coerceIn(0, 255)
-                val green = ((298 * c - 100 * d - 208 * e + 128) shr 8).coerceIn(0, 255)
-                val blue = ((298 * c + 516 * d + 128) shr 8).coerceIn(0, 255)
+                val rgb = yuvAt(
+                    sx,
+                    sy,
+                    y,
+                    u,
+                    v,
+                    yPlane.rowStride,
+                    uPlane.rowStride,
+                    vPlane.rowStride,
+                    uPlane.pixelStride,
+                    vPlane.pixelStride,
+                )
                 val offset = (dy * 640 + dx) * 3
-                out[offset] = blue.toByte()
-                out[offset + 1] = green.toByte()
-                out[offset + 2] = red.toByte()
+                out[offset] = rgb.blue.toInt().toByte()
+                out[offset + 1] = rgb.green.toInt().toByte()
+                out[offset + 2] = rgb.red.toInt().toByte()
             }
         }
         return out
+    }
+
+    private data class RgbPixel(val red: Float, val green: Float, val blue: Float)
+
+    private fun yuvAt(
+        sx: Int,
+        sy: Int,
+        y: ByteBuffer,
+        u: ByteBuffer,
+        v: ByteBuffer,
+        yRowStride: Int,
+        uRowStride: Int,
+        vRowStride: Int,
+        uPixelStride: Int,
+        vPixelStride: Int,
+    ): RgbPixel {
+        val yValue = y.get(sy * yRowStride + sx).toInt() and 0xff
+        val uvX = sx / 2
+        val uvY = sy / 2
+        val uValue = u.get(uvY * uRowStride + uvX * uPixelStride).toInt() and 0xff
+        val vValue = v.get(uvY * vRowStride + uvX * vPixelStride).toInt() and 0xff
+        val c = yValue - 16
+        val d = uValue - 128
+        val e = vValue - 128
+        val red = ((298 * c + 409 * e + 128) shr 8).coerceIn(0, 255).toFloat()
+        val green = ((298 * c - 100 * d - 208 * e + 128) shr 8).coerceIn(0, 255).toFloat()
+        val blue = ((298 * c + 516 * d + 128) shr 8).coerceIn(0, 255).toFloat()
+        return RgbPixel(red, green, blue)
     }
 
     private fun unrotatePoint(x: Int, y: Int, width: Int, height: Int, rotation: Int): Pair<Int, Int> {
@@ -738,37 +830,49 @@ class MainActivity: FlutterActivity() {
                 native.inputBuffer.position(0)
                 val preprocessingMs =
                     (SystemClock.elapsedRealtimeNanos() - frameStartedAt) / 1_000_000.0
-                native.outputBuffers.forEach { it.clear() }
-                val invokeStartedAt = SystemClock.elapsedRealtimeNanos()
-                native.interpreter.runForMultipleInputsOutputs(
-                    arrayOf(native.inputBuffer),
-                    native.outputBuffers.indices.associateWith { native.outputBuffers[it] },
-                )
-                val invokeMs =
-                    (SystemClock.elapsedRealtimeNanos() - invokeStartedAt) / 1_000_000.0
-                val decodeStartedAt = SystemClock.elapsedRealtimeNanos()
-                val decoded = decodeRetinaFaces(native)
-                val decodeMs =
-                    (SystemClock.elapsedRealtimeNanos() - decodeStartedAt) / 1_000_000.0
-                val totalMs = (SystemClock.elapsedRealtimeNanos() - frameStartedAt) / 1_000_000.0
-                Log.i(
-                    "WrytteLiteRT",
-                    "RetinaFace frame provider=${native.executionProvider} " +
-                        "preprocess_ms=%.1f invoke_ms=%.1f decode_nms_ms=%.1f faces=%d total_native_ms=%.1f"
-                            .format(preprocessingMs, invokeMs, decodeMs, decoded.faces.size, totalMs) +
-                        " best_face_conf=%.4f".format(decoded.bestFaceConfidence),
-                )
-                TfliteRetinaRunResult(decoded.faces, totalMs, invokeMs)
+                invokePreparedTfliteRetina(native, frameStartedAt, preprocessingMs)
             } finally {
-                native.inputBuffer.clear()
-                while (native.inputBuffer.hasRemaining()) native.inputBuffer.put(0.toByte())
-                native.inputBuffer.clear()
-                native.outputBuffers.forEach { buffer ->
-                    buffer.clear()
-                    while (buffer.hasRemaining()) buffer.put(0.toByte())
-                    buffer.clear()
-                }
+                wipeTfliteIoBuffers(native)
             }
+        }
+    }
+
+    private fun invokePreparedTfliteRetina(
+        native: NativeTfliteSession,
+        frameStartedAt: Long,
+        preprocessingMs: Double,
+    ): TfliteRetinaRunResult {
+        native.outputBuffers.forEach { it.clear() }
+        val invokeStartedAt = SystemClock.elapsedRealtimeNanos()
+        native.interpreter.runForMultipleInputsOutputs(
+            arrayOf(native.inputBuffer),
+            native.outputBuffers.indices.associateWith { native.outputBuffers[it] },
+        )
+        val invokeMs =
+            (SystemClock.elapsedRealtimeNanos() - invokeStartedAt) / 1_000_000.0
+        val decodeStartedAt = SystemClock.elapsedRealtimeNanos()
+        val decoded = decodeRetinaFaces(native)
+        val decodeMs =
+            (SystemClock.elapsedRealtimeNanos() - decodeStartedAt) / 1_000_000.0
+        val totalMs = (SystemClock.elapsedRealtimeNanos() - frameStartedAt) / 1_000_000.0
+        Log.i(
+            "WrytteLiteRT",
+            "RetinaFace frame provider=${native.executionProvider} " +
+                "preprocess_ms=%.1f invoke_ms=%.1f decode_nms_ms=%.1f faces=%d total_native_ms=%.1f"
+                    .format(preprocessingMs, invokeMs, decodeMs, decoded.faces.size, totalMs) +
+                " best_face_conf=%.4f".format(decoded.bestFaceConfidence),
+        )
+        return TfliteRetinaRunResult(decoded.faces, totalMs, invokeMs)
+    }
+
+    private fun wipeTfliteIoBuffers(native: NativeTfliteSession) {
+        native.inputBuffer.clear()
+        while (native.inputBuffer.hasRemaining()) native.inputBuffer.put(0.toByte())
+        native.inputBuffer.clear()
+        native.outputBuffers.forEach { buffer ->
+            buffer.clear()
+            while (buffer.hasRemaining()) buffer.put(0.toByte())
+            buffer.clear()
         }
     }
 
