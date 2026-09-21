@@ -122,16 +122,9 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                         context: context,
                         text: 'Wrytte ID',
                         onTap: () async {
-                          final regionCode = await (_signupRegion ??=
-                                  DeviceRegionService.detectOnce())
-                              .timeout(
-                                const Duration(seconds: 2),
-                                onTimeout: () =>
-                                    Localizations.localeOf(context)
-                                        .countryCode
-                                        ?.toUpperCase() ??
-                                    'US',
-                              );
+                          final regionCode =
+                              await (_signupRegion ??=
+                                  DeviceRegionService.detectOnce());
                           if (!context.mounted) return;
                           Navigator.push(
                             context,
@@ -147,16 +140,14 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                       _buildButton(
                         context: context,
                         text: 'Phone number',
-                        onTap: () {
+                        onTap: () async {
+                          await VirtualNumberService().clearPendingWrytteId();
+                          if (!context.mounted) return;
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) => const PhoneAuthPage(),
                             ),
-                          );
-                          // Do not make navigation wait for local storage.
-                          unawaited(
-                            VirtualNumberService().clearPendingWrytteId(),
                           );
                         },
                       ),
@@ -284,22 +275,23 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
     required String text,
     required VoidCallback onTap,
   }) {
-    return SizedBox(
-      width: double.infinity,
-      height: 80,
-      child: ElevatedButton(
-        onPressed: onTap,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF23262C),
-          foregroundColor: Colors.white70,
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF23262C),
+          borderRadius: BorderRadius.circular(12),
         ),
+        alignment: Alignment.center,
         child: Text(
           text,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 18,
+            fontWeight: FontWeight.w500,
+          ),
         ),
       ),
     );
