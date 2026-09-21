@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/face/biometric_prewarm_service.dart';
 import 'package:wrytte/ui/auth/kface_scan_page.dart';
 
 class KFaceIntroPage extends StatefulWidget {
@@ -10,6 +11,7 @@ class KFaceIntroPage extends StatefulWidget {
   final KFaceRecoveryData? recoveryData;
   final bool isEnrollment;
   final bool attachToExistingUser;
+  final BiometricPrewarmBundle? prewarm;
 
   const KFaceIntroPage({
     super.key,
@@ -18,6 +20,7 @@ class KFaceIntroPage extends StatefulWidget {
     this.recoveryData,
     this.isEnrollment = false,
     this.attachToExistingUser = false,
+    this.prewarm,
   });
 
   @override
@@ -25,6 +28,21 @@ class KFaceIntroPage extends StatefulWidget {
 }
 
 class _KFaceIntroPageState extends State<KFaceIntroPage> {
+  late final BiometricPrewarmBundle _prewarm;
+
+  @override
+  void initState() {
+    super.initState();
+    _prewarm =
+        widget.prewarm ??
+        BiometricPrewarmService.prewarm(
+          wrytteId: widget.wrytteId,
+          userId: widget.userId,
+          isEnrollment: widget.isEnrollment,
+          attachToExistingUser: widget.attachToExistingUser,
+        );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -98,6 +116,7 @@ class _KFaceIntroPageState extends State<KFaceIntroPage> {
                                       isEnrollment: widget.isEnrollment,
                                       attachToExistingUser:
                                           widget.attachToExistingUser,
+                                      prewarm: _prewarm,
                                     ),
                               ),
                             );

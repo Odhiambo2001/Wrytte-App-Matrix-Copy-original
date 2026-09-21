@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:wrytte/services/face/biometric_prewarm_service.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
@@ -6,7 +7,7 @@ import 'package:wrytte/ui/screens/home_screen.dart';
 /// Gives a phone account an explicit KFace opt-in. Skipping leaves the account
 /// usable with its phone OTP; choosing KFace starts the five-candidate
 /// liveness flow and attaches the resulting recovery data to that account.
-class KFaceChoicePage extends StatelessWidget {
+class KFaceChoicePage extends StatefulWidget {
   const KFaceChoicePage({
     super.key,
     required this.phoneNumber,
@@ -19,6 +20,24 @@ class KFaceChoicePage extends StatelessWidget {
   final String userId;
   final bool isExistingUser;
   final String? username;
+
+  @override
+  State<KFaceChoicePage> createState() => _KFaceChoicePageState();
+}
+
+class _KFaceChoicePageState extends State<KFaceChoicePage> {
+  late final BiometricPrewarmBundle _prewarm;
+
+  @override
+  void initState() {
+    super.initState();
+    _prewarm = BiometricPrewarmService.prewarm(
+      wrytteId: widget.phoneNumber,
+      userId: widget.userId,
+      isEnrollment: true,
+      attachToExistingUser: true,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -64,10 +83,11 @@ class KFaceChoicePage extends StatelessWidget {
                         MaterialPageRoute(
                           builder:
                               (_) => KFaceIntroPage(
-                                wrytteId: phoneNumber,
-                                userId: userId,
+                                wrytteId: widget.phoneNumber,
+                                userId: widget.userId,
                                 isEnrollment: true,
                                 attachToExistingUser: true,
+                                prewarm: _prewarm,
                               ),
                         ),
                       ),
@@ -82,11 +102,11 @@ class KFaceChoicePage extends StatelessWidget {
                       MaterialPageRoute<void>(
                         builder:
                             (_) =>
-                                isExistingUser
+                                widget.isExistingUser
                                     ? HomeScreen(
-                                      currentUserId: userId,
-                                      initialProfileName: username,
-                                      initialPhone: phoneNumber,
+                                      currentUserId: widget.userId,
+                                      initialProfileName: widget.username,
+                                      initialPhone: widget.phoneNumber,
                                     )
                                     : const AddProfilePage(isNewUser: true),
                       ),

@@ -6,6 +6,7 @@ import ai.onnxruntime.OrtLoggingLevel
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.providers.NNAPIFlags
 import android.content.Context
+import android.graphics.Bitmap
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.util.Log
@@ -27,6 +28,7 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugins.camerax.NativeBiometricAnalyzerRegistry
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -520,10 +522,12 @@ class MainActivity: FlutterActivity() {
             }
             executor.execute {
                 try {
-                    val session = nativeAnalyzerSession ?: createTfliteRetinaFaceSession(
-                        mapFlutterAsset(asset),
-                        threads,
-                    ).also { nativeAnalyzerSession = it }
+                    val session = nativeAnalyzerSession
+                        ?: (prewarmedTfliteSessions.remove(asset)
+                            ?: createTfliteRetinaFaceSession(
+                                mapFlutterAsset(asset),
+                                threads,
+                            )).also { nativeAnalyzerSession = it }
                     analyzeNativeBiometricFrame(session, image)
                 } catch (error: Throwable) {
                     Log.e(
@@ -579,6 +583,7 @@ class MainActivity: FlutterActivity() {
             event["faceCenterY"] = (it.top + it.bottom) / 2.0
             event["target"] = it.raw
             event["source"] = bgr
+            event["jpeg"] = retinaBgrToJpeg(bgr)
         }
         mainHandler.post { nativeEventSink?.success(event) }
         Log.i(
@@ -614,11 +619,7 @@ class MainActivity: FlutterActivity() {
         val width = image.width
         val height = image.height
         val rotation = image.imageInfo.rotationDegrees
-        val rotatedWidth = if (rotation == 90 || rotation == 270) height else width
-        val rotatedHeight = if (rotation == 90 || rotation == 270) width else height
-        val cropSide = minOf(rotatedWidth, rotatedHeight)
-        val cropLeft = (rotatedWidth - cropSide) / 2
-        val cropTop = (rotatedHeight - cropSide) / 2
+        val mapping = createRetinaSourceMapping(width, height, rotation)
         val planes = image.planes
         val yPlane = planes[0]
         val uPlane = planes[1]
@@ -626,28 +627,36 @@ class MainActivity: FlutterActivity() {
         val y = yPlane.buffer.duplicate()
         val u = uPlane.buffer.duplicate()
         val v = vPlane.buffer.duplicate()
-        for (dy in 0 until 640) {
-            val rotatedY = cropTop + ((dy + 0.5) * cropSide / 640.0).toInt().coerceIn(0, cropSide - 1)
-            for (dx in 0 until 640) {
-                val rotatedX = cropLeft + ((dx + 0.5) * cropSide / 640.0).toInt().coerceIn(0, cropSide - 1)
-                val source = unrotatePoint(rotatedX, rotatedY, width, height, rotation)
-                val sx = source.first.coerceIn(0, width - 1)
-                val sy = source.second.coerceIn(0, height - 1)
-                val rgb = yuvAt(
-                    sx,
-                    sy,
-                    y,
-                    u,
-                    v,
-                    yPlane.rowStride,
-                    uPlane.rowStride,
-                    vPlane.rowStride,
-                    uPlane.pixelStride,
-                    vPlane.pixelStride,
-                )
-                floats.put(rgb.blue - 104f)
-                floats.put(rgb.green - 117f)
-                floats.put(rgb.red - 123f)
+        val yRowStride = yPlane.rowStride
+        val uRowStride = uPlane.rowStride
+        val vRowStride = vPlane.rowStride
+        val uPixelStride = uPlane.pixelStride
+        val vPixelStride = vPlane.pixelStride
+        for (outY in 0 until 640) {
+            val rowSourceColumn = mapping.rowSourceColumns[outY]
+            val rowSourceRow = mapping.rowSourceRows[outY]
+            for (outX in 0 until 640) {
+                val sourceColumn =
+                    if (rowSourceColumn >= 0) rowSourceColumn else mapping.columnSourceColumns[outX]
+                val sourceRow =
+                    if (rowSourceRow >= 0) rowSourceRow else mapping.columnSourceRows[outX]
+                val yBase = sourceRow * yRowStride
+                val uvY = sourceRow shr 1
+                val uBase = uvY * uRowStride
+                val vBase = uvY * vRowStride
+                val yValue = y.get(yBase + sourceColumn).toInt() and 0xff
+                val uvX = sourceColumn shr 1
+                val uValue = u.get(uBase + uvX * uPixelStride).toInt() and 0xff
+                val vValue = v.get(vBase + uvX * vPixelStride).toInt() and 0xff
+                val c = yValue - 16
+                val d = uValue - 128
+                val e = vValue - 128
+                val red = ((298 * c + 409 * e + 128) shr 8).coerceIn(0, 255)
+                val green = ((298 * c - 100 * d - 208 * e + 128) shr 8).coerceIn(0, 255)
+                val blue = ((298 * c + 516 * d + 128) shr 8).coerceIn(0, 255)
+                floats.put(blue - 104f)
+                floats.put(green - 117f)
+                floats.put(red - 123f)
             }
         }
     }
@@ -656,11 +665,7 @@ class MainActivity: FlutterActivity() {
         val width = image.width
         val height = image.height
         val rotation = image.imageInfo.rotationDegrees
-        val rotatedWidth = if (rotation == 90 || rotation == 270) height else width
-        val rotatedHeight = if (rotation == 90 || rotation == 270) width else height
-        val cropSide = minOf(rotatedWidth, rotatedHeight)
-        val cropLeft = (rotatedWidth - cropSide) / 2
-        val cropTop = (rotatedHeight - cropSide) / 2
+        val mapping = createRetinaSourceMapping(width, height, rotation)
         val planes = image.planes
         val yPlane = planes[0]
         val uPlane = planes[1]
@@ -668,70 +673,133 @@ class MainActivity: FlutterActivity() {
         val y = yPlane.buffer.duplicate()
         val u = uPlane.buffer.duplicate()
         val v = vPlane.buffer.duplicate()
+        val yRowStride = yPlane.rowStride
+        val uRowStride = uPlane.rowStride
+        val vRowStride = vPlane.rowStride
+        val uPixelStride = uPlane.pixelStride
+        val vPixelStride = vPlane.pixelStride
         val out = ByteArray(640 * 640 * 3)
-        for (dy in 0 until 640) {
-            val rotatedY = cropTop + ((dy + 0.5) * cropSide / 640.0).toInt().coerceIn(0, cropSide - 1)
-            for (dx in 0 until 640) {
-                val rotatedX = cropLeft + ((dx + 0.5) * cropSide / 640.0).toInt().coerceIn(0, cropSide - 1)
-                val source = unrotatePoint(rotatedX, rotatedY, width, height, rotation)
-                val sx = source.first.coerceIn(0, width - 1)
-                val sy = source.second.coerceIn(0, height - 1)
-                val rgb = yuvAt(
-                    sx,
-                    sy,
-                    y,
-                    u,
-                    v,
-                    yPlane.rowStride,
-                    uPlane.rowStride,
-                    vPlane.rowStride,
-                    uPlane.pixelStride,
-                    vPlane.pixelStride,
-                )
-                val offset = (dy * 640 + dx) * 3
-                out[offset] = rgb.blue.toInt().toByte()
-                out[offset + 1] = rgb.green.toInt().toByte()
-                out[offset + 2] = rgb.red.toInt().toByte()
+        var offset = 0
+        for (outY in 0 until 640) {
+            val rowSourceColumn = mapping.rowSourceColumns[outY]
+            val rowSourceRow = mapping.rowSourceRows[outY]
+            for (outX in 0 until 640) {
+                val sourceColumn =
+                    if (rowSourceColumn >= 0) rowSourceColumn else mapping.columnSourceColumns[outX]
+                val sourceRow =
+                    if (rowSourceRow >= 0) rowSourceRow else mapping.columnSourceRows[outX]
+                val yBase = sourceRow * yRowStride
+                val uvY = sourceRow shr 1
+                val uBase = uvY * uRowStride
+                val vBase = uvY * vRowStride
+                val yValue = y.get(yBase + sourceColumn).toInt() and 0xff
+                val uvX = sourceColumn shr 1
+                val uValue = u.get(uBase + uvX * uPixelStride).toInt() and 0xff
+                val vValue = v.get(vBase + uvX * vPixelStride).toInt() and 0xff
+                val c = yValue - 16
+                val d = uValue - 128
+                val e = vValue - 128
+                out[offset++] = ((298 * c + 516 * d + 128) shr 8)
+                    .coerceIn(0, 255)
+                    .toByte()
+                out[offset++] = ((298 * c - 100 * d - 208 * e + 128) shr 8)
+                    .coerceIn(0, 255)
+                    .toByte()
+                out[offset++] = ((298 * c + 409 * e + 128) shr 8)
+                    .coerceIn(0, 255)
+                    .toByte()
             }
         }
         return out
     }
 
-    private data class RgbPixel(val red: Float, val green: Float, val blue: Float)
-
-    private fun yuvAt(
-        sx: Int,
-        sy: Int,
-        y: ByteBuffer,
-        u: ByteBuffer,
-        v: ByteBuffer,
-        yRowStride: Int,
-        uRowStride: Int,
-        vRowStride: Int,
-        uPixelStride: Int,
-        vPixelStride: Int,
-    ): RgbPixel {
-        val yValue = y.get(sy * yRowStride + sx).toInt() and 0xff
-        val uvX = sx / 2
-        val uvY = sy / 2
-        val uValue = u.get(uvY * uRowStride + uvX * uPixelStride).toInt() and 0xff
-        val vValue = v.get(uvY * vRowStride + uvX * vPixelStride).toInt() and 0xff
-        val c = yValue - 16
-        val d = uValue - 128
-        val e = vValue - 128
-        val red = ((298 * c + 409 * e + 128) shr 8).coerceIn(0, 255).toFloat()
-        val green = ((298 * c - 100 * d - 208 * e + 128) shr 8).coerceIn(0, 255).toFloat()
-        val blue = ((298 * c + 516 * d + 128) shr 8).coerceIn(0, 255).toFloat()
-        return RgbPixel(red, green, blue)
+    private fun retinaBgrToJpeg(bgr: ByteArray): ByteArray {
+        val pixels = IntArray(640 * 640)
+        var source = 0
+        for (index in pixels.indices) {
+            val blue = bgr[source++].toInt() and 0xff
+            val green = bgr[source++].toInt() and 0xff
+            val red = bgr[source++].toInt() and 0xff
+            pixels[index] = (0xff shl 24) or (red shl 16) or (green shl 8) or blue
+        }
+        val bitmap = Bitmap.createBitmap(pixels, 640, 640, Bitmap.Config.ARGB_8888)
+        return try {
+            ByteArrayOutputStream().use { output ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 70, output)
+                output.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
-    private fun unrotatePoint(x: Int, y: Int, width: Int, height: Int, rotation: Int): Pair<Int, Int> {
-        return when (rotation) {
-            90 -> Pair(y, height - 1 - x)
-            180 -> Pair(width - 1 - x, height - 1 - y)
-            270 -> Pair(width - 1 - y, x)
-            else -> Pair(x, y)
+    private data class RetinaSourceMapping(
+        val columnSourceColumns: IntArray,
+        val columnSourceRows: IntArray,
+        val rowSourceColumns: IntArray,
+        val rowSourceRows: IntArray,
+    )
+
+    private fun createRetinaSourceMapping(
+        width: Int,
+        height: Int,
+        rotation: Int,
+    ): RetinaSourceMapping {
+        val rotatedWidth = if (rotation == 90 || rotation == 270) height else width
+        val rotatedHeight = if (rotation == 90 || rotation == 270) width else height
+        val cropSide = minOf(rotatedWidth, rotatedHeight)
+        val cropLeft = (rotatedWidth - cropSide) / 2
+        val cropTop = (rotatedHeight - cropSide) / 2
+        val rotatedX = IntArray(640)
+        val rotatedY = IntArray(640)
+        for (index in 0 until 640) {
+            rotatedX[index] = (cropLeft + ((index + 0.5) * cropSide / 640.0)
+                .toInt()
+                .coerceIn(0, cropSide - 1))
+                .coerceIn(0, rotatedWidth - 1)
+            rotatedY[index] = (cropTop + ((index + 0.5) * cropSide / 640.0)
+                .toInt()
+                .coerceIn(0, cropSide - 1))
+                .coerceIn(0, rotatedHeight - 1)
         }
+        val columnSourceColumns = IntArray(640)
+        val columnSourceRows = IntArray(640)
+        val rowSourceColumns = IntArray(640)
+        val rowSourceRows = IntArray(640)
+        for (index in 0 until 640) {
+            when (rotation) {
+                90 -> {
+                    columnSourceColumns[index] = -1
+                    columnSourceRows[index] = (height - 1 - rotatedX[index]).coerceIn(0, height - 1)
+                    rowSourceColumns[index] = rotatedY[index].coerceIn(0, width - 1)
+                    rowSourceRows[index] = -1
+                }
+                180 -> {
+                    columnSourceColumns[index] = (width - 1 - rotatedX[index]).coerceIn(0, width - 1)
+                    columnSourceRows[index] = -1
+                    rowSourceColumns[index] = -1
+                    rowSourceRows[index] = (height - 1 - rotatedY[index]).coerceIn(0, height - 1)
+                }
+                270 -> {
+                    columnSourceColumns[index] = -1
+                    columnSourceRows[index] = rotatedX[index].coerceIn(0, height - 1)
+                    rowSourceColumns[index] = (width - 1 - rotatedY[index]).coerceIn(0, width - 1)
+                    rowSourceRows[index] = -1
+                }
+                else -> {
+                    columnSourceColumns[index] = rotatedX[index].coerceIn(0, width - 1)
+                    columnSourceRows[index] = -1
+                    rowSourceColumns[index] = -1
+                    rowSourceRows[index] = rotatedY[index].coerceIn(0, height - 1)
+                }
+            }
+        }
+        return RetinaSourceMapping(
+            columnSourceColumns = columnSourceColumns,
+            columnSourceRows = columnSourceRows,
+            rowSourceColumns = rowSourceColumns,
+            rowSourceRows = rowSourceRows,
+        )
     }
 
     private data class NativeFace(val raw: Map<String, Any>, val left: Double, val top: Double, val right: Double, val bottom: Double, val confidence: Double)

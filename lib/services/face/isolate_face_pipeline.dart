@@ -110,15 +110,20 @@ class WorkerCropCapture {
     this.width,
     this.height,
     this.box,
+    this.retinaFaceJpeg,
   );
   final int generation, index, width, height;
   final String retinaWorker;
   final FaceDetection target;
   final LivenessFaceBox box;
   Uint8List source;
+  Uint8List? retinaFaceJpeg;
   void clear() {
+    final jpeg = retinaFaceJpeg;
+    if (jpeg != null) _wipe(jpeg);
     _wipe(source);
     source = Uint8List(0);
+    retinaFaceJpeg = null;
   }
 }
 
@@ -172,6 +177,9 @@ class IsolateFacePipeline {
 
   Future<void> initializeDetector() => _initializing ??= _initialize();
 
+  Future<void> initializeNativeStreamSupport() =>
+      _initializing ??= _initialize(includeRetina: false);
+
   /// Compile/prepare the selected RetinaFace execution provider while the
   /// camera warms up, before any user frame is admitted for extraction.
   Future<void> warmupRetinaFace() async {
@@ -185,7 +193,7 @@ class IsolateFacePipeline {
     );
   }
 
-  Future<void> _initialize() async {
+  Future<void> _initialize({bool includeRetina = true}) async {
     await _closing;
     final generation = _generation;
     final created = <String, BiometricWorker>{};
@@ -197,13 +205,15 @@ class IsolateFacePipeline {
           _workerMain,
         );
       }
-      for (var index = 0; index < retinaWorkerCount; index++) {
-        final stage = 'retina-$index';
-        created[stage] = await BiometricWorker.start(
-          stage,
-          generation,
-          _workerMain,
-        );
+      if (includeRetina) {
+        for (var index = 0; index < retinaWorkerCount; index++) {
+          final stage = 'retina-$index';
+          created[stage] = await BiometricWorker.start(
+            stage,
+            generation,
+            _workerMain,
+          );
+        }
       }
       if (_disposed || generation != _generation) {
         throw StateError('Stale initialization');
@@ -234,6 +244,10 @@ class IsolateFacePipeline {
 
   Future<WorkerRetinaResult> processRetinaFrame(img.Image image) async {
     await initializeDetector();
+    if (!_workers.containsKey('retina-0')) {
+      await reset();
+      await initializeDetector();
+    }
     final generation = _generation, index = _index++;
     final raw = image.getBytes(order: img.ChannelOrder.rgb);
     final retinaWorker = 'retina-${index % retinaWorkerCount}';
@@ -266,6 +280,7 @@ class IsolateFacePipeline {
             result['width'] as int,
             result['height'] as int,
             _boxFromWire(result['box']! as Map<Object?, Object?>),
+            null,
           ),
     );
   }
@@ -333,6 +348,7 @@ class IsolateFacePipeline {
         )
         ..capture = BiometricCropSet(
           retinaFaceBgr: pending.source,
+          retinaFaceJpeg: pending.retinaFaceJpeg,
           adafaceLandmarks: pending.target.landmarks,
           livenessFaceBox: pending.box,
         );
@@ -650,7 +666,7 @@ Future<void> _workerMain(List<Object> arguments) async {
           );
           try {
             result = _transfer(
-              Uint8List.fromList(img.encodeJpg(image, quality: 90)),
+              Uint8List.fromList(img.encodeJpg(image, quality: 70)),
             );
           } finally {
             _wipe(bgr);

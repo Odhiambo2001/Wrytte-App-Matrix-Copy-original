@@ -144,7 +144,7 @@ class BiometricApiService {
   static void Function(int candidateIndex)? onFrontendPayloadReady;
   // JPEG preserves the face detail required by the backend models while
   // avoiding the large CPU and transport cost of lossless PNG frames.
-  static const _retinaJpegQuality = 85;
+  static const _retinaJpegQuality = 70;
   static Future<void> _uploadTail = Future<void>.value();
   static Stopwatch? _fiveFrameFrontendTimer;
   static final Set<String> _completedCaptureSessions = <String>{};

@@ -14,6 +14,7 @@ import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/face/android_native_biometric_stream.dart';
 import 'package:wrytte/services/face/biometric_api_service.dart';
 import 'package:wrytte/services/face/biometric_enrollment_timing.dart';
+import 'package:wrytte/services/face/biometric_prewarm_service.dart';
 import 'package:wrytte/services/face/camera_frame_converter.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
@@ -33,6 +34,7 @@ class KFaceScanPage extends StatefulWidget {
     this.recoveryData,
     required this.isEnrollment,
     this.attachToExistingUser = false,
+    this.prewarm,
   });
   final String wrytteId;
 
@@ -42,6 +44,7 @@ class KFaceScanPage extends StatefulWidget {
   final KFaceRecoveryData? recoveryData;
   final bool isEnrollment;
   final bool attachToExistingUser;
+  final BiometricPrewarmBundle? prewarm;
 
   @override
   State<KFaceScanPage> createState() => _KFaceScanPageState();
@@ -140,7 +143,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   // rebuilding the former unbounded speculative capture queue. Any work that
   // survives the fifth acceptance is cancelled before it enters HTTP.
   static const _maxCandidateSubmissions = 300;
-  final _pipeline = IsolateFacePipeline();
+  late final IsolateFacePipeline _pipeline;
+  late final BiometricPrewarmBundle _prewarm;
   final _ldpc = LdpcFuzzyCommitment();
   final _signatureService = LocalFaceSignatureService();
   CameraController? _camera;
@@ -197,6 +201,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   @override
   void initState() {
     super.initState();
+    _prewarm =
+        widget.prewarm ??
+        BiometricPrewarmService.take(
+          wrytteId: widget.wrytteId,
+          userId: widget.userId,
+          isEnrollment: widget.isEnrollment,
+          attachToExistingUser: widget.attachToExistingUser,
+        );
+    _pipeline = _prewarm.pipeline;
     BiometricApiService.onFrontendPayloadReady = (candidateIndex) {
       if (candidateIndex == FaceBiometricPipeline.framesToUse - 1 &&
           _normalFramesFrontendTimer != null) {
@@ -205,16 +218,14 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         BiometricStageTiming.log('Frontend', 'five_normal_frames_only', timer);
       }
     };
-    unawaited(_frontendTiming.run(_initialize));
+    unawaited(_frontendTiming.run(() => _initialize(_prewarm)));
   }
 
-  Future<void> _initialize() async {
+  Future<void> _initialize(BiometricPrewarmBundle prewarm) async {
     try {
-      await BiometricStageTiming.measureAsync(
-        'Models',
-        'initialize',
-        () => _pipeline.initializeDetector(),
-      );
+      await BiometricStageTiming.measureAsync('Models', 'initialize', () async {
+        await Future.wait<void>([prewarm.pipelineWarmup, prewarm.nativeWarmup]);
+      });
       final cameras = await BiometricStageTiming.measureAsync(
         'Camera',
         'enumerate',
@@ -281,6 +292,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         await camera.dispose();
         return;
       }
+      final retinaWarmup = prewarm.pipelineWarmup;
       setState(() {
         _camera = camera;
         _ready = true;
@@ -294,7 +306,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         await camera.dispose();
         return;
       }
-      final retinaWarmup = _pipeline.warmupRetinaFace();
       _scanStartTimer?.cancel();
       // Keep the camera stream active before any biometric extraction. This
       // lets auto-exposure and auto-white-balance settle without admitting a
@@ -330,7 +341,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         );
         _framesThisSecond = 0;
       });
-      unawaited(_startCaptureSession());
+      unawaited(
+        _startCaptureSession(prefetchedSession: prewarm.captureSession),
+      );
     } catch (error, stackTrace) {
       // Do not hide model startup failures: without this, the camera area
       // remains a spinner and the native LiteRT delegate exception is lost.
@@ -738,7 +751,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // JPEG belongs to its own isolate. The JPEG worker is ordered, so its
       // results preserve the liveness order even while later liveness work
       // runs concurrently.
-      await _pipeline.prepareJpeg(tagged.pending.capture);
+      if (tagged.pending.capture.retinaFaceJpeg == null) {
+        await _pipeline.prepareJpeg(tagged.pending.capture);
+      }
       if (!mounted ||
           _complete ||
           _processingPaused ||
@@ -807,14 +822,17 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   /// The camera opens immediately. This tiny request only obtains the opaque
   /// backend session that lets valid target frames stream in a bounded queue.
-  Future<void> _startCaptureSession() async {
+  Future<void> _startCaptureSession({
+    Future<String?>? prefetchedSession,
+  }) async {
     if (_startingCaptureSession || _captureSessionId != null || _complete) {
       return;
     }
     _startingCaptureSession = true;
     try {
       final sessionId =
-          _enrolling
+          await prefetchedSession ??
+          (_enrolling
               ? widget.attachToExistingUser
                   ? await BiometricApiService.startExistingEnrollmentCaptureSession(
                     userId: widget.userId!,
@@ -826,7 +844,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                   )
               : await BiometricApiService.startVerifyCaptureSession(
                 userId: widget.userId!,
-              );
+              ));
       if (!mounted || _complete || sessionId == null) return;
       _captureSessionId = sessionId;
       _dispatchPendingCandidateCaptures();
@@ -1670,7 +1688,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             child: _ScanCamera(
               controller: _camera,
               error: _cameraError,
-              onRetry: _initialize,
+              onRetry: () => _initialize(_prewarm),
             ),
           ),
           Positioned(

@@ -13,6 +13,7 @@ import 'package:wrytte/services/face/minifasnet_v2_liveness.dart';
 class BiometricCropSet {
   BiometricCropSet({
     required this.retinaFaceBgr,
+    this.retinaFaceJpeg,
     required this.adafaceLandmarks,
     required this.livenessFaceBox,
   });

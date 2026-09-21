@@ -57,6 +57,7 @@ class AndroidNativeBiometricStream {
       final analysis = _analysisFromNative(map);
       final target = map['target'];
       final source = map['source'];
+      final jpeg = map['jpeg'];
       WorkerCropCapture? pendingCrop;
       if (target is Map && source is Uint8List) {
         pendingCrop = WorkerCropCapture(
@@ -73,6 +74,7 @@ class AndroidNativeBiometricStream {
             width: (map['width'] as num?)?.toInt() ?? 640,
             height: (map['height'] as num?)?.toInt() ?? 640,
           ),
+          jpeg is Uint8List ? jpeg : null,
         );
       }
       return AndroidNativeBiometricFrame(
