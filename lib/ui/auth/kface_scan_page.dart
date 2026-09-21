@@ -376,6 +376,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _nativeBiometricSubscription ??= AndroidNativeBiometricStream.frames()
             .listen(_onNativeBiometricFrame, onError: _onNativeBiometricError);
         await AndroidNativeBiometricStream.start();
+        if (!camera.value.isStreamingImages) {
+          await camera.startImageStream(_onFrame);
+        }
         _usingNativeBiometricStream = true;
         debugPrint(
           '[BiometricTiming] pipeline=Camera stage=native_stream_start native_zero_copy=active',
