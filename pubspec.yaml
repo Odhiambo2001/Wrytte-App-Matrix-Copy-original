@@ -53,6 +53,12 @@ dependencies:
   ffi: ^2.1.4
   opencv_dart:
     path: third_party/opencv_dart
+
+dependency_overrides:
+  # Retains CameraPreview while allowing the Android analyzer to run
+  # RetinaFace before pixels are serialized into Dart.
+  camera_android_camerax:
+    path: third_party/camera_android_camerax
   rxdart: ^0.28.0
   photo_manager: ^3.8.3
   photo_manager_image_provider: ^2.2.0
