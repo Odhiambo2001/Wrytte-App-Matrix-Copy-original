@@ -87,6 +87,16 @@ class RetinaFaceDetector {
   bool get isReady =>
       _session != null || _android != null || _androidTflite != null;
 
+  /// Per-frame native timing is returned by Android beside the LiteRT result.
+  /// It makes provider selection and Dart/platform-boundary overhead visible
+  /// in the worker timing log rather than inferred from separate log lines.
+  String get lastExecutionProvider =>
+      _androidTflite?.lastFrameProvider ?? _androidTflite?.executionProvider ?? 'cpu';
+  double? get lastNativeTotalMilliseconds =>
+      _androidTflite?.lastNativeTotalMilliseconds;
+  double? get lastNativeInvokeMilliseconds =>
+      _androidTflite?.lastInvokeMilliseconds;
+
   Future<void> initialize() async {
     if (isReady) return;
     if (Platform.isAndroid) {

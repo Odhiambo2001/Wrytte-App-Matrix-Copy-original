@@ -423,7 +423,12 @@ class MainActivity: FlutterActivity() {
                             .format(preprocessingMs, invokeMs, decodeMs, decoded.faces.size, totalMs) +
                         " best_face_conf=%.4f".format(decoded.bestFaceConfidence),
                 )
-                mapOf("faces" to decoded.faces)
+                mapOf(
+                    "faces" to decoded.faces,
+                    "executionProvider" to native.executionProvider,
+                    "nativeTotalMs" to totalMs,
+                    "invokeMs" to invokeMs,
+                )
             } finally {
                 bytes.fill(0)
                 native.inputBuffer.clear()

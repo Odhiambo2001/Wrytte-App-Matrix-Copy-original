@@ -459,11 +459,22 @@ Future<void> _workerMain(List<Object> arguments) async {
               final detectorTimer = Stopwatch()..start();
               final faces = await retina.detectBgr(bgr);
               final detectorMilliseconds = detectorTimer.elapsedMilliseconds;
+              final nativeMilliseconds = retina.lastNativeTotalMilliseconds;
+              final boundaryMilliseconds = nativeMilliseconds == null
+                  ? null
+                  : (detectorMilliseconds - nativeMilliseconds).clamp(0, 1 << 30);
               // ignore: avoid_print
               print(
                 '[BiometricTiming] pipeline=RetinaFace stage=worker_breakdown '
                 'frame=${values[0]} prepare_ms=$prepareMilliseconds '
-                'native_bridge_and_result_ms=$detectorMilliseconds faces=${faces.length}',
+                'native_bridge_and_result_ms=$detectorMilliseconds '
+                'provider=${retina.lastExecutionProvider} '
+                'gpu_confirmed=${retina.lastExecutionProvider == 'gpu'} '
+                'native_total_ms=${nativeMilliseconds?.toStringAsFixed(1) ?? "unknown"} '
+                'gpu_invoke_ms=${retina.lastNativeInvokeMilliseconds?.toStringAsFixed(1) ?? "unknown"} '
+                'dart_platform_boundary_ms=${boundaryMilliseconds?.toStringAsFixed(1) ?? "unknown"} '
+                'dart_full_frame_transfer=active '
+                'faces=${faces.length}',
               );
               final target = FaceBiometricPipeline.chooseTarget(faces);
               result = <String, Object>{

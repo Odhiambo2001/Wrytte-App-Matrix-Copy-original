@@ -14,6 +14,9 @@ class AndroidTfliteImageSession {
 
   final String id;
   final String executionProvider;
+  String? lastFrameProvider;
+  double? lastNativeTotalMilliseconds;
+  double? lastInvokeMilliseconds;
 
   static Future<AndroidTfliteImageSession> create(
     String asset, {
@@ -46,6 +49,10 @@ class AndroidTfliteImageSession {
     if (value == null) {
       throw StateError('Native LiteRT inference returned null.');
     }
+    lastFrameProvider = value['executionProvider'] as String?;
+    lastNativeTotalMilliseconds =
+        (value['nativeTotalMs'] as num?)?.toDouble();
+    lastInvokeMilliseconds = (value['invokeMs'] as num?)?.toDouble();
     final faces = value['faces'];
     if (faces is! List) {
       throw StateError('Native LiteRT inference did not return face results.');
