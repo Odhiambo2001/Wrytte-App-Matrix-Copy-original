@@ -606,6 +606,7 @@ class MainActivity: FlutterActivity() {
             event["jpeg"] = retinaBgrToJpeg(bgr)
         }
         mainHandler.post { nativeEventSink?.success(event) }
+        
         Log.i(
             "WrytteNativeBio",
             "frame=$index faces=${faces.size} target=${target != null} native_stream=active " +
