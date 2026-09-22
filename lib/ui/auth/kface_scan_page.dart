@@ -323,8 +323,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         );
         setState(() {
           _scanPhaseReady = true;
-          _scanStarted = true;
-          _status = 'Scanning…';
         });
         debugPrint('[BiometricTiming] pipeline=Camera stage=scan_phase_ready');
       });
@@ -345,9 +343,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
       if (mounted) {
         setState(() {
-          _cameraError =
-              'Face scanner could not start.\nTap Start over to retry.';
-          _status = 'Scanner startup failed';
+          _cameraError = null;
+          _status = 'Position your face\nwithin the circle';
         });
       }
     }
@@ -484,7 +481,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                   analysis.faceDetected &&
                   analysis.targetFaceSelected &&
                   analysis.alignmentAccepted;
-              if (_faceAligned) _scanStarted = true;
+              if (!_faceAligned) _scanStarted = false;
               if (analysis.faceCenterX != null) {
                 _headMovement = (analysis.faceCenterX! / 640).clamp(0.0, 1.0);
               }
@@ -671,7 +668,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         ),
       );
       _uploadBatchTimer ??= Stopwatch()..start();
-      if (mounted) setState(() => _status = 'Scanning…');
       _dispatchPendingCandidateCaptures();
     } catch (error) {
       tagged.pending.capture.clear();
@@ -704,6 +700,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           '[BiometricTiming] pipeline=Liveness stage=local_verdict '
           'outcome=rejected authority=backend',
         );
+      }
+      if (mounted) {
+        setState(() {
+          _scanStarted = live;
+          _status =
+              live
+                  ? 'Scanning…'
+                  : 'Face not detected.\nPosition your face within the circle';
+        });
       }
       await _prepareAndQueueCandidate(tagged);
     } catch (error) {
@@ -779,10 +784,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       for (var index = 0; index < FaceBiometricPipeline.framesToUse; index++) {
         batch.add(_pendingCandidateCaptures.removeFirst());
       }
-      _candidateExtractionClosed = true;
-      _discardPendingRetinaFrames();
-      _discardPendingCropCaptures();
-      _discardPendingLivenessCaptures();
+      _pauseFrontendProcessing();
       _inFlightCandidateUploads++;
       unawaited(_frontendTiming.run(() => _uploadNewEnrollmentBatch(batch)));
       return;
@@ -798,10 +800,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // there is no useful sixth target to retain locally. If the backend
       // rejects this batch, its response starts a fresh capture session.
       if (candidateIndex + 1 == FaceBiometricPipeline.framesToUse) {
-        _candidateExtractionClosed = true;
-        _discardPendingRetinaFrames();
-        _discardPendingCropCaptures();
-        _discardPendingLivenessCaptures();
+        _pauseFrontendProcessing();
       }
       unawaited(
         _frontendTiming.run(
@@ -824,7 +823,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       );
       if (!mounted || _complete) return;
       if (!input.accepted || input.enrollmentTicket == null) {
-        await _resumeAfterBiometricRejection();
+        await _showBackendFaceRejection();
         return;
       }
       if (_captureBatchTimer != null) {
@@ -986,7 +985,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         // The backend cannot accept further candidates in a geometry-invalid
         // session. Start a fresh session instead of advancing its index.
         if (fakeFrame || invalidGeometry || !result.accepted) {
-          await _resumeAfterBiometricRejection();
+          await _showBackendFaceRejection();
         }
         return;
       }
@@ -1004,7 +1003,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         );
       }
       if (!result.complete) {
-        setState(() => _status = 'Scanning…');
         return;
       }
 
@@ -1333,7 +1331,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         () => _recoverLocalKey(verification.input.ldpcBits, verification.kmap),
       );
       if (recoveredKey == null) {
-        await _resumeAfterBiometricRejection();
+        _showVerificationFailure();
         return;
       }
       final signature = await BiometricStageTiming.measureAsync(
@@ -1380,12 +1378,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       if (mounted) {
         if (_enrolling) BiometricEnrollmentTiming.cancel();
         _logTransitionTiming('failure_result');
-        setState(() {
-          _complete = true;
-          _backendWaiting = false;
-          _verificationFailed = true;
-          _status = 'Verification failed.\nTap “Start over” to try again';
-        });
+        _showVerificationFailure();
       }
     } finally {
       _sending = false;
@@ -1439,6 +1432,32 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   /// A false biometric result is deliberately indistinguishable from a bad
   /// capture or an unknown Wrytte ID. Discard all candidates and continue the
   /// original scan rather than showing a result screen that reveals nothing.
+  Future<void> _showBackendFaceRejection() async {
+    if (!mounted) return;
+    setState(() {
+      _complete = true;
+      _backendWaiting = false;
+      _verificationFailed = true;
+      _scanStarted = false;
+      _status = 'Face not detected.\nPosition your face within the circle';
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    if (mounted && _verificationFailed) {
+      await _resumeAfterBiometricRejection();
+    }
+  }
+
+  void _showVerificationFailure() {
+    if (!mounted) return;
+    setState(() {
+      _complete = true;
+      _backendWaiting = false;
+      _verificationFailed = true;
+      _scanStarted = false;
+      _status = 'Verification failed.\nTap “Start over” to try again';
+    });
+  }
+
   Future<void> _resumeAfterBiometricRejection() async {
     _captureBatchTimer?.stop();
     _normalFramesFrontendTimer?.stop();
