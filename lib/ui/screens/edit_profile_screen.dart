@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/face/biometric_prewarm_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/auth_entry_screen.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
@@ -231,6 +232,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       debugPrint('[Logout] Auth logout error (skipping): $e');
       UserProfileService.instance.clearCache();
     }
+    await BiometricPrewarmService.clearForLogout();
 
     if (mounted) {
       Navigator.pushAndRemoveUntil(

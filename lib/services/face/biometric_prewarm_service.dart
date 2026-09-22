@@ -90,6 +90,18 @@ class BiometricPrewarmService {
     _nativeWarmup = null;
   }
 
+  /// Logout ends the current account journey. Do not let its prefetched
+  /// capture session or pipeline be reused by the next Wrytte-ID signup.
+  static Future<void> clearForLogout() async {
+    final pipeline = _pipeline;
+    _pipeline = null;
+    _pipelineWarmup = null;
+    _nativeWarmup = null;
+    _captureSession = null;
+    _captureSessionKey = null;
+    await pipeline?.dispose();
+  }
+
   static Future<String?> _startCaptureSession(_CaptureSessionKey key) async {
     try {
       if (key.isEnrollment) {
