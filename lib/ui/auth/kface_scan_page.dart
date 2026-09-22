@@ -123,7 +123,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   Stopwatch? _captureBatchTimer;
   Stopwatch? _normalFramesFrontendTimer;
   Stopwatch? _uploadBatchTimer;
-  bool _scanStarted = false;
   bool _scanPhaseReady = false;
   bool _backendWaiting = false;
   bool _verificationFailed = false;
@@ -131,7 +130,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   Timer? _frameRateTimer;
   int _framesThisSecond = 0;
   DateTime? _lastSelectedFrameAt;
-  bool _faceAligned = false;
   double _headMovement = 0.5;
   // Keep three local pipeline stages moving: one request may be on the wire,
   // the next candidate may be encoding, and a third may pass RetinaFace and
@@ -477,11 +475,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             final analysis = retina.analysis;
             if (analysis.processingMilliseconds == 0) return;
             setState(() {
-              _faceAligned =
-                  analysis.faceDetected &&
-                  analysis.targetFaceSelected &&
-                  analysis.alignmentAccepted;
-              if (!_faceAligned) _scanStarted = false;
               if (analysis.faceCenterX != null) {
                 _headMovement = (analysis.faceCenterX! / 640).clamp(0.0, 1.0);
               }
@@ -703,7 +696,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       }
       if (mounted) {
         setState(() {
-          _scanStarted = live;
           _status =
               live
                   ? 'Scanning…'
@@ -1438,7 +1430,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _complete = true;
       _backendWaiting = false;
       _verificationFailed = true;
-      _scanStarted = false;
       _status = 'Face not detected.\nPosition your face within the circle';
     });
     await Future<void>.delayed(const Duration(milliseconds: 900));
@@ -1453,7 +1444,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _complete = true;
       _backendWaiting = false;
       _verificationFailed = true;
-      _scanStarted = false;
       _status = 'Verification failed.\nTap “Start over” to try again';
     });
   }
@@ -1479,10 +1469,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _acceptedCandidateCount = 0;
     _candidateExtractionClosed = false;
     _processingPaused = false;
-    _scanStarted = false;
     _scanPhaseReady = _ready;
     _scanStartTimer?.cancel();
-    _faceAligned = false;
     _nextCandidateSubmissionIndex = 0;
     _captureSessionId = null;
     _discardPendingCandidateCaptures();
@@ -1537,10 +1525,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _acceptedCandidateCount = 0;
       _candidateExtractionClosed = false;
       _processingPaused = false;
-      _scanStarted = false;
       _scanPhaseReady = _ready;
       _scanStartTimer?.cancel();
-      _faceAligned = false;
       _nextCandidateSubmissionIndex = 0;
       _captureSessionId = null;
       _status = 'Position your face\nwithin the circle';
@@ -1631,12 +1617,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             child: KFaceScanOverlay(
               faceDiameter: ringSize,
               showTicks: false,
-              scanning:
-                  _scanStarted &&
-                  _scanPhaseReady &&
-                  !_complete &&
-                  !_sending &&
-                  _captureSessionId != null,
+              scanning: _ready && !_complete && !_sending,
               progress: _complete ? 1.0 : progress,
               waiting: _backendWaiting,
               success: _complete && !_backendWaiting && !_verificationFailed,

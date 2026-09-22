@@ -93,13 +93,9 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
                       waiting: widget.waiting,
                       success: widget.success,
                       failure: widget.failure,
-                      // Capture progress is driven by valid head movement. The small
-                      // time component keeps the light alive between accepted frames.
-                      phase:
-                          widget.waiting
-                              ? _motion.value * math.pi * 2
-                              : progress * math.pi * 2 +
-                                  _motion.value * math.pi * 2,
+                      // Animation timing is deliberately independent of face-frame
+                      // results so the visual scanner never pauses between captures.
+                      phase: _motion.value * math.pi * 2,
                     ),
                     child: const SizedBox.expand(),
                   ),
@@ -229,12 +225,9 @@ class _ScanOverlayPainter extends CustomPainter {
   }) {
     // A fan of meridians, not a thick stroked arc: the lines converge at
     // the poles and spread across the face, producing the ribbed light sheet.
-    final longitude =
-        vertical
-            // This is a UI scan: it sweeps left and right continuously even
-            // when the head is still. Face position adds a small offset.
-            ? math.sin(phase) * 0.95 + (movement - 0.5) * 0.18
-            : math.cos(phase) * 0.65;
+    // Use the controller's linear phase directly. The former nested sine
+    // decelerated at every turnaround, which made the scanner appear stuck.
+    final longitude = vertical ? phase : phase + math.pi / 2;
     const spread = 0.42;
     const ribs = 28;
     const steps = 80;
