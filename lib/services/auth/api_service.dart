@@ -9,6 +9,12 @@ class ApiService {
     defaultValue: 'https://api.wrytte.com',
   );
 
+  // Reuse one client for the app's lifetime so requests to the same host
+  // share a connection pool (keep-alive) instead of each paying a fresh
+  // TCP+TLS handshake. This matters most for the near-concurrent candidate
+  // uploads fired during a biometric scan.
+  static final http.Client _client = http.Client();
+
   static bool isBackendHost(String? host) =>
       host?.toLowerCase() == Uri.parse(baseUrl).host.toLowerCase();
 
@@ -32,7 +38,7 @@ class ApiService {
     debugPrint("➡️ POST $uri");
     debugPrint("📦 BODY: ${_redactMap(body)}");
 
-    final response = await http
+    final response = await _client
         .post(
           uri,
           headers: headers,
@@ -71,7 +77,7 @@ class ApiService {
     debugPrint("➡️ POST JSON $uri");
     debugPrint("📦 JSON BODY: ${_redactMap(body)}");
 
-    final response = await http
+    final response = await _client
         .post(
           uri,
           headers: headers,
@@ -115,7 +121,7 @@ class ApiService {
           ..headers.addAll(headers)
           ..body = jsonEncode(body ?? const <String, dynamic>{});
 
-    final streamedResponse = await request.send().timeout(
+    final streamedResponse = await _client.send(request).timeout(
       const Duration(seconds: 20),
     );
     final response = await http.Response.fromStream(streamedResponse);
@@ -165,7 +171,7 @@ class ApiService {
     }
 
     final requestTimer = Stopwatch()..start();
-    final streamedResponse = await request.send().timeout(
+    final streamedResponse = await _client.send(request).timeout(
       const Duration(seconds: 20),
     );
     requestTimer.stop();
@@ -212,7 +218,7 @@ class ApiService {
 
     debugPrint("➡️ GET $uri");
 
-    final response = await http
+    final response = await _client
         .get(uri, headers: headers)
         .timeout(const Duration(seconds: 20));
 

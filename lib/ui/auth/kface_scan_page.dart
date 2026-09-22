@@ -223,7 +223,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   Future<void> _initialize(BiometricPrewarmBundle prewarm) async {
     try {
-      await BiometricStageTiming.measureAsync('Models', 'initialize', () async {
+      // Don't await here — let this run in parallel with camera enumerate/init below.
+      final modelsInit = BiometricStageTiming.measureAsync('Models', 'initialize', () async {
         await Future.wait<void>([prewarm.pipelineWarmup, prewarm.nativeWarmup]);
       });
       final cameras = await BiometricStageTiming.measureAsync(
@@ -265,8 +266,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         description,
         ResolutionPreset.high,
         enableAudio: false,
-        // Request a consistent scan cadence. The platform uses the nearest
-        // supported range if this specific device cannot provide exactly 15.
         fps: 30,
         imageFormatGroup:
             Platform.isIOS
@@ -287,6 +286,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // CameraX must receive the Flutter preview texture before ImageAnalysis
       // is bound. Starting the stream first can leave a live analyzer with a
       // black preview surface on some devices.
+      await modelsInit; // block here — right before frame streaming actually needs warmup done
       await _startFrameStream(camera);
       if (!mounted) {
         await camera.dispose();
@@ -307,11 +307,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         return;
       }
       _scanStartTimer?.cancel();
-      // Keep the camera stream active before any biometric extraction. This
-      // lets auto-exposure and auto-white-balance settle without admitting a
-      // cold-start frame to worker 1.
       final startupWaitTimer = Stopwatch()..start();
-      _scanStartTimer = Timer(const Duration(milliseconds: 1500), () async {
+      _scanStartTimer = Timer(const Duration(milliseconds: 400), () async {
         if (!mounted) return;
         try {
           await retinaWarmup;
@@ -345,8 +342,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _startCaptureSession(prefetchedSession: prewarm.captureSession),
       );
     } catch (error, stackTrace) {
-      // Do not hide model startup failures: without this, the camera area
-      // remains a spinner and the native LiteRT delegate exception is lost.
       debugPrint(
         '[BiometricTiming] pipeline=Models stage=initialize_error '
         'error=$error\n$stackTrace',
@@ -420,6 +415,20 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     final camera = _camera;
     if (camera?.value.isStreamingImages == true) {
       await camera!.stopImageStream();
+    }
+  }
+
+  Future<void> _stopNativeBiometricAnalysis() async {
+    if (!_usingNativeBiometricStream) return;
+    try {
+      await AndroidNativeBiometricStream.stop();
+    } catch (error) {
+      debugPrint(
+        '[BiometricTiming] pipeline=Camera stage=native_stream_stop_error '
+        'error=${error.runtimeType}',
+      );
+    } finally {
+      _usingNativeBiometricStream = false;
     }
   }
 
@@ -887,6 +896,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _discardPendingCropCaptures();
       _discardPendingLivenessCaptures();
       _inFlightCandidateUploads++;
+      unawaited(_stopNativeBiometricAnalysis());
       unawaited(_frontendTiming.run(() => _uploadNewEnrollmentBatch(batch)));
       return;
     }
@@ -905,6 +915,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _discardPendingRetinaFrames();
         _discardPendingCropCaptures();
         _discardPendingLivenessCaptures();
+        unawaited(_stopNativeBiometricAnalysis());
       }
       unawaited(
         _frontendTiming.run(

@@ -104,6 +104,12 @@ class MainActivity: FlutterActivity() {
     private val nativeAnalyzerEnabled = AtomicBoolean(false)
     private val nativeAnalyzerBusy = AtomicBoolean(false)
     private var nativeFrameIndex = 0L
+    // Bounds how many accepted (target != null) frames the native analyzer
+    // will emit before self-disabling. Set from Dart's "start" call so the
+    // analyzer stops itself on the same thread that decided a frame
+    // qualifies, instead of waiting for a "stop" MethodChannel round trip.
+    private var nativeAnalyzerMaxTargets = Int.MAX_VALUE
+    private var nativeAnalyzerTargetCount = 0
     // A prewarmed session is built on the same serial LiteRT queue that later
     // owns inference. It is leased by createRetinaFaceSession, rather than
     // compiled again when the scan page opens.
@@ -152,7 +158,8 @@ class MainActivity: FlutterActivity() {
                         val threads = (call.argument<Int>("threads") ?: 4)
                             .coerceAtLeast(1)
                             .coerceAtMost(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
-                        startNativeBiometricAnalyzer(asset, threads)
+                        val maxTargets = call.argument<Int>("maxTargets") ?: Int.MAX_VALUE
+                        startNativeBiometricAnalyzer(asset, threads, maxTargets)
                         result.success(null)
                     }
                     "stop" -> {
@@ -507,9 +514,11 @@ class MainActivity: FlutterActivity() {
         }
     }
 
-    private fun startNativeBiometricAnalyzer(asset: String, threads: Int) {
+    private fun startNativeBiometricAnalyzer(asset: String, threads: Int, maxTargets: Int) {
         if (nativeAnalyzerEnabled.get()) return
         nativeAnalyzerEnabled.set(true)
+        nativeAnalyzerTargetCount = 0
+        nativeAnalyzerMaxTargets = maxTargets
         val executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "wrytte-native-biometric-analyzer")
         }
@@ -566,6 +575,17 @@ class MainActivity: FlutterActivity() {
         val target = chooseNativeTarget(faces)
         val elapsedMs = ((SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000_000.0).toLong()
         val index = nativeFrameIndex++
+        // Self-stop the instant this frame reaches the target count. This
+        // runs on the same worker thread that just decided the frame
+        // qualifies, so no further frames are admitted while a "stop"
+        // MethodChannel call from Dart is still in flight.
+        if (target != null) {
+            nativeAnalyzerTargetCount++
+            if (nativeAnalyzerTargetCount >= nativeAnalyzerMaxTargets) {
+                nativeAnalyzerEnabled.set(false)
+                NativeBiometricAnalyzerRegistry.setAnalyzer(null)
+            }
+        }
         val event = HashMap<String, Any?>()
         event["index"] = index
         event["width"] = 640
