@@ -31,23 +31,10 @@ class KFaceScanOverlay extends StatefulWidget {
 
 class _KFaceScanOverlayState extends State<KFaceScanOverlay>
     with SingleTickerProviderStateMixin {
-  final Stopwatch _motionLogClock = Stopwatch()..start();
-  int _lastMotionLogMilliseconds = -1000;
   late final AnimationController _motion = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 3000),
-  )..addListener(_logMotion);
-
-  void _logMotion() {
-    final elapsed = _motionLogClock.elapsedMilliseconds;
-    if (elapsed - _lastMotionLogMilliseconds < 1000) return;
-    _lastMotionLogMilliseconds = elapsed;
-    debugPrint(
-      '[KFaceScanAnimation] phase=${_motion.value.toStringAsFixed(3)} '
-      'active=${_motion.isAnimating} scanning=${widget.scanning} '
-      'waiting=${widget.waiting}',
-    );
-  }
+  );
 
   @override
   void didChangeDependencies() {
@@ -106,9 +93,13 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
                       waiting: widget.waiting,
                       success: widget.success,
                       failure: widget.failure,
-                      // Animation timing is deliberately independent of face-frame
-                      // results so the visual scanner never pauses between captures.
-                      phase: _motion.value * math.pi * 2,
+                      // Capture progress is driven by valid head movement. The small
+                      // time component keeps the light alive between accepted frames.
+                      phase:
+                          widget.waiting
+                              ? _motion.value * math.pi * 2
+                              : progress * math.pi * 2 +
+                                  _motion.value * math.pi * 2,
                     ),
                     child: const SizedBox.expand(),
                   ),
@@ -140,6 +131,15 @@ class _ScanOverlayPainter extends CustomPainter {
   final bool success;
   final bool failure;
   final double phase;
+
+  /// Converts a phase angle into a constant-speed triangle wave in [-1, 1].
+  /// A raw sin(phase) mapping decelerates to zero speed at its extremes
+  /// (derivative cos(phase) -> 0), which reads as the sweep "hanging" at
+  /// the edges. asin(sin(phase)) is linear in phase almost everywhere,
+  /// producing uniform sweep speed with only an instantaneous turnaround
+  /// at each edge instead of a visible stall.
+  static double _triangleWave(double phase) =>
+      (2 / math.pi) * math.asin(math.sin(phase));
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -238,19 +238,22 @@ class _ScanOverlayPainter extends CustomPainter {
   }) {
     // A fan of meridians, not a thick stroked arc: the lines converge at
     // the poles and spread across the face, producing the ribbed light sheet.
-    // Constant-speed travel avoids the sine-wave pause at each reversal
-    // while keeping the ribbon inside the face ring.
-    final cycle = (phase / (math.pi * 2)) % 1;
     final longitude =
-        cycle < 0.5 ? -0.18 + cycle * 0.72 : 0.18 - (cycle - 0.5) * 0.72;
-    const spread = 0.16;
-    const ribs = 14;
-    const steps = 40;
+        vertical
+            // This is a UI scan: it sweeps left and right continuously even
+            // when the head is still. Face position adds a small offset.
+            // Uses a triangle wave (not sin) so the sweep moves at constant
+            // speed and does not appear to hang at the left/right extremes.
+            ? _triangleWave(phase) * 0.95 + (movement - 0.5) * 0.18
+            : _triangleWave(phase + math.pi / 2) * 0.65;
+    const spread = 0.42;
+    const ribs = 28;
+    const steps = 80;
 
     Offset point(double latitude, double meridian) {
       final across = math.sin(latitude) * radius;
       final depth = math.cos(latitude) * radius;
-      final sweep = meridian * depth;
+      final sweep = math.sin(meridian) * depth;
       return center +
           (vertical ? Offset(sweep, across) : Offset(across, sweep));
     }
@@ -290,6 +293,13 @@ class _ScanOverlayPainter extends CustomPainter {
       stops: const [0, 0.35, 0.68, 1],
     ).createShader(bounds);
 
+    // One soft halo behind the entire sheet keeps the fine gaps crisp.
+    canvas.drawPath(
+      strip(longitude, longitude + spread),
+      Paint()
+        ..color = const Color(0xFF1976FF).withValues(alpha: 0.18)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * 0.018),
+    );
     for (var rib = 0; rib < ribs; rib++) {
       final fraction = rib / ribs;
       final angle = longitude + spread * fraction;
