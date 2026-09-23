@@ -1755,13 +1755,11 @@ class _ScanCamera extends StatelessWidget {
         child: SizedBox(
           width: 1000,
           height: 1000 / aspect,
-          child: Transform.scale(
-            alignment: Alignment.center,
-            scaleX: -1.0,
-            scaleY: 1.0,
-            child: CameraPreview(camera),
-          ),
+          child: CameraPreview(camera),
         ),
+
+
+
       ),
     );
   }
