@@ -1581,7 +1581,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     final bottomPanelHeight = size.height - cameraHeight;
     final previewHeight = cameraHeight;
     final ringSize = (size.width * 0.75).clamp(240.0, 340.0);
-    const verticalShift = 8.0;
+    const verticalShift = 24.0;
     // Keep the camera shifted down, but leave the circle slightly higher
     // within it so the guide does not include as much of the chest.
     final ringTop = (previewHeight * 0.50) - (ringSize / 2);
@@ -1625,7 +1625,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           ),
           Positioned(
             left: ringLeft - tickRingMargin,
-            top: ringTop - tickRingMargin,
+            top: verticalShift + ringTop - tickRingMargin, 
             width: ringSize + tickRingMargin * 2,
             height: ringSize + tickRingMargin * 2,
             child: KFaceScanOverlay(
@@ -1751,7 +1751,9 @@ class _ScanCamera extends StatelessWidget {
       child: FittedBox(
         // Preserve the APK's 3:4 camera framing. Cover crops the sides/top
         // to fill a 9:16 screen and makes the face appear too close.
-        fit: BoxFit.contain,
+        fit: BoxFit.cover,
+        clipBehavior: Clip.hardEdge,
+        alignment: const Alignment(0, -0.2), // tune this
         child: SizedBox(
           width: 1000,
           height: 1000 / aspect,
