@@ -1581,6 +1581,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     final bottomPanelHeight = size.height - cameraHeight;
     final previewHeight = cameraHeight;
     final ringSize = (size.width * 0.75).clamp(240.0, 340.0);
+    const verticalShift = 8.0;
+    // Keep the camera shifted down, but leave the circle slightly higher
+    // within it so the guide does not include as much of the chest.
     final ringTop = (previewHeight * 0.50) - (ringSize / 2);
     final ringLeft = (size.width - ringSize) / 2;
     const tickRingMargin = 20.0;
@@ -1593,9 +1596,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         children: [
           Positioned(
             left: 0,
-            top: 0,
+            top: verticalShift,
             right: 0,
-            bottom: bottomPanelHeight,
+            bottom: bottomPanelHeight - verticalShift,
             child: _ScanCamera(
               controller: _camera,
               error: _cameraError,
@@ -1604,9 +1607,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           ),
           Positioned(
             left: 0,
-            top: 0,
+            top: verticalShift,
             right: 0,
-            bottom: bottomPanelHeight,
+            bottom: bottomPanelHeight - verticalShift,
             child: IgnorePointer(
               child: CustomPaint(
                 painter: _ScanMaskPainter(
@@ -1745,16 +1748,17 @@ class _ScanCamera extends StatelessWidget {
     final preview = camera.value.previewSize;
     final aspect = preview == null ? 3 / 4 : preview.height / preview.width;
     return SizedBox.expand(
-      child: Transform(
-        alignment: Alignment.center,
-        transform: Matrix4.diagonal3Values(-1, 1, 1),
-        child: FittedBox(
-          // Preserve the APK's 3:4 camera framing. Cover crops the sides/top
-          // to fill a 9:16 screen and makes the face appear too close.
-          fit: BoxFit.contain,
-          child: SizedBox(
-            width: 1000,
-            height: 1000 / aspect,
+      child: FittedBox(
+        // Preserve the APK's 3:4 camera framing. Cover crops the sides/top
+        // to fill a 9:16 screen and makes the face appear too close.
+        fit: BoxFit.contain,
+        child: SizedBox(
+          width: 1000,
+          height: 1000 / aspect,
+          child: Transform.scale(
+            alignment: Alignment.center,
+            scaleX: -1.0,
+            scaleY: 1.0,
             child: CameraPreview(camera),
           ),
         ),
