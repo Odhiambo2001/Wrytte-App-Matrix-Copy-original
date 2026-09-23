@@ -243,35 +243,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           '[BiometricTiming] pipeline=Camera stage=supported_fps_ranges '
           'camera_id=${description.name} ranges=${ranges ?? const []} requested_fps=15',
         );
-        final supports30 = (ranges ?? const []).any((range) {
-          final values = List<dynamic>.from(range as List);
-          return values.length >= 2 &&
-              (values[0] as num).toInt() <= 30 &&
-              (values[1] as num).toInt() >= 30;
-        });
-        if (!supports30) {
-          throw StateError('This camera does not advertise 30 FPS support.');
-        }
       } catch (error) {
         debugPrint(
           '[BiometricTiming] pipeline=Camera stage=supported_fps_ranges_error error=$error',
         );
       }
-      final camera = CameraController(
-        description,
-        ResolutionPreset.high,
-        enableAudio: false,
-        fps: 30,
-        imageFormatGroup:
-            Platform.isIOS
-                ? ImageFormatGroup.bgra8888
-                : ImageFormatGroup.yuv420,
-      );
-      await BiometricStageTiming.measureAsync(
-        'Camera',
-        'initialize',
-        () => camera.initialize(),
-      );
+      final camera = await _buildCameraController(description);
       await _restoreCameraParameters(camera);
       if (!mounted) {
         await camera.dispose();
@@ -370,6 +347,40 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
   }
 
+  Future<CameraController> _buildCameraController(
+    CameraDescription description,
+  ) async {
+    Object? lastError;
+    for (final preset in <ResolutionPreset>[
+      ResolutionPreset.medium,
+      ResolutionPreset.high,
+      ResolutionPreset.veryHigh,
+      ResolutionPreset.low,
+    ]) {
+      final camera = CameraController(
+        description,
+        preset,
+        enableAudio: false,
+        imageFormatGroup:
+            Platform.isIOS
+                ? ImageFormatGroup.bgra8888
+                : ImageFormatGroup.yuv420,
+      );
+      try {
+        await BiometricStageTiming.measureAsync(
+          'Camera',
+          'initialize_${preset.name}',
+          () => camera.initialize(),
+        );
+        return camera;
+      } catch (error) {
+        lastError = error;
+        await camera.dispose();
+      }
+    }
+    throw lastError ?? StateError('Unable to initialize the front camera.');
+  }
+
   Future<void> _startFrameStream(CameraController camera) async {
     // Keep Kface on its original single CameraPreview/ImageAnalysis stream.
     // Adding the native CameraX analyzer creates a second use case, which can
@@ -413,7 +424,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
     final now = DateTime.now();
     if (_lastSelectedFrameAt != null &&
-        now.difference(_lastSelectedFrameAt!).inMilliseconds < 133) {
+        now.difference(_lastSelectedFrameAt!).inMilliseconds < 200) {
       return;
     }
     final sessionId = _captureSessionId;
@@ -1734,12 +1745,18 @@ class _ScanCamera extends StatelessWidget {
     final preview = camera.value.previewSize;
     final aspect = preview == null ? 3 / 4 : preview.height / preview.width;
     return SizedBox.expand(
-      child: FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
-          width: 1000,
-          height: 1000 / aspect,
-          child: CameraPreview(camera),
+      child: Transform(
+        alignment: Alignment.center,
+        transform: Matrix4.diagonal3Values(-1, 1, 1),
+        child: FittedBox(
+          // Preserve the APK's 3:4 camera framing. Cover crops the sides/top
+          // to fill a 9:16 screen and makes the face appear too close.
+          fit: BoxFit.contain,
+          child: SizedBox(
+            width: 1000,
+            height: 1000 / aspect,
+            child: CameraPreview(camera),
+          ),
         ),
       ),
     );
