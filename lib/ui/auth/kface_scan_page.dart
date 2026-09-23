@@ -422,7 +422,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _lastSelectedFrameAt = now;
     _captureBatchTimer ??= Stopwatch()..start();
     try {
-      final image = BiometricStageTiming.measure(
+      final image = await BiometricStageTiming.measureAsync(
         'Camera',
         'convert_and_rotate',
         () => CameraFrameConverter.convert(

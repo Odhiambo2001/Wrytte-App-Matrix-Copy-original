@@ -35,6 +35,10 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
     vsync: this,
     duration: const Duration(milliseconds: 3000),
   );
+  // Throttles the [ScanMotion] diagnostic log to ~10 lines/sec instead of
+  // once per animation frame (60/sec), so it's readable and cheap to leave
+  // in during testing.
+  final Stopwatch _logStopwatch = Stopwatch()..start();
 
   @override
   void didChangeDependencies() {
@@ -82,27 +86,46 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
         builder:
             (context, progress, child) => AnimatedBuilder(
               animation: _motion,
-              builder:
-                  (context, child) => CustomPaint(
-                    painter: _ScanOverlayPainter(
-                      faceDiameter: widget.faceDiameter,
-                      showTicks: widget.showTicks,
-                      scanning: widget.scanning && !reduceMotion,
-                      progress: progress,
-                      movement: widget.movement,
-                      waiting: widget.waiting,
-                      success: widget.success,
-                      failure: widget.failure,
-                      // Capture progress is driven by valid head movement. The small
-                      // time component keeps the light alive between accepted frames.
-                      phase:
-                          widget.waiting
-                              ? _motion.value * math.pi * 2
-                              : progress * math.pi * 2 +
-                                  _motion.value * math.pi * 2,
-                    ),
-                    child: const SizedBox.expand(),
+              builder: (context, child) {
+                // The ribbon's rotation is driven only by _motion — a
+                // continuous, constant-speed clock — never by capture
+                // progress. Previously `progress * 2π` was added here,
+                // which made the sweep advance in a fast burst each time a
+                // candidate was accepted (via the easeOut tween above), then
+                // sit almost still until the next candidate was accepted.
+                // Since acceptance timing depends on the network/backend,
+                // that produced visible "stuck on rotation 2/3/4" stalls
+                // that had nothing to do with animation math.
+                final phase = _motion.value * math.pi * 2;
+                if (widget.scanning &&
+                    !widget.waiting &&
+                    _logStopwatch.elapsedMilliseconds >= 100) {
+                  _logStopwatch.reset();
+                  final longitude =
+                      _ScanOverlayPainter._sweepAngle(phase, 0.95) +
+                      (widget.movement - 0.5) * 0.18;
+                  debugPrint(
+                    '[ScanMotion] t=${DateTime.now().millisecondsSinceEpoch} '
+                    'motion=${_motion.value.toStringAsFixed(4)} '
+                    'phase=${phase.toStringAsFixed(3)} '
+                    'longitude=${longitude.toStringAsFixed(3)}',
+                  );
+                }
+                return CustomPaint(
+                  painter: _ScanOverlayPainter(
+                    faceDiameter: widget.faceDiameter,
+                    showTicks: widget.showTicks,
+                    scanning: widget.scanning && !reduceMotion,
+                    progress: progress,
+                    movement: widget.movement,
+                    waiting: widget.waiting,
+                    success: widget.success,
+                    failure: widget.failure,
+                    phase: phase,
                   ),
+                  child: const SizedBox.expand(),
+                );
+              },
             ),
       ),
     );
@@ -140,6 +163,17 @@ class _ScanOverlayPainter extends CustomPainter {
   /// at each edge instead of a visible stall.
   static double _triangleWave(double phase) =>
       (2 / math.pi) * math.asin(math.sin(phase));
+
+  /// The meridian angle is fed through sin() a second time inside point()
+  /// (`sweep = sin(meridian) * depth`) to project it onto the sphere. That
+  /// second sine has its own deceleration near the sweep's extremes, most
+  /// noticeable during the very first excursion away from center. Pre-warp
+  /// the meridian with asin so the *projected* screen position — not just
+  /// the angle — advances at constant speed.
+  static double _sweepAngle(double phase, double maxAngle) {
+    final linear = _triangleWave(phase) * math.sin(maxAngle);
+    return math.asin(linear.clamp(-1.0, 1.0));
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -242,10 +276,12 @@ class _ScanOverlayPainter extends CustomPainter {
         vertical
             // This is a UI scan: it sweeps left and right continuously even
             // when the head is still. Face position adds a small offset.
-            // Uses a triangle wave (not sin) so the sweep moves at constant
-            // speed and does not appear to hang at the left/right extremes.
-            ? _triangleWave(phase) * 0.95 + (movement - 0.5) * 0.18
-            : _triangleWave(phase + math.pi / 2) * 0.65;
+            // _sweepAngle pre-compensates for the sin() applied again inside
+            // point() below, so the actual on-screen sweep position moves at
+            // constant speed with no deceleration at the extremes or during
+            // the first excursion away from center.
+            ? _sweepAngle(phase, 0.95) + (movement - 0.5) * 0.18
+            : _sweepAngle(phase + math.pi / 2, 0.65);
     const spread = 0.42;
     const ribs = 28;
     const steps = 80;
