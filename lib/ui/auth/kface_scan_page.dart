@@ -126,6 +126,31 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   bool _scanPhaseReady = false;
   bool _backendWaiting = false;
   bool _verificationFailed = false;
+
+  // ---- LOGIN-ONLY STATE -------------------------------------------------
+  // Sign-in never shows the scan animation unless the local liveness verdict
+  // for the frame on screen is Real.
+  bool _loginScanAnimation = false;
+  bool _loginChallengeAccepted = false;
+  bool _loginCaptureComplete = false;
+  bool _loginCompletionHandling = false;
+  BiometricVerificationBootstrap? _pendingLoginVerification;
+  // Set when the fifth candidate is handed to the backend. The green
+  // animation runs at least [_loginGreenAnimation] from this moment.
+  DateTime? _loginWaitStartedAt;
+  static const _loginGreenAnimation = Duration(seconds: 4);
+  static const _loginDoneDisplay = Duration(milliseconds: 900);
+
+  static const _signPosition = 'Position your face\nwithin the circle';
+  static const _signNotDetected =
+      'Face not detected.\nPosition your face within the circle';
+  static const _signMultiple =
+      'Multiple faces detected.\nCenter one face within the circle';
+  static const _signFar = 'Move your face closer to the camera';
+  static const _signClose = 'Move your face farther from the camera';
+  static const _signScanning = 'Scanning…';
+  // -----------------------------------------------------------------------
+
   Timer? _scanStartTimer;
   Timer? _frameRateTimer;
   int _framesThisSecond = 0;
@@ -192,6 +217,80 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           FaceBiometricPipeline.framesToUse -
               _nextCandidateSubmissionIndex +
               _inFlightCandidateUploads;
+
+  // ---- LOGIN-ONLY HELPERS -----------------------------------------------
+
+  /// True while any candidate frame sits in the crop -> liveness lane. While
+  /// this is true the sign belongs to the liveness answer; RetinaFace answers
+  /// are used only when the lane is empty.
+  bool get _livenessOwnsLoginSign =>
+      _processingCrop ||
+      _pendingCropCaptures.isNotEmpty ||
+      _processingLiveness ||
+      _pendingLivenessCaptures.isNotEmpty;
+
+  void _setLoginSign(String status, {required bool scanAnimation}) {
+    if (!mounted || _enrolling) return;
+    if (_status == status && _loginScanAnimation == scanAnimation) return;
+    setState(() {
+      _status = status;
+      _loginScanAnimation = scanAnimation;
+    });
+  }
+
+  /// RetinaFace answer for a frame that produced NO candidate. Sign only,
+  /// never the scan animation.
+  void _applyLoginRetinaAnswer({
+    required bool faceDetected,
+    required bool multipleFaces,
+    required bool faceTooFar,
+    required bool faceTooClose,
+  }) {
+    if (_backendWaiting || _livenessOwnsLoginSign) return;
+    final String sign;
+    if (!faceDetected) {
+      sign = _signNotDetected;
+    } else if (multipleFaces) {
+      sign = _signMultiple;
+    } else if (faceTooFar) {
+      sign = _signFar;
+    } else if (faceTooClose) {
+      sign = _signClose;
+    } else {
+      // Face found but no usable target (half face / not a full candidate).
+      sign = _signNotDetected;
+    }
+    _setLoginSign(sign, scanAnimation: false);
+  }
+
+  /// Called when the fifth candidate is handed to the backend. Extraction has
+  /// already been stopped and wiped by [_pauseFrontendProcessing].
+  void _startLoginWaitingUi() {
+    if (_enrolling || _loginWaitStartedAt != null || !mounted) return;
+    _loginWaitStartedAt = DateTime.now();
+    // If the backend never completes the batch, the drain in
+    // [_finishLoginCandidateBatch] ends in "Verification failed" rather than
+    // leaving the green animation running forever.
+    _loginCaptureComplete = true;
+    setState(() {
+      _loginScanAnimation = false;
+      _backendWaiting = true;
+      _status = 'Please wait…';
+    });
+  }
+
+  /// Keeps the green animation on screen for at least [_loginGreenAnimation]
+  /// counted from the fifth frame, before any Done / failure outcome shows.
+  Future<void> _awaitLoginMinimumWait() async {
+    final startedAt = _loginWaitStartedAt;
+    if (startedAt == null) return;
+    final remaining =
+        _loginGreenAnimation - DateTime.now().difference(startedAt);
+    if (remaining > Duration.zero) {
+      await Future<void>.delayed(remaining);
+    }
+  }
+  // -----------------------------------------------------------------------
 
   @override
   void initState() {
@@ -492,6 +591,18 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             });
             final pendingCrop = retina.pendingCrop;
             if (pendingCrop == null) {
+              // LOGIN: RetinaFace answers (no face / half face / far / close /
+              // multiple) are sign-only and yield to liveness while any
+              // candidate is in the liveness lane.
+              if (!_enrolling) {
+                _applyLoginRetinaAnswer(
+                  faceDetected: analysis.faceDetected,
+                  multipleFaces: analysis.multipleFaces,
+                  faceTooFar: analysis.faceTooFar,
+                  faceTooClose: analysis.faceTooClose,
+                );
+                return;
+              }
               if (!analysis.faceDetected) {
                 setState(
                   () =>
@@ -685,6 +796,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _TaggedLivenessCapture tagged,
     bool live,
   ) async {
+    // LOGIN has its own liveness handling (fake frames are dropped, the sign
+    // and scan animation follow the liveness answer). Sign-up is unchanged.
+    if (!_enrolling) {
+      await _completeLoginLivenessResult(tagged, live);
+      return;
+    }
     try {
       // Server liveness is authoritative. The on-device MiniFASNet result is
       // retained as a fast diagnostic/quality signal, but must not starve a
@@ -712,6 +829,57 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
                   ? 'Scanning…'
                   : 'Face not detected.\nPosition your face within the circle';
         });
+      }
+      await _prepareAndQueueCandidate(tagged);
+    } catch (error) {
+      tagged.pending.capture.clear();
+      if (!_isExpectedCancellation(error)) {
+        debugPrint(
+          '[BiometricTiming] pipeline=RetinaFace stage=original_error '
+          'error=${error.runtimeType}',
+        );
+      }
+    }
+  }
+
+  /// LOGIN liveness verdict for one candidate frame.
+  ///  - Real: "Scanning…" + scan animation, frame continues to the backend.
+  ///  - Fake: "Face not detected…" without animation, frame is wiped and is
+  ///    never sent to the backend.
+  Future<void> _completeLoginLivenessResult(
+    _TaggedLivenessCapture tagged,
+    bool live,
+  ) async {
+    bool stale() =>
+        !mounted ||
+        _complete ||
+        _processingPaused ||
+        tagged.captureSessionId != _captureSessionId;
+    try {
+      if (stale()) {
+        // Pause/reset already wiped the RetinaFace-side original.
+        tagged.pending.capture.clear();
+        return;
+      }
+      // The liveness answer owns the sign; set it before any await so a
+      // RetinaFace answer cannot slip in between the verdict and the sign.
+      _setLoginSign(
+        live ? _signScanning : _signNotDetected,
+        scanAnimation: live,
+      );
+      if (!live) {
+        debugPrint(
+          '[BiometricTiming] pipeline=Liveness stage=local_verdict '
+          'outcome=rejected authority=frontend_login',
+        );
+        await _pipeline.resolveRetinaOriginal(tagged.pending, false);
+        tagged.pending.capture.clear();
+        return;
+      }
+      await _pipeline.resolveRetinaOriginal(tagged.pending, true);
+      if (stale()) {
+        tagged.pending.capture.clear();
+        return;
       }
       await _prepareAndQueueCandidate(tagged);
     } catch (error) {
@@ -804,6 +972,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // rejects this batch, its response starts a fresh capture session.
       if (candidateIndex + 1 == FaceBiometricPipeline.framesToUse) {
         _pauseFrontendProcessing();
+        // LOGIN: the fifth frame has just been sent to the backend. All other
+        // frames still in RetinaFace/crop/liveness/JPEG were wiped by the
+        // pause above; the green "Please wait…" animation starts now.
+        if (!_enrolling) _startLoginWaitingUi();
       }
       unawaited(
         _frontendTiming.run(
@@ -948,7 +1120,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
               );
       capture.clear();
       if (!mounted) return;
-      if (_complete) return;
+      if (_complete && (_enrolling || _verificationFailed)) return;
 
       // Candidate uploads complete out of order. A response from a different
       // backend session is stale and must never replace this scan's session.
@@ -978,6 +1150,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             errorCode == 'LIVENESS_FAILED' ||
             errorCode == 'SPOOF_DETECTED';
         final invalidGeometry = errorCode == 'INVALID_GEOMETRY';
+        if (!_enrolling) {
+          // LOGIN: backend fake/reject -> red ring for 2 s, then auto restart.
+          await _showBackendFaceRejection();
+          return;
+        }
         setState(
           () =>
               _status =
@@ -1005,7 +1182,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           _captureBatchTimer!,
         );
       }
-      if (!result.complete) {
+      if (!result.complete) return;
+
+      if (!_enrolling) {
+        _loginCaptureComplete = true;
+        _pendingLoginVerification = result.verificationBootstrap;
+        await _finishLoginCandidateBatch();
         return;
       }
 
@@ -1019,25 +1201,31 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       // Stop OpenCV/RetinaFace extraction as soon as the backend has accepted
       // the five live candidates. Keep the camera stream open so the preview
       // remains visible while LDPC recovery and challenge signing complete.
-      setState(() {
-        _complete = true;
-        _candidateExtractionClosed = true;
-        _backendWaiting = true;
-        _status = 'Please wait…';
-      });
+      if (_enrolling) {
+        setState(() {
+          _complete = true;
+          _candidateExtractionClosed = true;
+          _backendWaiting = true;
+          _status = 'Please wait…';
+        });
+      }
       // No more candidates may be dispatched once the backend has completed
       // the session. Clear the queue immediately; already in-flight requests
       // are ignored by the completion guard below when they return.
-      _discardPendingCandidateCaptures();
-      _discardPendingRetinaFrames();
-      _discardPendingCropCaptures();
-      _discardPendingLivenessCaptures();
-      await BiometricStageTiming.measureAsync(
-        'UI',
-        'completion_wait',
-        () => Future<void>.delayed(const Duration(seconds: 3)),
-      );
-      if (mounted) {
+      if (_enrolling) {
+        _discardPendingCandidateCaptures();
+        _discardPendingRetinaFrames();
+        _discardPendingCropCaptures();
+        _discardPendingLivenessCaptures();
+      }
+      if (_enrolling) {
+        await BiometricStageTiming.measureAsync(
+          'UI',
+          'completion_wait',
+          () => Future<void>.delayed(const Duration(seconds: 3)),
+        );
+      }
+      if (mounted && _enrolling) {
         setState(() {
           _backendWaiting = false;
           _status = 'Done';
@@ -1085,7 +1273,53 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     } finally {
       capture.clear();
       _inFlightCandidateUploads = math.max(0, _inFlightCandidateUploads - 1);
+      if (!_enrolling &&
+          _loginCaptureComplete &&
+          _inFlightCandidateUploads == 0) {
+        unawaited(_finishLoginCandidateBatch());
+      }
       _dispatchPendingCandidateCaptures();
+    }
+  }
+
+  /// LOGIN: runs once every in-flight upload has returned. The green animation
+  /// keeps running (minimum [_loginGreenAnimation] from the fifth frame) until
+  /// the outcome is known, then either Done (challenge passed) or a red
+  /// "Verification failed" (backend rejected, LDPC rejected, challenge false).
+  Future<void> _finishLoginCandidateBatch([
+    BiometricVerificationBootstrap? verification,
+  ]) async {
+    if (_loginCompletionHandling || _verificationFailed || !mounted) return;
+    final pending = verification ?? _pendingLoginVerification;
+    if (_inFlightCandidateUploads > 0) {
+      if (pending != null) _pendingLoginVerification = pending;
+      return;
+    }
+    if (pending == null) {
+      if (!_loginCaptureComplete) return;
+      // All five frames went out but the backend never completed the batch.
+      _loginCompletionHandling = true;
+      try {
+        await _awaitLoginMinimumWait();
+        if (!mounted || _verificationFailed) return;
+        _showVerificationFailure();
+      } finally {
+        _loginCompletionHandling = false;
+      }
+      return;
+    }
+    _loginCompletionHandling = true;
+    _pendingLoginVerification = null;
+    try {
+      if (!pending.input.accepted) {
+        await _awaitLoginMinimumWait();
+        if (!mounted || _verificationFailed) return;
+        _showVerificationFailure();
+        return;
+      }
+      await _completeSubmission(pending);
+    } finally {
+      _loginCompletionHandling = false;
     }
   }
 
@@ -1319,6 +1553,10 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     return null;
   }
 
+  /// LOGIN ONLY. LDPC recovery + challenge signing run while the green
+  /// animation is on screen. Nothing is shown (Done or failure) before the
+  /// minimum green time has elapsed, and the page only changes after the
+  /// backend accepted the signed challenge.
   Future<void> _completeSubmission(
     BiometricVerificationBootstrap verification,
   ) async {
@@ -1334,6 +1572,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         () => _recoverLocalKey(verification.input.ldpcBits, verification.kmap),
       );
       if (recoveredKey == null) {
+        // LDPC rejected: green animation first, then red + Verification failed.
+        await _awaitLoginMinimumWait();
         _showVerificationFailure();
         return;
       }
@@ -1345,12 +1585,25 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
           challengeBase64Url: verification.challenge,
         ),
       );
+      // Throws if the backend rejects the challenge -> handled in catch below.
       final signedInUser = await AuthService.instance.completeWrytteIdSignIn(
         userId: widget.userId!,
         wrytteId: widget.wrytteId,
         challenge: verification.challenge,
         signature: signature,
       );
+      // Challenge passed. Keep the green animation until the minimum time is
+      // up, then show the checkmark + Done.
+      await _awaitLoginMinimumWait();
+      if (!mounted) return;
+      setState(() {
+        _complete = true;
+        _backendWaiting = false;
+        _verificationFailed = false;
+        _loginChallengeAccepted = true;
+        _status = 'Done';
+      });
+      await Future<void>.delayed(_loginDoneDisplay);
       try {
         await DeviceMetadataService.instance.registerWithBackend(
           userId: signedInUser.userId,
@@ -1379,9 +1632,14 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       print('[BiometricTiming] stage=submit_failure type=${error.runtimeType}');
       await _pipeline.reset();
       if (mounted) {
+        _loginChallengeAccepted = false;
         if (_enrolling) BiometricEnrollmentTiming.cancel();
-        _logTransitionTiming('failure_result');
-        _showVerificationFailure();
+        // Challenge false: green animation first, then red + Verification failed.
+        await _awaitLoginMinimumWait();
+        if (mounted) {
+          _logTransitionTiming('failure_result');
+          _showVerificationFailure();
+        }
       }
     } finally {
       _sending = false;
@@ -1441,9 +1699,13 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _complete = true;
       _backendWaiting = false;
       _verificationFailed = true;
+      _loginChallengeAccepted = false;
+      _loginScanAnimation = false;
       _status = 'Face not detected.\nPosition your face within the circle';
     });
-    await Future<void>.delayed(const Duration(milliseconds: 900));
+    await Future<void>.delayed(
+      Duration(milliseconds: _enrolling ? 900 : 2000),
+    );
     if (mounted && _verificationFailed) {
       await _resumeAfterBiometricRejection();
     }
@@ -1454,6 +1716,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     setState(() {
       _complete = true;
       _backendWaiting = false;
+      _loginChallengeAccepted = false;
+      _loginScanAnimation = false;
       _verificationFailed = true;
       _status = 'Verification failed.\nTap “Start over” to try again';
     });
@@ -1477,6 +1741,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _complete = false;
     _backendWaiting = false;
     _verificationFailed = false;
+    _loginChallengeAccepted = false;
+    _loginCaptureComplete = false;
+    _loginCompletionHandling = false;
+    _pendingLoginVerification = null;
+    _loginWaitStartedAt = null;
+    _loginScanAnimation = false;
     _acceptedCandidateCount = 0;
     _candidateExtractionClosed = false;
     _processingPaused = false;
@@ -1533,6 +1803,12 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
       _complete = false;
       _backendWaiting = false;
       _verificationFailed = false;
+      _loginChallengeAccepted = false;
+      _loginCaptureComplete = false;
+      _loginCompletionHandling = false;
+      _pendingLoginVerification = null;
+      _loginWaitStartedAt = null;
+      _loginScanAnimation = false;
       _acceptedCandidateCount = 0;
       _candidateExtractionClosed = false;
       _processingPaused = false;
@@ -1631,10 +1907,27 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
             child: KFaceScanOverlay(
               faceDiameter: ringSize,
               showTicks: false,
-              scanning: _ready && !_complete && !_sending,
+              // LOGIN: the scan animation runs only while the liveness answer
+              // for the current frame is Real. Sign-up is unchanged.
+              scanning:
+                  _ready &&
+                  !_complete &&
+                  !_sending &&
+                  (_enrolling || _loginScanAnimation),
               progress: _complete ? 1.0 : progress,
               waiting: _backendWaiting,
-              success: _complete && !_backendWaiting && !_verificationFailed,
+              // LOGIN: one green rotation over 4 s, then hold as a full ring
+              // until Done / failure. Sign-up keeps the 3 s looping arc.
+              waitingDuration:
+                  _enrolling
+                      ? const Duration(milliseconds: 3000)
+                      : _loginGreenAnimation,
+              waitingRepeat: _enrolling,
+              success:
+                  _complete &&
+                  !_backendWaiting &&
+                  !_verificationFailed &&
+                  (_enrolling || _loginChallengeAccepted),
               failure: _verificationFailed,
               movement: _headMovement,
             ),

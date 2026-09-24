@@ -14,6 +14,11 @@ class KFaceScanOverlay extends StatefulWidget {
     this.waiting = false,
     this.success = false,
     this.failure = false,
+    // Defaults reproduce the original behaviour exactly (3 s arc that loops).
+    // Login passes 4 s and repeat: false so the green arc makes ONE rotation
+    // and then holds as a full ring until the outcome is shown.
+    this.waitingDuration = const Duration(milliseconds: 3000),
+    this.waitingRepeat = true,
   });
 
   final double faceDiameter;
@@ -24,6 +29,8 @@ class KFaceScanOverlay extends StatefulWidget {
   final bool waiting;
   final bool success;
   final bool failure;
+  final Duration waitingDuration;
+  final bool waitingRepeat;
 
   @override
   State<KFaceScanOverlay> createState() => _KFaceScanOverlayState();
@@ -31,9 +38,11 @@ class KFaceScanOverlay extends StatefulWidget {
 
 class _KFaceScanOverlayState extends State<KFaceScanOverlay>
     with SingleTickerProviderStateMixin {
+  static const _scanDuration = Duration(milliseconds: 3000);
+
   late final AnimationController _motion = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 3000),
+    duration: _scanDuration,
   );
   // Throttles the [ScanMotion] diagnostic log to ~10 lines/sec instead of
   // once per animation frame (60/sec), so it's readable and cheap to leave
@@ -52,8 +61,17 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
     if (widget.waiting && !oldWidget.waiting) {
       _motion
         ..stop()
-        ..value = 0
-        ..repeat();
+        ..duration = widget.waitingDuration
+        ..value = 0;
+      if (widget.waitingRepeat) {
+        _motion.repeat();
+      } else {
+        // One rotation over waitingDuration, then hold at a full ring.
+        _motion.forward(from: 0);
+      }
+    } else if (!widget.waiting && oldWidget.waiting) {
+      // Scan sweep always uses its own speed.
+      _motion.duration = _scanDuration;
     }
     _updateMotion();
   }
@@ -61,6 +79,8 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
   void _updateMotion() {
     if ((widget.scanning || widget.waiting) &&
         !MediaQuery.disableAnimationsOf(context)) {
+      // One-shot waiting arc is started in didUpdateWidget; never restart it.
+      if (widget.waiting && !widget.waitingRepeat) return;
       if (!_motion.isAnimating) _motion.repeat();
     } else {
       _motion.stop();
@@ -236,6 +256,8 @@ class _ScanOverlayPainter extends CustomPainter {
           ..color = const Color(0xFF32E875),
       );
     }
+
+    if (failure) return;
 
     if (waiting) {
       final arcPaint =
