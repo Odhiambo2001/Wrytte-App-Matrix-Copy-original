@@ -15,7 +15,7 @@ class KFaceScanOverlay extends StatefulWidget {
     this.success = false,
     this.failure = false,
     // Defaults reproduce the original behaviour exactly (3 s arc that loops).
-    // Login passes 4 s and repeat: false so the green arc makes ONE rotation
+    // Login passes 3 s and repeat: false so the green arc makes ONE rotation
     // and then holds as a full ring until the outcome is shown.
     this.waitingDuration = const Duration(milliseconds: 3000),
     this.waitingRepeat = true,
@@ -59,28 +59,56 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
   void didUpdateWidget(covariant KFaceScanOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.waiting && !oldWidget.waiting) {
+      _startWaitingMotion();
+    } else if (!widget.waiting && oldWidget.waiting) {
+      // Leaving the waiting state: hand the controller back to the scan sweep
+      // with its own speed, starting from a clean phase.
       _motion
         ..stop()
-        ..duration = widget.waitingDuration
+        ..duration = _scanDuration
         ..value = 0;
-      if (widget.waitingRepeat) {
-        _motion.repeat();
-      } else {
-        // One rotation over waitingDuration, then hold at a full ring.
-        _motion.forward(from: 0);
-      }
-    } else if (!widget.waiting && oldWidget.waiting) {
-      // Scan sweep always uses its own speed.
-      _motion.duration = _scanDuration;
     }
     _updateMotion();
   }
 
+  /// The ONLY place the waiting arc is started.
+  ///  - waitingRepeat == true  : looping arc (sign-up).
+  ///  - waitingRepeat == false : exactly one rotation over [waitingDuration],
+  ///    then the controller completes at 1.0 and the arc holds as a full ring.
+  void _startWaitingMotion() {
+    _motion
+      ..stop()
+      ..duration = widget.waitingDuration;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      // No motion allowed: show the finished ring immediately.
+      _motion.value = 1;
+      return;
+    }
+    _motion.value = 0;
+    if (widget.waitingRepeat) {
+      _motion.repeat();
+    } else {
+      _motion.forward(from: 0);
+    }
+  }
+
   void _updateMotion() {
-    if ((widget.scanning || widget.waiting) &&
-        !MediaQuery.disableAnimationsOf(context)) {
-      // One-shot waiting arc is started in didUpdateWidget; never restart it.
-      if (widget.waiting && !widget.waitingRepeat) return;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+
+    if (widget.waiting) {
+      // The waiting arc is owned by [_startWaitingMotion]. Nothing here may
+      // stop, restart or re-loop it.
+      if (widget.waitingRepeat) {
+        if (!reduceMotion && !_motion.isAnimating) _motion.repeat();
+      } else if (!_motion.isAnimating && _motion.value < 1.0) {
+        // Only reached if the widget was created already in the waiting
+        // state; a finished arc (value == 1.0) is never restarted.
+        _startWaitingMotion();
+      }
+      return;
+    }
+
+    if (widget.scanning && !reduceMotion) {
       if (!_motion.isAnimating) _motion.repeat();
     } else {
       _motion.stop();
@@ -201,6 +229,10 @@ class _ScanOverlayPainter extends CustomPainter {
     final radius = faceDiameter / 2;
     final paint = Paint()..style = PaintingStyle.stroke;
     if (!showTicks) {
+      // Ring colour: red ONLY for `failure` (which the page sets only after a
+      // backend / verification outcome), green for success, otherwise the
+      // neutral white outline — which is what a locally-detected fake frame
+      // ("Face not detected") keeps showing.
       canvas.drawCircle(
         center,
         radius + 3.5,
@@ -260,6 +292,8 @@ class _ScanOverlayPainter extends CustomPainter {
     if (failure) return;
 
     if (waiting) {
+      // phase / 2π == controller value in [0, 1]. For the one-shot arc the
+      // controller stops at 1.0, so this holds as a full ring.
       final arcPaint =
           Paint()
             ..style = PaintingStyle.stroke
