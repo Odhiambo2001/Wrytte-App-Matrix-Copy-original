@@ -554,7 +554,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         );
         debugPrint(
           '[BiometricTiming] pipeline=Camera stage=supported_fps_ranges '
-          'camera_id=${description.name} ranges=${ranges ?? const []} requested_fps=15',
+          'camera_id=${description.name} ranges=${ranges ?? const []} requested_fps=30',
         );
       } catch (error) {
         debugPrint(
@@ -660,39 +660,39 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
   }
 
-  Future<CameraController> _buildCameraController(
-    CameraDescription description,
-  ) async {
-    Object? lastError;
-    for (final preset in <ResolutionPreset>[
-      ResolutionPreset.medium,
-      ResolutionPreset.high,
-      ResolutionPreset.veryHigh,
-      ResolutionPreset.low,
-    ]) {
-      final camera = CameraController(
-        description,
-        preset,
-        enableAudio: false,
-        imageFormatGroup:
-            Platform.isIOS
-                ? ImageFormatGroup.bgra8888
-                : ImageFormatGroup.yuv420,
+Future<CameraController> _buildCameraController(
+  CameraDescription description,
+) async {
+  Object? lastError;
+  for (final preset in <ResolutionPreset>[
+    ResolutionPreset.medium, // wider FOV — avoids the “zoomed in” look
+    ResolutionPreset.high,
+    ResolutionPreset.low,
+  ]) {
+    final camera = CameraController(
+      description,
+      preset,
+      enableAudio: false,
+      fps: 30,
+      imageFormatGroup:
+          Platform.isIOS
+              ? ImageFormatGroup.bgra8888
+              : ImageFormatGroup.yuv420,
+    );
+    try {
+      await BiometricStageTiming.measureAsync(
+        'Camera',
+        'initialize_${preset.name}_30fps',
+        () => camera.initialize(),
       );
-      try {
-        await BiometricStageTiming.measureAsync(
-          'Camera',
-          'initialize_${preset.name}',
-          () => camera.initialize(),
-        );
-        return camera;
-      } catch (error) {
-        lastError = error;
-        await camera.dispose();
-      }
+      return camera;
+    } catch (error) {
+      lastError = error;
+      await camera.dispose();
     }
-    throw lastError ?? StateError('Unable to initialize the front camera.');
   }
+  throw lastError ?? StateError('Unable to initialize the front camera.');
+}
 
   Future<void> _startFrameStream(CameraController camera) async {
     // If a stop was requested when extraction paused, let it finish first so a
@@ -749,7 +749,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
     final now = DateTime.now();
     if (_lastSelectedFrameAt != null &&
-        now.difference(_lastSelectedFrameAt!).inMilliseconds < 200) {
+        now.difference(_lastSelectedFrameAt!).inMilliseconds < 100) {
       return;
     }
     final sessionId = _captureSessionId;
@@ -1051,12 +1051,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   ///  - Blocked by the candidate guard (far, close, half face, off-centre,
   ///    low confidence): the guard's sign, plain white ring, NO scan
   ///    animation, frame is wiped and never uploaded.
-  ///  - LOGIN, local liveness Fake: "Face not detected…", plain white ring,
-  ///    frame is wiped and never uploaded. Red is reserved for backend /
-  ///    verification outcomes.
-  ///  - SIGN-UP, local liveness Fake: the local MiniFASNet result is only a
-  ///    diagnostic (the backend is authoritative), so the frame is still
-  ///    uploaded, but the sign stays "Face not detected" with no animation.
+  ///  - SIGN-UP and LOGIN, local liveness Fake: keep the neutral prompt and
+  ///    drop the frame locally. It must never trigger a backend rejection,
+  ///    red ring, or scan reset.
   ///  - Real: "Scanning…" + scan animation, frame continues to the backend.
   ///
   /// The `_backendWaiting` / `_processingPaused` / outcome guard lives inside
@@ -1077,7 +1074,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         return;
       }
       final blocked = tagged.blockedSign;
-      final dropFrame = blocked != null || (!_enrolling && !live);
+      final dropFrame = blocked != null || !live;
       if (dropFrame) {
         _setSignForFrame(
           blocked ?? _signNotDetected,
@@ -1098,17 +1095,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _setSignForFrame(
           _signScanning,
           scanAnimation: true,
-          frameSequence: tagged.frameSequence,
-        );
-      } else {
-        // Sign-up only: uploaded anyway, backend decides.
-        debugPrint(
-          '[BiometricTiming] pipeline=Liveness stage=local_verdict '
-          'outcome=rejected authority=backend',
-        );
-        _setSignForFrame(
-          _signNotDetected,
-          scanAnimation: false,
           frameSequence: tagged.frameSequence,
         );
       }
