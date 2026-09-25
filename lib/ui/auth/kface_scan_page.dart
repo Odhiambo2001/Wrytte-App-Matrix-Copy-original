@@ -1038,12 +1038,9 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   ///  - Blocked by the candidate guard (far, close, half face, off-centre,
   ///    low confidence): the guard's sign, plain white ring, NO scan
   ///    animation, frame is wiped and never uploaded.
-  ///  - LOGIN, local liveness Fake: "Face not detected…", plain white ring,
-  ///    frame is wiped and never uploaded. Red is reserved for backend /
-  ///    verification outcomes.
-  ///  - SIGN-UP, local liveness Fake: the local MiniFASNet result is only a
-  ///    diagnostic (the backend is authoritative), so the frame is still
-  ///    uploaded, but the sign stays "Face not detected" with no animation.
+  ///  - SIGN-UP and LOGIN, local liveness Fake: keep the neutral prompt and
+  ///    drop the frame locally. It must never trigger a backend rejection,
+  ///    red ring, or scan reset.
   ///  - Real: "Scanning…" + scan animation, frame continues to the backend.
   ///
   /// The `_backendWaiting` / `_processingPaused` / outcome guard lives inside
@@ -1064,7 +1061,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         return;
       }
       final blocked = tagged.blockedSign;
-      final dropFrame = blocked != null || (!_enrolling && !live);
+      final dropFrame = blocked != null || !live;
       if (dropFrame) {
         _setSignForFrame(
           blocked ?? _signNotDetected,
@@ -1085,17 +1082,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _setSignForFrame(
           _signScanning,
           scanAnimation: true,
-          frameSequence: tagged.frameSequence,
-        );
-      } else {
-        // Sign-up only: uploaded anyway, backend decides.
-        debugPrint(
-          '[BiometricTiming] pipeline=Liveness stage=local_verdict '
-          'outcome=rejected authority=backend',
-        );
-        _setSignForFrame(
-          _signNotDetected,
-          scanAnimation: false,
           frameSequence: tagged.frameSequence,
         );
       }
