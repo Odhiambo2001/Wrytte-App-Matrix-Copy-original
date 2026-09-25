@@ -554,7 +554,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         );
         debugPrint(
           '[BiometricTiming] pipeline=Camera stage=supported_fps_ranges '
-          'camera_id=${description.name} ranges=${ranges ?? const []} requested_fps=15',
+          'camera_id=${description.name} ranges=${ranges ?? const []} requested_fps=30',
         );
       } catch (error) {
         debugPrint(
@@ -663,35 +663,22 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   Future<CameraController> _buildCameraController(
     CameraDescription description,
   ) async {
-    Object? lastError;
-    for (final preset in <ResolutionPreset>[
-      ResolutionPreset.medium,
-      ResolutionPreset.high,
-      ResolutionPreset.veryHigh,
-      ResolutionPreset.low,
-    ]) {
-      final camera = CameraController(
-        description,
-        preset,
-        enableAudio: false,
-        imageFormatGroup:
-            Platform.isIOS
-                ? ImageFormatGroup.bgra8888
-                : ImageFormatGroup.yuv420,
-      );
-      try {
-        await BiometricStageTiming.measureAsync(
-          'Camera',
-          'initialize_${preset.name}',
-          () => camera.initialize(),
-        );
-        return camera;
-      } catch (error) {
-        lastError = error;
-        await camera.dispose();
-      }
-    }
-    throw lastError ?? StateError('Unable to initialize the front camera.');
+    final camera = CameraController(
+      description,
+      ResolutionPreset.high, // CameraX high targets 1280x720 (720p).
+      enableAudio: false,
+      fps: 30,
+      imageFormatGroup:
+          Platform.isIOS
+              ? ImageFormatGroup.bgra8888
+              : ImageFormatGroup.yuv420,
+    );
+    await BiometricStageTiming.measureAsync(
+      'Camera',
+      'initialize_high_720p_30fps',
+      () => camera.initialize(),
+    );
+    return camera;
   }
 
   Future<void> _startFrameStream(CameraController camera) async {
@@ -749,7 +736,7 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
     final now = DateTime.now();
     if (_lastSelectedFrameAt != null &&
-        now.difference(_lastSelectedFrameAt!).inMilliseconds < 200) {
+        now.difference(_lastSelectedFrameAt!).inMilliseconds < 33) {
       return;
     }
     final sessionId = _captureSessionId;
