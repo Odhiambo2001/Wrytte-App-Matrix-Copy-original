@@ -14,11 +14,8 @@ class KFaceScanOverlay extends StatefulWidget {
     this.waiting = false,
     this.success = false,
     this.failure = false,
-    // Defaults reproduce the original behaviour exactly (3 s arc that loops).
-    // Login passes 3 s and repeat: false so the green arc makes ONE rotation
-    // and then holds as a full ring until the outcome is shown.
+    // Duration of the single clockwise wait-light orbit.
     this.waitingDuration = const Duration(milliseconds: 3000),
-    this.waitingRepeat = true,
   });
 
   final double faceDiameter;
@@ -30,19 +27,22 @@ class KFaceScanOverlay extends StatefulWidget {
   final bool success;
   final bool failure;
   final Duration waitingDuration;
-  final bool waitingRepeat;
 
   @override
   State<KFaceScanOverlay> createState() => _KFaceScanOverlayState();
 }
 
 class _KFaceScanOverlayState extends State<KFaceScanOverlay>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   static const _scanDuration = Duration(milliseconds: 3000);
 
   late final AnimationController _motion = AnimationController(
     vsync: this,
     duration: _scanDuration,
+  );
+  late final AnimationController _waitingMotion = AnimationController(
+    vsync: this,
+    duration: widget.waitingDuration,
   );
   // Throttles the [ScanMotion] diagnostic log to ~10 lines/sec instead of
   // once per animation frame (60/sec), so it's readable and cheap to leave
@@ -61,49 +61,45 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
     if (widget.waiting && !oldWidget.waiting) {
       _startWaitingMotion();
     } else if (!widget.waiting && oldWidget.waiting) {
-      // Leaving the waiting state: hand the controller back to the scan sweep
-      // with its own speed, starting from a clean phase.
-      _motion
+      // Keep the scan sweep and waiting progress independent. Reset the
+      // one-shot wait controller only after leaving its state.
+      _waitingMotion
         ..stop()
-        ..duration = _scanDuration
         ..value = 0;
     }
     _updateMotion();
   }
 
-  /// The ONLY place the waiting arc is started.
-  ///  - waitingRepeat == true  : looping arc (sign-up).
-  ///  - waitingRepeat == false : exactly one rotation over [waitingDuration],
-  ///    then the controller completes at 1.0 and the arc holds as a full ring.
+  /// Starts one constant-speed clockwise orbit. The fixed-length light makes
+  /// exactly one 360-degree trip and then holds at its endpoint.
   void _startWaitingMotion() {
-    _motion
+    // The 3-D scan sweep must be fully stopped while the wait arc runs so the
+    // two animations never compete for frames.
+    _motion.stop();
+    _waitingMotion
       ..stop()
       ..duration = widget.waitingDuration;
     if (MediaQuery.disableAnimationsOf(context)) {
       // No motion allowed: show the finished ring immediately.
-      _motion.value = 1;
+      _waitingMotion.value = 1;
       return;
     }
-    _motion.value = 0;
-    if (widget.waitingRepeat) {
-      _motion.repeat();
-    } else {
-      _motion.forward(from: 0);
-    }
+    _waitingMotion.value = 0;
+    _waitingMotion.forward();
   }
 
   void _updateMotion() {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
     if (widget.waiting) {
-      // The waiting arc is owned by [_startWaitingMotion]. Nothing here may
-      // stop, restart or re-loop it.
-      if (widget.waitingRepeat) {
-        if (!reduceMotion && !_motion.isAnimating) _motion.repeat();
-      } else if (!_motion.isAnimating && _motion.value < 1.0) {
-        // Only reached if the widget was created already in the waiting
-        // state; a finished arc (value == 1.0) is never restarted.
-        _startWaitingMotion();
+      // The scan sweep never runs during the wait.
+      if (_motion.isAnimating) _motion.stop();
+      // Resume from the current value if an inherited ticker pause interrupted
+      // the one-shot. Do not reset to zero and visibly restart the arc.
+      if (!reduceMotion &&
+          !_waitingMotion.isAnimating &&
+          _waitingMotion.value < 1.0) {
+        _waitingMotion.forward();
       }
       return;
     }
@@ -119,6 +115,7 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
   @override
   void dispose() {
     _motion.dispose();
+    _waitingMotion.dispose();
     super.dispose();
   }
 
@@ -126,55 +123,57 @@ class _KFaceScanOverlayState extends State<KFaceScanOverlay>
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     return IgnorePointer(
-      child: TweenAnimationBuilder<double>(
-        tween: Tween(begin: 0, end: widget.progress.clamp(0.0, 1.0)),
-        duration:
-            reduceMotion ? Duration.zero : const Duration(milliseconds: 450),
-        curve: Curves.easeOut,
-        builder:
-            (context, progress, child) => AnimatedBuilder(
-              animation: _motion,
-              builder: (context, child) {
-                // The ribbon's rotation is driven only by _motion — a
-                // continuous, constant-speed clock — never by capture
-                // progress. Previously `progress * 2π` was added here,
-                // which made the sweep advance in a fast burst each time a
-                // candidate was accepted (via the easeOut tween above), then
-                // sit almost still until the next candidate was accepted.
-                // Since acceptance timing depends on the network/backend,
-                // that produced visible "stuck on rotation 2/3/4" stalls
-                // that had nothing to do with animation math.
-                final phase = _motion.value * math.pi * 2;
-                if (widget.scanning &&
-                    !widget.waiting &&
-                    _logStopwatch.elapsedMilliseconds >= 100) {
-                  _logStopwatch.reset();
-                  final longitude =
-                      _ScanOverlayPainter._sweepAngle(phase, 0.95) +
-                      (widget.movement - 0.5) * 0.18;
-                  debugPrint(
-                    '[ScanMotion] t=${DateTime.now().millisecondsSinceEpoch} '
-                    'motion=${_motion.value.toStringAsFixed(4)} '
-                    'phase=${phase.toStringAsFixed(3)} '
-                    'longitude=${longitude.toStringAsFixed(3)}',
+      // The overlay repaints every frame while animating. Isolating it in its
+      // own layer keeps the camera preview and the rest of the page from being
+      // repainted with it, which is what keeps the green rotation smooth.
+      child: RepaintBoundary(
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: widget.progress.clamp(0.0, 1.0)),
+          duration:
+              reduceMotion ? Duration.zero : const Duration(milliseconds: 450),
+          curve: Curves.easeOut,
+          builder:
+              (context, progress, child) => AnimatedBuilder(
+                animation: Listenable.merge([_motion, _waitingMotion]),
+                builder: (context, child) {
+                  // The ribbon's rotation is driven only by _motion — a
+                  // continuous, constant-speed clock — never by capture
+                  // progress.
+                  final phase =
+                      (widget.waiting ? _waitingMotion.value : _motion.value) *
+                      math.pi *
+                      2;
+                  if (widget.scanning &&
+                      !widget.waiting &&
+                      _logStopwatch.elapsedMilliseconds >= 100) {
+                    _logStopwatch.reset();
+                    final longitude =
+                        _ScanOverlayPainter._sweepAngle(phase, 0.95) +
+                        (widget.movement - 0.5) * 0.18;
+                    debugPrint(
+                      '[ScanMotion] t=${DateTime.now().millisecondsSinceEpoch} '
+                      'motion=${_motion.value.toStringAsFixed(4)} '
+                      'phase=${phase.toStringAsFixed(3)} '
+                      'longitude=${longitude.toStringAsFixed(3)}',
+                    );
+                  }
+                  return CustomPaint(
+                    painter: _ScanOverlayPainter(
+                      faceDiameter: widget.faceDiameter,
+                      showTicks: widget.showTicks,
+                      scanning: widget.scanning && !reduceMotion,
+                      progress: progress,
+                      movement: widget.movement,
+                      waiting: widget.waiting,
+                      success: widget.success,
+                      failure: widget.failure,
+                      phase: phase,
+                    ),
+                    child: const SizedBox.expand(),
                   );
-                }
-                return CustomPaint(
-                  painter: _ScanOverlayPainter(
-                    faceDiameter: widget.faceDiameter,
-                    showTicks: widget.showTicks,
-                    scanning: widget.scanning && !reduceMotion,
-                    progress: progress,
-                    movement: widget.movement,
-                    waiting: widget.waiting,
-                    success: widget.success,
-                    failure: widget.failure,
-                    phase: phase,
-                  ),
-                  child: const SizedBox.expand(),
-                );
-              },
-            ),
+                },
+              ),
+        ),
       ),
     );
   }
@@ -213,9 +212,7 @@ class _ScanOverlayPainter extends CustomPainter {
       (2 / math.pi) * math.asin(math.sin(phase));
 
   /// The meridian angle is fed through sin() a second time inside point()
-  /// (`sweep = sin(meridian) * depth`) to project it onto the sphere. That
-  /// second sine has its own deceleration near the sweep's extremes, most
-  /// noticeable during the very first excursion away from center. Pre-warp
+  /// (`sweep = sin(meridian) * depth`) to project it onto the sphere. Pre-warp
   /// the meridian with asin so the *projected* screen position — not just
   /// the angle — advances at constant speed.
   static double _sweepAngle(double phase, double maxAngle) {
@@ -231,8 +228,8 @@ class _ScanOverlayPainter extends CustomPainter {
     if (!showTicks) {
       // Ring colour: red ONLY for `failure` (which the page sets only after a
       // backend / verification outcome), green for success, otherwise the
-      // neutral white outline — which is what a locally-detected fake frame
-      // ("Face not detected") keeps showing.
+      // neutral white outline — which is what "Face not detected", "Move
+      // closer", "Move farther", "Multiple faces" etc. keep showing.
       canvas.drawCircle(
         center,
         radius + 3.5,
@@ -292,20 +289,29 @@ class _ScanOverlayPainter extends CustomPainter {
     if (failure) return;
 
     if (waiting) {
-      // phase / 2π == controller value in [0, 1]. For the one-shot arc the
-      // controller stops at 1.0, so this holds as a full ring.
       final arcPaint =
           Paint()
             ..style = PaintingStyle.stroke
             ..strokeWidth = 5
             ..strokeCap = StrokeCap.round
             ..color = const Color(0xFF18D85B);
+      // One green light travels clockwise exactly once. The leading point
+      // advances monotonically from 12 o'clock to 12 o'clock while its trail
+      // grows behind it; this is not a repeating short segment orbit.
+      final sweep = phase.clamp(0.0, math.pi * 2);
+      final orbitRadius = radius + 3.5;
       canvas.drawArc(
-        Rect.fromCircle(center: center, radius: radius + 3.5),
+        Rect.fromCircle(center: center, radius: orbitRadius),
         -math.pi / 2,
-        (phase / (math.pi * 2)).clamp(0.0, 1.0) * math.pi * 2,
+        sweep,
         false,
         arcPaint,
+      );
+      final headAngle = -math.pi / 2 + sweep;
+      canvas.drawCircle(
+        center + Offset(math.cos(headAngle), math.sin(headAngle)) * orbitRadius,
+        arcPaint.strokeWidth / 2,
+        Paint()..color = arcPaint.color,
       );
       return;
     }
@@ -332,10 +338,6 @@ class _ScanOverlayPainter extends CustomPainter {
         vertical
             // This is a UI scan: it sweeps left and right continuously even
             // when the head is still. Face position adds a small offset.
-            // _sweepAngle pre-compensates for the sin() applied again inside
-            // point() below, so the actual on-screen sweep position moves at
-            // constant speed with no deceleration at the extremes or during
-            // the first excursion away from center.
             ? _sweepAngle(phase, 0.95) + (movement - 0.5) * 0.18
             : _sweepAngle(phase + math.pi / 2, 0.65);
     const spread = 0.42;
