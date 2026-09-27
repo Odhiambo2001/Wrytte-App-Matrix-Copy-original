@@ -6,7 +6,7 @@ import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/face/biometric_prewarm_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
-import 'package:wrytte/ui/auth/auth_entry_screen.dart';
+import 'package:wrytte/ui/auth/welcome_view.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 
 class EditProfileScreen extends StatefulWidget {
@@ -237,7 +237,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (mounted) {
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const AuthEntryScreen()),
+        MaterialPageRoute(builder: (_) => const WelcomeView()),
         (route) => false,
       );
     }

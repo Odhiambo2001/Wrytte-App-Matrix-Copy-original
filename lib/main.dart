@@ -7,6 +7,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'package:wrytte/ui/auth/auth_entry_screen.dart';
+import 'package:wrytte/ui/auth/welcome_view.dart';
 import 'package:wrytte/ui/auth/email_verification_page.dart';
 import 'package:wrytte/ui/auth/login_email_verification_page.dart';
 import 'package:wrytte/ui/auth/phone_auth_page.dart';
@@ -101,6 +102,7 @@ class WrytteApp extends StatelessWidget {
       theme: WrytteTheme.lightTheme,
       home: const ThemeWrapper(child: AuthWrapper()),
       routes: {
+        '/welcome': (context) => const ThemeWrapper(child: WelcomeView()),
         '/auth_entry_screen':
             (context) => const ThemeWrapper(child: AuthEntryScreen()),
 
@@ -348,7 +350,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       );
     }
 
-    if (!_isLoggedIn) return const AuthEntryScreen();
+    if (!_isLoggedIn) return const WelcomeView();
 
     if (_needsProfile) {
       return const AddProfilePage(isNewUser: false);
