@@ -16,10 +16,10 @@ class WelcomeView extends StatelessWidget {
     bottomNavigationBar: SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
-        child: SizedBox(
-          height: 56,
-          child: ElevatedButton(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: FilledButton(
             onPressed: () {
               unawaited(_collectDeviceMetadata());
               Navigator.pushReplacement(
@@ -27,18 +27,20 @@ class WelcomeView extends StatelessWidget {
                 MaterialPageRoute(builder: (_) => const AuthEntryScreen()),
               );
             },
-            style: ElevatedButton.styleFrom(
+            style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF4DA3FF),
               foregroundColor: Colors.white,
               elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(38),
+              shape: const StadiumBorder(),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              textStyle: const TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                height: 1.2,
               ),
             ),
-            child: const Text(
-              'Agree and continue',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
-            ),
+            child: const Text('Agree and continue', textAlign: TextAlign.center),
           ),
         ),
       ),
@@ -67,7 +69,12 @@ class WelcomeView extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const WelcomeIntro(),
+                      WelcomeIntro(
+                        compact: constraints.maxHeight < 520,
+                        descriptionWidth:
+                            (constraints.maxWidth.clamp(0.0, 430.0) - 36)
+                                .clamp(0.0, 328.0),
+                      ),
                       const SizedBox(height: 32),
                       _WelcomeLegal(
                         onOpenLegal: () => Navigator.push(
@@ -119,15 +126,24 @@ class _WelcomeLegal extends StatelessWidget {
               width: double.infinity,
               child: Text.rich(
                 TextSpan(
-                  style: TextStyle(color: Colors.white, fontSize: 16, height: 1.45),
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    color: Colors.white,
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
                   children: [
                     TextSpan(text: 'By continuing, you agree to the '),
                     TextSpan(
-                      text: 'Wrytte\nTerms of Service',
+                      text: 'Wrytte\nTerms\u00a0of\u00a0Service',
                       style: TextStyle(color: Color(0xFF4DA3FF)),
                     ),
                     TextSpan(
-                      text: ' and App Privacy',
+                      text: ' and ',
+                      style: TextStyle(color: Color(0xFF4DA3FF)),
+                    ),
+                    TextSpan(
+                      text: 'App\u00a0Privacy',
                       style: TextStyle(color: Color(0xFF4DA3FF)),
                     ),
                   ],
