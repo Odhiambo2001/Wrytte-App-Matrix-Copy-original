@@ -1304,7 +1304,6 @@ class MatrixChatService {
         room.id,
         eventId,
         reason: cleanReason,
-        score: -50,
       );
       homeserverReportSubmitted = true;
     } catch (error) {
@@ -1383,7 +1382,6 @@ class MatrixChatService {
         cleanRoomId,
         cleanEventId,
         reason: cleanReason,
-        score: -50,
       );
       return;
     } catch (error) {
