@@ -157,6 +157,7 @@ flutter:
     - assets/ldpc/Weights_Var_MS/
     - assets/ldpc/Biases_Var_MS/
     - assets/images/wrytte_logo.png
+    - assets/images/wrytte_id_signup_icon_128.png
     - assets/images/default_avatar.jpg
     - assets/images/video image1.jpg
     - assets/images/video image2.jpg
@@ -168,6 +169,7 @@ flutter:
     - assets/svg/comment_icon.svg
     - assets/svg/chat_icon.svg
     - assets/svg/phonebook.svg
+    - assets/svg/solar--phone-linear.svg
     - assets/svg/phone_book.png
     - assets/svg/chat_filled.svg
     - assets/svg/reward_icon.svg

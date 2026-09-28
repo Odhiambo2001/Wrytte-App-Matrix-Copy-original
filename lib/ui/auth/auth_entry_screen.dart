@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:wrytte/core/theme.dart';
 import 'package:wrytte/services/auth/device_region_service.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/auth_entry_components.dart';
@@ -18,7 +19,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: const Color(0xFF08090B),
+    backgroundColor: WrytteTheme.background,
     body: SafeArea(
       child: LayoutBuilder(
         builder: (context, constraints) {
