@@ -450,10 +450,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
   @override
   Widget build(BuildContext context) {
     if (_checking) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF08090B),
-        body: SizedBox.shrink(),
-      );
+      // Show the welcome screen immediately after startup while the saved
+      // session is checked, instead of exposing a blank loading frame.
+      return const WelcomeView();
     }
 
     if (!_isLoggedIn) return const WelcomeView();
