@@ -133,10 +133,12 @@ class _BottomNavBarState extends State<BottomNavBar> {
                       unselectedItemColor: const Color(0xFF7A7A7A),
                       iconSize: 26,
                       selectedLabelStyle: const TextStyle(
+                        fontFamily: 'Inter',
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
                       ),
                       unselectedLabelStyle: const TextStyle(
+                        fontFamily: 'Inter',
                         fontSize: 11,
                         fontWeight: FontWeight.w400,
                       ),
@@ -272,7 +274,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                           '|avatar:v${_profile!.avatarVersion}',
                             ),
                           ),
-                          label: _profileTabLabel(),
+                          label: 'Profile',
                         ),
                       ],
                     ),
@@ -284,14 +286,6 @@ class _BottomNavBarState extends State<BottomNavBar> {
         ),
       ],
     );
-  }
-
-  String _profileTabLabel() {
-    final name = _profileDisplayName();
-    if (name.isEmpty) return 'Profile';
-    final firstName = name.split(RegExp(r'\s+')).first;
-    if (firstName.length <= 10) return firstName;
-    return '${firstName.substring(0, 10)}...';
   }
 
   String? _profileNameForAvatar() {

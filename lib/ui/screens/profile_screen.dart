@@ -37,6 +37,7 @@ class ProfileScreen extends StatefulWidget {
   final String? conversationId;
   final String? savedNameHint;
   final String? initialAvatarUrl;
+  final bool embeddedInHome;
 
   const ProfileScreen({
     super.key,
@@ -44,6 +45,7 @@ class ProfileScreen extends StatefulWidget {
     this.conversationId,
     this.savedNameHint,
     this.initialAvatarUrl,
+    this.embeddedInHome = false,
   });
 
   @override
@@ -656,6 +658,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final double statusBarHeight = MediaQuery.of(context).padding.top;
     final double topBarHeight = statusBarHeight + kToolbarHeight;
 
@@ -668,10 +671,16 @@ class _ProfileScreenState extends State<ProfileScreen>
     final String bioText = _profileBio();
     final List<String> links = _profile?.links ?? [];
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF08090B),
-      extendBodyBehindAppBar: true,
-      body: Stack(
+    return Theme(
+      data: theme.copyWith(
+        fontFamily: 'Inter',
+        textTheme: theme.textTheme.apply(fontFamily: 'Inter'),
+        primaryTextTheme: theme.primaryTextTheme.apply(fontFamily: 'Inter'),
+      ),
+      child: Scaffold(
+        backgroundColor: const Color(0xFF08090B),
+        extendBodyBehindAppBar: true,
+        body: Stack(
         children: [
           NestedScrollView(
             physics: const BouncingScrollPhysics(
@@ -699,9 +708,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                         const SizedBox(height: 12),
 
                         // ── Name ────────────────────────────────────────────
-                        if (displayName.isNotEmpty)
+                        if (!_isOtherUser || displayName.isNotEmpty)
                           Text(
-                            displayName,
+                            _isOtherUser ? displayName : 'You',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 22,
@@ -840,10 +849,12 @@ class _ProfileScreenState extends State<ProfileScreen>
                   child: Row(
                     children: [
                       // ── Back button ──────────────────────────────────
-                      _glassButton(
-                        icon: Icons.arrow_back_ios,
-                        onTap: () => Navigator.pop(context),
-                      ),
+                      widget.embeddedInHome
+                          ? const SizedBox(width: 44)
+                          : _glassButton(
+                              icon: Icons.arrow_back_ios,
+                              onTap: () => Navigator.pop(context),
+                            ),
 
                       // ── Title — only shown for own profile, truly centered ─
                       Expanded(
@@ -907,6 +918,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -993,19 +1005,26 @@ class _ProfileScreenState extends State<ProfileScreen>
           style: TextStyle(color: Colors.white, fontSize: 11),
         ),
         const SizedBox(height: 6),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 120),
-          child: ElevatedButton(
+        Center(
+          child: FilledButton(
             onPressed: () {},
-            style: ElevatedButton.styleFrom(
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(48, 48),
               backgroundColor: const Color(0xFF4DA3FF),
+              foregroundColor: Colors.white,
+              elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
+              ),
+              textStyle: const TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
               ),
             ),
             child: const Text(
               "Add storie",
-              style: TextStyle(color: Colors.white, fontSize: 15),
+              style: TextStyle(fontSize: 15),
             ),
           ),
         ),
@@ -1466,8 +1485,10 @@ class _ProfileScreenState extends State<ProfileScreen>
             child: Center(
               child: Text(
                 text,
-                // CHANGE 1: Always white, for both own and other user
-                style: const TextStyle(color: Colors.white, fontSize: 16),
+                style: const TextStyle(
+                  color: Color(0xFF4DA3FF),
+                  fontSize: 16,
+                ),
               ),
             ),
           ),

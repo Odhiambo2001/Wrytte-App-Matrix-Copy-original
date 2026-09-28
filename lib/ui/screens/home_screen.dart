@@ -11,10 +11,10 @@ import 'package:wrytte/services/call_listener_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/chats/conversations_screen.dart'; // ← this one
+import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'calls/calls_screen.dart';
 import 'post/post_screen.dart';
 import 'shops/shops_screen.dart';
-import 'settings/settings_screen.dart';
 import '../widgets/bottom_nav_bar.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -84,7 +84,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       const PostScreen(),
       const CallsScreen(),
-      const SettingsScreen(),
+      const ProfileScreen(embeddedInHome: true),
     ];
   }
 
