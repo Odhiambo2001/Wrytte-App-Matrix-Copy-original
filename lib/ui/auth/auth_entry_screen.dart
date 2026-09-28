@@ -46,16 +46,6 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Center(
-                                  child: SizedBox(
-                                    width: 220,
-                                    child: Image.asset(
-                                      'assets/images/wrytte_logo.png',
-                                      fit: BoxFit.contain,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 1),
                                 WrytteAuthOptions(
                                   onWrytteIdPressed: _openWrytteId,
                                   onPhonePressed: _openPhone,
