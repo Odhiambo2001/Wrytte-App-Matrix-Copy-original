@@ -150,7 +150,6 @@ void _startDeferredWarmups() {
 void main() {
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
-  unawaited(_initializeStartupServices());
   unawaited(
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
   );
@@ -168,6 +167,7 @@ void main() {
 
   runApp(const WrytteApp());
   WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(_initializeStartupServices());
     FlutterNativeSplash.remove();
   });
 }

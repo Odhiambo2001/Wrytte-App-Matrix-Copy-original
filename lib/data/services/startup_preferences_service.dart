@@ -4,7 +4,7 @@ class StartupPreferencesService {
   StartupPreferencesService({SharedPreferencesAsync? preferences})
     : _preferences = preferences ?? SharedPreferencesAsync();
 
-  static const _introductionSeenKey = 'startup.introduction_seen.v1';
+  static const _introductionSeenKey = 'startup.introduction_seen.v2';
 
   final SharedPreferencesAsync _preferences;
 
