@@ -73,7 +73,7 @@ void paintCanonicalWrytteLogo(Canvas canvas, Size size, {double opacity = 1}) {
   canvas.drawCircle(
     wrytteLogoDotCenter,
     wrytteLogoDotRadius,
-    Paint()..color = WrytteColors.destructive.withValues(alpha: safeOpacity),
+    Paint()..color = WrytteColors.brandCoral.withValues(alpha: safeOpacity),
   );
 
   canvas.restore();

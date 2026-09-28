@@ -35,7 +35,7 @@ class WelcomeIntro extends StatelessWidget {
     mainAxisSize: MainAxisSize.min,
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      const Center(child: WrytteLogo()),
+      const Center(child: WrytteLogo(size: wrytteBrandDisplaySize)),
       SizedBox(height: compact ? 32 : 68),
       const Text(
         'Welcome to Wrytte',
