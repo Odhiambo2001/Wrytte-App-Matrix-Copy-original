@@ -6,7 +6,10 @@ import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/ui/auth/country_picker_page.dart';
 import 'package:wrytte/ui/auth/active_device_login_page.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
+import 'package:wrytte/ui/auth/widgets/auth_bottom_action.dart';
+import 'package:wrytte/ui/auth/widgets/auth_page_header.dart';
 import 'package:wrytte/ui/screens/terms_privacy_page.dart';
+import 'package:wrytte/core/theme.dart';
 import 'package:wrytte/utils/countries.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 import 'otp_verification_page.dart';
@@ -352,291 +355,229 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF08090B),
+      backgroundColor: WrytteColors.background,
+      resizeToAvoidBottomInset: false,
       body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            return SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              padding: EdgeInsets.fromLTRB(
-                24,
-                0,
-                24,
-                MediaQuery.of(context).viewInsets.bottom + 20,
-              ),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                child: IntrinsicHeight(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      /// Back Button
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-
-                      const SizedBox(height: 10),
-
-                      /// Title
-                      const Center(
-                        child: Text(
-                          "Phone number",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w500,
+        bottom: false,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 430),
+            child: AuthBottomAction(
+              label: 'Next',
+              busy: _isSending,
+              onPressed: _canAttemptVerification ? _startVerification : null,
+              focusNodes: [_codeFocusNode, _numberFocusNode],
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  AuthPageHeader(
+                    title: widget.isSignInFlow ? 'Log in' : 'Phone number',
+                    onBack: () => Navigator.pop(context),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          AuthPageSubtitle(
+                            child: SizedBox(
+                              width: 310,
+                              child: Text(
+                                widget.isSignInFlow
+                                    ? 'Enter your country code and\n'
+                                        'phone number to log in.'
+                                    : 'Please confirm your country code\n'
+                                        'and enter your phone number.',
+                                textAlign: TextAlign.center,
+                                style: WrytteTypography.authSubtitle,
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 8),
-
-                      Center(
-                        child: Text(
-                          "Please confirm your country code\nand enter your phone number.",
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.white54,
-                            fontSize: 15,
-                            height: 1.1,
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 30),
-
-                      /// Country + Phone Container
-                      Container(
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF23262C),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Column(
-                          mainAxisSize:
-                              MainAxisSize
-                                  .min, // <-- ADD THIS to minimize height
-                          children: [
-                            /// Country Selector
-                            ListTile(
-                              onTap: _pickCountry,
-                              title: Text(
-                                _hasInvalidCountryCode
-                                    ? 'Invalid country code'
-                                    : _selectedCountry == null
-                                    ? 'Country'
-                                    : "${_selectedCountry!.flag} ${_selectedCountry!.name}",
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize:
-                                      15, // <-- OPTIONAL: reduced from 16 to 15
+                          const SizedBox(height: 26),
+                          Material(
+                            color: Colors.transparent,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(28),
+                              side: const BorderSide(
+                                color: WrytteColors.surfaceRaised,
+                                width: 1.5,
+                              ),
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ListTile(
+                                  onTap: _pickCountry,
+                                  title: Text(
+                                    _hasInvalidCountryCode
+                                        ? 'Invalid country code'
+                                        : _selectedCountry == null
+                                        ? 'Country'
+                                        : '${_selectedCountry!.flag} ${_selectedCountry!.name}',
+                                    style: WrytteTypography.authInput,
+                                  ),
+                                  trailing: const Icon(
+                                    Icons.chevron_right,
+                                    color: WrytteColors.textPrimary,
+                                    size: 22,
+                                  ),
+                                  dense: true,
+                                  visualDensity: VisualDensity.compact,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
                                 ),
-                              ),
-                              trailing: const Icon(
-                                Icons.chevron_right,
-                                color: Colors.white,
-                                size:
-                                    22, // <-- OPTIONAL: slightly reduced icon size
-                              ),
-                              dense:
-                                  true, // <-- ADD THIS for more compact ListTile
-                              visualDensity:
-                                  VisualDensity
-                                      .compact, // <-- ADD THIS for tighter spacing
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical:
-                                    8, // <-- ADD THIS to control vertical padding
-                              ),
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 16),
+                                  child: Divider(
+                                    color: Colors.white12,
+                                    height: 1,
+                                  ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      SizedBox(
+                                        width: 70,
+                                        child: TextField(
+                                          controller: _codeCtrl,
+                                          focusNode: _codeFocusNode,
+                                          onTapOutside:
+                                              (_) =>
+                                                  FocusScope.of(
+                                                    context,
+                                                  ).unfocus(),
+                                          cursorColor: WrytteColors.primary,
+                                          keyboardType: TextInputType.phone,
+                                          style: WrytteTypography.authInput,
+                                          decoration: const InputDecoration(
+                                            border: InputBorder.none,
+                                            enabledBorder: InputBorder.none,
+                                            focusedBorder: InputBorder.none,
+                                            isDense: true,
+                                            contentPadding:
+                                                EdgeInsets.symmetric(
+                                                  vertical: 8,
+                                                ),
+                                          ),
+                                          onChanged: _detectCountryFromCode,
+                                          onTap: _onCodeFieldTap,
+                                        ),
+                                      ),
+                                      if (_showDivider)
+                                        Container(
+                                          height: 22,
+                                          width: 1.5,
+                                          color: WrytteColors.surfaceRaised,
+                                          margin: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                          ),
+                                        ),
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _numberCtrl,
+                                          focusNode: _numberFocusNode,
+                                          onTapOutside:
+                                              (_) =>
+                                                  FocusScope.of(
+                                                    context,
+                                                  ).unfocus(),
+                                          cursorColor: WrytteColors.primary,
+                                          keyboardType: TextInputType.phone,
+                                          inputFormatters: [
+                                            if (_selectedCountry != null)
+                                              CountryPhoneNumberInputFormatter(
+                                                _selectedCountry!.isoCode,
+                                              )
+                                            else
+                                              FilteringTextInputFormatter
+                                                  .digitsOnly,
+                                          ],
+                                          style: WrytteTypography.authInput,
+                                          decoration: InputDecoration(
+                                            hintText:
+                                                _showDivider
+                                                    ? 'Phone number'
+                                                    : '',
+                                            hintStyle: WrytteTypography
+                                                .authInput
+                                                .copyWith(
+                                                  color: WrytteColors.textMuted,
+                                                ),
+                                            border: InputBorder.none,
+                                            enabledBorder: InputBorder.none,
+                                            focusedBorder: InputBorder.none,
+                                            isDense: true,
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                                  vertical: 8,
+                                                ),
+                                          ),
+                                          onChanged: (_) => setState(() {}),
+                                          enabled: _showDivider,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
-
-                            /// Divider with padding
-                            const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 16),
-                              child: Divider(color: Colors.white12, height: 1),
-                            ),
-
-                            /// Phone Row
+                          ),
+                          if (MediaQuery.viewInsetsOf(context).bottom == 0) ...[
+                            const SizedBox(height: 24),
                             Padding(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8, // <-- REDUCED from 12 to 8
+                                horizontal: 15,
                               ),
-                              child: Row(
-                                children: [
-                                  /// Country Code Input
-                                  SizedBox(
-                                    width: 70,
-                                    child: TextField(
-                                      controller: _codeCtrl,
-                                      focusNode: _codeFocusNode,
-                                      keyboardType: TextInputType.phone,
+                              child: RichText(
+                                textAlign: TextAlign.center,
+                                text: TextSpan(
+                                  style: WrytteTypography.authBody,
+                                  children: [
+                                    const TextSpan(
+                                      text:
+                                          'By entering this device’s phone number and tapping “Next,” you agree to ',
+                                    ),
+                                    TextSpan(
+                                      text:
+                                          'Wrytte’s Terms and Conditions and Privacy Policy',
                                       style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize:
-                                            15, // <-- OPTIONAL: reduced from 16 to 15
+                                        color: WrytteColors.primary,
                                       ),
-                                      decoration: const InputDecoration(
-                                        hintText: "",
-                                        border: InputBorder.none,
-                                        isDense:
-                                            true, // <-- ADD THIS for compact input
-                                        contentPadding: EdgeInsets.symmetric(
-                                          vertical: 8,
-                                        ), // <-- ADD THIS to control height
-                                      ),
-                                      onChanged: _detectCountryFromCode,
-                                      onTap: _onCodeFieldTap,
+                                      recognizer:
+                                          TapGestureRecognizer()
+                                            ..onTap =
+                                                () => Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder:
+                                                        (_) =>
+                                                            const TermsPrivacyPage(),
+                                                  ),
+                                                ),
                                     ),
-                                  ),
-
-                                  /// Blue Divider (only shown after code auto-fill)
-                                  if (_showDivider)
-                                    Container(
-                                      height: 22, // <-- REDUCED from 26 to 22
-                                      width: 1,
-                                      color: const Color(0xFF4DA3FF),
-                                      margin: const EdgeInsets.symmetric(
-                                        horizontal:
-                                            8, // <-- REDUCED from 10 to 8
-                                      ),
-                                    ),
-
-                                  /// Phone Number Input
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _numberCtrl,
-                                      focusNode: _numberFocusNode,
-                                      keyboardType: TextInputType.phone,
-                                      inputFormatters: [
-                                        if (_selectedCountry != null)
-                                          CountryPhoneNumberInputFormatter(
-                                            _selectedCountry!.isoCode,
-                                          )
-                                        else
-                                          FilteringTextInputFormatter
-                                              .digitsOnly,
-                                      ],
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize:
-                                            15, // <-- OPTIONAL: reduced from 16 to 15
-                                      ),
-                                      decoration: InputDecoration(
-                                        hintText:
-                                            _showDivider ? "Phone number" : "",
-                                        hintStyle: const TextStyle(
-                                          color: Colors.white38,
-                                          fontSize:
-                                              15, // <-- OPTIONAL: reduced from 16 to 15
-                                        ),
-                                        border: InputBorder.none,
-                                        isDense:
-                                            true, // <-- ADD THIS for compact input
-                                        contentPadding:
-                                            const EdgeInsets.symmetric(
-                                              vertical: 8,
-                                            ), // <-- ADD THIS to control height
-                                      ),
-                                      onChanged: (_) => setState(() {}),
-                                      enabled:
-                                          _showDivider, // Disable until code is entered
-                                    ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           ],
-                        ),
+                        ],
                       ),
-
-                      const SizedBox(height: 25),
-
-                      /// Terms
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 15),
-                        child: RichText(
-                          textAlign: TextAlign.center,
-                          text: TextSpan(
-                            style: const TextStyle(color: Colors.white),
-                            children: [
-                              const TextSpan(
-                                text:
-                                    "By entering this device’s phone number and tapping “Next,” you agree to ",
-                              ),
-                              TextSpan(
-                                text:
-                                    "Wrytte’s Terms and Conditions and Privacy Policy",
-                                style: const TextStyle(
-                                  color: Color(0xFF4DA3FF),
-                                ),
-                                recognizer:
-                                    TapGestureRecognizer()
-                                      ..onTap = () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder:
-                                                (_) => const TermsPrivacyPage(),
-                                          ),
-                                        );
-                                      },
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-
-                      const Spacer(),
-
-                      /// Next Button
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed:
-                              _canAttemptVerification && !_isSending
-                                  ? _startVerification
-                                  : null,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor:
-                                _canAttemptVerification && !_isSending
-                                    ? const Color(0xFF4DA3FF)
-                                    : const Color(0xFF23262C),
-                            disabledBackgroundColor: const Color(0xFF23262C),
-                            foregroundColor:
-                                _canAttemptVerification
-                                    ? Colors.white
-                                    : Colors.grey,
-                            disabledForegroundColor: Colors.grey,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                          child:
-                              _isSending
-                                  ? const SizedBox(
-                                    height: 20,
-                                    width: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                  : const Text(
-                                    "Next",
-                                    style: TextStyle(fontSize: 16),
-                                  ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 20),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
-            );
-          },
+            ),
+          ),
         ),
       ),
     );
