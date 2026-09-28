@@ -41,6 +41,15 @@ abstract final class WrytteTypography {
     color: WrytteColors.textPrimary,
   );
 
+  static const TextStyle authSectionTitle = TextStyle(
+    fontFamily: primaryFontFamily,
+    fontSize: 20,
+    fontWeight: FontWeight.w500,
+    height: 1.3,
+    letterSpacing: 0,
+    color: WrytteColors.textPrimary,
+  );
+
   static const TextStyle authSectionTitleLarge = TextStyle(
     fontFamily: primaryFontFamily,
     fontSize: 20,
@@ -53,6 +62,15 @@ abstract final class WrytteTypography {
   static const TextStyle authButtonLabel = TextStyle(
     fontFamily: primaryFontFamily,
     fontSize: 18,
+    fontWeight: FontWeight.w500,
+    height: 1.2,
+    letterSpacing: 0,
+    color: WrytteColors.onPrimary,
+  );
+
+  static const TextStyle authCompactButtonLabel = TextStyle(
+    fontFamily: primaryFontFamily,
+    fontSize: 16,
     fontWeight: FontWeight.w500,
     height: 1.2,
     letterSpacing: 0,

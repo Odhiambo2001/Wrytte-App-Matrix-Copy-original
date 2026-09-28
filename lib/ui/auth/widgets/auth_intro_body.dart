@@ -29,7 +29,7 @@ class AuthIntroBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => spacious
-      ? _spaciousBody()
+      ? _spaciousBody(context)
       : SafeArea(
           bottom: false,
           child: Center(
@@ -64,7 +64,7 @@ class AuthIntroBody extends StatelessWidget {
           ),
         );
 
-  Widget _spaciousBody() => SafeArea(
+  Widget _spaciousBody(BuildContext context) => SafeArea(
     bottom: false,
     child: Align(
       alignment: Alignment.topCenter,

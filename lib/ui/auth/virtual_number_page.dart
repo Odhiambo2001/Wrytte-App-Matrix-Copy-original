@@ -2,7 +2,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:wrytte/core/theme.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
-import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/widgets/auth_intro_body.dart';
 import 'package:wrytte/ui/auth/widgets/wrytte_id_checkmark.dart';
 
@@ -97,14 +96,15 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
 
   Future<void> _openKFace() async {
     if (_vpnLoading || _virtualNumber.isEmpty) return;
-    await Navigator.push(
+    await Navigator.pushNamed(
       context,
-      MaterialPageRoute(
-        builder: (_) => KFaceIntroPage(
-          wrytteId: _virtualNumber,
-          isEnrollment: true,
-        ),
-      ),
+      '/auth/kface',
+      arguments: <String, Object?>{
+        'wrytteId': _virtualNumber,
+        'isEnrollment': true,
+        'userId': null,
+        'attachToExistingUser': false,
+      },
     );
   }
 

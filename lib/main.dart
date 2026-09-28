@@ -13,6 +13,7 @@ import 'package:wrytte/ui/auth/login_email_verification_page.dart';
 import 'package:wrytte/ui/auth/phone_auth_page.dart';
 import 'package:wrytte/ui/auth/otp_verification_page.dart';
 import 'package:wrytte/ui/auth/add_profile_page.dart';
+import 'package:wrytte/ui/auth/kface_view.dart';
 import 'package:wrytte/ui/auth/sign_in_page.dart';
 import 'package:wrytte/ui/auth/virtual_number_page.dart';
 
@@ -119,6 +120,21 @@ class WrytteApp extends StatelessWidget {
                       .locale
                       .countryCode ??
                   'US',
+            ),
+          );
+        },
+        '/auth/kface': (context) {
+          final args =
+              ModalRoute.of(context)?.settings.arguments
+                  as Map<String, dynamic>?;
+          final wrytteId = (args?['wrytteId'] ?? '').toString();
+          return ThemeWrapper(
+            child: KfaceView(
+              wrytteId: wrytteId,
+              isEnrollment: args?['isEnrollment'] as bool? ?? true,
+              userId: args?['userId'] as String?,
+              attachToExistingUser:
+                  args?['attachToExistingUser'] as bool? ?? false,
             ),
           );
         },
