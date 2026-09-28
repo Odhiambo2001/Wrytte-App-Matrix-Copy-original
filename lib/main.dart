@@ -266,8 +266,30 @@ class WrytteApp extends StatelessWidget {
         '/add_profile': (context) => _profileSetupRoute(),
 
         '/home': (context) {
-          final profileName =
-              ModalRoute.of(context)?.settings.arguments as String?;
+          final arguments = ModalRoute.of(context)?.settings.arguments;
+          if (arguments is Map) {
+            final profileName = arguments['profileName']?.toString().trim();
+            final userId = arguments['userId']?.toString().trim();
+            final phone = arguments['phone']?.toString();
+            if (profileName != null &&
+                profileName.isNotEmpty &&
+                userId != null &&
+                userId.isNotEmpty) {
+              return ThemeWrapper(
+                child: HomeScreen(
+                  currentUserId: userId,
+                  initialProfileName: profileName,
+                  initialPhone: phone,
+                  isFirstSignup: true,
+                ),
+              );
+            }
+            if (profileName != null && profileName.isNotEmpty) {
+              return _profileSetupCompletionRoute(profileName);
+            }
+          }
+
+          final profileName = arguments as String?;
           return profileName == null || profileName.trim().isEmpty
               ? const ThemeWrapper(child: AuthWrapper())
               : _profileSetupCompletionRoute(profileName.trim());

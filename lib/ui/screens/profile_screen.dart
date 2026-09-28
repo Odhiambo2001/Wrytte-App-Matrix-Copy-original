@@ -37,6 +37,7 @@ class ProfileScreen extends StatefulWidget {
   final String? conversationId;
   final String? savedNameHint;
   final String? initialAvatarUrl;
+  final String? initialProfileName;
   final bool embeddedInHome;
 
   const ProfileScreen({
@@ -45,6 +46,7 @@ class ProfileScreen extends StatefulWidget {
     this.conversationId,
     this.savedNameHint,
     this.initialAvatarUrl,
+    this.initialProfileName,
     this.embeddedInHome = false,
   });
 
@@ -491,9 +493,9 @@ class _ProfileScreenState extends State<ProfileScreen>
       final savedIdentityName = _cleanName(_identity?.savedName);
       if (savedIdentityName.isNotEmpty) return savedIdentityName;
     }
-    return _cleanName(_profile?.displayName).isNotEmpty
-        ? _cleanName(_profile?.displayName)
-        : '';
+    final profileName = _cleanName(_profile?.displayName);
+    if (profileName.isNotEmpty) return profileName;
+    return _cleanName(widget.initialProfileName);
   }
 
   String? _profileAvatarUrl() {
@@ -663,10 +665,14 @@ class _ProfileScreenState extends State<ProfileScreen>
     final double topBarHeight = statusBarHeight + kToolbarHeight;
 
     final hasProfile = _profile != null;
+    final hasInitialProfileName =
+        _cleanName(widget.initialProfileName).isNotEmpty;
     final hasInitialAvatar =
         (widget.initialAvatarUrl?.trim().isNotEmpty ?? false);
     final String displayName =
-        _profileLoading && !hasProfile ? '' : _profileDisplayName();
+        _profileLoading && !hasProfile && !hasInitialProfileName
+            ? ''
+            : _profileDisplayName();
     final String phone = _profileLoading && !hasProfile ? '' : _profilePhone();
     final String bioText = _profileBio();
     final List<String> links = _profile?.links ?? [];
@@ -709,7 +715,11 @@ class _ProfileScreenState extends State<ProfileScreen>
                         // ── Name ────────────────────────────────────────────
                         if (!_isOtherUser || displayName.isNotEmpty)
                           Text(
-                            _isOtherUser ? displayName : 'You',
+                            _isOtherUser
+                                ? displayName
+                                : displayName.isNotEmpty
+                                ? displayName
+                                : 'You',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 22,

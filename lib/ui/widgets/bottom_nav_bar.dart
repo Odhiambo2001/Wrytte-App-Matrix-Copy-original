@@ -274,7 +274,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                           '|avatar:v${_profile!.avatarVersion}',
                             ),
                           ),
-                          label: 'Profile',
+                          label: _profileTabLabel(),
                         ),
                       ],
                     ),
@@ -291,6 +291,12 @@ class _BottomNavBarState extends State<BottomNavBar> {
   String? _profileNameForAvatar() {
     final name = _profileDisplayName();
     return name.isEmpty ? null : name;
+  }
+
+  String _profileTabLabel() {
+    final name = _profileDisplayName();
+    if (name.isEmpty) return 'Profile';
+    return name.split(RegExp(r'\s+')).first;
   }
 
   String _profileDisplayName() {

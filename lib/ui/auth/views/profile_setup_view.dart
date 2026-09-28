@@ -9,6 +9,7 @@ import 'package:wrytte/domain/models/camera_capture_result.dart';
 import 'package:wrytte/domain/models/camera_session_config.dart';
 import 'package:wrytte/domain/repositories/camera_repository.dart';
 import 'package:wrytte/domain/repositories/media_library_repository.dart';
+import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/view_models/profile_setup_view_model.dart';
 import 'package:wrytte/ui/auth/widgets/sync_contacts_switch.dart';
@@ -72,6 +73,22 @@ class _ProfileSetupViewState extends State<ProfileSetupView> {
       debugPrint('[ProfileSetupView] profile photo save failed: $error');
     }
 
+    final profileName = model.name.trim();
+    try {
+      await UserProfileService.instance.updateDisplayName(profileName);
+    } catch (error) {
+      debugPrint('[ProfileSetupView] display name save failed: $error');
+    }
+
+    String? userId;
+    String? phone;
+    try {
+      userId = await AuthService.instance.getCurrentUserId();
+      phone = await AuthService.instance.getSavedPhone();
+    } catch (error) {
+      debugPrint('[ProfileSetupView] session read failed: $error');
+    }
+
     if (!mounted) return;
 
     // Profile setup completes the authentication flow. Replace the complete
@@ -79,7 +96,7 @@ class _ProfileSetupViewState extends State<ProfileSetupView> {
     Navigator.of(context).pushNamedAndRemoveUntil(
       '/home',
       (_) => false,
-      arguments: model.name.trim(),
+      arguments: {'profileName': profileName, 'userId': userId, 'phone': phone},
     );
   }
 

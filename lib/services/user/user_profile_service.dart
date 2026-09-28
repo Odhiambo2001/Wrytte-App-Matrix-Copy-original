@@ -124,11 +124,12 @@ class UserProfileService {
     await _storage.write(key: _lastNameKey, value: parts.$2);
     // Also keep AuthService in sync (it owns the same key)
     await AuthService.instance.updateStoredUsername(trimmed);
-    await _saveBackendProfileBestEffort({
+    _cache = null;
+    await _readFromStorage(allowBackendRefresh: false);
+    unawaited(_saveBackendProfileBestEffort({
       'FirstName': parts.$1,
       if (parts.$2.isNotEmpty) 'LastName': parts.$2,
-    });
-    _cache = null;
+    }));
     debugPrint('[UserProfileService] Display name updated: "$trimmed"');
   }
 

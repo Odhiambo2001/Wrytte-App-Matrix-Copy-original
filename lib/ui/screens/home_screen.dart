@@ -84,7 +84,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       const PostScreen(),
       const CallsScreen(),
-      const ProfileScreen(embeddedInHome: true),
+      ProfileScreen(
+        embeddedInHome: true,
+        initialProfileName: widget.initialProfileName,
+      ),
     ];
   }
 
