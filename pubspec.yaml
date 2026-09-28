@@ -121,10 +121,10 @@ hooks:
 flutter_icons:
   android: true
   ios: true
-  image_path: "assets/images/wrytte_logo.png"
-  # Android adaptive icon — logo centered on the dark background
+  image_path: "assets/images/wrytte_launcher_icon.png"
+  # Android adaptive icon — canonical TT mark, centered on the dark background
   adaptive_icon_background: "#08090B"
-  adaptive_icon_foreground: "assets/images/wrytte_logo.png"
+  adaptive_icon_foreground: "assets/images/wrytte_launcher_foreground.png"
   # Remove the white background on iOS
   remove_alpha_ios: true
   # Web (optional — safe to leave in)
@@ -136,14 +136,14 @@ flutter_icons:
 flutter_native_splash:
   # Background colour matching your app dark background
   color: "#08090B"
-  # The logo shown centred on the splash
-  image: assets/images/wrytte_logo.png
+  # No static logo: StartupScreen displays the animated logo after Flutter loads.
   # Keep the splash until Flutter is ready (removes white flash)
   fullscreen: true
   android_12:
     # Android 12+ uses a dedicated splash API
     color: "#08090B"
-    image: assets/images/wrytte_logo.png
+    # Transparent artwork suppresses Android 12's default launcher icon splash.
+    image: assets/images/transparent_splash.png
     icon_background_color: "#08090B"
   # Make both system bars transparent on the splash too
   android_gravity: center
@@ -161,6 +161,7 @@ flutter:
     - assets/ldpc/Weights_Var_MS/
     - assets/ldpc/Biases_Var_MS/
     - assets/images/wrytte_logo.png
+    - assets/images/wrytte_launcher_icon.png
     - assets/images/wrytte_id_signup_icon_128.png
     - assets/images/default_avatar.jpg
     - assets/images/video image1.jpg

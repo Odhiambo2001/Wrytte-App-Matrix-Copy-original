@@ -1,63 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
     <!-- SPLASH THEME -->
     <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">@drawable/launch_background</item>
-        <item name="android:forceDarkAllowed">false</item>
-
         <!-- Allow drawing under bars -->
-        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
-        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
-
         <!-- Transparent bars -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-
         <!-- Disable Android contrast scrim -->
         <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
-
     <!-- NORMAL APP THEME -->
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
-
         <item name="android:windowBackground">@android:color/transparent</item>
-
         <!-- TRUE TRANSPARENCY -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-
         <!-- Allow drawing behind bars -->
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
-
         <!-- Disable forced contrast -->
         <item name="android:enforceNavigationBarContrast">false</item>
-
         <!-- Optional translucency -->
         <item name="android:windowTranslucentNavigation">true</item>
         <item name="android:windowTranslucentStatus">true</item>
-
         <!-- Icon colors -->
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
-
     </style>
-
     <!-- MAIN APP THEME -->
     <style name="AppTheme" parent="@android:style/Theme.Light.NoTitleBar">
-
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
-
         <item name="android:enforceNavigationBarContrast">false</item>
-
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
-
     </style>
-
 </resources>
