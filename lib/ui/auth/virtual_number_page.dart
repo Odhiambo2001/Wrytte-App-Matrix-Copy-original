@@ -220,7 +220,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
         ),
         details: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: const [
+          children: [
             Text(
               'What is the Wrytte ID ?',
               textAlign: TextAlign.center,
