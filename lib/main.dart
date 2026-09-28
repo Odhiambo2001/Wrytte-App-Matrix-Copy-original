@@ -117,17 +117,24 @@ Future<void> _ensureFirebaseInitialized() async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 }
 
-Future<void> main() async {
-  final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
-  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
-  await Hive.initFlutter();
+final Completer<void> _startupServicesCompleter = Completer<void>();
+Future<void> get _startupServicesReady => _startupServicesCompleter.future;
 
-  await _ensureFirebaseInitialized();
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+Future<void> _initializeStartupServices() async {
+  try {
+    await Future.wait<void>([Hive.initFlutter(), _ensureFirebaseInitialized()]);
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  } catch (error, stackTrace) {
+    debugPrint('[Startup] essential service initialization failed: $error');
+    debugPrintStack(stackTrace: stackTrace);
+  } finally {
+    if (!_startupServicesCompleter.isCompleted) {
+      _startupServicesCompleter.complete();
+    }
+  }
+}
 
-  // Do not make the first scanner visit compile the GPU delegate. This is
-  // deliberately unawaited so the app remains responsive while the splash and
-  // normal authentication flow are displayed.
+void _startDeferredWarmups() {
   unawaited(
     AndroidTfliteImageSession.prewarm(
       'assets/models/retinaface_mv2.tflite',
@@ -137,13 +144,17 @@ Future<void> main() async {
       );
     }),
   );
-
   unawaited(MatrixClientService.instance.ensureInitialized());
+}
 
-  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-
+void main() {
+  final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+  unawaited(_initializeStartupServices());
+  unawaited(
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
+  );
+  unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: _systemBarColor,
@@ -156,6 +167,9 @@ Future<void> main() async {
   );
 
   runApp(const WrytteApp());
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    FlutterNativeSplash.remove();
+  });
 }
 
 class WrytteApp extends StatelessWidget {
@@ -169,6 +183,7 @@ class WrytteApp extends StatelessWidget {
       theme: WrytteTheme.lightTheme,
       home: StartupScreen(
         nextScreen: (_) => const ThemeWrapper(child: AuthWrapper()),
+        onAnimationCompleted: _startDeferredWarmups,
       ),
       routes: {
         '/welcome': (context) => const ThemeWrapper(child: WelcomeView()),
@@ -326,6 +341,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
   Future<void> _checkSession() async {
     try {
+      await _startupServicesReady;
       final user = await AuthService.instance.getCurrentUser();
       final loggedIn = user != null && user.isAuthenticated;
       final userId = user?.userId;
