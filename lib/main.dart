@@ -106,6 +106,22 @@ class WrytteApp extends StatelessWidget {
         '/auth': (context) => const ThemeWrapper(child: AuthEntryScreen()),
         '/auth_entry_screen':
             (context) => const ThemeWrapper(child: AuthEntryScreen()),
+        '/auth/wrytte-id': (context) {
+          final routeRegion =
+              ModalRoute.of(context)?.settings.arguments as String?;
+          return ThemeWrapper(
+            child: VirtualNumberPage(
+              regionCode:
+                  routeRegion ??
+                  WidgetsBinding
+                      .instance
+                      .platformDispatcher
+                      .locale
+                      .countryCode ??
+                  'US',
+            ),
+          );
+        },
 
         '/phone_auth': (context) => const ThemeWrapper(child: PhoneAuthPage()),
 

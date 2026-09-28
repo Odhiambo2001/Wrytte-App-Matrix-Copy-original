@@ -170,6 +170,8 @@ flutter:
     - assets/svg/chat_icon.svg
     - assets/svg/phonebook.svg
     - assets/svg/solar--phone-linear.svg
+    - assets/svg/ic--round-arrow-back-ios.svg
+    - assets/svg/Checkmark icon Wrytte.svg
     - assets/svg/phone_book.png
     - assets/svg/chat_filled.svg
     - assets/svg/reward_icon.svg

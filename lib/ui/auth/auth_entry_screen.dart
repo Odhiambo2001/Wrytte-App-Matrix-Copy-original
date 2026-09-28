@@ -5,7 +5,6 @@ import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/auth_entry_components.dart';
 import 'package:wrytte/ui/auth/phone_auth_page.dart';
 import 'package:wrytte/ui/auth/sign_in_page.dart';
-import 'package:wrytte/ui/auth/virtual_number_page.dart';
 
 class AuthEntryScreen extends StatefulWidget {
   const AuthEntryScreen({super.key});
@@ -84,9 +83,10 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
     final regionCode =
         await (_signupRegion ??= DeviceRegionService.detectOnce());
     if (!mounted) return;
-    Navigator.push(
+    Navigator.pushNamed(
       context,
-      MaterialPageRoute(builder: (_) => VirtualNumberPage(regionCode: regionCode)),
+      '/auth/wrytte-id',
+      arguments: regionCode,
     );
   }
 
