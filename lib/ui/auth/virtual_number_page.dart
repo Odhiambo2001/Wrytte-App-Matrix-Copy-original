@@ -4,7 +4,6 @@ import 'package:wrytte/core/theme.dart';
 import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/widgets/auth_intro_body.dart';
-import 'package:wrytte/ui/auth/widgets/auth_page_header.dart';
 import 'package:wrytte/ui/auth/widgets/wrytte_id_checkmark.dart';
 
 class VirtualNumberPage extends StatefulWidget {
@@ -119,11 +118,13 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
       bottomNavigationBar: SafeArea(
         top: false,
         child: Center(
+          heightFactor: 1,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 430),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
               child: SizedBox(
+                width: double.infinity,
                 height: 48,
                 child: FilledButton(
                   onPressed: !_vpnLoading && _virtualNumber.isNotEmpty
@@ -131,7 +132,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                       : null,
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF4DA3FF),
-                    disabledBackgroundColor: const Color(0xFF23262C),
+                    disabledBackgroundColor: WrytteColors.surfaceRaised,
                     foregroundColor: Colors.white,
                     disabledForegroundColor: const Color(0xFF9A9DA4),
                     padding: const EdgeInsets.symmetric(
@@ -139,12 +140,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                       vertical: 12,
                     ),
                     shape: const StadiumBorder(),
-                    textStyle: const TextStyle(
-                      fontFamily: 'Inter',
-                      fontSize: 18,
-                      fontWeight: FontWeight.w500,
-                      height: 1.2,
-                    ),
+                    textStyle: WrytteTypography.authButtonLabel,
                   ),
                   child: const Text('Next', textAlign: TextAlign.center),
                 ),
@@ -162,12 +158,12 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
           width: 280,
           child: Text.rich(
             TextSpan(
-              style: wrytteAuthSubtitleStyle,
+              style: WrytteTypography.authSubtitle,
               children: [
                 const TextSpan(text: 'To create another Wrytte ID '),
                 TextSpan(
                   text: 'Click here',
-                  style: wrytteAuthPrimaryStyle,
+                  style: const TextStyle(color: WrytteColors.primary),
                   recognizer: _generateRecognizer,
                 ),
               ],
@@ -182,7 +178,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
           decoration: BoxDecoration(
             color: Colors.transparent,
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: const Color(0xFF23262C), width: 1.5),
+            border: Border.all(color: WrytteColors.surfaceRaised, width: 1.5),
           ),
           child: _vpnLoading
               ? const Center(
@@ -206,7 +202,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                             ? TextAlign.center
                             : TextAlign.left,
                         textDirection: TextDirection.ltr,
-                        style: wrytteAuthInputStyle,
+                        style: WrytteTypography.authInput,
                       ),
                     ),
                     if (_virtualNumber.isNotEmpty) const SizedBox(width: 8),
@@ -224,13 +220,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
             Text(
               'What is the Wrytte ID ?',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 20,
-                fontWeight: FontWeight.w500,
-                height: 1.3,
-                color: Color(0xFFF2F2F2),
-              ),
+              style: WrytteTypography.authSectionTitleLarge,
             ),
             SizedBox(height: 16),
             Center(
@@ -241,13 +231,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                   'private calls, messaging, and\n'
                   'communication.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: 14,
-                    fontWeight: FontWeight.normal,
-                    height: 1.4,
-                    color: Color(0xFFF2F2F2),
-                  ),
+                  style: WrytteTypography.authBody,
                 ),
               ),
             ),

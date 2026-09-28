@@ -1,11 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-
-const _primaryFont = 'Inter';
-const _textPrimary = Color(0xFFF2F2F2);
-const _iconPrimary = Color(0xFFF7F8FA);
-const _primary = Color(0xFF4DA3FF);
-const _textSecondary = Color(0xFFC6C6C6);
+import 'package:wrytte/core/theme.dart';
 
 class WrytteAuthBackButton extends StatelessWidget {
   const WrytteAuthBackButton({super.key, required this.onPressed});
@@ -30,7 +25,10 @@ class WrytteAuthBackButton extends StatelessWidget {
           width: iconSize,
           height: iconSize,
           fit: BoxFit.contain,
-          colorFilter: const ColorFilter.mode(_iconPrimary, BlendMode.srcIn),
+          colorFilter: const ColorFilter.mode(
+            WrytteColors.iconPrimary,
+            BlendMode.srcIn,
+          ),
         ),
       ),
     ),
@@ -95,15 +93,7 @@ class AuthPageHeader extends StatelessWidget {
                     title,
                     textAlign: TextAlign.center,
                     maxLines: 1,
-                    style:
-                        titleStyle ??
-                        const TextStyle(
-                          fontFamily: _primaryFont,
-                          fontSize: 25,
-                          fontWeight: FontWeight.w600,
-                          height: 1.2,
-                          color: _textPrimary,
-                        ),
+                    style: titleStyle ?? WrytteTypography.authPageTitle,
                   ),
                 ),
               ),
@@ -136,22 +126,3 @@ class AuthPageSubtitle extends StatelessWidget {
     ),
   );
 }
-
-TextStyle get wrytteAuthSubtitleStyle => const TextStyle(
-  fontFamily: _primaryFont,
-  fontSize: 14,
-  height: 1.4,
-  color: _textSecondary,
-);
-
-TextStyle get wrytteAuthInputStyle => const TextStyle(
-  fontFamily: _primaryFont,
-  fontSize: 16,
-  height: 1.3,
-  color: _textPrimary,
-);
-
-TextStyle get wrytteAuthPrimaryStyle => const TextStyle(
-  fontFamily: _primaryFont,
-  color: _primary,
-);
