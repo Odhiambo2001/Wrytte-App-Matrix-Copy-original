@@ -3687,7 +3687,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                     }
                   },
                   backgroundColor: const Color(0xFF4DA3FF),
-                  child: const Icon(Icons.edit_square, color: Colors.black),
+                  child: const Icon(
+                    Icons.edit_outlined,
+                    color: Colors.black,
+                    size: 24,
+                  ),
                 ),
               ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,

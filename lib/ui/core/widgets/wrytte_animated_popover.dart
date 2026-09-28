@@ -29,7 +29,10 @@ class WrytteAnimatedPopover extends StatelessWidget {
       layoutBuilder: (currentChild, previousChildren) => Stack(
         alignment: alignment,
         clipBehavior: Clip.none,
-        children: [...previousChildren, ?currentChild],
+        children: [
+          ...previousChildren,
+          if (currentChild != null) currentChild,
+        ],
       ),
       transitionBuilder: (child, animation) {
         final curved = CurvedAnimation(

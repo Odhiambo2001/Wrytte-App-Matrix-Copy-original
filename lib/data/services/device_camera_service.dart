@@ -118,12 +118,6 @@ class DeviceCameraService {
 
       }
 
-      await _ignoreUnsupported(
-
-        () => controller.setJpegImageQuality(config.jpegQuality),
-
-      );
-
       if (config.supportsVideo) {
 
         await _ignoreUnsupported(controller.prepareForVideoRecording);
@@ -131,15 +125,6 @@ class DeviceCameraService {
       }
 
       final capabilities = await _readCapabilities(controller);
-
-      if (config.supportsVideo &&
-          capabilities.stabilizationModes.contains('level1')) {
-        await _ignoreUnsupported(
-          () => controller.setVideoStabilizationMode(
-            VideoStabilizationMode.level1,
-          ),
-        );
-      }
 
       return capabilities;
 
@@ -482,7 +467,7 @@ class DeviceCameraService {
       controller.getExposureOffsetStepSize,
       0,
     );
-    final stabilization = await _readStabilization(controller);
+    final stabilization = await _readStabilization();
     final value = controller.value;
 
     return DeviceCameraCapabilitiesRecord(
@@ -519,27 +504,7 @@ class DeviceCameraService {
 
   }
 
-  static Future<Set<String>> _readStabilization(
-
-    CameraController controller,
-
-  ) async {
-
-    try {
-
-      return (await controller.getSupportedVideoStabilizationModes())
-
-          .map((mode) => mode.name)
-
-          .toSet();
-
-    } catch (_) {
-
-      return const {'off'};
-
-    }
-
-  }
+  static Future<Set<String>> _readStabilization() async => const {'off'};
 
   static Future<void> _ignoreUnsupported(Future<void> Function() call) async {
 
