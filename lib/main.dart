@@ -103,6 +103,7 @@ class WrytteApp extends StatelessWidget {
       home: const ThemeWrapper(child: AuthWrapper()),
       routes: {
         '/welcome': (context) => const ThemeWrapper(child: WelcomeView()),
+        '/auth': (context) => const ThemeWrapper(child: AuthEntryScreen()),
         '/auth_entry_screen':
             (context) => const ThemeWrapper(child: AuthEntryScreen()),
 
