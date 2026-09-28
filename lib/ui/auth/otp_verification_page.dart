@@ -110,7 +110,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
       //
       // NOTE: isSignInFlow is kept for callers that explicitly set it, but
       // isNewUser from the server is the authoritative source of truth.
-      // A returning phone account never goes through AddProfilePage. It can
+      // A returning phone account never goes through profile setup. It can
       // still enroll KFace, and an already enrolled device goes to Home.
 
       if (result.isNewUser) {

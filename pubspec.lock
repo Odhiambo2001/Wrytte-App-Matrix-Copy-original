@@ -360,6 +360,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.9"
+  cupertino_ui:
+    dependency: transitive
+    description:
+      name: cupertino_ui
+      sha256: e9dfe7fac704028f8928cbe4028a0be5e8a709498e8daf8247de99e99a32aef3
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.2"
   dart_jsonwebtoken:
     dependency: transitive
     description:
@@ -701,6 +709,11 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.3"
+  flutter_localizations:
+    dependency: transitive
+    description: flutter
+    source: sdk
+    version: "0.0.0"
   flutter_native_splash:
     dependency: "direct overridden"
     description:
@@ -879,6 +892,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
+  go_router:
+    dependency: "direct main"
+    description:
+      name: go_router
+      sha256: "008ab21d89d0de8ccd79586838f7533f126c2d894f50bf25f2947888d3c225b5"
+      url: "https://pub.dev"
+    source: hosted
+    version: "18.0.1"
   hive:
     dependency: "direct overridden"
     description:
@@ -1007,6 +1028,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.2"
+  intl:
+    dependency: transitive
+    description:
+      name: intl
+      sha256: "3df61194eb431efc39c4ceba583b95633a403f46c9fd341e550ce0bfa50e9aa5"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.20.2"
   io:
     dependency: transitive
     description:
@@ -1159,6 +1188,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.13.0"
+  material_ui:
+    dependency: "direct main"
+    description:
+      name: material_ui
+      sha256: fbfb53cab6c4629438feeade5f3d305f72944bc9d9f25786b19106d32b80ec45
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.2.0"
   matrix:
     dependency: "direct overridden"
     description:
@@ -1191,6 +1228,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.1"
+  nested:
+    dependency: transitive
+    description:
+      name: nested
+      sha256: "03bac4c528c64c95c722ec99280375a6f2fc708eec17c7b3f07253b626cd2a20"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.0"
   nm:
     dependency: transitive
     description:
@@ -1438,6 +1483,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.5.2"
+  pro_image_editor:
+    dependency: "direct main"
+    description:
+      name: pro_image_editor
+      sha256: dbbe5085954e0106367e64ea85cd9f8fa3fdaa0b46dee08cb199b0a0c256dafe
+      url: "https://pub.dev"
+    source: hosted
+    version: "14.4.1"
   protobuf:
     dependency: transitive
     description:
@@ -1446,6 +1499,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.1.0"
+  provider:
+    dependency: "direct main"
+    description:
+      name: provider
+      sha256: "4e82183fa20e5ca25703ead7e05de9e4cceed1fbd1eadc1ac3cb6f565a09f272"
+      url: "https://pub.dev"
+    source: hosted
+    version: "6.1.5+1"
   pub_semver:
     dependency: transitive
     description:

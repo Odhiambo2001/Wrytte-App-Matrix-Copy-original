@@ -3,6 +3,15 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:wrytte/data/repositories/camera_repository_impl.dart';
+import 'package:wrytte/data/repositories/media_library_repository_impl.dart';
+import 'package:wrytte/data/services/camera_capabilities_service.dart';
+import 'package:wrytte/data/services/camera_session_manager.dart';
+import 'package:wrytte/data/services/device_camera_service.dart';
+import 'package:wrytte/data/services/device_media_library_service.dart';
+import 'package:wrytte/domain/repositories/camera_repository.dart';
+import 'package:wrytte/domain/repositories/media_library_repository.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
@@ -12,7 +21,8 @@ import 'package:wrytte/ui/auth/email_verification_page.dart';
 import 'package:wrytte/ui/auth/login_email_verification_page.dart';
 import 'package:wrytte/ui/auth/phone_auth_page.dart';
 import 'package:wrytte/ui/auth/otp_verification_page.dart';
-import 'package:wrytte/ui/auth/add_profile_page.dart';
+import 'package:wrytte/ui/auth/view_models/profile_setup_view_model.dart';
+import 'package:wrytte/ui/auth/views/profile_setup_view.dart';
 import 'package:wrytte/ui/auth/kface_view.dart';
 import 'package:wrytte/ui/auth/sign_in_page.dart';
 import 'package:wrytte/ui/auth/virtual_number_page.dart';
@@ -28,6 +38,7 @@ import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/notification_service.dart';
+import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/services/face/android_tflite_image_session.dart';
 
 import 'firebase_options.dart';
@@ -35,6 +46,60 @@ import 'core/theme.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
 
 const _systemBarColor = Colors.transparent;
+
+Widget _profileSetupRoute() => ThemeWrapper(
+  child: MultiProvider(
+    providers: [
+      Provider<CameraRepository>(
+        create: (_) => CameraRepositoryImpl(
+          DeviceCameraService(),
+          const CameraCapabilitiesService(),
+          CameraSessionManager(),
+        ),
+        dispose: (_, repository) => unawaited(repository.close()),
+      ),
+      Provider<MediaLibraryRepository>(
+        create: (_) => MediaLibraryRepositoryImpl(DeviceMediaLibraryService()),
+      ),
+      ChangeNotifierProvider(create: (_) => ProfileSetupViewModel()),
+    ],
+    child: const ProfileSetupView(),
+  ),
+);
+
+Future<(String?, String?)> _completeProfileSetup(String profileName) async {
+  try {
+    await UserProfileService.instance.updateDisplayName(profileName);
+  } catch (error) {
+    debugPrint('[ProfileSetupRoute] display name save failed: $error');
+  }
+  return (
+    await AuthService.instance.getCurrentUserId(),
+    await AuthService.instance.getSavedPhone(),
+  );
+}
+
+Widget _profileSetupCompletionRoute(String profileName) => FutureBuilder(
+  future: _completeProfileSetup(profileName),
+  builder: (context, snapshot) {
+    final session = snapshot.data;
+    final userId = session?.$1;
+    if (!snapshot.hasData || userId == null || userId.isEmpty) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF08090B),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return ThemeWrapper(
+      child: HomeScreen(
+        currentUserId: userId,
+        initialProfileName: profileName,
+        initialPhone: session!.$2,
+        isFirstSignup: true,
+      ),
+    );
+  },
+);
 
 void apkLog(String tag, String message) {
   debugPrint('[$tag] $message');
@@ -107,6 +172,7 @@ class WrytteApp extends StatelessWidget {
         '/auth': (context) => const ThemeWrapper(child: AuthEntryScreen()),
         '/auth_entry_screen':
             (context) => const ThemeWrapper(child: AuthEntryScreen()),
+        '/auth/profile': (context) => _profileSetupRoute(),
         '/auth/wrytte-id': (context) {
           final routeRegion =
               ModalRoute.of(context)?.settings.arguments as String?;
@@ -194,11 +260,15 @@ class WrytteApp extends StatelessWidget {
           );
         },
 
-        '/add_profile':
-            (context) =>
-                const ThemeWrapper(child: AddProfilePage(isNewUser: true)),
+        '/add_profile': (context) => _profileSetupRoute(),
 
-        '/home': (context) => const ThemeWrapper(child: AuthWrapper()),
+        '/home': (context) {
+          final profileName =
+              ModalRoute.of(context)?.settings.arguments as String?;
+          return profileName == null || profileName.trim().isEmpty
+              ? const ThemeWrapper(child: AuthWrapper())
+              : _profileSetupCompletionRoute(profileName.trim());
+        },
 
         'terms_privacy':
             (context) => const ThemeWrapper(child: TermsPrivacyPage()),
@@ -386,7 +456,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
     if (!_isLoggedIn) return const WelcomeView();
 
     if (_needsProfile) {
-      return const AddProfilePage(isNewUser: false);
+      return _profileSetupRoute();
     }
 
     return HomeScreen(

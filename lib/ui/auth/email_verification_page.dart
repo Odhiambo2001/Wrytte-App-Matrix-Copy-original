@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
-import 'package:wrytte/ui/auth/add_profile_page.dart';
 
 class EmailVerificationPage extends StatefulWidget {
   final String email;
@@ -89,10 +88,9 @@ class _EmailVerificationPageState extends State<EmailVerificationPage>
 
       if (!mounted) return;
 
-      Navigator.pushAndRemoveUntil(
+      Navigator.pushNamedAndRemoveUntil(
         context,
-        //MaterialPageRoute(builder: (_) => const AddProfilePage()),
-        MaterialPageRoute(builder: (_) => const AddProfilePage(isNewUser: true)),
+        '/auth/profile',
         (_) => false,
       );
     } catch (e) {

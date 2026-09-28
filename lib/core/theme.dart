@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 abstract final class WrytteColors {
   static const Color background = Color(0xFF08090B);
+  static const Color surface = Color(0xFF111318);
   static const Color surfaceRaised = Color(0xFF23262C);
   static const Color primary = Color(0xFF4DA3FF);
+  static const Color destructive = Color(0xFFFF5E5E);
   static const Color onPrimary = Color(0xFFFFFFFF);
   static const Color iconPrimary = Color(0xFFF7F8FA);
   static const Color textPrimary = Color(0xFFF2F2F2);
@@ -85,6 +87,11 @@ abstract final class WrytteTypography {
     letterSpacing: 0,
     color: WrytteColors.textPrimary,
   );
+}
+
+abstract final class WrytteSpacing {
+  static const double contentMaxWidth = 430;
+  static const double actionHeight = 48;
 }
 
 class WrytteTheme {

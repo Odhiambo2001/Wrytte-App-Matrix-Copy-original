@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/face/biometric_prewarm_service.dart';
-import 'package:wrytte/ui/auth/add_profile_page.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
@@ -96,22 +95,27 @@ class _KFaceChoicePageState extends State<KFaceChoicePage> {
               ),
               const SizedBox(height: 14),
               TextButton(
-                onPressed:
-                    () => Navigator.pushAndRemoveUntil(
+                onPressed: () {
+                  if (widget.isExistingUser) {
+                    Navigator.pushAndRemoveUntil(
                       context,
                       MaterialPageRoute<void>(
-                        builder:
-                            (_) =>
-                                widget.isExistingUser
-                                    ? HomeScreen(
-                                      currentUserId: widget.userId,
-                                      initialProfileName: widget.username,
-                                      initialPhone: widget.phoneNumber,
-                                    )
-                                    : const AddProfilePage(isNewUser: true),
+                        builder: (_) => HomeScreen(
+                          currentUserId: widget.userId,
+                          initialProfileName: widget.username,
+                          initialPhone: widget.phoneNumber,
+                        ),
                       ),
                       (_) => false,
-                    ),
+                    );
+                    return;
+                  }
+                  Navigator.pushNamedAndRemoveUntil(
+                    context,
+                    '/auth/profile',
+                    (_) => false,
+                  );
+                },
                 child: const Text('Skip'),
               ),
             ],

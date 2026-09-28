@@ -18,7 +18,6 @@ import 'package:wrytte/services/face/camera_frame_converter.dart';
 import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/services/face/local_face_signature_service.dart';
-import 'package:wrytte/ui/auth/add_profile_page.dart';
 import 'package:wrytte/ui/auth/kface_scan_overlay.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
@@ -1632,11 +1631,7 @@ Future<CameraController> _buildCameraController(
     );
     if (!mounted) return;
     _logTransitionTiming('profile_setup');
-    await Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(
-        builder: (_) => const AddProfilePage(isNewUser: true),
-      ),
-    );
+    await Navigator.of(context).pushReplacementNamed('/auth/profile');
   }
 
   Future<void> _completeEnrollmentInBackground(
