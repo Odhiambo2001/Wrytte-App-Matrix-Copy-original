@@ -28,6 +28,7 @@ import 'package:wrytte/ui/auth/sign_in_page.dart';
 import 'package:wrytte/ui/auth/virtual_number_page.dart';
 
 import 'package:wrytte/ui/screens/home_screen.dart';
+import 'package:wrytte/ui/startup/views/startup_screen.dart';
 import 'package:wrytte/ui/screens/terms_privacy_page.dart';
 import 'package:wrytte/ui/widgets/theme_wrapper.dart';
 
@@ -166,7 +167,9 @@ class WrytteApp extends StatelessWidget {
       title: 'Wrytte',
       debugShowCheckedModeBanner: false,
       theme: WrytteTheme.lightTheme,
-      home: const ThemeWrapper(child: AuthWrapper()),
+      home: StartupScreen(
+        nextScreen: (_) => const ThemeWrapper(child: AuthWrapper()),
+      ),
       routes: {
         '/welcome': (context) => const ThemeWrapper(child: WelcomeView()),
         '/auth': (context) => const ThemeWrapper(child: AuthEntryScreen()),

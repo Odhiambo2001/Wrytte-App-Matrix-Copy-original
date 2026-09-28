@@ -639,9 +639,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   static const TextStyle _bioStyle = TextStyle(
-    color: Colors.white,
+    color: Color(0xFFC6C6C6),
     fontSize: 14,
-    height: 1.4,
   );
 
   bool get _hasCard {
@@ -653,6 +652,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   String _profileBio() {
     final profileBio = _profile?.bio.trim() ?? '';
     if (profileBio.isNotEmpty) return profileBio;
+    if (!_isOtherUser) return 'Available on Wrytte';
     return '';
   }
 
@@ -673,7 +673,6 @@ class _ProfileScreenState extends State<ProfileScreen>
 
     return Theme(
       data: theme.copyWith(
-        fontFamily: 'Inter',
         textTheme: theme.textTheme.apply(fontFamily: 'Inter'),
         primaryTextTheme: theme.primaryTextTheme.apply(fontFamily: 'Inter'),
       ),
@@ -730,11 +729,12 @@ class _ProfileScreenState extends State<ProfileScreen>
                             ),
                           ),
 
-                        if (!_profileLoading && bioText.isNotEmpty) ...[
+                        if (bioText.isNotEmpty) ...[
                           const SizedBox(height: 10),
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 32),
                             child: Container(
+                              width: double.infinity,
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 18,
                                 vertical: 12,
@@ -1306,7 +1306,11 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (_bioExpanded) {
       return GestureDetector(
         onTap: () => setState(() => _bioExpanded = false),
-        child: Text(bioText, style: _bioStyle),
+        child: Text(
+          bioText,
+          textAlign: TextAlign.center,
+          style: _bioStyle,
+        ),
       );
     }
 
@@ -1319,7 +1323,11 @@ class _ProfileScreenState extends State<ProfileScreen>
         )..layout(maxWidth: constraints.maxWidth);
 
         if (!fullPainter.didExceedMaxLines) {
-          return Text(bioText, style: _bioStyle);
+          return Text(
+            bioText,
+            textAlign: TextAlign.center,
+            style: _bioStyle,
+          );
         }
 
         int lo = 0, hi = bioText.length;
@@ -1358,6 +1366,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               ],
             ),
             maxLines: 3,
+            textAlign: TextAlign.center,
           ),
         );
       },
