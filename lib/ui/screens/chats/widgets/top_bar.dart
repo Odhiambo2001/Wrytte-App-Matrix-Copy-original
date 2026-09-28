@@ -1,6 +1,5 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:wrytte/ui/screens/chats/widgets/selection_top_bar.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
@@ -216,14 +215,10 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
                           child: IconButton(
                             padding: EdgeInsets.zero,
                             onPressed: _openCamera, // Camera opens immediately
-                            icon: SvgPicture.asset(
-                              'assets/svg/stories_icon.svg',
-                              height: 20,
-                              width: 20,
-                              colorFilter: const ColorFilter.mode(
-                                Color(0xFF4DA3FF),
-                                BlendMode.srcIn,
-                              ),
+                            icon: const Icon(
+                              Icons.auto_awesome_outlined,
+                              color: Color(0xFF4DA3FF),
+                              size: 21,
                             ),
                           ),
                         ),
