@@ -9,6 +9,7 @@ import 'package:wrytte/domain/models/camera_capture_result.dart';
 import 'package:wrytte/domain/models/camera_session_config.dart';
 import 'package:wrytte/domain/repositories/camera_repository.dart';
 import 'package:wrytte/domain/repositories/media_library_repository.dart';
+import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/view_models/profile_setup_view_model.dart';
 import 'package:wrytte/ui/auth/widgets/sync_contacts_switch.dart';
 import 'package:wrytte/ui/camera/views/wrytte_camera_route.dart';
@@ -34,6 +35,7 @@ class _ProfileSetupViewState extends State<ProfileSetupView> {
   final _fullScreenCameraOpen = ValueNotifier<bool>(false);
 
   final _profilePhotoKey = GlobalKey();
+  bool _finishing = false;
 
   @override
   void dispose() {
@@ -44,17 +46,40 @@ class _ProfileSetupViewState extends State<ProfileSetupView> {
     super.dispose();
   }
 
-  void _finish() {
-    if (!context.read<ProfileSetupViewModel>().canFinish) return;
+  Future<void> _finish() async {
+    if (_finishing) return;
+    final model = context.read<ProfileSetupViewModel>();
+    if (!model.canFinish) return;
+    _finishing = true;
 
     FocusManager.instance.primaryFocus?.unfocus();
+
+    try {
+      var photoPath = model.profilePhotoPath;
+      if (photoPath == null && model.profilePhoto != null) {
+        photoPath = await context.read<MediaLibraryRepository>().loadFilePath(
+          model.profilePhoto!.id,
+        );
+      }
+      if (photoPath != null) {
+        await UserProfileService.instance.saveProfileImageLocally(
+          File(photoPath),
+        );
+      }
+    } catch (error) {
+      // Keep profile setup navigation available if local avatar persistence
+      // fails; the chosen photo is an optional part of signup.
+      debugPrint('[ProfileSetupView] profile photo save failed: $error');
+    }
+
+    if (!mounted) return;
 
     // Profile setup completes the authentication flow. Replace the complete
     // auth location so system Back cannot return to setup or OTP screens.
     Navigator.of(context).pushNamedAndRemoveUntil(
       '/home',
       (_) => false,
-      arguments: context.read<ProfileSetupViewModel>().name.trim(),
+      arguments: model.name.trim(),
     );
   }
 

@@ -142,6 +142,25 @@ class UserProfileService {
     await _refreshAndNotify();
   }
 
+  /// Saves a newly selected avatar locally so profile surfaces can display it
+  /// immediately, then retries its upload in the background.
+  Future<void> saveProfileImageLocally(File file) async {
+    final uid = await AuthService.instance.getCurrentUserId();
+    if (uid == null || uid.isEmpty) {
+      throw Exception('Not authenticated.');
+    }
+
+    final localPath = await _cacheProfileImageFile(uid, file);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_localProfileImageKey(uid), localPath);
+    await prefs.setString(_pendingProfileImageKey(uid), localPath);
+    _cache = null;
+
+    await _readFromStorage(allowBackendRefresh: false);
+
+    unawaited(_syncPendingAvatarAndRefresh());
+  }
+
   Future<String> uploadProfileImage(File file) async {
     final uid = await AuthService.instance.getCurrentUserId();
     if (uid == null || uid.isEmpty) {
