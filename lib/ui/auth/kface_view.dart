@@ -46,8 +46,6 @@ class _KfaceViewState extends State<KfaceView> {
           userId: widget.userId,
           isEnrollment: widget.isEnrollment,
           attachToExistingUser: widget.attachToExistingUser,
-          continueToProfileAfterEnrollment:
-              widget.continueToProfileAfterEnrollment,
         );
     _learnMoreRecognizer =
         TapGestureRecognizer()..onTap = () => _showInformation(context);
