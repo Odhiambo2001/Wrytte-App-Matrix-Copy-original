@@ -6,6 +6,7 @@ import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
+import 'package:wrytte/ui/auth/otp_verification_page.dart';
 import 'package:wrytte/ui/auth/active_device_login_page.dart';
 import 'package:wrytte/ui/auth/widgets/auth_bottom_action.dart';
 import 'package:wrytte/ui/auth/widgets/auth_page_header.dart';
@@ -260,7 +261,19 @@ class _SignInPageState extends State<SignInPage> {
       final lookup = await _realNumberService.searchPhoneAuthMethods(phone);
       if (!mounted) return;
       if (!lookup.exists) {
-        throw const FormatException('Phone account not found');
+        await _realNumberService.sendSmsCode(phone);
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+            builder:
+                (_) => OtpVerificationPage(
+                  phoneNumber: phone,
+                  isSignInFlow: false,
+                ),
+          ),
+        );
+        return;
       }
       if (lookup.kface) {
         Navigator.push(
