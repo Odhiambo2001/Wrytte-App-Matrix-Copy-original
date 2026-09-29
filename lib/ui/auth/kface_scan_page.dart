@@ -8,6 +8,7 @@ import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:wrytte/core/theme.dart';
 import 'package:image/image.dart' as img;
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/device_metadata_service.dart';
@@ -19,6 +20,7 @@ import 'package:wrytte/services/face/face_biometric_pipeline.dart';
 import 'package:wrytte/services/face/ldpc_fuzzy_commitment.dart';
 import 'package:wrytte/services/face/local_face_signature_service.dart';
 import 'package:wrytte/ui/auth/kface_scan_overlay.dart';
+import 'package:wrytte/ui/auth/widgets/auth_bottom_action.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
 
 /// Camera and RetinaFace stay on-device. The backend owns alignment, AdaFace,
@@ -2057,6 +2059,7 @@ Future<CameraController> _buildCameraController(
             FaceBiometricPipeline.framesToUse)
         .clamp(0.0, 1.0);
     final size = MediaQuery.sizeOf(context);
+    final bottomSafeArea = MediaQuery.paddingOf(context).bottom;
     // The reference keeps the camera card in the upper half and reserves the
     // lower half for the instruction and controls.
     final cameraHeight = size.height * 0.52;
@@ -2143,55 +2146,33 @@ Future<CameraController> _buildCameraController(
               width: double.infinity,
               height: bottomPanelHeight,
               color: Colors.black,
-              padding: const EdgeInsets.fromLTRB(24, 28, 24, 40),
+              padding: EdgeInsets.fromLTRB(0, 28, 0, bottomSafeArea),
               child: Column(
                 mainAxisSize: MainAxisSize.max,
                 children: [
-                  Text(
-                    _status,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w600,
-                      height: 1.3,
-                      color: Colors.white,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 28),
+                    child: Text(
+                      _status,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontFamily: WrytteTypography.primaryFontFamily,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                   const Spacer(),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton(
-                      onPressed:
-                          (_backendWaiting ||
-                                  (_complete && !_verificationFailed))
-                              ? null
-                              : _startOver,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            (_backendWaiting ||
-                                    (_complete && !_verificationFailed))
-                                ? const Color(0xFF23262C)
-                                : const Color(0xFF4285DF),
-                        foregroundColor:
-                            (_backendWaiting ||
-                                    (_complete && !_verificationFailed))
-                                ? const Color(0xFFB8BDC5)
-                                : Colors.white,
-                        disabledBackgroundColor: const Color(0xFF23262C),
-                        disabledForegroundColor: const Color(0xFFB8BDC5),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(26),
-                        ),
-                      ),
-                      child: const Text(
-                        'Start over',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
+                  AuthBottomAction(
+                    label: 'Start over',
+                    onPressed:
+                        (_backendWaiting ||
+                                (_complete && !_verificationFailed))
+                            ? null
+                            : _startOver,
+                    useBottomSafeArea: false,
                   ),
                 ],
               ),

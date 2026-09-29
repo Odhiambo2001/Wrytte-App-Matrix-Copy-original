@@ -459,6 +459,9 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                                           cursorColor: WrytteColors.primary,
                                           keyboardType: TextInputType.phone,
                                           style: WrytteTypography.authInput,
+                                          inputFormatters: const [
+                                            _CountryCodeInputFormatter(),
+                                          ],
                                           decoration: const InputDecoration(
                                             border: InputBorder.none,
                                             enabledBorder: InputBorder.none,
@@ -580,6 +583,34 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Keeps the international prefix and allows no more than four country-code
+/// digits while the user edits the field.
+class _CountryCodeInputFormatter extends TextInputFormatter {
+  const _CountryCodeInputFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    final limitedDigits = digits.length > 4 ? digits.substring(0, 4) : digits;
+    final text = '+$limitedDigits';
+    final selectionOffset = newValue.selection.extentOffset;
+    final digitsBeforeCursor = newValue.text
+        .substring(0, selectionOffset.clamp(0, newValue.text.length))
+        .replaceAll(RegExp(r'[^0-9]'), '')
+        .length;
+    final boundedDigitsBeforeCursor = digitsBeforeCursor.clamp(0, 4);
+
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: 1 + boundedDigitsBeforeCursor),
+      composing: TextRange.empty,
     );
   }
 }
