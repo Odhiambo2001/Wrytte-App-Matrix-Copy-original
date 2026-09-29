@@ -4,7 +4,6 @@ import 'package:wrytte/core/theme.dart';
 import 'package:wrytte/data/repositories/startup_repository_impl.dart';
 import 'package:wrytte/data/services/startup_preferences_service.dart';
 import 'package:wrytte/domain/repositories/startup_repository.dart';
-import 'package:wrytte/ui/startup/widgets/splash_logo_animation.dart';
 import 'package:wrytte/ui/startup/view_models/startup_view_model.dart';
 
 class StartupScreen extends StatefulWidget {
@@ -77,13 +76,19 @@ class _StartupScreenState extends State<StartupScreen> {
   }
 
   @override
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: WrytteColors.background,
-      body: SplashLogoAnimation(
-        animate: _hasSeenIntroduction != true,
-        onCompleted: _complete,
-      ),
+    // Trigger completion as soon as the screen is shown
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_animationFinished) {
+        _complete();
+      }
+    });
+
+    return const Scaffold(
+      backgroundColor: Colors.black,   // pure black screen
+      body: SizedBox.expand(),         // empty body
     );
   }
 }

@@ -143,6 +143,15 @@ class VirtualNumberService {
     return getAvailableVpn(regionCode: regionCode);
   }
 
+  /// Ensures the next signup flow generates a different candidate while
+  /// preserving the previous number long enough to exclude it from generation.
+  Future<void> prepareForNewSignup() async {
+    final preferences = await SharedPreferences.getInstance();
+    if (preferences.containsKey(_numberKey)) {
+      await preferences.setBool(_verifiedKey, false);
+    }
+  }
+
   Future<void> clearPendingWrytteId() async {
     final preferences = await SharedPreferences.getInstance();
     await preferences.remove(_numberKey);

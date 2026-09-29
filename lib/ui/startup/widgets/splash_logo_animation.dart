@@ -51,14 +51,6 @@ class _SplashLogoAnimationState extends State<SplashLogoAnimation>
   }
 
   @override
-  void didUpdateWidget(covariant SplashLogoAnimation oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.animate && !widget.animate) {
-      _controller.value = 1.0;
-    }
-  }
-
-  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
 

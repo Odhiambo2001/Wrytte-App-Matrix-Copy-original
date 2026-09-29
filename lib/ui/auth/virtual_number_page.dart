@@ -55,7 +55,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     super.dispose();
   }
 
-  Future<void> _fetchVpn({bool refresh = false}) async {
+  Future<void> _fetchVpn() async {
     setState(() {
       _vpnLoading = true;
       _fetchFailed = false;
@@ -65,12 +65,10 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
     try {
       final regionCode = _resolvedRegionCode;
       if (regionCode == null) throw StateError('Region is not ready');
-      final candidate =
-          refresh
-              ? await _service.refreshAvailableVpn(
-                regionCode: regionCode,
-              )
-              : await _service.getAvailableVpn(regionCode: regionCode);
+      // Reuse the cached number when the user taps "Click here" again.
+      final candidate = await _service.getAvailableVpn(
+        regionCode: regionCode,
+      );
 
       if (!mounted) return;
       setState(() {
@@ -111,7 +109,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
   @override
   Widget build(BuildContext context) {
     _generateRecognizer.onTap =
-        _vpnLoading ? null : () => _fetchVpn(refresh: true);
+        _vpnLoading ? null : _fetchVpn;
 
     return Scaffold(
       backgroundColor: WrytteTheme.background,

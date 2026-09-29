@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/services/auth/device_region_service.dart';
+import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/auth_entry_screen.dart';
 import 'package:wrytte/ui/auth/welcome_intro.dart';
 import 'package:wrytte/ui/screens/terms_privacy_page.dart';
@@ -20,8 +21,10 @@ class WelcomeView extends StatelessWidget {
         child: ConstrainedBox(
           constraints: const BoxConstraints(minHeight: 48),
           child: FilledButton(
-            onPressed: () {
+            onPressed: () async {
               unawaited(_collectDeviceMetadata());
+              await VirtualNumberService().prepareForNewSignup();
+              if (!context.mounted) return;
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(builder: (_) => const AuthEntryScreen()),
