@@ -37,7 +37,6 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   bool _isSending = false;
   Future<void>? _sendCodeFuture;
   bool _showDivider = false;
-  bool _isAutoFilling = false;
   bool _hasInvalidCountryCode = false;
 
   /// Valid, normalized international number (for example +254712345678).
@@ -77,8 +76,6 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
 
   /// Detect country from typed code (Telegram behavior)
   void _detectCountryFromCode(String value) {
-    if (_isAutoFilling) return;
-
     // Ensure plus sign is always present
     if (!value.startsWith('+')) {
       _codeCtrl.text = '+$value';
@@ -112,13 +109,6 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       _showDivider = codeWithoutPlus.isNotEmpty;
     });
 
-    if (detectedCountry != null && !_isAutoFilling) {
-      _isAutoFilling = true;
-      Future.delayed(const Duration(milliseconds: 100), () {
-        _numberFocusNode.requestFocus();
-        _isAutoFilling = false;
-      });
-    }
   }
 
   /// Handle code field focus and cursor position
