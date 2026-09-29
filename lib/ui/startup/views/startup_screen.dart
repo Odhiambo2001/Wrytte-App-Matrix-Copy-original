@@ -70,16 +70,14 @@ class _StartupScreenState extends State<StartupScreen> {
 
     if (!mounted) return;
     widget.onAnimationCompleted?.call();
-    await Navigator.of(
-      context,
-    ).pushReplacement(MaterialPageRoute<void>(builder: widget.nextScreen));
+    await Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(builder: widget.nextScreen),
+    );
   }
 
   @override
-
-  @override
   Widget build(BuildContext context) {
-    // Trigger completion as soon as the screen is shown
+    // Go to Welcome page as soon as the screen is ready
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_animationFinished) {
         _complete();
@@ -87,8 +85,8 @@ class _StartupScreenState extends State<StartupScreen> {
     });
 
     return const Scaffold(
-      backgroundColor: Colors.black,   // pure black screen
-      body: SizedBox.expand(),         // empty body
+      backgroundColor: Colors.black, // pure black, no logo
+      body: SizedBox.expand(),
     );
   }
 }
