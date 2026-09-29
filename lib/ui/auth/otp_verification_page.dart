@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/services/auth/device_metadata_service.dart';
 import 'package:wrytte/ui/auth/kface_choice_page.dart';
+import 'package:wrytte/ui/auth/widgets/auth_page_header.dart';
 import 'package:wrytte/ui/screens/home_screen.dart';
+import 'package:wrytte/core/theme.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 
 class OtpVerificationPage extends StatefulWidget {
@@ -249,9 +251,11 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
   Widget _buildOtpBoxes() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final screenWidth = constraints.maxWidth;
-        final boxSize = (screenWidth - 48) / 6;
-        final boxWidth = boxSize.clamp(36.0, 48.0);
+        const gap = 10.0;
+        final boxWidth = ((constraints.maxWidth - gap * 5) / 6).clamp(
+          38.0,
+          46.0,
+        );
 
         return Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -261,21 +265,26 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
                     ? _otpController.text[index]
                     : '';
 
-            return Container(
-              width: boxWidth,
-              height: boxWidth + 10,
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: const Color(0xFF23262C),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                char.isEmpty ? '—' : char,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w500,
+            return Padding(
+              padding: EdgeInsetsDirectional.only(end: index == 5 ? 0 : gap),
+              child: Container(
+                width: boxWidth,
+                height: 50,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF08090B),
+                  border: Border.all(color: const Color(0xFF2D3138)),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: Text(
+                  char.isEmpty ? '–' : char,
+                  style: TextStyle(
+                    fontFamily: WrytteTypography.primaryFontFamily,
+                    color: char.isEmpty ? Colors.white70 : Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w500,
+                    height: 1,
+                  ),
                 ),
               ),
             );
@@ -296,134 +305,147 @@ class _OtpVerificationPageState extends State<OtpVerificationPage>
 
   @override
   Widget build(BuildContext context) {
-    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
-
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
       resizeToAvoidBottomInset: true,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: EdgeInsets.only(bottom: keyboardHeight),
-          child: Column(
-            children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  onPressed: () => Navigator.pop(context),
+        bottom: false,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 430),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                AuthPageHeader(
+                  title: 'Activate account',
+                  onBack: () => Navigator.pop(context),
                 ),
-              ),
-
-              const SizedBox(height: 40),
-
-              const Text(
-                'Activate your account',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              Text(
-                'We\'ve sent a code by SMS to phone\nnumber $_displayPhoneNumber.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white54),
-              ),
-
-              const SizedBox(height: 30),
-
-              AnimatedBuilder(
-                animation: _shakeAnimation,
-                builder: (context, child) {
-                  return Transform.translate(
-                    offset: Offset(_shakeAnimation.value, 0),
-                    child: child,
-                  );
-                },
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 18,
-                    horizontal: 16,
-                  ),
-                  margin: const EdgeInsets.symmetric(horizontal: 20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF23262C),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'Enter 6-digit code',
-                        style: TextStyle(color: Colors.white70, fontSize: 14),
-                      ),
-                      const SizedBox(height: 16),
-                      _buildOtpBoxes(),
-                      TextField(
-                        controller: _otpController,
-                        focusNode: _focusNode,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                        ],
-                        maxLength: 6,
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          counterText: '',
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(18, 0, 18, 28),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        AuthPageSubtitle(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 310),
+                            child: Text(
+                              "We've sent a code by SMS to phone\nnumber $_displayPhoneNumber.",
+                              textAlign: TextAlign.center,
+                              style: WrytteTypography.authSubtitle,
+                            ),
+                          ),
                         ),
-                        style: const TextStyle(color: Colors.transparent),
-                        cursorColor: Colors.transparent,
-                        onChanged: (_) {
-                          setState(() {});
-                          if (_otpController.text.length == 6) {
-                            _verifyOtp();
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              if (_errorMessage != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Text(
-                    _errorMessage!,
-                    style: const TextStyle(color: Colors.redAccent),
-                  ),
-                ),
-
-              const SizedBox(height: 20),
-
-              Text(
-                '00:${_secondsRemaining.toString().padLeft(2, '0')}',
-                style: const TextStyle(color: Colors.white70, fontSize: 16),
-              ),
-
-              const SizedBox(height: 40),
-
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  TextButton(
-                    onPressed: _canResend ? _resendCode : null,
-                    child: const Text(
-                      'Resend SMS',
-                      style: TextStyle(color: Colors.white54),
+                        const SizedBox(height: 18),
+                        Text(
+                          _isLoading ? 'Verifying…' : 'Enter 6-digit code',
+                          textAlign: TextAlign.center,
+                          style: WrytteTypography.authSubtitle,
+                        ),
+                        const SizedBox(height: 28),
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _focusNode.requestFocus,
+                          child: AnimatedBuilder(
+                            animation: _shakeAnimation,
+                            builder:
+                                (context, child) => Transform.translate(
+                                  offset: Offset(_shakeAnimation.value, 0),
+                                  child: child,
+                                ),
+                            child: _buildOtpBoxes(),
+                          ),
+                        ),
+                        SizedBox(
+                          height: 1,
+                          child: Opacity(
+                            opacity: 0,
+                            child: TextField(
+                              controller: _otpController,
+                              focusNode: _focusNode,
+                              enabled: !_isLoading,
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
+                              maxLength: 6,
+                              decoration: const InputDecoration(
+                                border: InputBorder.none,
+                                counterText: '',
+                                isCollapsed: true,
+                              ),
+                              onChanged: (_) {
+                                setState(() {});
+                                if (_otpController.text.length == 6) {
+                                  _verifyOtp();
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                        if (_errorMessage != null) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            _errorMessage!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.redAccent),
+                          ),
+                        ],
+                        const SizedBox(height: 40),
+                        Text(
+                          '00:${_secondsRemaining.toString().padLeft(2, '0')}',
+                          textAlign: TextAlign.center,
+                          style: WrytteTypography.authSubtitle,
+                        ),
+                        const SizedBox(height: 34),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextButton(
+                                onPressed:
+                                    _canResend && !_isLoading
+                                        ? _resendCode
+                                        : null,
+                                child: Text(
+                                  'Resend SMS',
+                                  style: TextStyle(
+                                    fontFamily:
+                                        WrytteTypography.primaryFontFamily,
+                                    color:
+                                        _canResend
+                                            ? WrytteColors.textPrimary
+                                            : Colors.white54,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              child: TextButton(
+                                onPressed: null,
+                                child: Text(
+                                  'Activate via call',
+                                  style: TextStyle(
+                                    fontFamily:
+                                        WrytteTypography.primaryFontFamily,
+                                    color:
+                                        _canResend
+                                            ? WrytteColors.textPrimary
+                                            : Colors.white54,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  const Text(
-                    'Activate via call',
-                    style: TextStyle(color: Colors.white54),
-                  ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
