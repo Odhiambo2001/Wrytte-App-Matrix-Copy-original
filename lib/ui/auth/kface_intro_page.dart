@@ -13,6 +13,7 @@ class KFaceIntroPage extends StatelessWidget {
     this.recoveryData,
     this.isEnrollment = false,
     this.attachToExistingUser = false,
+    this.continueToProfileAfterEnrollment = false,
     this.prewarm,
   });
 
@@ -21,6 +22,7 @@ class KFaceIntroPage extends StatelessWidget {
   final KFaceRecoveryData? recoveryData;
   final bool isEnrollment;
   final bool attachToExistingUser;
+  final bool continueToProfileAfterEnrollment;
   final BiometricPrewarmBundle? prewarm;
 
   @override
@@ -30,6 +32,7 @@ class KFaceIntroPage extends StatelessWidget {
     recoveryData: recoveryData,
     isEnrollment: isEnrollment,
     attachToExistingUser: attachToExistingUser,
+    continueToProfileAfterEnrollment: continueToProfileAfterEnrollment,
     prewarm: prewarm,
   );
 }

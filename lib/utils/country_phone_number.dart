@@ -62,25 +62,33 @@ class CountryPhoneNumber {
     String countryAlpha2,
   ) {
     final number = tryParse(input, countryAlpha2);
-    if (number == null) return PhoneNumberLengthStatus.invalidLength;
+    if (number == null) {
+      final isoCode = isoCodeFromAlpha2(countryAlpha2);
+      if (isoCode != null) {
+        final callingCode = PhoneNumber(isoCode: isoCode, nsn: '').countryCode;
+        final digitCount = input.replaceAll(RegExp(r'[^\d]'), '').length;
+        if (digitCount + callingCode.length > 15) {
+          return PhoneNumberLengthStatus.tooLong;
+        }
+        final possibleLengths = _possibleNationalLengths(isoCode);
+        if (possibleLengths.isNotEmpty) {
+          final minimumLength = possibleLengths.reduce((a, b) => a < b ? a : b);
+          final maximumLength = possibleLengths.reduce((a, b) => a > b ? a : b);
+          if (digitCount < minimumLength) {
+            return PhoneNumberLengthStatus.tooShort;
+          }
+          if (digitCount > maximumLength) {
+            return PhoneNumberLengthStatus.tooLong;
+          }
+        }
+      }
+      return PhoneNumberLengthStatus.invalidLength;
+    }
     if (number.countryCode.length + number.nsn.length > 15) {
       return PhoneNumberLengthStatus.tooLong;
     }
 
-    final metadata = metadataLenghtsByIsoCode[number.isoCode];
-    if (metadata == null) return PhoneNumberLengthStatus.invalidLength;
-    final possibleLengths = <int>{
-      ...metadata.mobile,
-      ...metadata.fixedLine,
-      ...metadata.voip,
-      ...metadata.tollFree,
-      ...metadata.premiumRate,
-      ...metadata.sharedCost,
-      ...metadata.personalNumber,
-      ...metadata.uan,
-      ...metadata.pager,
-      ...metadata.voiceMail,
-    }..removeWhere((length) => length <= 0);
+    final possibleLengths = _possibleNationalLengths(number.isoCode);
     if (possibleLengths.isEmpty) {
       return number.isValidLength()
           ? PhoneNumberLengthStatus.valid
@@ -97,6 +105,29 @@ class CountryPhoneNumber {
     return possibleLengths.contains(length)
         ? PhoneNumberLengthStatus.valid
         : PhoneNumberLengthStatus.invalidLength;
+  }
+
+  static Set<int> _possibleNationalLengths(IsoCode isoCode) {
+    final metadata = metadataLenghtsByIsoCode[isoCode];
+    if (metadata == null) return {};
+    // These auth fields verify by SMS, so use mobile numbering lengths where
+    // the country metadata provides them. Other categories, such as toll-free,
+    // can have different lengths and must not make a mobile number seem valid.
+    if (metadata.mobile.isNotEmpty) {
+      return metadata.mobile.where((length) => length > 0).toSet();
+    }
+    return <int>{
+      ...metadata.mobile,
+      ...metadata.fixedLine,
+      ...metadata.voip,
+      ...metadata.tollFree,
+      ...metadata.premiumRate,
+      ...metadata.sharedCost,
+      ...metadata.personalNumber,
+      ...metadata.uan,
+      ...metadata.pager,
+      ...metadata.voiceMail,
+    }..removeWhere((length) => length <= 0);
   }
 
   static String formatNational(String input, String countryAlpha2) {
@@ -207,6 +238,10 @@ class CountryPhoneNumberInputFormatter extends TextInputFormatter {
   ) {
     final raw = newValue.text;
     if (raw.isEmpty) return newValue;
+
+    // Let backspace remove grouping punctuation instead of immediately
+    // inserting it again and trapping the cursor beside a bracket.
+    if (newValue.text.length < oldValue.text.length) return newValue;
 
     // Keep the phone keyboard characters users commonly paste/type, but do not
     // merge extensions or other text into the subscriber number.

@@ -86,6 +86,8 @@ class _KFaceChoicePageState extends State<KFaceChoicePage> {
                                 userId: widget.userId,
                                 isEnrollment: true,
                                 attachToExistingUser: true,
+                                continueToProfileAfterEnrollment:
+                                    !widget.isExistingUser,
                                 prewarm: _prewarm,
                               ),
                         ),
@@ -100,11 +102,12 @@ class _KFaceChoicePageState extends State<KFaceChoicePage> {
                     Navigator.pushAndRemoveUntil(
                       context,
                       MaterialPageRoute<void>(
-                        builder: (_) => HomeScreen(
-                          currentUserId: widget.userId,
-                          initialProfileName: widget.username,
-                          initialPhone: widget.phoneNumber,
-                        ),
+                        builder:
+                            (_) => HomeScreen(
+                              currentUserId: widget.userId,
+                              initialProfileName: widget.username,
+                              initialPhone: widget.phoneNumber,
+                            ),
                       ),
                       (_) => false,
                     );

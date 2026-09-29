@@ -5,6 +5,7 @@ import 'package:wrytte/services/auth/virtual_number_service.dart';
 import 'package:wrytte/ui/auth/auth_entry_components.dart';
 import 'package:wrytte/ui/auth/phone_auth_page.dart';
 import 'package:wrytte/ui/auth/sign_in_page.dart';
+import 'package:wrytte/ui/widgets/theme_wrapper.dart';
 
 class AuthEntryScreen extends StatefulWidget {
   const AuthEntryScreen({super.key});
@@ -73,11 +74,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
     final regionCode =
         await (_signupRegion ??= DeviceRegionService.detectOnce());
     if (!mounted) return;
-    Navigator.pushNamed(
-      context,
-      '/auth/wrytte-id',
-      arguments: regionCode,
-    );
+    Navigator.pushNamed(context, '/auth/wrytte-id', arguments: regionCode);
   }
 
   Future<void> _openPhone() async {
@@ -92,7 +89,9 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
   void _openSignIn() {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const SignInPage()),
+      MaterialPageRoute<void>(
+        builder: (_) => ThemeWrapper(child: SignInPage(key: UniqueKey())),
+      ),
     );
   }
 }

@@ -34,6 +34,7 @@ class KFaceScanPage extends StatefulWidget {
     this.recoveryData,
     required this.isEnrollment,
     this.attachToExistingUser = false,
+    this.continueToProfileAfterEnrollment = false,
     this.prewarm,
   });
   final String wrytteId;
@@ -44,6 +45,7 @@ class KFaceScanPage extends StatefulWidget {
   final KFaceRecoveryData? recoveryData;
   final bool isEnrollment;
   final bool attachToExistingUser;
+  final bool continueToProfileAfterEnrollment;
   final BiometricPrewarmBundle? prewarm;
 
   @override
@@ -661,39 +663,39 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     }
   }
 
-Future<CameraController> _buildCameraController(
-  CameraDescription description,
-) async {
-  Object? lastError;
-  for (final preset in <ResolutionPreset>[
-    ResolutionPreset.medium, // wider FOV — avoids the “zoomed in” look
-    ResolutionPreset.high,
-    ResolutionPreset.low,
-  ]) {
-    final camera = CameraController(
-      description,
-      preset,
-      enableAudio: false,
-      fps: 30,
-      imageFormatGroup:
-          Platform.isIOS
-              ? ImageFormatGroup.bgra8888
-              : ImageFormatGroup.yuv420,
-    );
-    try {
-      await BiometricStageTiming.measureAsync(
-        'Camera',
-        'initialize_${preset.name}_30fps',
-        () => camera.initialize(),
+  Future<CameraController> _buildCameraController(
+    CameraDescription description,
+  ) async {
+    Object? lastError;
+    for (final preset in <ResolutionPreset>[
+      ResolutionPreset.medium, // wider FOV — avoids the “zoomed in” look
+      ResolutionPreset.high,
+      ResolutionPreset.low,
+    ]) {
+      final camera = CameraController(
+        description,
+        preset,
+        enableAudio: false,
+        fps: 30,
+        imageFormatGroup:
+            Platform.isIOS
+                ? ImageFormatGroup.bgra8888
+                : ImageFormatGroup.yuv420,
       );
-      return camera;
-    } catch (error) {
-      lastError = error;
-      await camera.dispose();
+      try {
+        await BiometricStageTiming.measureAsync(
+          'Camera',
+          'initialize_${preset.name}_30fps',
+          () => camera.initialize(),
+        );
+        return camera;
+      } catch (error) {
+        lastError = error;
+        await camera.dispose();
+      }
     }
+    throw lastError ?? StateError('Unable to initialize the front camera.');
   }
-  throw lastError ?? StateError('Unable to initialize the front camera.');
-}
 
   Future<void> _startFrameStream(CameraController camera) async {
     // If a stop was requested when extraction paused, let it finish first so a
@@ -1507,6 +1509,12 @@ Future<CameraController> _buildCameraController(
         publicKey: enrollment.publicKey,
       );
       if (!mounted) return;
+      if (widget.continueToProfileAfterEnrollment) {
+        await Navigator.of(
+          context,
+        ).pushNamedAndRemoveUntil('/auth/profile', (_) => false);
+        return;
+      }
       final currentUser = await AuthService.instance.getCurrentUser();
       if (!mounted) return;
       await Navigator.of(context).pushAndRemoveUntil(
@@ -2168,8 +2176,7 @@ Future<CameraController> _buildCameraController(
                   AuthBottomAction(
                     label: 'Start over',
                     onPressed:
-                        (_backendWaiting ||
-                                (_complete && !_verificationFailed))
+                        (_backendWaiting || (_complete && !_verificationFailed))
                             ? null
                             : _startOver,
                     useBottomSafeArea: false,

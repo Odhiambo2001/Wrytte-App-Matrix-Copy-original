@@ -15,6 +15,7 @@ class KfaceView extends StatefulWidget {
     required this.isEnrollment,
     this.userId,
     this.attachToExistingUser = false,
+    this.continueToProfileAfterEnrollment = false,
     this.recoveryData,
     this.prewarm,
   });
@@ -23,6 +24,7 @@ class KfaceView extends StatefulWidget {
   final bool isEnrollment;
   final String? userId;
   final bool attachToExistingUser;
+  final bool continueToProfileAfterEnrollment;
   final KFaceRecoveryData? recoveryData;
   final BiometricPrewarmBundle? prewarm;
 
@@ -44,9 +46,11 @@ class _KfaceViewState extends State<KfaceView> {
           userId: widget.userId,
           isEnrollment: widget.isEnrollment,
           attachToExistingUser: widget.attachToExistingUser,
+          continueToProfileAfterEnrollment:
+              widget.continueToProfileAfterEnrollment,
         );
-    _learnMoreRecognizer = TapGestureRecognizer()
-      ..onTap = () => _showInformation(context);
+    _learnMoreRecognizer =
+        TapGestureRecognizer()..onTap = () => _showInformation(context);
   }
 
   @override
@@ -65,14 +69,17 @@ class _KfaceViewState extends State<KfaceView> {
         onPressed: () {
           Navigator.of(context).push(
             MaterialPageRoute<void>(
-              builder: (_) => KFaceScanPage(
-                wrytteId: widget.wrytteId,
-                userId: widget.userId,
-                recoveryData: widget.recoveryData,
-                isEnrollment: widget.isEnrollment,
-                attachToExistingUser: widget.attachToExistingUser,
-                prewarm: _prewarm,
-              ),
+              builder:
+                  (_) => KFaceScanPage(
+                    wrytteId: widget.wrytteId,
+                    userId: widget.userId,
+                    recoveryData: widget.recoveryData,
+                    isEnrollment: widget.isEnrollment,
+                    attachToExistingUser: widget.attachToExistingUser,
+                    continueToProfileAfterEnrollment:
+                        widget.continueToProfileAfterEnrollment,
+                    prewarm: _prewarm,
+                  ),
             ),
           );
         },
@@ -142,20 +149,21 @@ class _KfaceViewState extends State<KfaceView> {
   void _showInformation(BuildContext context) {
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('About Kface'),
-        content: const SingleChildScrollView(
-          child: Text(
-            'Kface is a planned on-device recovery feature. Enrollment and recovery are not connected in this build. No facial data has been captured and no recovery key has been created.',
+      builder:
+          (context) => AlertDialog(
+            title: const Text('About Kface'),
+            content: const SingleChildScrollView(
+              child: Text(
+                'Kface is a planned on-device recovery feature. Enrollment and recovery are not connected in this build. No facial data has been captured and no recovery key has been created.',
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
     );
   }
 }

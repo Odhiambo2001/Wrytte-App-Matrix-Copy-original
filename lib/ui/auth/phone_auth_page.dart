@@ -1,14 +1,15 @@
-import 'package:flutter/gestures.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/api_service.dart';
+import 'package:wrytte/services/auth/device_region_service.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
 import 'package:wrytte/ui/auth/country_picker_page.dart';
 import 'package:wrytte/ui/auth/active_device_login_page.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/widgets/auth_bottom_action.dart';
 import 'package:wrytte/ui/auth/widgets/auth_page_header.dart';
-import 'package:wrytte/ui/screens/terms_privacy_page.dart';
 import 'package:wrytte/core/theme.dart';
 import 'package:wrytte/utils/countries.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
@@ -137,6 +138,16 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       await _showInvalidCountryCodeDialog();
       return;
     }
+    final lengthStatus = CountryPhoneNumber.lengthStatus(
+      _numberCtrl.text,
+      _selectedCountry!.isoCode,
+    );
+    if (lengthStatus != PhoneNumberLengthStatus.valid) {
+      _codeFocusNode.unfocus();
+      _numberFocusNode.unfocus();
+      await _showInvalidPhoneDialog();
+      return;
+    }
     if (!_isValid) {
       await _showInvalidPhoneDialog();
       return;
@@ -164,11 +175,12 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
     );
     final message = switch (lengthStatus) {
       PhoneNumberLengthStatus.tooShort =>
-        'The phone number you entered has an invalid length for ${country.name}.',
+        'The phone number you entered is too short for ${country.name}.',
       PhoneNumberLengthStatus.tooLong =>
         'The phone number you entered is too long for ${country.name}.',
       PhoneNumberLengthStatus.invalidLength =>
-        'The phone number you entered has an invalid length for ${country.name}.',
+        'The phone number you entered has an invalid length '
+            'for ${country.name}.',
       PhoneNumberLengthStatus.valid =>
         'The phone number you entered is not valid for ${country.name}.',
     };
@@ -324,13 +336,38 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_initializeDeviceCountry());
+  }
 
-    // Initialize with plus sign and focus on code field
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+  Future<void> _initializeDeviceCountry() async {
+    final regionCode = await DeviceRegionService.detectOnce();
+    Country? detectedCountry;
+    for (final country in countries) {
+      if (country.isoCode == regionCode) {
+        detectedCountry = country;
+        break;
+      }
+    }
+
+    if (!mounted) return;
+    final country = detectedCountry;
+    if (country == null) {
       _codeCtrl.text = '+';
-      _codeCtrl.selection = TextSelection.fromPosition(TextPosition(offset: 1));
+      _codeCtrl.selection = const TextSelection.collapsed(offset: 1);
       _codeFocusNode.requestFocus();
+      return;
+    }
+
+    setState(() {
+      _selectedCountry = country;
+      _codeCtrl.text = '+${country.dialCode}';
+      _codeCtrl.selection = TextSelection.collapsed(
+        offset: _codeCtrl.text.length,
+      );
+      _showDivider = true;
+      _hasInvalidCountryCode = false;
     });
+    _numberFocusNode.requestFocus();
   }
 
   @override
@@ -525,44 +562,6 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                               ],
                             ),
                           ),
-                          if (MediaQuery.viewInsetsOf(context).bottom == 0) ...[
-                            const SizedBox(height: 24),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 15,
-                              ),
-                              child: RichText(
-                                textAlign: TextAlign.center,
-                                text: TextSpan(
-                                  style: WrytteTypography.authBody,
-                                  children: [
-                                    const TextSpan(
-                                      text:
-                                          'By entering this device’s phone number and tapping “Next,” you agree to ',
-                                    ),
-                                    TextSpan(
-                                      text:
-                                          'Wrytte’s Terms and Conditions and Privacy Policy',
-                                      style: const TextStyle(
-                                        color: WrytteColors.primary,
-                                      ),
-                                      recognizer:
-                                          TapGestureRecognizer()
-                                            ..onTap =
-                                                () => Navigator.push(
-                                                  context,
-                                                  MaterialPageRoute(
-                                                    builder:
-                                                        (_) =>
-                                                            const TermsPrivacyPage(),
-                                                  ),
-                                                ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
                         ],
                       ),
                     ),

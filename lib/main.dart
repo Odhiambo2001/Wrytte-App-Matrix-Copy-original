@@ -52,11 +52,12 @@ Widget _profileSetupRoute() => ThemeWrapper(
   child: MultiProvider(
     providers: [
       Provider<CameraRepository>(
-        create: (_) => CameraRepositoryImpl(
-          DeviceCameraService(),
-          const CameraCapabilitiesService(),
-          CameraSessionManager(),
-        ),
+        create:
+            (_) => CameraRepositoryImpl(
+              DeviceCameraService(),
+              const CameraCapabilitiesService(),
+              CameraSessionManager(),
+            ),
         dispose: (_, repository) => unawaited(repository.close()),
       ),
       Provider<MediaLibraryRepository>(
@@ -488,8 +489,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   @override
   Widget build(BuildContext context) {
     if (_checking) {
-      // Show the welcome screen immediately after startup while the saved
-      // session is checked, instead of exposing a blank loading frame.
+      // Show the welcome screen while the saved session is checked.
       return const WelcomeView();
     }
 
