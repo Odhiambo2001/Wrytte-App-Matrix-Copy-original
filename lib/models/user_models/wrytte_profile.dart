@@ -26,6 +26,18 @@ class WrytteProfile {
 
   String? operator [](String key) => fields[key]?.toString();
 
+  String? get avatarUrl => fields['avatar_url']?.toString();
+  String? get firstNameValue => this[firstNameKey];
+  String? get lastNameValue => this[lastNameKey];
+  String? get phoneNumberValue => this[phoneNumber];
+  String? get bioValue => this[bio];
+  String? get linkValue => this[link];
+  String? get channelAliasValue => this[channelAlias];
+  String? get groupAliasValue => this[groupAlias];
+
+  static const firstNameKey = firstName;
+  static const lastNameKey = lastName;
+
   Map<String, String> get visibilitySettings {
     final raw = fields[visibility];
     if (raw is! Map) return const {};

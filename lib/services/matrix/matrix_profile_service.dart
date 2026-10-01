@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
@@ -54,6 +55,74 @@ class MatrixProfileService {
 
   Future<void> setVisibility(String userId, Map<String, String> settings) =>
       setField(userId, WrytteProfile.visibility, settings);
+
+  Future<mx.CachedPresence> getOnlineStatus(String userId) async {
+    final client = MatrixClientService.instance.client;
+    return client.fetchCurrentPresence(userId);
+  }
+
+  Future<void> updateOwnerProfile({
+    required String userId,
+    String? avatarUrl,
+    String? firstName,
+    String? lastName,
+    String? phoneNumber,
+    String? bio,
+    String? link,
+    String? channelAlias,
+    String? groupAlias,
+    Map<String, String>? visibilitySettings,
+  }) async {
+    final operations = <Future<void>>[];
+    if (avatarUrl != null) operations.add(setAvatar(userId, avatarUrl));
+    if (firstName != null) operations.add(setFirstName(userId, firstName));
+    if (lastName != null) operations.add(setLastName(userId, lastName));
+    if (phoneNumber != null) operations.add(setPhoneNumber(userId, phoneNumber));
+    if (bio != null) operations.add(setBio(userId, bio));
+    if (link != null) operations.add(setLink(userId, link));
+    if (channelAlias != null) operations.add(setChannelAlias(userId, channelAlias));
+    if (groupAlias != null) operations.add(setGroupAlias(userId, groupAlias));
+    if (visibilitySettings != null) operations.add(setVisibility(userId, visibilitySettings));
+    await Future.wait(operations);
+  }
+
+  Future<void> setAvatar(String userId, String? mxcUrl) async {
+    if (mxcUrl == null || mxcUrl.trim().isEmpty) {
+      final response = await http.delete(
+        _profileUri(userId, 'avatar_url'),
+        headers: await _authHeaders(),
+      );
+      _check(response);
+      return;
+    }
+    await setField(userId, 'avatar_url', mxcUrl.trim());
+  }
+
+  Future<void> setFirstName(String userId, String? value) =>
+      _setOrDelete(userId, WrytteProfile.firstName, value);
+
+  Future<void> setLastName(String userId, String? value) =>
+      _setOrDelete(userId, WrytteProfile.lastName, value);
+
+  Future<void> setPhoneNumber(String userId, String? value) =>
+      _setOrDelete(userId, WrytteProfile.phoneNumber, value);
+
+  Future<void> setBio(String userId, String? value) =>
+      _setOrDelete(userId, WrytteProfile.bio, value);
+
+  Future<void> setLink(String userId, String? value) =>
+      _setOrDelete(userId, WrytteProfile.link, value);
+
+  Future<void> setChannelAlias(String userId, String? value) =>
+      _setOrDelete(userId, WrytteProfile.channelAlias, value);
+
+  Future<void> setGroupAlias(String userId, String? value) =>
+      _setOrDelete(userId, WrytteProfile.groupAlias, value);
+
+  Future<void> _setOrDelete(String userId, String field, String? value) {
+    final clean = value?.trim() ?? '';
+    return clean.isEmpty ? deleteField(userId, field) : setField(userId, field, clean);
+  }
 
   void _check(http.Response response) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
