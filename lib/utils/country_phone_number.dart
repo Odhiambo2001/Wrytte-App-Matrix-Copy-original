@@ -9,8 +9,19 @@ enum PhoneNumberLengthStatus { valid, tooShort, tooLong, invalidLength }
 class CountryPhoneNumber {
   const CountryPhoneNumber._();
 
+  static final Map<String, String> _callingCodesByRegion = {};
+
   static IsoCode? isoCodeFromAlpha2(String alpha2) {
     return isoCodeConversionMap[alpha2.toUpperCase()];
+  }
+
+  static String callingCodeForRegion(String regionCode) {
+    final isoCode = isoCodeFromAlpha2(regionCode);
+    if (isoCode == null) return '';
+    return _callingCodesByRegion.putIfAbsent(
+      isoCode.name,
+      () => PhoneNumber(isoCode: isoCode, nsn: '').countryCode,
+    );
   }
 
   static PhoneNumber? tryParse(String input, String countryAlpha2) {
@@ -201,14 +212,8 @@ class InternationalPhoneNumberInputFormatter extends TextInputFormatter {
 
   static String _formatWrytteId(String digits) {
     final suppliedBody = digits.length > 2 ? digits.substring(2) : '';
-    final rule = WrytteLibrary.resolvePrefix(suppliedBody);
-    final body =
-        rule == null
-            ? suppliedBody
-            : suppliedBody.substring(
-              0,
-              suppliedBody.length.clamp(0, rule.maximumNationalLength),
-            );
+    final body = suppliedBody.substring(0, suppliedBody.length.clamp(0, 12));
+    final rule = WrytteLibrary.resolvePrefix(body);
     final groups = <String>['00'];
     final sizes =
         rule == null
@@ -221,6 +226,7 @@ class InternationalPhoneNumberInputFormatter extends TextInputFormatter {
       offset = end;
       if (offset >= body.length) break;
     }
+    if (offset < body.length) groups.add(body.substring(offset));
     return groups.join(' ');
   }
 }

@@ -1336,6 +1336,18 @@ abstract final class WrytteLibrary {
         : additionalPrefixes[normalized] ?? const [];
   }
 
+  /// Returns whether [value] has the Wrytte ID marker and the supported
+  /// national digit count. IDs may contain up to 12 digits after `00`, even
+  /// when that length exceeds a region's generated format. Login must not
+  /// require a generated allocation prefix.
+  static bool matchesWrytteIdFormat(String value) {
+    final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+    if (!digits.startsWith('00')) return false;
+
+    final nationalLength = digits.length - 2;
+    return nationalLength >= 1 && nationalLength <= 12;
+  }
+
   /// Resolves a Wrytte ID body to its regional formatting rule. Explicit
   /// Wrytte allocations win, followed by the longest matching library prefix.
   static WrytteRegionRule? resolvePrefix(String value) {

@@ -28,6 +28,7 @@ class VirtualNumberService {
   static const _verifiedKey = 'pending_wrytte_id_verified';
   static const _autoDeleteKey = 'pending_wrytte_id_auto_delete';
   static const _wryttePrefix = '00';
+  static final Map<String, WrytteIdCandidate> _sessionCandidates = {};
 
   /// Get a locally generated Wrytte ID candidate. Server-side uniqueness is
   /// enforced by the registration API/Matrix account creation.
@@ -51,6 +52,22 @@ class VirtualNumberService {
             : DateTime.fromMillisecondsSinceEpoch(expiryMillis);
     final autoDelete = preferences.getBool(_autoDeleteKey) ?? true;
 
+    // Keep the generated ID stable while the app process is alive. The
+    // welcome flow invalidates the persisted candidate on a fresh launch, so
+    // a new process still starts with a newly generated ID.
+    final sessionCandidate = _sessionCandidates[normalizedRegion];
+    if (sessionCandidate != null) {
+      await preferences.setString(_numberKey, sessionCandidate.number);
+      await preferences.setString(_regionKey, normalizedRegion);
+      await preferences.setInt(
+        _expiryKey,
+        sessionCandidate.expiresAt.millisecondsSinceEpoch,
+      );
+      await preferences.setBool(_verifiedKey, true);
+      await preferences.setBool(_autoDeleteKey, true);
+      return sessionCandidate;
+    }
+
     if (savedNumber.isNotEmpty &&
         savedRegion == normalizedRegion &&
         savedNumber.startsWith(_wryttePrefix) &&
@@ -58,7 +75,12 @@ class VirtualNumberService {
         preferences.getBool(_verifiedKey) == true &&
         savedExpiry != null &&
         (!autoDelete || savedExpiry.isAfter(now))) {
-      return WrytteIdCandidate(number: savedNumber, expiresAt: savedExpiry);
+      final candidate = WrytteIdCandidate(
+        number: savedNumber,
+        expiresAt: savedExpiry,
+      );
+      _sessionCandidates[normalizedRegion] = candidate;
+      return candidate;
     }
 
     await clearPendingWrytteId();
@@ -98,7 +120,12 @@ class VirtualNumberService {
     await preferences.setInt(_expiryKey, expiresAt.millisecondsSinceEpoch);
     await preferences.setBool(_verifiedKey, true);
     await preferences.setBool(_autoDeleteKey, true);
-    return WrytteIdCandidate(number: number, expiresAt: expiresAt);
+    final candidate = WrytteIdCandidate(
+      number: number,
+      expiresAt: expiresAt,
+    );
+    _sessionCandidates[normalizedRegion] = candidate;
+    return candidate;
   }
 
   Future<bool> _candidateExists(String backendId) async {
@@ -138,6 +165,7 @@ class VirtualNumberService {
   Future<WrytteIdCandidate> refreshAvailableVpn({
     required String regionCode,
   }) async {
+    _sessionCandidates.remove(regionCode.trim().toUpperCase());
     final preferences = await SharedPreferences.getInstance();
     await preferences.setBool(_verifiedKey, false);
     return getAvailableVpn(regionCode: regionCode);

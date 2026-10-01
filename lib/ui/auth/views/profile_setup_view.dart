@@ -170,6 +170,11 @@ class _ProfileSetupViewState extends State<ProfileSetupView> {
       },
     );
 
+    // The sheet paints immediately with final grid geometry. Camera startup is
+    // independent, so it cannot block media loading or make the tall first tile
+    // suddenly reflow into the grid when initialization completes.
+    unawaited(cameraRepository.open(cameraConfig));
+
     AttachmentGalleryResult? result;
 
     try {

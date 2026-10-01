@@ -93,6 +93,7 @@ class MainActivity: FlutterActivity() {
     private val nativeBiometricStreamChannel = "com.example.wrytte/native_biometric_stream"
     private val nativeBiometricStreamEventsChannel = "com.example.wrytte/native_biometric_stream/events"
     private val cameraCapabilitiesChannel = "com.example.wrytte/camera_capabilities"
+    private var cameraMetadataChannel: CameraCapabilitiesChannel? = null
     private var callerRingback: ToneGenerator? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ortEnvironment by lazy { OrtEnvironment.getEnvironment() }
@@ -117,6 +118,10 @@ class MainActivity: FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        cameraMetadataChannel = CameraCapabilitiesChannel(
+            applicationContext,
+            flutterEngine.dartExecutor.binaryMessenger,
+        )
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, cameraCapabilitiesChannel)
             .setMethodCallHandler { call, result ->
                 if (call.method != "getFpsRanges") {
@@ -1205,6 +1210,8 @@ class MainActivity: FlutterActivity() {
 
     override fun onDestroy() {
         stopCallerRingback()
+        cameraMetadataChannel?.dispose()
+        cameraMetadataChannel = null
         tfliteSessions.values.forEach { closeTfliteSession(it) }
         tfliteSessions.clear()
         ortSessions.values.forEach { closeOrtSession(it) }

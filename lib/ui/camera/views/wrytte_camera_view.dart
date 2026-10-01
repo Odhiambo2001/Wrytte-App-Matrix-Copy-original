@@ -310,6 +310,7 @@ class _CameraChrome extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = model.state;
     final recording = state.isRecording;
+    final flashAvailable = state.capabilities?.flashAvailable == true;
     return SafeArea(
       bottom: false,
       child: Stack(
@@ -327,22 +328,23 @@ class _CameraChrome extends StatelessWidget {
               size: 52,
             ),
           ),
-          if (state.capabilities?.flashAvailable == true)
-            PositionedDirectional(
-              top: 8,
-              end: 22,
-              child: CameraControlButton(
-                semanticLabel: 'Change flash mode',
-                onPressed: recording
-                    ? null
-                    : () => unawaited(model.cycleFlash()),
-                svgAsset: state.flashMode == WrytteFlashMode.off
-                    ? 'assets/svg/Flash off icon.svg'
-                    : 'assets/svg/Flash on icon .svg',
-                iconSize: 27,
-                size: 52,
-              ),
+          PositionedDirectional(
+            top: 8,
+            end: 22,
+            child: CameraControlButton(
+              semanticLabel: flashAvailable
+                  ? 'Change flash mode'
+                  : 'Flash unavailable',
+              onPressed: recording || !flashAvailable
+                  ? null
+                  : () => unawaited(model.cycleFlash()),
+              svgAsset: state.flashMode == WrytteFlashMode.off
+                  ? 'assets/svg/Flash off icon.svg'
+                  : 'assets/svg/Flash on icon .svg',
+              iconSize: 27,
+              size: 52,
             ),
+          ),
           if (recording)
             Positioned(
               top: 18,

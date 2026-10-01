@@ -46,6 +46,13 @@ class _SignInPageState extends State<SignInPage> {
               !_hasInvalidCountryCode &&
               _phoneCtrl.text.replaceAll(RegExp(r'\D'), '').isNotEmpty;
 
+  String _callingCode(Country country) {
+    final metadataCode = CountryPhoneNumber.callingCodeForRegion(
+      country.isoCode,
+    );
+    return metadataCode.isEmpty ? country.dialCode : metadataCode;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -63,7 +70,7 @@ class _SignInPageState extends State<SignInPage> {
     setState(() {
       _identityEntryStarted = true;
       _selectedCountry = country;
-      _inputCtrl.text = '+${country.dialCode}';
+      _inputCtrl.text = '+${_callingCode(country)}';
       _phoneCtrl.clear();
       _isWrytteIdInput = false;
       _hasInvalidCountryCode = false;
@@ -77,14 +84,60 @@ class _SignInPageState extends State<SignInPage> {
     final digits = value.replaceAll(RegExp(r'[^\d]'), '');
     final isWrytteId = digits.startsWith('0');
     Country? detectedCountry;
+    String? nationalDigitsFromSameField;
+    var moveCaretToPhone = false;
+
     if (!isWrytteId && digits.isNotEmpty) {
-      for (final country in countries) {
-        if (country.dialCode == digits) {
-          detectedCountry = country;
-          break;
+      final exactMatches =
+          countries.where((country) => _callingCode(country) == digits).toList()
+            ..sort((a, b) {
+              final aCanonical = a.dialCode == digits ? 0 : 1;
+              final bCanonical = b.dialCode == digits ? 0 : 1;
+              return aCanonical.compareTo(bCanonical);
+            });
+      final couldBeLongerCode = countries.any(
+        (country) =>
+            _callingCode(country).length > digits.length &&
+            _callingCode(country).startsWith(digits),
+      );
+
+      if (exactMatches.isNotEmpty) {
+        detectedCountry = exactMatches.first;
+        moveCaretToPhone = !couldBeLongerCode;
+      } else if (!couldBeLongerCode) {
+        final shorterCodeMatches =
+            countries
+                .where((country) => digits.startsWith(_callingCode(country)))
+                .toList()
+              ..sort(
+                (a, b) =>
+                    _callingCode(b).length.compareTo(_callingCode(a).length),
+              );
+        if (shorterCodeMatches.isNotEmpty) {
+          detectedCountry = shorterCodeMatches.first;
+          final callingCodeDigits = _callingCode(detectedCountry);
+          nationalDigitsFromSameField = digits.substring(
+            callingCodeDigits.length,
+          );
+          moveCaretToPhone = true;
         }
       }
     }
+
+    if (detectedCountry != null && nationalDigitsFromSameField != null) {
+      _inputCtrl.value = TextEditingValue(
+        text: '+${_callingCode(detectedCountry)}',
+        selection: TextSelection.collapsed(
+          offset: _callingCode(detectedCountry).length + 1,
+        ),
+      );
+      _phoneCtrl.text = nationalDigitsFromSameField;
+    }
+
+    final isPossibleCodePrefix =
+        !isWrytteId &&
+        digits.isNotEmpty &&
+        countries.any((country) => _callingCode(country).startsWith(digits));
 
     setState(() {
       _identityEntryStarted = digits.isNotEmpty;
@@ -95,7 +148,10 @@ class _SignInPageState extends State<SignInPage> {
       _isWrytteIdInput = isWrytteId;
       _selectedCountry = isWrytteId ? null : detectedCountry;
       _hasInvalidCountryCode =
-          !isWrytteId && digits.isNotEmpty && detectedCountry == null;
+          !isWrytteId &&
+          digits.isNotEmpty &&
+          detectedCountry == null &&
+          !isPossibleCodePrefix;
       _isValid =
           isWrytteId
               ? _isValidWrytteId(digits)
@@ -107,6 +163,17 @@ class _SignInPageState extends State<SignInPage> {
                       null;
       _errorMessage = null;
     });
+
+    if (!isWrytteId && detectedCountry != null && moveCaretToPhone) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            _isWrytteIdInput ||
+            _selectedCountry?.isoCode != detectedCountry!.isoCode) {
+          return;
+        }
+        _phoneFocusNode.requestFocus();
+      });
+    }
   }
 
   void _onPhoneChanged(String value) {
@@ -120,9 +187,7 @@ class _SignInPageState extends State<SignInPage> {
   }
 
   bool _isValidWrytteId(String digits) {
-    final rule =
-        digits.startsWith('00') ? WrytteLibrary.resolvePrefix(digits) : null;
-    return rule != null && digits.length - 2 == rule.maximumNationalLength;
+    return WrytteLibrary.matchesWrytteIdFormat(digits);
   }
 
   void _onCodeTap() {
@@ -207,10 +272,8 @@ class _SignInPageState extends State<SignInPage> {
 
       final digits = input.replaceAll(RegExp(r'[^\d]'), '');
       if (digits.startsWith('00')) {
-        final rule = WrytteLibrary.resolvePrefix(digits);
-        final bodyLength = digits.length - 2;
-        if (rule == null || bodyLength != rule.maximumNationalLength) {
-          throw const FormatException('Incomplete or unknown Wrytte ID');
+        if (!WrytteLibrary.matchesWrytteIdFormat(digits)) {
+          throw const FormatException('Invalid Wrytte ID format');
         }
         final search = await AuthService.instance.searchWrytteIdForSignIn(
           digits,

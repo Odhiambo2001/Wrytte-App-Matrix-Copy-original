@@ -176,6 +176,15 @@ flutter:
     - assets/svg/phonebook.svg
     - assets/svg/solar--phone-linear.svg
     - assets/svg/ic--round-arrow-back-ios.svg
+    - assets/svg/Camera icon .svg
+    - assets/svg/Flash off icon.svg
+    - assets/svg/Flash on icon .svg
+    - assets/svg/Flip camera icon .svg
+    - assets/svg/Forward Icon.svg
+    - assets/svg/Download Save icon.svg
+    - assets/svg/Edit pencil icon.svg
+    - assets/svg/Delete icon.svg
+    - assets/svg/Show in Chat icon.svg
     - assets/svg/Checkmark edit.svg
     - assets/svg/Checkmark icon Wrytte.svg
     - assets/svg/phone_book.png

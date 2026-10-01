@@ -32,6 +32,8 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
 
   final FocusNode _codeFocusNode = FocusNode();
   final FocusNode _numberFocusNode = FocusNode();
+  Animation<double>? _routeAnimation;
+  AnimationStatusListener? _routeAnimationListener;
 
   final RealNumberService _realNumberService = RealNumberService();
 
@@ -65,7 +67,11 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       setState(() {
         _selectedCountry = result;
         _hasInvalidCountryCode = false;
-        _codeCtrl.text = '+${result.dialCode}'; // Keep the plus sign
+        final metadataCode = CountryPhoneNumber.callingCodeForRegion(
+          result.isoCode,
+        );
+        _codeCtrl.text =
+            '+${metadataCode.isEmpty ? result.dialCode : metadataCode}';
         _showDivider = true;
         _numberCtrl.clear();
       });
@@ -87,13 +93,31 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
     }
 
     final codeWithoutPlus = value.substring(1).replaceAll(RegExp(r'[^\d]'), '');
-    Country? detectedCountry;
-    for (final country in countries) {
-      if (country.dialCode == codeWithoutPlus) {
-        detectedCountry = country;
-        break;
-      }
+    String callingCode(Country country) {
+      final metadataCode = CountryPhoneNumber.callingCodeForRegion(
+        country.isoCode,
+      );
+      return metadataCode.isEmpty ? country.dialCode : metadataCode;
     }
+
+    final exactMatches =
+        countries
+            .where((country) => callingCode(country) == codeWithoutPlus)
+            .toList()
+          ..sort((a, b) {
+            final aCanonical = a.dialCode == codeWithoutPlus ? 0 : 1;
+            final bCanonical = b.dialCode == codeWithoutPlus ? 0 : 1;
+            return aCanonical.compareTo(bCanonical);
+          });
+    final detectedCountry = exactMatches.isEmpty ? null : exactMatches.first;
+    final couldBeLongerCode = countries.any(
+      (country) =>
+          callingCode(country).length > codeWithoutPlus.length &&
+          callingCode(country).startsWith(codeWithoutPlus),
+    );
+    final isPossibleCodePrefix = countries.any(
+      (country) => callingCode(country).startsWith(codeWithoutPlus),
+    );
 
     if (detectedCountry == null && _numberCtrl.text.isNotEmpty) {
       final digits = _numberCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
@@ -106,10 +130,23 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
     setState(() {
       _selectedCountry = detectedCountry;
       _hasInvalidCountryCode =
-          detectedCountry == null && codeWithoutPlus.isNotEmpty;
+          detectedCountry == null &&
+          codeWithoutPlus.isNotEmpty &&
+          !isPossibleCodePrefix;
       _showDivider = codeWithoutPlus.isNotEmpty;
     });
 
+    if (detectedCountry != null && !couldBeLongerCode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            _selectedCountry?.isoCode != detectedCountry.isoCode ||
+            _codeCtrl.text.replaceAll(RegExp(r'[^\d]'), '') !=
+                callingCode(detectedCountry)) {
+          return;
+        }
+        _numberFocusNode.requestFocus();
+      });
+    }
   }
 
   /// Handle code field focus and cursor position
@@ -339,6 +376,45 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
     unawaited(_initializeDeviceCountry());
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final animation = ModalRoute.of(context)?.animation;
+    if (identical(animation, _routeAnimation)) return;
+
+    if (_routeAnimation != null && _routeAnimationListener != null) {
+      _routeAnimation!.removeStatusListener(_routeAnimationListener!);
+    }
+    _routeAnimation = animation;
+    if (animation == null) {
+      _focusNumberFieldAfterFrame();
+      return;
+    }
+
+    void focusWhenRouteIsVisible(AnimationStatus status) {
+      if (status == AnimationStatus.completed) {
+        _focusNumberFieldAfterFrame();
+      }
+    }
+
+    _routeAnimationListener = focusWhenRouteIsVisible;
+    animation.addStatusListener(focusWhenRouteIsVisible);
+    if (animation.status == AnimationStatus.completed) {
+      _focusNumberFieldAfterFrame();
+    }
+  }
+
+  void _focusNumberFieldAfterFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _numberFocusNode.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_numberFocusNode.hasFocus) return;
+        SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+      });
+    });
+  }
+
   Future<void> _initializeDeviceCountry() async {
     final regionCode = await DeviceRegionService.detectOnce();
     Country? detectedCountry;
@@ -354,24 +430,29 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
     if (country == null) {
       _codeCtrl.text = '+';
       _codeCtrl.selection = const TextSelection.collapsed(offset: 1);
-      _codeFocusNode.requestFocus();
       return;
     }
 
     setState(() {
       _selectedCountry = country;
-      _codeCtrl.text = '+${country.dialCode}';
+      final metadataCode = CountryPhoneNumber.callingCodeForRegion(
+        country.isoCode,
+      );
+      _codeCtrl.text =
+          '+${metadataCode.isEmpty ? country.dialCode : metadataCode}';
       _codeCtrl.selection = TextSelection.collapsed(
         offset: _codeCtrl.text.length,
       );
       _showDivider = true;
       _hasInvalidCountryCode = false;
     });
-    _numberFocusNode.requestFocus();
   }
 
   @override
   void dispose() {
+    if (_routeAnimation != null && _routeAnimationListener != null) {
+      _routeAnimation!.removeStatusListener(_routeAnimationListener!);
+    }
     _codeCtrl.dispose();
     _numberCtrl.dispose();
     _codeFocusNode.dispose();
@@ -516,6 +597,7 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
                                         child: TextField(
                                           controller: _numberCtrl,
                                           focusNode: _numberFocusNode,
+                                          autofocus: true,
                                           onTapOutside:
                                               (_) =>
                                                   FocusScope.of(
@@ -590,10 +672,11 @@ class _CountryCodeInputFormatter extends TextInputFormatter {
     final limitedDigits = digits.length > 4 ? digits.substring(0, 4) : digits;
     final text = '+$limitedDigits';
     final selectionOffset = newValue.selection.extentOffset;
-    final digitsBeforeCursor = newValue.text
-        .substring(0, selectionOffset.clamp(0, newValue.text.length))
-        .replaceAll(RegExp(r'[^0-9]'), '')
-        .length;
+    final digitsBeforeCursor =
+        newValue.text
+            .substring(0, selectionOffset.clamp(0, newValue.text.length))
+            .replaceAll(RegExp(r'[^0-9]'), '')
+            .length;
     final boundedDigitsBeforeCursor = digitsBeforeCursor.clamp(0, 4);
 
     return TextEditingValue(
