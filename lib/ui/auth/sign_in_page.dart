@@ -224,6 +224,7 @@ class _SignInPageState extends State<SignInPage> {
 
   Future<void> _goNext() async {
     if (_isLoading) return;
+    String? validatedPhone;
     if (_isWrytteIdInput) {
       if (!_isValid) return;
     } else {
@@ -242,11 +243,22 @@ class _SignInPageState extends State<SignInPage> {
           PhoneNumberLengthStatus.tooLong =>
             'The phone number you entered is too long for ${country.name}.',
           PhoneNumberLengthStatus.invalidLength =>
-            'The phone number you entered has an invalid length '
-                'for ${country.name}.',
+            'The phone number you entered is invalid for ${country.name}.',
           PhoneNumberLengthStatus.valid => '',
         };
         await _showPhoneLengthDialog(message);
+        return;
+      }
+      validatedPhone = CountryPhoneNumber.international(
+        _phoneCtrl.text,
+        country.isoCode,
+      );
+      if (validatedPhone == null) {
+        _focusNode.unfocus();
+        _phoneFocusNode.unfocus();
+        await _showPhoneLengthDialog(
+          'The phone number you entered is invalid for ${country.name}.',
+        );
         return;
       }
     }
@@ -256,11 +268,7 @@ class _SignInPageState extends State<SignInPage> {
             ? _inputCtrl.text.trim()
             : _selectedCountry == null
             ? ''
-            : CountryPhoneNumber.international(
-                  _phoneCtrl.text,
-                  _selectedCountry!.isoCode,
-                ) ??
-                '';
+            : validatedPhone ?? '';
 
     setState(() {
       _isLoading = true;

@@ -216,10 +216,9 @@ class _PhoneAuthPageState extends State<PhoneAuthPage> {
       PhoneNumberLengthStatus.tooLong =>
         'The phone number you entered is too long for ${country.name}.',
       PhoneNumberLengthStatus.invalidLength =>
-        'The phone number you entered has an invalid length '
-            'for ${country.name}.',
+        'The phone number you entered is invalid for ${country.name}.',
       PhoneNumberLengthStatus.valid =>
-        'The phone number you entered is not valid for ${country.name}.',
+        'The phone number you entered is invalid for ${country.name}.',
     };
 
     await _showValidationDialog(message);
