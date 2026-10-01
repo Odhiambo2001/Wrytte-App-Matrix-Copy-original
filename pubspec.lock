@@ -191,7 +191,7 @@ packages:
       path: "third_party/camera_android_camerax"
       relative: true
     source: path
-    version: "0.6.26+2"
+    version: "0.6.30"
   camera_avfoundation:
     dependency: transitive
     description:
@@ -755,7 +755,7 @@ packages:
     source: hosted
     version: "2.11.1"
   flutter_secure_storage:
-    dependency: "direct overridden"
+    dependency: "direct main"
     description:
       name: flutter_secure_storage
       sha256: fe638107c5f69119156ada2db5a57734385fac3f64430bd7252a00d3ead2ca4b
@@ -1420,7 +1420,7 @@ packages:
     source: hosted
     version: "9.0.26"
   photo_manager:
-    dependency: "direct overridden"
+    dependency: "direct main"
     description:
       name: photo_manager
       sha256: "2d00a785b501bf1e5f6180bbef772846e767be11d45d11112b63092ef54a419e"
@@ -1428,7 +1428,7 @@ packages:
     source: hosted
     version: "3.12.0"
   photo_manager_image_provider:
-    dependency: "direct overridden"
+    dependency: "direct main"
     description:
       name: photo_manager_image_provider
       sha256: b6015b67b32f345f57cf32c126f871bced2501236c405aafaefa885f7c821e4f

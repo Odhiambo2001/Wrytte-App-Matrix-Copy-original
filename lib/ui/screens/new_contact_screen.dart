@@ -620,6 +620,16 @@ class _NewContactPageState extends State<NewContactPage> {
       await ChatService().applySavedContact(localContact);
       ContactService.invalidateMatrixContactsCache();
       _contactService.invalidateCache();
+
+      // A number that is not registered on Wrytte has no user ID and cannot
+      // be stored by the backend or used to create a Matrix DM. It is still a
+      // valid local phone contact, so finish successfully after local save.
+      if (receiverId.isEmpty) {
+        if (!mounted) return;
+        Navigator.pop(context);
+        return;
+      }
+
       unawaited(
         _saveContactToBackendOrThrow(
           selfId: selfId,
@@ -636,11 +646,6 @@ class _NewContactPageState extends State<NewContactPage> {
       // ── 2. Create or reuse this contact's verified Matrix DM room. ────────
       // Never carry a group room ID into the personal chat: the room is
       // resolved exclusively from the saved contact's Matrix user ID.
-      if (receiverId.isEmpty) {
-        throw StateError(
-          'A Matrix user ID is required to create this direct chat.',
-        );
-      }
       final conversationId = await ChatService().getMatrixConversationId(
         receiverId,
       );

@@ -28,6 +28,7 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugins.camerax.NativeBiometricAnalyzerRegistry
+import com.it_nomads.fluttersecurestorage.FlutterSecureStoragePlugin
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -118,6 +119,12 @@ class MainActivity: FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // MainActivity contains custom channels; explicitly register secure
+        // storage so session persistence is available even if the generated
+        // plugin registrant is stale after a dependency/rebase change.
+        if (flutterEngine.plugins.get(FlutterSecureStoragePlugin::class.java) == null) {
+            flutterEngine.plugins.add(FlutterSecureStoragePlugin())
+        }
         cameraMetadataChannel = CameraCapabilitiesChannel(
             applicationContext,
             flutterEngine.dartExecutor.binaryMessenger,

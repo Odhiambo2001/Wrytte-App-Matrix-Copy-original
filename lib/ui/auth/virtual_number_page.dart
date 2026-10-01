@@ -194,7 +194,7 @@ class _VirtualNumberPageState extends State<VirtualNumberPage> {
                             ? 'Unable to create ID. Try again.'
                             : _service.formatWrytteId(
                                 _virtualNumber,
-                                regionCode: widget.regionCode,
+                                regionCode: _resolvedRegionCode ?? 'US',
                               ),
                         textAlign: _virtualNumber.isEmpty
                             ? TextAlign.center
