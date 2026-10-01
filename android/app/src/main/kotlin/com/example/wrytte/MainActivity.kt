@@ -11,8 +11,11 @@ import android.media.AudioManager
 import android.util.Log
 import android.media.ToneGenerator
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.telephony.TelephonyManager
+import androidx.camera.core.ImageProxy
 import androidx.core.view.WindowCompat
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.gpu.CompatibilityList
@@ -21,7 +24,9 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.FlutterInjector
 import io.flutter.plugin.common.BinaryMessenger
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugins.camerax.NativeBiometricAnalyzerRegistry
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -30,6 +35,9 @@ import java.nio.FloatBuffer
 import java.util.UUID
 import java.util.EnumSet
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 private data class RetinaPrior(
     val centerX: Float,
@@ -80,11 +88,20 @@ class MainActivity: FlutterActivity() {
     private val callerRingbackChannel = "com.example.wrytte/caller_ringback"
     private val onnxImageChannel = "com.example.wrytte/onnx_image"
     private val tfliteImageChannel = "com.example.wrytte/tflite_image"
+    private val nativeBiometricStreamChannel = "com.example.wrytte/native_biometric_stream"
+    private val nativeBiometricStreamEventsChannel = "com.example.wrytte/native_biometric_stream/events"
     private val cameraCapabilitiesChannel = "com.example.wrytte/camera_capabilities"
     private var callerRingback: ToneGenerator? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val ortEnvironment by lazy { OrtEnvironment.getEnvironment() }
     private val ortSessions = ConcurrentHashMap<String, NativeOrtSession>()
     private val tfliteSessions = ConcurrentHashMap<String, NativeTfliteSession>()
+    private var nativeEventSink: EventChannel.EventSink? = null
+    private var nativeAnalyzerExecutor: ExecutorService? = null
+    private var nativeAnalyzerSession: NativeTfliteSession? = null
+    private val nativeAnalyzerEnabled = AtomicBoolean(false)
+    private val nativeAnalyzerBusy = AtomicBoolean(false)
+    private var nativeFrameIndex = 0L
     // A prewarmed session is built on the same serial LiteRT queue that later
     // owns inference. It is leased by createRetinaFaceSession, rather than
     // compiled again when the scan page opens.
@@ -110,6 +127,42 @@ class MainActivity: FlutterActivity() {
                     result.error("CAMERA_CAPABILITIES_ERROR", error.message, null)
                 }
             }
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            nativeBiometricStreamEventsChannel,
+        ).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                nativeEventSink = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                nativeEventSink = null
+            }
+        })
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            nativeBiometricStreamChannel,
+        ).setMethodCallHandler { call, result ->
+            try {
+                when (call.method) {
+                    "start" -> {
+                        val asset = requireNotNull(call.argument<String>("asset"))
+                        val threads = (call.argument<Int>("threads") ?: 4)
+                            .coerceAtLeast(1)
+                            .coerceAtMost(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
+                        startNativeBiometricAnalyzer(asset, threads)
+                        result.success(null)
+                    }
+                    "stop" -> {
+                        stopNativeBiometricAnalyzer()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (error: Throwable) {
+                result.error("NATIVE_BIOMETRIC_STREAM_ERROR", error.message, error.stackTraceToString())
+            }
+        }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             deviceRegionChannel,
@@ -452,6 +505,196 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    private fun startNativeBiometricAnalyzer(asset: String, threads: Int) {
+        if (nativeAnalyzerEnabled.get()) return
+        nativeAnalyzerEnabled.set(true)
+        val executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "wrytte-native-biometric-analyzer")
+        }
+        nativeAnalyzerExecutor = executor
+        NativeBiometricAnalyzerRegistry.setAnalyzer { image ->
+            if (!nativeAnalyzerEnabled.get()) return@setAnalyzer false
+            if (!nativeAnalyzerBusy.compareAndSet(false, true)) {
+                image.close()
+                return@setAnalyzer true
+            }
+            executor.execute {
+                try {
+                    val session = nativeAnalyzerSession ?: createTfliteRetinaFaceSession(
+                        mapFlutterAsset(asset),
+                        threads,
+                    ).also { nativeAnalyzerSession = it }
+                    analyzeNativeBiometricFrame(session, image)
+                } catch (error: Throwable) {
+                    Log.e(
+                        "WrytteNativeBio",
+                        "Native biometric frame failed: ${error.javaClass.simpleName}: ${error.message}",
+                        error,
+                    )
+                } finally {
+                    try { image.close() } catch (_: Throwable) {}
+                    nativeAnalyzerBusy.set(false)
+                }
+            }
+            true
+        }
+        Log.i("WrytteNativeBio", "Native CameraX biometric analyzer enabled")
+    }
+
+    private fun stopNativeBiometricAnalyzer() {
+        nativeAnalyzerEnabled.set(false)
+        NativeBiometricAnalyzerRegistry.setAnalyzer(null)
+        nativeAnalyzerBusy.set(false)
+        val executor = nativeAnalyzerExecutor
+        nativeAnalyzerExecutor = null
+        executor?.execute {
+            nativeAnalyzerSession?.let { closeTfliteSession(it) }
+            nativeAnalyzerSession = null
+        }
+        executor?.shutdown()
+        Log.i("WrytteNativeBio", "Native CameraX biometric analyzer disabled")
+    }
+
+    private fun analyzeNativeBiometricFrame(native: NativeTfliteSession, image: ImageProxy) {
+        val startedAt = SystemClock.elapsedRealtimeNanos()
+        val bgr = imageProxyToCenteredRetinaBgr(image)
+        val result = runTfliteRetinaBgrDirect(native, bgr)
+        val faces = result.faces.map { faceMapToDetection(it) }
+        val target = chooseNativeTarget(faces)
+        val elapsedMs = ((SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000_000.0).toLong()
+        val index = nativeFrameIndex++
+        val event = HashMap<String, Any?>()
+        event["index"] = index
+        event["width"] = 640
+        event["height"] = 640
+        event["faceDetected"] = faces.isNotEmpty()
+        event["targetFaceSelected"] = target != null
+        event["alignmentAccepted"] = target != null
+        event["processingMilliseconds"] = elapsedMs
+        event["multipleFaces"] = faces.size > 1
+        event["faceTooFar"] = faces.isNotEmpty() && faces.all { measureNativeFaceDistance(it) == "FAR" }
+        event["faceTooClose"] = faces.isNotEmpty() && faces.all { measureNativeFaceDistance(it) == "CLOSE" }
+        target?.let {
+            event["faceCenterX"] = (it.left + it.right) / 2.0
+            event["faceCenterY"] = (it.top + it.bottom) / 2.0
+            event["target"] = it.raw
+            event["source"] = bgr
+        }
+        if (target == null) bgr.fill(0)
+        mainHandler.post { nativeEventSink?.success(event) }
+        Log.i(
+            "WrytteNativeBio",
+            "frame=$index faces=${faces.size} target=${target != null} native_stream=active " +
+                "elapsed_ms=$elapsedMs provider=${native.executionProvider}",
+        )
+    }
+
+    private fun imageProxyToCenteredRetinaBgr(image: ImageProxy): ByteArray {
+        val width = image.width
+        val height = image.height
+        val rotation = image.imageInfo.rotationDegrees
+        val rotatedWidth = if (rotation == 90 || rotation == 270) height else width
+        val rotatedHeight = if (rotation == 90 || rotation == 270) width else height
+        val cropSide = minOf(rotatedWidth, rotatedHeight)
+        val cropLeft = (rotatedWidth - cropSide) / 2
+        val cropTop = (rotatedHeight - cropSide) / 2
+        val planes = image.planes
+        val yPlane = planes[0]
+        val uPlane = planes[1]
+        val vPlane = planes[2]
+        val y = yPlane.buffer.duplicate()
+        val u = uPlane.buffer.duplicate()
+        val v = vPlane.buffer.duplicate()
+        val out = ByteArray(640 * 640 * 3)
+        for (dy in 0 until 640) {
+            val rotatedY = cropTop + ((dy + 0.5) * cropSide / 640.0).toInt().coerceIn(0, cropSide - 1)
+            for (dx in 0 until 640) {
+                val rotatedX = cropLeft + ((dx + 0.5) * cropSide / 640.0).toInt().coerceIn(0, cropSide - 1)
+                val source = unrotatePoint(rotatedX, rotatedY, width, height, rotation)
+                val sx = source.first.coerceIn(0, width - 1)
+                val sy = source.second.coerceIn(0, height - 1)
+                val yValue = y.get(sy * yPlane.rowStride + sx).toInt() and 0xff
+                val uvX = sx / 2
+                val uvY = sy / 2
+                val uValue = u.get(uvY * uPlane.rowStride + uvX * uPlane.pixelStride).toInt() and 0xff
+                val vValue = v.get(uvY * vPlane.rowStride + uvX * vPlane.pixelStride).toInt() and 0xff
+                val c = yValue - 16
+                val d = uValue - 128
+                val e = vValue - 128
+                val red = ((298 * c + 409 * e + 128) shr 8).coerceIn(0, 255)
+                val green = ((298 * c - 100 * d - 208 * e + 128) shr 8).coerceIn(0, 255)
+                val blue = ((298 * c + 516 * d + 128) shr 8).coerceIn(0, 255)
+                val offset = (dy * 640 + dx) * 3
+                out[offset] = blue.toByte()
+                out[offset + 1] = green.toByte()
+                out[offset + 2] = red.toByte()
+            }
+        }
+        return out
+    }
+
+    private fun unrotatePoint(x: Int, y: Int, width: Int, height: Int, rotation: Int): Pair<Int, Int> {
+        return when (rotation) {
+            90 -> Pair(y, height - 1 - x)
+            180 -> Pair(width - 1 - x, height - 1 - y)
+            270 -> Pair(width - 1 - y, x)
+            else -> Pair(x, y)
+        }
+    }
+
+    private data class NativeFace(val raw: Map<String, Any>, val left: Double, val top: Double, val right: Double, val bottom: Double, val confidence: Double)
+
+    private fun faceMapToDetection(raw: Map<String, Any>): NativeFace {
+        return NativeFace(
+            raw = raw,
+            left = (raw["left"] as Number).toDouble(),
+            top = (raw["top"] as Number).toDouble(),
+            right = (raw["right"] as Number).toDouble(),
+            bottom = (raw["bottom"] as Number).toDouble(),
+            confidence = (raw["confidence"] as Number).toDouble(),
+        )
+    }
+
+    private fun measureNativeFaceDistance(face: NativeFace): String {
+        val size = maxOf((face.right - face.left) / 640.0, (face.bottom - face.top) / 640.0)
+        return when {
+            size < 0.34 -> "FAR"
+            size > 0.72 -> "CLOSE"
+            else -> "NORMAL"
+        }
+    }
+
+    private fun chooseNativeTarget(faces: List<NativeFace>): NativeFace? {
+        if (faces.isEmpty() || faces.size > 2) return null
+        val qualifying = faces.filter { face ->
+            face.confidence >= 0.83 &&
+                measureNativeFaceDistance(face) == "NORMAL" &&
+                visibleNativeFraction(face) >= 0.90
+        }
+        if (qualifying.size == 1 && faces.size == 1) return qualifying.first()
+        if (qualifying.size == 1 && faces.size == 2) {
+            val other = faces.first { it !== qualifying.first() }
+            val gap = nativeSizeRatio(qualifying.first()) - nativeSizeRatio(other)
+            if (measureNativeFaceDistance(other) == "FAR" && gap >= 0.20) return qualifying.first()
+        }
+        return null
+    }
+
+    private fun nativeSizeRatio(face: NativeFace): Double =
+        maxOf((face.right - face.left) / 640.0, (face.bottom - face.top) / 640.0)
+
+    private fun visibleNativeFraction(face: NativeFace): Double {
+        val left = ((face.raw["rawLeft"] as? Number)?.toDouble()) ?: face.left
+        val top = ((face.raw["rawTop"] as? Number)?.toDouble()) ?: face.top
+        val right = ((face.raw["rawRight"] as? Number)?.toDouble()) ?: face.right
+        val bottom = ((face.raw["rawBottom"] as? Number)?.toDouble()) ?: face.bottom
+        val full = maxOf(0.0, right - left) * maxOf(0.0, bottom - top)
+        if (full <= 0.0) return 0.0
+        val visible = maxOf(0.0, minOf(640.0, right) - maxOf(0.0, left)) *
+            maxOf(0.0, minOf(640.0, bottom) - maxOf(0.0, top))
+        return visible / full
+    }
+
     private fun runTfliteRetinaBgr(arguments: Map<*, *>): Map<String, Any> {
         val sessionId = requireNotNull(arguments["sessionId"] as? String)
         val bytes = requireNotNull(arguments["bgr"] as? ByteArray)
@@ -461,6 +704,23 @@ class MainActivity: FlutterActivity() {
             "LiteRT RetinaFace requires packed 640x640 BGR pixels"
         }
         val native = requireNotNull(tfliteSessions[sessionId]) { "Session is closed" }
+        val decoded = runTfliteRetinaBgrDirect(native, bytes)
+        bytes.fill(0)
+        return mapOf(
+            "faces" to decoded.faces,
+            "executionProvider" to native.executionProvider,
+            "nativeTotalMs" to decoded.totalMs,
+            "invokeMs" to decoded.invokeMs,
+        )
+    }
+
+    private data class TfliteRetinaRunResult(
+        val faces: List<Map<String, Any>>,
+        val totalMs: Double,
+        val invokeMs: Double,
+    )
+
+    private fun runTfliteRetinaBgrDirect(native: NativeTfliteSession, bytes: ByteArray): TfliteRetinaRunResult {
         return synchronized(native) {
             check(!native.closed) { "Session is closed" }
             try {
@@ -469,7 +729,7 @@ class MainActivity: FlutterActivity() {
                 // ONNX RetinaFace's B/G/R mean-subtracted semantics.
                 native.inputBuffer.clear()
                 val floats = native.inputBuffer.asFloatBuffer()
-                for (pixel in 0 until width * height) {
+                for (pixel in 0 until 640 * 640) {
                     val offset = pixel * 3
                     floats.put((bytes[offset].toInt() and 0xff) - 104f)
                     floats.put((bytes[offset + 1].toInt() and 0xff) - 117f)
@@ -498,14 +758,8 @@ class MainActivity: FlutterActivity() {
                             .format(preprocessingMs, invokeMs, decodeMs, decoded.faces.size, totalMs) +
                         " best_face_conf=%.4f".format(decoded.bestFaceConfidence),
                 )
-                mapOf(
-                    "faces" to decoded.faces,
-                    "executionProvider" to native.executionProvider,
-                    "nativeTotalMs" to totalMs,
-                    "invokeMs" to invokeMs,
-                )
+                TfliteRetinaRunResult(decoded.faces, totalMs, invokeMs)
             } finally {
-                bytes.fill(0)
                 native.inputBuffer.clear()
                 while (native.inputBuffer.hasRemaining()) native.inputBuffer.put(0.toByte())
                 native.inputBuffer.clear()

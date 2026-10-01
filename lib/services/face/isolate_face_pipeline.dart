@@ -273,6 +273,9 @@ class IsolateFacePipeline {
   Future<WorkerLivenessCapture> cropForLiveness(
     WorkerCropCapture pending,
   ) async {
+    if (pending.retinaWorker == 'android-native') {
+      return _cropNativeRetinaFrameForLiveness(pending);
+    }
     try {
       final result = await _call('liveness', pending.generation, 'crop', [
         pending.index,
@@ -301,6 +304,44 @@ class IsolateFacePipeline {
     }
   }
 
+  Future<WorkerLivenessCapture> _cropNativeRetinaFrameForLiveness(
+    WorkerCropCapture pending,
+  ) async {
+    try {
+      final generation = _generation;
+      final result = await _call('liveness', generation, 'crop', [
+        pending.index,
+        pending.width,
+        pending.height,
+        _boxToWire(pending.box),
+        _transfer(Uint8List.fromList(pending.source)),
+      ]);
+      final crop = _bytes(result);
+      if (generation != _generation) {
+        _wipe(crop);
+        throw StateError('Cancelled native crop');
+      }
+      return WorkerLivenessCapture(
+          generation,
+          pending.index,
+          pending.retinaWorker,
+          pending.target,
+          crop,
+          pending.width,
+          pending.height,
+          pending.box,
+        )
+        ..capture = BiometricCropSet(
+          retinaFaceBgr: pending.source,
+          adafaceLandmarks: pending.target.landmarks,
+          livenessFaceBox: pending.box,
+        );
+    } catch (_) {
+      pending.clear();
+      rethrow;
+    }
+  }
+
   Future<bool> checkLiveness(WorkerLivenessCapture pending) async {
     try {
       final live =
@@ -323,6 +364,7 @@ class IsolateFacePipeline {
     WorkerLivenessCapture pending,
     bool live,
   ) async {
+    if (pending.retinaWorker == 'android-native') return;
     final original = await _call(
       pending.retinaWorker,
       pending.generation,
@@ -460,9 +502,13 @@ Future<void> _workerMain(List<Object> arguments) async {
               final faces = await retina.detectBgr(bgr);
               final detectorMilliseconds = detectorTimer.elapsedMilliseconds;
               final nativeMilliseconds = retina.lastNativeTotalMilliseconds;
-              final boundaryMilliseconds = nativeMilliseconds == null
-                  ? null
-                  : (detectorMilliseconds - nativeMilliseconds).clamp(0, 1 << 30);
+              final boundaryMilliseconds =
+                  nativeMilliseconds == null
+                      ? null
+                      : (detectorMilliseconds - nativeMilliseconds).clamp(
+                        0,
+                        1 << 30,
+                      );
               // ignore: avoid_print
               print(
                 '[BiometricTiming] pipeline=RetinaFace stage=worker_breakdown '

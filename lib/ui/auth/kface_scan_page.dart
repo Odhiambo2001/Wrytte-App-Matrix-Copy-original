@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/device_metadata_service.dart';
+import 'package:wrytte/services/face/android_native_biometric_stream.dart';
 import 'package:wrytte/services/face/biometric_api_service.dart';
 import 'package:wrytte/services/face/biometric_enrollment_timing.dart';
 import 'package:wrytte/services/face/camera_frame_converter.dart';
@@ -143,6 +144,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
   final _ldpc = LdpcFuzzyCommitment();
   final _signatureService = LocalFaceSignatureService();
   CameraController? _camera;
+  StreamSubscription<AndroidNativeBiometricFrame>? _nativeBiometricSubscription;
+  bool _usingNativeBiometricStream = false;
   bool _ready = false;
   bool _sending = false;
   int _inFlightCandidateUploads = 0;
@@ -269,9 +272,15 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         await camera.dispose();
         return;
       }
+
       // CameraX must receive the Flutter preview texture before ImageAnalysis
       // is bound. Starting the stream first can leave a live analyzer with a
       // black preview surface on some devices.
+      await _startFrameStream(camera);
+      if (!mounted) {
+        await camera.dispose();
+        return;
+      }
       setState(() {
         _camera = camera;
         _ready = true;
@@ -285,7 +294,6 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         await camera.dispose();
         return;
       }
-      await camera.startImageStream(_onFrame);
       final retinaWarmup = _pipeline.warmupRetinaFace();
       _scanStartTimer?.cancel();
       // Keep the camera stream active before any biometric extraction. This
@@ -360,6 +368,114 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     } catch (error) {
       debugPrint('[Camera] setZoomLevel failed: $error');
     }
+  }
+
+  Future<void> _startFrameStream(CameraController camera) async {
+    if (AndroidNativeBiometricStream.isSupported) {
+      try {
+        _nativeBiometricSubscription ??= AndroidNativeBiometricStream.frames()
+            .listen(_onNativeBiometricFrame, onError: _onNativeBiometricError);
+        await AndroidNativeBiometricStream.start();
+        _usingNativeBiometricStream = true;
+        debugPrint(
+          '[BiometricTiming] pipeline=Camera stage=native_stream_start native_zero_copy=active',
+        );
+        return;
+      } catch (error, stackTrace) {
+        _usingNativeBiometricStream = false;
+        await _nativeBiometricSubscription?.cancel();
+        _nativeBiometricSubscription = null;
+        debugPrint(
+          '[BiometricTiming] pipeline=Camera stage=native_stream_start_error '
+          'error=$error\n$stackTrace',
+        );
+      }
+    }
+    if (!camera.value.isStreamingImages) {
+      await camera.startImageStream(_onFrame);
+    }
+  }
+
+  Future<void> _stopFrameStream() async {
+    if (_usingNativeBiometricStream) {
+      await AndroidNativeBiometricStream.stop();
+      _usingNativeBiometricStream = false;
+    }
+    final camera = _camera;
+    if (camera?.value.isStreamingImages == true) {
+      await camera!.stopImageStream();
+    }
+  }
+
+  void _onNativeBiometricError(Object error) {
+    debugPrint(
+      '[BiometricTiming] pipeline=Camera stage=native_stream_error error=${error.runtimeType}',
+    );
+  }
+
+  void _onNativeBiometricFrame(AndroidNativeBiometricFrame frame) {
+    _framesThisSecond++;
+    if (!_ready ||
+        !_scanPhaseReady ||
+        _sending ||
+        _complete ||
+        _candidateExtractionClosed ||
+        _processingPaused ||
+        !_hasCandidateUploadCapacity) {
+      frame.pendingCrop?.clear();
+      return;
+    }
+    final sessionId = _captureSessionId;
+    if (sessionId == null) {
+      frame.pendingCrop?.clear();
+      return;
+    }
+    final analysis = frame.analysis;
+    if (analysis.processingMilliseconds == 0) {
+      frame.pendingCrop?.clear();
+      return;
+    }
+    setState(() {
+      _faceAligned =
+          analysis.faceDetected &&
+          analysis.targetFaceSelected &&
+          analysis.alignmentAccepted;
+      if (_faceAligned) _scanStarted = true;
+      if (analysis.faceCenterX != null) {
+        _headMovement = (analysis.faceCenterX! / 640).clamp(0.0, 1.0);
+      }
+    });
+    final pendingCrop = frame.pendingCrop;
+    if (pendingCrop == null) {
+      if (!analysis.faceDetected) {
+        setState(
+          () =>
+              _status =
+                  'Face not detected.\nPosition your face within the circle',
+        );
+      } else if (analysis.multipleFaces) {
+        setState(
+          () =>
+              _status =
+                  'Multiple faces detected.\nCenter one face within the circle',
+        );
+      } else if (analysis.faceTooFar) {
+        setState(() => _status = 'Move your face closer to the camera');
+      } else if (analysis.faceTooClose) {
+        setState(() => _status = 'Move your face farther from the camera');
+      }
+      return;
+    }
+    _pendingCropCaptures.addLast(
+      _TaggedCropCapture(
+        pending: pendingCrop,
+        wrytteId: widget.wrytteId,
+        userId: widget.userId,
+        captureSessionId: sessionId,
+      ),
+    );
+    _normalFramesFrontendTimer ??= Stopwatch()..start();
+    _drainCropCaptures();
   }
 
   // Camera callbacks must not await BBOX/liveness work. Hand each callback to
@@ -812,14 +928,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
         _backendWaiting = true;
         _status = 'Please wait…';
       });
-      final camera = _camera;
-      if (camera?.value.isStreamingImages == true) {
-        await BiometricStageTiming.measureAsync(
-          'Camera',
-          'stop_stream',
-          () => camera!.stopImageStream(),
-        );
-      }
+      await BiometricStageTiming.measureAsync(
+        'Camera',
+        'stop_stream',
+        _stopFrameStream,
+      );
       final enrollment = await BiometricStageTiming.measureAsync(
         'LDPC',
         'local_enrollment',
@@ -1072,14 +1185,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
 
   Future<void> _completeExistingUserEnrollment(BiometricLdpcInput input) async {
     _sending = true;
-    final camera = _camera;
-    if (camera?.value.isStreamingImages == true) {
-      await BiometricStageTiming.measureAsync(
-        'Camera',
-        'stop_stream',
-        () => camera!.stopImageStream(),
-      );
-    }
+    await BiometricStageTiming.measureAsync(
+      'Camera',
+      'stop_stream',
+      _stopFrameStream,
+    );
     try {
       final enrollment = await BiometricStageTiming.measureAsync(
         'LDPC',
@@ -1175,14 +1285,11 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     BiometricEnrollmentProvision provision,
   ) async {
     _sending = true;
-    final camera = _camera;
-    if (camera?.value.isStreamingImages == true) {
-      await BiometricStageTiming.measureAsync(
-        'Camera',
-        'stop_stream',
-        () => camera!.stopImageStream(),
-      );
-    }
+    await BiometricStageTiming.measureAsync(
+      'Camera',
+      'stop_stream',
+      _stopFrameStream,
+    );
     await BiometricStageTiming.measureAsync(
       'Session',
       'persist_before_profile',
@@ -1450,10 +1557,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     if (!mounted) return;
     setState(() => _status = 'Position your face\nwithin the circle');
     final camera = _camera;
-    if (camera != null &&
-        camera.value.isInitialized &&
-        !camera.value.isStreamingImages) {
-      await camera.startImageStream(_onFrame);
+    if (camera != null && camera.value.isInitialized) {
+      await _startFrameStream(camera);
     }
   }
 
@@ -1508,10 +1613,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _discardPendingCropCaptures();
     _discardPendingLivenessCaptures();
     final camera = _camera;
-    if (camera != null &&
-        camera.value.isInitialized &&
-        !camera.value.isStreamingImages) {
-      await camera.startImageStream(_onFrame);
+    if (camera != null && camera.value.isInitialized) {
+      await _startFrameStream(camera);
     }
     unawaited(_startCaptureSession());
   }
@@ -1527,6 +1630,8 @@ class _KFaceScanPageState extends State<KFaceScanPage> {
     _discardPendingRetinaFrames();
     _discardPendingCropCaptures();
     _discardPendingLivenessCaptures();
+    unawaited(_nativeBiometricSubscription?.cancel());
+    unawaited(AndroidNativeBiometricStream.stop());
     unawaited(_camera?.dispose());
     unawaited(_pipeline.dispose());
     super.dispose();
