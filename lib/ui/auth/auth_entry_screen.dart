@@ -59,6 +59,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                             ),
                           ),
                         ),
+                      ),
                     ),
                   ],
                 ),
