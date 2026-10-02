@@ -1,10 +1,8 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
-import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
-import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 
 /// Matrix profile API implementation for Wrytte profile fields.
@@ -14,11 +12,10 @@ class MatrixProfileService {
   MatrixProfileService._();
   static final instance = MatrixProfileService._();
 
-  Uri _profileUri(String userId, [String? field]) {
+  Uri _profileUri(String userId) {
     final encodedUser = Uri.encodeComponent(userId);
-    final suffix = field == null ? '' : '/${Uri.encodeComponent(field)}';
     return Uri.parse(
-      '${MatrixConfig.homeserver}/_matrix/client/v3/profile/$encodedUser$suffix',
+      '${MatrixConfig.homeserver}/_synapse/client/wrytte/profile/$encodedUser',
     );
   }
 
@@ -36,34 +33,44 @@ class MatrixProfileService {
     _check(response);
     final decoded = jsonDecode(response.body);
     if (decoded is! Map) throw const FormatException('Invalid Matrix profile.');
-    return WrytteProfile(userId: userId, fields: Map<String, dynamic>.from(decoded));
+    final fields = <String, dynamic>{
+      ...((decoded['fields'] is Map)
+          ? Map<String, dynamic>.from(decoded['fields'] as Map)
+          : <String, dynamic>{}),
+    };
+    for (final key in const ['displayname', 'avatar_url', 'presence']) {
+      if (decoded[key] != null) fields[key] = decoded[key];
+    }
+    return WrytteProfile(userId: userId, fields: fields);
   }
 
   Future<void> setField(String userId, String field, dynamic value) async {
-    final response = await http.put(
-      _profileUri(userId, field),
+    final response = await http.patch(
+      _profileUri(userId),
       headers: await _authHeaders(),
-      body: jsonEncode({field: value}),
+      body: jsonEncode({'fields': {field: value}}),
     );
     _check(response);
   }
 
   Future<void> deleteField(String userId, String field) async {
-    final response = await http.delete(_profileUri(userId, field), headers: await _authHeaders());
+    final uri = _profileUri(userId).replace(queryParameters: {'field': field});
+    final response = await http.delete(uri, headers: await _authHeaders());
     _check(response);
   }
 
   Future<void> setVisibility(String userId, Map<String, String> settings) =>
       setField(userId, WrytteProfile.visibility, settings);
 
-  Future<mx.CachedPresence> getOnlineStatus(String userId) async {
-    final client = MatrixClientService.instance.client;
-    return client.fetchCurrentPresence(userId);
+  Future<String?> getPresence(String userId) async {
+    final profile = await getProfile(userId);
+    return profile.presence;
   }
 
   Future<void> updateOwnerProfile({
     required String userId,
     String? avatarUrl,
+    String? displayName,
     String? firstName,
     String? lastName,
     String? phoneNumber,
@@ -75,6 +82,7 @@ class MatrixProfileService {
   }) async {
     final operations = <Future<void>>[];
     if (avatarUrl != null) operations.add(setAvatar(userId, avatarUrl));
+    if (displayName != null) operations.add(setDisplayName(userId, displayName));
     if (firstName != null) operations.add(setFirstName(userId, firstName));
     if (lastName != null) operations.add(setLastName(userId, lastName));
     if (phoneNumber != null) operations.add(setPhoneNumber(userId, phoneNumber));
@@ -87,16 +95,13 @@ class MatrixProfileService {
   }
 
   Future<void> setAvatar(String userId, String? mxcUrl) async {
-    if (mxcUrl == null || mxcUrl.trim().isEmpty) {
-      final response = await http.delete(
-        _profileUri(userId, 'avatar_url'),
-        headers: await _authHeaders(),
-      );
-      _check(response);
-      return;
-    }
-    await setField(userId, 'avatar_url', mxcUrl.trim());
+    final value = mxcUrl?.trim() ?? '';
+    if (value.isEmpty) return deleteField(userId, 'avatar_url');
+    return setField(userId, 'avatar_url', value);
   }
+
+  Future<void> setDisplayName(String userId, String? value) =>
+      _setOrDelete(userId, 'displayname', value);
 
   Future<void> setFirstName(String userId, String? value) =>
       _setOrDelete(userId, WrytteProfile.firstName, value);

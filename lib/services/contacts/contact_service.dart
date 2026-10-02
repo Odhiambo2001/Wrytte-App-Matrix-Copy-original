@@ -8,7 +8,7 @@ import 'package:flutter_contacts/flutter_contacts.dart' as fc;
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/contacts/contact_avatar_sanitizer.dart';
-import 'package:wrytte/services/contacts/contact_backend_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/contacts/contact_directory_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
@@ -204,10 +204,29 @@ class ContactService {
     return contacts;
   }
 
-  // ──────────────────────────────────────────────────────────────────────
-  // Backend is the remote source of truth for saved contacts. Matrix is chat
-  // transport only and must not be used as the contact database.
-  // ──────────────────────────────────────────────────────────────────────
+  static const String _contactsAccountDataType = 'com.wrytte.contacts';
+
+  Future<List<Contact>> _readMatrixAccountContacts(String owner) async {
+    final client = MatrixClientService.instance.client;
+    final raw = client.accountData[_contactsAccountDataType];
+    if (raw == null) return [];
+    final value = raw['contacts'];
+    if (value is! List) return [];
+    return value
+        .whereType<Map>()
+        .map((item) => Contact.fromMap(Map<String, dynamic>.from(item)))
+        .map((contact) => contact.copyWith(isSaved: true))
+        .where((contact) => !_isSelfContact(contact.wrytteUserId, owner))
+        .toList();
+  }
+
+  Future<void> _writeMatrixAccountContacts(String owner, List<Contact> contacts) async {
+    final client = MatrixClientService.instance.client;
+    await client.setAccountData(owner, _contactsAccountDataType, {
+      'contacts': contacts.map((contact) => contact.copyWith(isSaved: true).toMap()).toList(),
+    });
+  }
+
   Future<void> saveContactToBackend({
     required String ownerUserId,
     required Contact contact,
@@ -219,13 +238,11 @@ class ContactService {
       contact: contact,
     );
 
-    await ContactBackendService.instance.saveContact(
-      ownerUserId: owner,
-      contact: freshContact.copyWith(isSaved: true),
-    );
+    final existing = await _readMatrixAccountContacts(owner);
+    await _writeMatrixAccountContacts(owner, _mergeSavedContacts(existing, [freshContact]));
     apkLog(
       'Contact.save',
-      'backend contact save done owner="$owner" name="${freshContact.formattedName}" wrytteUserId="${freshContact.wrytteUserId}"',
+      'Matrix account-data contact save done owner="$owner" name="${freshContact.formattedName}"',
     );
   }
 
@@ -235,13 +252,13 @@ class ContactService {
   }) async {
     final owner = ownerUserId.trim();
     if (owner.isEmpty) return;
-    await ContactBackendService.instance.removeContact(
-      ownerUserId: owner,
-      contact: contact,
-    );
+    final existing = await _readMatrixAccountContacts(owner);
+    final key = _dedupeKey(contact);
+    await _writeMatrixAccountContacts(owner,
+        existing.where((item) => _dedupeKey(item) != key).toList());
     apkLog(
       'Contact.remove',
-      'backend contact remove done owner="$owner" name="${contact.formattedName}" wrytteUserId="${contact.wrytteUserId}"',
+      'Matrix account-data contact remove done owner="$owner" name="${contact.formattedName}"',
     );
   }
 
@@ -252,14 +269,15 @@ class ContactService {
   }) async {
     final owner = ownerUserId.trim();
     if (owner.isEmpty) return;
-    await ContactBackendService.instance.updateContactName(
-      ownerUserId: owner,
-      contact: contact,
-      name: name,
-    );
+    final existing = await _readMatrixAccountContacts(owner);
+    final key = _dedupeKey(contact);
+    final updated = existing.map((item) => _dedupeKey(item) == key
+        ? item.copyWith(displayName: name)
+        : item).toList();
+    await _writeMatrixAccountContacts(owner, updated);
     apkLog(
       'Contact.update',
-      'backend contact update done owner="$owner" name="$name" wrytteUserId="${contact.wrytteUserId}"',
+      'Matrix account-data contact update done owner="$owner" name="$name"',
     );
   }
 
@@ -331,29 +349,19 @@ class ContactService {
     }
 
     try {
-      final backendContacts = await ContactBackendService.instance.loadContacts(
-        ownerUserId: owner,
-      );
+      final matrixContacts = await _readMatrixAccountContacts(owner);
       if (generation != _cacheGeneration) return const [];
-      final peerBackendContacts =
-          backendContacts
-              .where((contact) => !_isSelfContact(contact.wrytteUserId, owner))
-              .toList();
-      if (peerBackendContacts.isNotEmpty) {
-        contacts = _mergeSavedContacts(
-          contacts,
-          ContactAvatarSanitizer.sanitizeAll(peerBackendContacts),
-        );
+      if (matrixContacts.isNotEmpty) {
+        contacts = _mergeSavedContacts(contacts, ContactAvatarSanitizer.sanitizeAll(matrixContacts));
         await ContactLocalDb.saveContacts(contacts, ownerUserId: owner);
         ContactService.notifyContactsChanged(owner);
-        unawaited(_refreshBackendContactProfiles(owner, peerBackendContacts));
       }
       _matrixContactsCache = ContactAvatarSanitizer.sanitizeAll(contacts);
       _matrixContactsCacheOwner = owner;
       debugPrint('Loaded ${contacts.length} contacts');
       return contacts;
     } catch (e) {
-      debugPrint('Failed to load backend contacts: $e');
+      debugPrint('Failed to load Matrix account-data contacts: $e');
       _matrixContactsCache = ContactAvatarSanitizer.sanitizeAll(contacts);
       _matrixContactsCacheOwner = owner;
       return contacts;
@@ -740,29 +748,11 @@ class ContactService {
       return;
     }
 
-    for (final contact in contacts) {
-      final freshContact = await _contactWithLatestPublicProfile(
-        ownerUserId: owner,
-        contact: contact,
-      );
-      try {
-        await ContactBackendService.instance.saveContact(
-          ownerUserId: owner,
-          contact: freshContact.copyWith(isSaved: true),
-        );
-      } catch (error, stackTrace) {
-        apkLog(
-          'Contact.sync',
-          'backend contact sync failed owner="$owner" '
-              'contact="${freshContact.formattedName}" error="$error"',
-        );
-        debugPrintStack(stackTrace: stackTrace);
-      }
-    }
+    await _writeMatrixAccountContacts(owner, contacts);
     invalidateMatrixContactsCache();
     apkLog(
       'Contact.sync',
-      'backend contact sync done owner="$owner" contacts=${contacts.length}',
+      'Matrix account-data contact sync done owner="$owner" contacts=${contacts.length}',
     );
   }
 

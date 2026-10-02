@@ -27,6 +27,8 @@ class WrytteProfile {
   String? operator [](String key) => fields[key]?.toString();
 
   String? get avatarUrl => fields['avatar_url']?.toString();
+  String? get displayName => fields['displayname']?.toString();
+  String? get presence => fields['presence']?.toString();
   String? get firstNameValue => this[firstNameKey];
   String? get lastNameValue => this[lastNameKey];
   String? get phoneNumberValue => this[phoneNumber];
