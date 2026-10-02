@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 
 /// Matrix profile API implementation for Wrytte profile fields.

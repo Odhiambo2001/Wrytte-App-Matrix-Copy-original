@@ -208,9 +208,9 @@ class ContactService {
 
   Future<List<Contact>> _readMatrixAccountContacts(String owner) async {
     final client = MatrixClientService.instance.client;
-    final raw = client.accountData[_contactsAccountDataType];
-    if (raw == null) return [];
-    final value = raw['contacts'];
+    final accountData = client.accountData[_contactsAccountDataType];
+    if (accountData == null) return [];
+    final value = accountData.content['contacts'];
     if (value is! List) return [];
     return value
         .whereType<Map>()
