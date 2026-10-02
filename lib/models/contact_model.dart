@@ -6,6 +6,7 @@ class Contact {
   final bool isOnWrytte;
   final String? wrytteUserId;
   final String? databaseName;
+  final String? directRoomId;
   final bool isRecent;
   final bool isSaved;
 
@@ -17,6 +18,7 @@ class Contact {
     this.isOnWrytte = false,
     this.wrytteUserId,
     this.databaseName,
+    this.directRoomId,
     this.isRecent = false,
     this.isSaved = false,
   });
@@ -33,6 +35,7 @@ class Contact {
     bool? isOnWrytte,
     String? wrytteUserId,
     String? databaseName,
+    String? directRoomId,
     bool? isRecent,
     bool? isSaved,
   }) {
@@ -44,6 +47,7 @@ class Contact {
       isOnWrytte: isOnWrytte ?? this.isOnWrytte,
       wrytteUserId: wrytteUserId ?? this.wrytteUserId,
       databaseName: databaseName ?? this.databaseName,
+      directRoomId: directRoomId ?? this.directRoomId,
       isRecent: isRecent ?? this.isRecent,
       isSaved: isSaved ?? this.isSaved,
     );
@@ -64,6 +68,7 @@ class Contact {
       'isOnWrytte': isOnWrytte,
       'wrytteUserId': wrytteUserId,
       'databaseName': databaseName,
+      'directRoomId': directRoomId,
       'isRecent': isRecent,
       'isSaved': isSaved,
     };
@@ -79,6 +84,7 @@ class Contact {
       isOnWrytte: map['isOnWrytte'] ?? false,
       wrytteUserId: map['wrytteUserId'],
       databaseName: map['databaseName'],
+      directRoomId: map['directRoomId'],
       isRecent: map['isRecent'] ?? false,
       isSaved: map['isSaved'] ?? false,
     );
