@@ -36,7 +36,7 @@ class FileUploadLimits {
   /// lower server limit remains authoritative.
   static const int mediaMaxBytes = 100 * 1024 * 1024;
 
-  static const int avatarImageMaxBytes = mediaMaxBytes;
+  static const int avatarImageMaxBytes = 20 * 1024 * 1024;
   static const int voiceMessageMaxBytes = mediaMaxBytes;
   static const int videoMessageMaxBytes = mediaMaxBytes;
   static const int chatFileMaxBytes = mediaMaxBytes;
