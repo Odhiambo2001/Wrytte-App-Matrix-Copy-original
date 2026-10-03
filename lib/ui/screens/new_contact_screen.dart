@@ -6,6 +6,7 @@ import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/contact_user_profiles.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
@@ -30,6 +31,41 @@ const _kDivider = Colors.white12;
 const _kMinPhoneLookupDigits = 8;
 const _kMaxPhoneLookupDigits = 13;
 const _kPhoneLookupDebounce = Duration(milliseconds: 500);
+
+String _formatWrytteIdBody(String value) {
+  final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+  if (digits.isEmpty) return '';
+  final formatted =
+      InternationalPhoneNumberInputFormatter()
+          .formatEditUpdate(
+            const TextEditingValue(),
+            TextEditingValue(
+              text: '00$digits',
+              selection: TextSelection.collapsed(offset: digits.length + 2),
+            ),
+          )
+          .text;
+  return formatted.replaceFirst(RegExp(r'^00\s?'), '');
+}
+
+class _WrytteIdBodyFormatter extends TextInputFormatter {
+  const _WrytteIdBodyFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digits = newValue.text.replaceAll(RegExp(r'[^\d]'), '');
+    final body = digits.length > 12 ? digits.substring(0, 12) : digits;
+    final formatted = _formatWrytteIdBody(body);
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+      composing: TextRange.empty,
+    );
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Enum for the three possible lookup states
@@ -72,6 +108,7 @@ class _NewContactPageState extends State<NewContactPage> {
   bool _showDivider = false;
   bool _isAutoFilling = false;
   bool _hasInvalidCountryCode = false;
+  bool _isWrytteIdInput = false;
 
   // ── Sync toggle ───────────────────────────────────────────────
   bool _syncToPhone = true;
@@ -96,12 +133,25 @@ class _NewContactPageState extends State<NewContactPage> {
   // ─────────────────────────────────────────────────────────────
   // Computed helpers
   // ─────────────────────────────────────────────────────────────
-  bool get _isWrytteIdMode => _selectedCountry?.isoCode == 'WID';
+  bool get _isWrytteIdMode =>
+      _isWrytteIdInput || _selectedCountry?.isoCode == 'WID';
+
+  String _callingCode(CountryId country) {
+    final metadataCode = CountryPhoneNumber.callingCodeForRegion(
+      country.isoCode,
+    );
+    return metadataCode.isEmpty ? country.dialCode : metadataCode;
+  }
+
+  String get _wrytteIdDigits {
+    final digits = _phoneDigits;
+    return '00$digits';
+  }
 
   String get _fullIdentifier {
     if (_selectedCountry == null) return '';
     final raw = _numberCtrl.text.trim();
-    if (_isWrytteIdMode) return raw;
+    if (_isWrytteIdMode) return _wrytteIdDigits;
     return CountryPhoneNumber.international(raw, _selectedCountry!.isoCode) ??
         '';
   }
@@ -113,7 +163,7 @@ class _NewContactPageState extends State<NewContactPage> {
       (_hasInvalidCountryCode ||
           (_selectedCountry != null &&
               (_isWrytteIdMode
-                  ? _numberCtrl.text.trim().length >= 4
+                  ? WrytteLibrary.matchesWrytteIdFormat(_fullIdentifier)
                   : _fullIdentifier.isNotEmpty)));
 
   String get _phoneDigits => _numberCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
@@ -157,15 +207,23 @@ class _NewContactPageState extends State<NewContactPage> {
       _lookupState = _LookupState.found;
     }
 
-    if (identifier.isEmpty || _prefillPhone(identifier)) return;
+    if (identifier.isEmpty) return;
+    final identifierDigits = identifier.replaceAll(RegExp(r'[^\d]'), '');
+    if (!identifierDigits.startsWith('00') && _prefillPhone(identifier)) {
+      return;
+    }
 
     final wrytteMode = countriesId.firstWhere(
       (country) => country.isoCode == 'WID',
-      orElse: () => countriesId.first,
     );
     _selectedCountry = wrytteMode;
+    _isWrytteIdInput = true;
     _codeCtrl.text = '+${wrytteMode.dialCode}';
-    _numberCtrl.text = identifier;
+    final body =
+        identifierDigits.startsWith('00')
+            ? identifierDigits.substring(2)
+            : identifierDigits;
+    _numberCtrl.text = _formatWrytteIdBody(body);
     _showDivider = true;
   }
 
@@ -218,8 +276,11 @@ class _NewContactPageState extends State<NewContactPage> {
     );
 
     if (result != null) {
+      final selectedWrytteId = result.isoCode == 'WID';
+      final clearExistingNumber = _isWrytteIdMode != selectedWrytteId;
       setState(() {
         _selectedCountry = result;
+        _isWrytteIdInput = selectedWrytteId;
         _hasInvalidCountryCode = false;
         _codeCtrl.text = '+${result.dialCode}';
         _showDivider = true;
@@ -230,6 +291,7 @@ class _NewContactPageState extends State<NewContactPage> {
         _lookupError = null;
         _saveError = null;
       });
+      if (clearExistingNumber) _numberCtrl.clear();
       _numberFocusNode.requestFocus();
     }
   }
@@ -248,39 +310,130 @@ class _NewContactPageState extends State<NewContactPage> {
       );
     }
 
+    // A leading zero switches to Wrytte ID entry. Wait until both marker
+    // digits are present before moving from the code field to the ID digits.
+    if (digitsOnly.startsWith('0')) {
+      final hasWrytteMarker = digitsOnly.startsWith('00');
+      final suppliedIdDigits = hasWrytteMarker ? digitsOnly.substring(2) : '';
+      final wrytteMode = countriesId.firstWhere(
+        (country) => country.isoCode == 'WID',
+      );
+      _debounce?.cancel();
+      setState(() {
+        _isWrytteIdInput = true;
+        _selectedCountry = hasWrytteMarker ? wrytteMode : null;
+        _hasInvalidCountryCode = false;
+        _showDivider = hasWrytteMarker;
+        _lookupState = _LookupState.idle;
+        _duplicateContact = null;
+        _resolvedUserId = null;
+        _isRegisteredOnWrytte = false;
+        _lookupError = null;
+        _saveError = null;
+        _codeCtrl.value = TextEditingValue(
+          text: hasWrytteMarker ? '+00' : '+$digitsOnly',
+          selection: TextSelection.collapsed(
+            offset: (hasWrytteMarker ? 2 : digitsOnly.length) + 1,
+          ),
+        );
+      });
+      _numberCtrl.text = _formatWrytteIdBody(suppliedIdDigits);
+      if (hasWrytteMarker && !_isAutoFilling) {
+        _isAutoFilling = true;
+        Future<void>.delayed(const Duration(milliseconds: 100), () {
+          if (!mounted) return;
+          _numberFocusNode.requestFocus();
+          _isAutoFilling = false;
+        });
+      }
+      return;
+    }
+
     final codeWithoutPlus = digitsOnly;
+    final phoneCountries =
+        countriesId.where((country) => country.isoCode != 'WID').toList();
+    final exactMatches =
+        phoneCountries
+            .where((country) => _callingCode(country) == codeWithoutPlus)
+            .toList()
+          ..sort((a, b) {
+            final aCanonical = a.dialCode == codeWithoutPlus ? 0 : 1;
+            final bCanonical = b.dialCode == codeWithoutPlus ? 0 : 1;
+            return aCanonical.compareTo(bCanonical);
+          });
+    final couldBeLongerCode = phoneCountries.any(
+      (country) =>
+          _callingCode(country).length > codeWithoutPlus.length &&
+          _callingCode(country).startsWith(codeWithoutPlus),
+    );
+
     CountryId? detectedCountry;
-    for (final country in countriesId) {
-      if (country.dialCode == codeWithoutPlus) {
-        detectedCountry = country;
-        break;
+    String? nationalDigitsFromCode;
+    var moveCaretToPhone = false;
+    if (exactMatches.isNotEmpty) {
+      detectedCountry = exactMatches.first;
+      moveCaretToPhone = !couldBeLongerCode;
+    } else if (codeWithoutPlus.isNotEmpty && !couldBeLongerCode) {
+      final shorterCodeMatches =
+          phoneCountries
+              .where(
+                (country) => codeWithoutPlus.startsWith(_callingCode(country)),
+              )
+              .toList()
+            ..sort(
+              (a, b) =>
+                  _callingCode(b).length.compareTo(_callingCode(a).length),
+            );
+      if (shorterCodeMatches.isNotEmpty) {
+        detectedCountry = shorterCodeMatches.first;
+        nationalDigitsFromCode = codeWithoutPlus.substring(
+          _callingCode(detectedCountry).length,
+        );
+        moveCaretToPhone = true;
       }
     }
 
-    if (detectedCountry == null && _numberCtrl.text.isNotEmpty) {
-      final digits = _phoneDigits;
-      _numberCtrl.value = TextEditingValue(
-        text: digits,
-        selection: TextSelection.collapsed(offset: digits.length),
-      );
-    }
+    final isPossibleCodePrefix =
+        codeWithoutPlus.isEmpty ||
+        phoneCountries.any(
+          (country) => _callingCode(country).startsWith(codeWithoutPlus),
+        );
 
     _debounce?.cancel();
     setState(() {
+      _isWrytteIdInput = false;
       _selectedCountry = detectedCountry;
       _hasInvalidCountryCode =
-          detectedCountry == null && codeWithoutPlus.isNotEmpty;
-      _showDivider = codeWithoutPlus.isNotEmpty;
+          codeWithoutPlus.isNotEmpty &&
+          detectedCountry == null &&
+          !isPossibleCodePrefix;
+      _showDivider = detectedCountry != null;
       _lookupState = _LookupState.idle;
       _duplicateContact = null;
       _resolvedUserId = null;
       _isRegisteredOnWrytte = false;
       _lookupError = null;
+      _saveError = null;
+      if (detectedCountry != null && nationalDigitsFromCode != null) {
+        _codeCtrl.value = TextEditingValue(
+          text: '+${_callingCode(detectedCountry)}',
+          selection: TextSelection.collapsed(
+            offset: _callingCode(detectedCountry).length + 1,
+          ),
+        );
+      }
     });
 
-    if (detectedCountry != null && !_isAutoFilling) {
+    if (detectedCountry != null && nationalDigitsFromCode != null) {
+      _numberCtrl.text = nationalDigitsFromCode;
+    } else if (detectedCountry == null && _numberCtrl.text.isNotEmpty) {
+      _numberCtrl.clear();
+    }
+
+    if (detectedCountry != null && moveCaretToPhone && !_isAutoFilling) {
       _isAutoFilling = true;
       Future.delayed(const Duration(milliseconds: 100), () {
+        if (!mounted) return;
         _numberFocusNode.requestFocus();
         _isAutoFilling = false;
       });
@@ -320,7 +473,7 @@ class _NewContactPageState extends State<NewContactPage> {
     final digits = _phoneDigits;
     if (_selectedCountry == null) return;
     if (_isWrytteIdMode) {
-      if (_numberCtrl.text.trim().length < 4) return;
+      if (!WrytteLibrary.matchesWrytteIdFormat(_fullIdentifier)) return;
     } else if (digits.length < _kMinPhoneLookupDigits ||
         digits.length > _kMaxPhoneLookupDigits) {
       return;
@@ -752,7 +905,9 @@ class _NewContactPageState extends State<NewContactPage> {
     if (!_isWrytteIdMode && _phoneDigits.length > _kMaxPhoneLookupDigits) {
       return null;
     }
-    if (_isWrytteIdMode && _numberCtrl.text.trim().length < 4) return null;
+    if (_isWrytteIdMode && !WrytteLibrary.matchesWrytteIdFormat(identifier)) {
+      return null;
+    }
 
     final freshToken =
         await AuthService.instance.getMatrixAccessToken() ?? fallbackToken;
@@ -1161,19 +1316,19 @@ class _NewContactPageState extends State<NewContactPage> {
                       title: Text(
                         _hasInvalidCountryCode
                             ? 'Invalid country code'
-                            : _selectedCountry == null
-                            ? 'Country'
                             : _isWrytteIdMode
                             ? 'Wrytte ID number'
+                            : _selectedCountry == null
+                            ? 'Country'
                             : '${_selectedCountry!.flag} ${_selectedCountry!.name}',
                         style: TextStyle(
                           color:
-                              _selectedCountry == null
+                              _selectedCountry == null && !_isWrytteIdMode
                                   ? Colors.white38
                                   : Colors.white,
                           fontSize: 15,
                           fontWeight:
-                              _selectedCountry != null
+                              _selectedCountry != null || _isWrytteIdMode
                                   ? FontWeight.w500
                                   : FontWeight.normal,
                         ),
@@ -1217,11 +1372,12 @@ class _NewContactPageState extends State<NewContactPage> {
                                 ),
                               ),
                               onChanged:
-                                  _isWrytteIdMode
+                                  _isWrytteIdMode && _codeCtrl.text == '+00'
                                       ? null
                                       : _detectCountryFromCode,
                               onTap: _onCodeFieldTap,
-                              readOnly: _isWrytteIdMode,
+                              readOnly:
+                                  _isWrytteIdMode && _codeCtrl.text == '+00',
                             ),
                           ),
 
@@ -1245,7 +1401,7 @@ class _NewContactPageState extends State<NewContactPage> {
                                       : TextInputType.phone,
                               inputFormatters: [
                                 if (_isWrytteIdMode)
-                                  FilteringTextInputFormatter.digitsOnly
+                                  const _WrytteIdBodyFormatter()
                                 else if (_selectedCountry != null)
                                   CountryPhoneNumberInputFormatter(
                                     _selectedCountry!.isoCode,
@@ -1259,7 +1415,7 @@ class _NewContactPageState extends State<NewContactPage> {
                               ),
                               decoration: InputDecoration(
                                 hintText:
-                                    _showDivider
+                                    _selectedCountry != null && _showDivider
                                         ? (_isWrytteIdMode
                                             ? 'Wrytte ID'
                                             : 'Phone number')
@@ -1274,7 +1430,7 @@ class _NewContactPageState extends State<NewContactPage> {
                                   vertical: 8,
                                 ),
                               ),
-                              enabled: _showDivider,
+                              enabled: _selectedCountry != null && _showDivider,
                             ),
                           ),
                         ],
@@ -1390,19 +1546,20 @@ class _NewContactPageState extends State<NewContactPage> {
 
     final wrytteMode = countriesId.firstWhere(
       (country) => country.isoCode == 'WID',
-      orElse: () => countriesId.first,
     );
+    final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+    final body = digits.startsWith('00') ? digits.substring(2) : digits;
     setState(() {
       _selectedCountry = wrytteMode;
+      _isWrytteIdInput = true;
       _codeCtrl.text = '+${wrytteMode.dialCode}';
-      _numberCtrl.text = value;
       _showDivider = true;
       _lookupState = _LookupState.idle;
       _lookupError = null;
       _resolvedUserId = null;
       _isRegisteredOnWrytte = false;
     });
-    _onNumberChanged();
+    _numberCtrl.text = _formatWrytteIdBody(body);
   }
 }
 
