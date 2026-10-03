@@ -466,6 +466,7 @@ class ContactService {
       firstName: incoming.firstName ?? existing.firstName,
       lastName: incoming.lastName ?? existing.lastName,
       directRoomId: incoming.directRoomId ?? existing.directRoomId,
+      inviteStatus: incoming.inviteStatus ?? existing.inviteStatus,
       isRecent: existing.isRecent || incoming.isRecent,
       isSaved: true,
     );

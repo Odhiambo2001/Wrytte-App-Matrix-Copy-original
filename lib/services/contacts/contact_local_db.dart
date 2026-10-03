@@ -30,6 +30,7 @@ class ContactLocalDb {
                 'bio': c.bio,
                 'wrytteUserId': c.wrytteUserId,
                 'directRoomId': c.directRoomId,
+                'inviteStatus': c.inviteStatus,
                 'isOnWrytte': c.isOnWrytte,
                 'isSaved': c.isSaved,
               }),
@@ -56,6 +57,7 @@ class ContactLocalDb {
         bio: json['bio'],
         wrytteUserId: json['wrytteUserId'],
         directRoomId: json['directRoomId'],
+        inviteStatus: json['inviteStatus'],
         isOnWrytte: json['isOnWrytte'] ?? false,
         isSaved: json['isSaved'] ?? false,
       );
@@ -110,6 +112,7 @@ class ContactLocalDb {
             bio: json['bio'],
             wrytteUserId: json['wrytteUserId'],
             directRoomId: json['directRoomId'],
+            inviteStatus: json['inviteStatus'],
             isOnWrytte: json['isOnWrytte'] ?? false,
             isSaved: json['isSaved'] ?? false,
           );

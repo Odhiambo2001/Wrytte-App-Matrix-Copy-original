@@ -9,6 +9,7 @@ class Contact {
   final String? wrytteUserId;
   final String? databaseName;
   final String? directRoomId;
+  final String? inviteStatus;
   final bool isRecent;
   final bool isSaved;
 
@@ -23,6 +24,7 @@ class Contact {
     this.wrytteUserId,
     this.databaseName,
     this.directRoomId,
+    this.inviteStatus,
     this.isRecent = false,
     this.isSaved = false,
   });
@@ -42,6 +44,7 @@ class Contact {
     String? wrytteUserId,
     String? databaseName,
     String? directRoomId,
+    String? inviteStatus,
     bool? isRecent,
     bool? isSaved,
   }) {
@@ -56,6 +59,7 @@ class Contact {
       wrytteUserId: wrytteUserId ?? this.wrytteUserId,
       databaseName: databaseName ?? this.databaseName,
       directRoomId: directRoomId ?? this.directRoomId,
+      inviteStatus: inviteStatus ?? this.inviteStatus,
       isRecent: isRecent ?? this.isRecent,
       isSaved: isSaved ?? this.isSaved,
     );
@@ -79,6 +83,7 @@ class Contact {
       'wrytteUserId': wrytteUserId,
       'databaseName': databaseName,
       'directRoomId': directRoomId,
+      'inviteStatus': inviteStatus,
       'isRecent': isRecent,
       'isSaved': isSaved,
     };
@@ -97,6 +102,7 @@ class Contact {
       wrytteUserId: map['wrytteUserId'],
       databaseName: map['databaseName'],
       directRoomId: map['directRoomId'],
+      inviteStatus: map['inviteStatus'],
       isRecent: map['isRecent'] ?? false,
       isSaved: map['isSaved'] ?? false,
     );

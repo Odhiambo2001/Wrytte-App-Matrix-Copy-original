@@ -60,6 +60,7 @@ class ContactUserProfile2 {
   final String? databaseName;
   final bool isRecent;
   final bool isSaved;
+  final String? inviteStatus;
 
   const ContactUserProfile2({
     required this.displayName,
@@ -73,6 +74,7 @@ class ContactUserProfile2 {
     this.databaseName,
     this.isRecent = false,
     this.isSaved = true,
+    this.inviteStatus,
   });
 
   factory ContactUserProfile2.fromSavedContact({
@@ -82,6 +84,7 @@ class ContactUserProfile2 {
     String? firstName,
     String? lastName,
     String? wrytteUserId,
+    String? inviteStatus,
     ContactUserProfile1? contactUserProfile1,
   }) {
     final phoneFromProfile1 = contactUserProfile1?.phone.trim() ?? '';
@@ -95,6 +98,7 @@ class ContactUserProfile2 {
       isOnWrytte: isOnWrytte,
       wrytteUserId: wrytteUserId?.trim().isEmpty == true ? null : wrytteUserId,
       isSaved: true,
+      inviteStatus: inviteStatus,
     );
   }
 
@@ -109,6 +113,7 @@ class ContactUserProfile2 {
       isOnWrytte: isOnWrytte,
       wrytteUserId: wrytteUserId,
       databaseName: databaseName,
+      inviteStatus: inviteStatus,
       isRecent: isRecent,
       isSaved: isSaved,
     );

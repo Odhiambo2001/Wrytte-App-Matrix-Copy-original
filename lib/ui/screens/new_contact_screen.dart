@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_contacts/flutter_contacts.dart' as fc;
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/contact_user_profiles.dart';
@@ -14,6 +15,7 @@ import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
+import 'package:wrytte/ui/auth/widgets/wrytte_id_checkmark.dart';
 import 'package:wrytte/ui/screens/Country%20id%20picker%20page.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/utils/countries_id.dart';
@@ -89,6 +91,8 @@ class _WrytteIdBodyFormatter extends TextInputFormatter {
 // Enum for the three possible lookup states
 // ─────────────────────────────────────────────────────────────────
 enum _LookupState { idle, found, duplicate, notFound, error }
+
+enum _UnregisteredWrytteSaveChoice { saveAndInvite, saveOnly }
 
 class NewContactPage extends StatefulWidget {
   /// Bearer token for the UserSearchService call.
@@ -184,9 +188,12 @@ class _NewContactPageState extends State<NewContactPage> {
           _isRegisteredOnWrytte &&
           (_resolvedUserId?.trim().isNotEmpty ?? false) &&
           WrytteLibrary.matchesWrytteIdFormat(_fullIdentifier);
-      return canSaveRegisteredId &&
-          (_lookupState == _LookupState.found ||
-              _lookupState == _LookupState.duplicate);
+      final canSaveUnregisteredId =
+          !_isRegisteredOnWrytte && _lookupState == _LookupState.notFound;
+      return canSaveUnregisteredId ||
+          (canSaveRegisteredId &&
+              (_lookupState == _LookupState.found ||
+                  _lookupState == _LookupState.duplicate));
     }
     return _lookupState != _LookupState.duplicate &&
         (_hasInvalidCountryCode ||
@@ -810,6 +817,15 @@ class _NewContactPageState extends State<NewContactPage> {
       return;
     }
 
+    if (_isWrytteIdMode && _lookupState == _LookupState.notFound) {
+      final choice = await _showUnregisteredWrytteDialog();
+      if (choice == null || !mounted) return;
+      await _saveUnregisteredWrytte(
+        saveAndInvite: choice == _UnregisteredWrytteSaveChoice.saveAndInvite,
+      );
+      return;
+    }
+
     setState(() {
       _isSaving = true;
       _saveError = null;
@@ -1036,6 +1052,176 @@ class _NewContactPageState extends State<NewContactPage> {
         _saveError = _friendlyError(e.toString());
       });
     }
+  }
+
+  Future<_UnregisteredWrytteSaveChoice?> _showUnregisteredWrytteDialog() {
+    return showDialog<_UnregisteredWrytteSaveChoice>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: _kBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+          side: const BorderSide(color: Colors.white24),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 26, 24, 22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This Wrytte ID is not on Wrytte',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'You can save this contact locally and invite them to Wrytte.',
+                style: TextStyle(color: Colors.white70, fontSize: 16),
+              ),
+              const SizedBox(height: 22),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.pop(
+                    dialogContext,
+                    _UnregisteredWrytteSaveChoice.saveAndInvite,
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _kBlue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: const StadiumBorder(),
+                  ),
+                  child: const Text('Save and invite'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              _unregisteredDialogButton(
+                dialogContext,
+                label: 'Save only',
+                result: _UnregisteredWrytteSaveChoice.saveOnly,
+              ),
+              const SizedBox(height: 10),
+              _unregisteredDialogButton(
+                dialogContext,
+                label: 'Cancel',
+                result: null,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _unregisteredDialogButton(
+    BuildContext dialogContext, {
+    required String label,
+    required _UnregisteredWrytteSaveChoice? result,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      child: TextButton(
+        onPressed: () => Navigator.pop(dialogContext, result),
+        style: TextButton.styleFrom(
+          backgroundColor: _kCard,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape: const StadiumBorder(),
+        ),
+        child: Text(label),
+      ),
+    );
+  }
+
+  Future<void> _saveUnregisteredWrytte({required bool saveAndInvite}) async {
+    setState(() {
+      _isSaving = true;
+      _saveError = null;
+    });
+
+    try {
+      final owner = await AuthService.instance.getCurrentUserId() ?? '';
+      if (owner.isEmpty) {
+        throw StateError('Cannot save contact without a signed-in user.');
+      }
+
+      final firstName = _firstNameCtrl.text.trim();
+      final lastName = _lastNameCtrl.text.trim();
+      final name = _displayName(firstName, lastName, _fullIdentifier);
+      if (_syncToPhone) {
+        await _saveUnregisteredContactToPhone(
+          firstName: firstName,
+          lastName: lastName,
+          displayName: name,
+        );
+      }
+
+      final profile2 = ContactUserProfile2.fromSavedContact(
+        savedDisplayName: name,
+        typedPhone: _fullIdentifier,
+        isOnWrytte: false,
+        firstName: firstName,
+        lastName: lastName,
+        inviteStatus: saveAndInvite ? 'invite' : null,
+      );
+      final contact = profile2.toContact();
+      await ContactLocalDb.addContact(contact, ownerUserId: owner);
+      ContactService.notifyContactsChanged(owner);
+      ContactService.invalidateMatrixContactsCache();
+      _contactService.invalidateCache();
+
+      if (saveAndInvite) {
+        await _saveContactToBackendOrThrow(
+          selfId: owner,
+          receiverId: '',
+          contact: contact,
+        );
+      }
+
+      if (!mounted) return;
+      Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isSaving = false;
+        _saveError = _friendlyError(error.toString());
+      });
+    }
+  }
+
+  Future<void> _saveUnregisteredContactToPhone({
+    required String firstName,
+    required String lastName,
+    required String displayName,
+  }) async {
+    if (!await _contactService.requestContactsPermission()) {
+      throw StateError('Phone contacts permission denied.');
+    }
+
+    final digits = _digitsOnly(_fullIdentifier);
+    final existing = await fc.FlutterContacts.getContacts(
+      withProperties: true,
+      withPhoto: false,
+    );
+    final alreadySaved = existing.any(
+      (contact) => contact.phones.any(
+        (phone) => _digitsOnly(phone.number) == digits,
+      ),
+    );
+    if (alreadySaved) return;
+
+    await fc.FlutterContacts.insertContact(
+      fc.Contact(
+        displayName: displayName,
+        name: fc.Name(first: firstName, last: lastName),
+        phones: [fc.Phone('+$digits')],
+      ),
+    );
   }
 
   Future<void> _showInvalidCountryCodeDialog() async {
@@ -1320,8 +1506,8 @@ class _NewContactPageState extends State<NewContactPage> {
               style: const TextStyle(color: Colors.white54, fontSize: 13),
             ),
             if (checkmark) ...[
-              const SizedBox(width: 4),
-              const Text('✓', style: TextStyle(color: _kBlue, fontSize: 13)),
+              const SizedBox(width: 6),
+              const WrytteIdCheckmark(),
             ],
             if (trailing != null) trailing,
           ],
@@ -1334,7 +1520,9 @@ class _NewContactPageState extends State<NewContactPage> {
         return Padding(
           padding: const EdgeInsets.only(top: 6),
           child: statusRow(
-            isWrytteId ? 'Wrytte ID is on Wrytte' : 'Phone number is on Wrytte',
+            isWrytteId
+                ? 'This Wrytte ID is on Wrytte'
+                : 'Phone number is on Wrytte',
             checkmark: true,
           ),
         );
@@ -1349,7 +1537,7 @@ class _NewContactPageState extends State<NewContactPage> {
             children: [
               Text(
                 isWrytteId
-                    ? 'Wrytte ID is in your contacts.'
+                    ? 'This Wrytte ID is in your contacts.'
                     : 'This phone number is already in your contacts.',
                 style: const TextStyle(color: Colors.white54, fontSize: 13),
               ),
@@ -1360,7 +1548,7 @@ class _NewContactPageState extends State<NewContactPage> {
                   style: TextStyle(color: _kBlue, fontSize: 13),
                 ),
               ),
-              const Text('✓', style: TextStyle(color: _kBlue, fontSize: 13)),
+              const WrytteIdCheckmark(),
             ],
           ),
         );
@@ -1370,7 +1558,7 @@ class _NewContactPageState extends State<NewContactPage> {
           padding: const EdgeInsets.only(top: 6),
           child:
               isWrytteId
-                  ? statusRow('Wrytte ID not on Wrytte')
+                  ? statusRow('This Wrytte ID is not on Wrytte')
                   : Row(
                     children: [
                       const Text(
