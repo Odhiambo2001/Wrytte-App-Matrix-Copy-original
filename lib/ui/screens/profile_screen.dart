@@ -505,11 +505,20 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profilePhone() {
+    final raw = _profile?.phone.trim() ?? '';
+    final wrytteId = _displayWrytteId(raw);
+    if (wrytteId != null) return wrytteId;
     final phone = _phoneFromIdentifier(_profile?.phone);
     if (phone.isNotEmpty) {
       return _formatPhone(phone);
     }
     return '';
+  }
+
+  String? _displayWrytteId(String value) {
+    final match = RegExp(r'^W(\d{8,12})$', caseSensitive: false).firstMatch(value);
+    if (match == null) return null;
+    return '+00 ${match.group(1)}';
   }
 
   String _formatPhone(String phone) {

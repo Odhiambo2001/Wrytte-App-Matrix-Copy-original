@@ -7,7 +7,6 @@ import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/contact_user_profiles.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
-import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
@@ -38,35 +37,26 @@ const _kWrytteIdLookupDebounce = Duration(milliseconds: 300);
 
 String _formatWrytteIdBody(String value) {
   final digits = value.replaceAll(RegExp(r'[^\d]'), '');
-  if (digits.isEmpty) return '';
-  final formatted =
-      InternationalPhoneNumberInputFormatter()
-          .formatEditUpdate(
-            const TextEditingValue(),
-            TextEditingValue(
-              text: '00$digits',
-              selection: TextSelection.collapsed(offset: digits.length + 2),
-            ),
-          )
-          .text;
-  return formatted.replaceFirst(RegExp(r'^00\s?'), '');
+  return digits.length > 12 ? digits.substring(0, 12) : digits;
 }
 
 String _formatWrytteIdEntry(String value) {
   final digits = value.replaceAll(RegExp(r'[^\d]'), '');
   if (digits.isEmpty) return '';
-  final limited = digits.length > 14 ? digits.substring(0, 14) : digits;
-  final formatted =
-      InternationalPhoneNumberInputFormatter()
-          .formatEditUpdate(
-            const TextEditingValue(),
-            TextEditingValue(
-              text: limited,
-              selection: TextSelection.collapsed(offset: limited.length),
-            ),
-          )
-          .text;
-  return '+$formatted';
+  final body =
+      digits.startsWith('00')
+          ? digits.substring(2)
+          : digits.startsWith('0')
+          ? ''
+          : digits;
+  final limitedBody = body.length > 12 ? body.substring(0, 12) : body;
+  return limitedBody.isEmpty ? '+00' : '+00 $limitedBody';
+}
+
+bool _isValidWrytteId(String value) {
+  final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+  final bodyLength = digits.startsWith('00') ? digits.length - 2 : 0;
+  return bodyLength >= 8 && bodyLength <= 12;
 }
 
 class _WrytteIdBodyFormatter extends TextInputFormatter {
@@ -188,7 +178,7 @@ class _NewContactPageState extends State<NewContactPage> {
       final canSaveRegisteredId =
           _isRegisteredOnWrytte &&
           (_resolvedUserId?.trim().isNotEmpty ?? false) &&
-          WrytteLibrary.matchesWrytteIdFormat(_fullIdentifier);
+          _isValidWrytteId(_fullIdentifier);
       final canSaveUnregisteredId =
           !_isRegisteredOnWrytte && _lookupState == _LookupState.notFound;
       return canSaveUnregisteredId ||
@@ -499,7 +489,7 @@ class _NewContactPageState extends State<NewContactPage> {
     if (_isWrytteIdMode) {
       if (digits.length < _kMinPhoneLookupDigits ||
           digits.length > 12 ||
-          !WrytteLibrary.matchesWrytteIdFormat(_fullIdentifier)) {
+          !_isValidWrytteId(_fullIdentifier)) {
         return;
       }
     } else if (digits.length < _kMinPhoneLookupDigits ||
@@ -525,7 +515,7 @@ class _NewContactPageState extends State<NewContactPage> {
     if (_isWrytteIdMode &&
         (_phoneDigits.length < _kMinPhoneLookupDigits ||
             _phoneDigits.length > 12 ||
-            !WrytteLibrary.matchesWrytteIdFormat(identifier))) {
+            !_isValidWrytteId(identifier))) {
       return;
     }
 
@@ -1296,7 +1286,7 @@ class _NewContactPageState extends State<NewContactPage> {
     if (_isWrytteIdMode &&
         (_phoneDigits.length < _kMinPhoneLookupDigits ||
             _phoneDigits.length > 12 ||
-            !WrytteLibrary.matchesWrytteIdFormat(identifier))) {
+            !_isValidWrytteId(identifier))) {
       return null;
     }
 

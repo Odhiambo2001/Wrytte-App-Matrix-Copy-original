@@ -31,16 +31,24 @@ class ContactUserProfile1 {
   }) {
     final avatar = profile.hasProfileImage ? profile.profileImage.trim() : '';
     final bio = profile.bio.trim();
+    final backendPhone = profile.phone.trim();
+    final fallback = fallbackPhone.trim();
     return ContactUserProfile1(
       userId: userId,
       displayName: profile.displayName.trim(),
-      phone:
-          profile.phone.trim().isNotEmpty
-              ? profile.phone.trim()
-              : fallbackPhone.trim(),
+      phone: _displayWrytteId(backendPhone) ??
+          (backendPhone.isNotEmpty ? backendPhone : fallback),
       avatarUrl: avatar.isEmpty ? null : avatar,
       bio: bio.isEmpty ? null : bio,
     );
+  }
+
+  /// Backend profiles store Wrytte IDs as `W700...`. Keep their visual
+  /// identifier distinct from phone numbers throughout contact rendering.
+  static String? _displayWrytteId(String value) {
+    final match = RegExp(r'^W(\d{8,12})$', caseSensitive: false).firstMatch(value);
+    if (match == null) return null;
+    return '+00 ${match.group(1)}';
   }
 }
 

@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:wrytte/services/auth/device_region_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/auth/real_number_service.dart';
-import 'package:wrytte/services/auth/wrytte_library.dart';
 import 'package:wrytte/ui/auth/kface_intro_page.dart';
 import 'package:wrytte/ui/auth/login_otp_page.dart';
 import 'package:wrytte/ui/auth/otp_verification_page.dart';
@@ -187,7 +186,9 @@ class _SignInPageState extends State<SignInPage> {
   }
 
   bool _isValidWrytteId(String digits) {
-    return WrytteLibrary.matchesWrytteIdFormat(digits);
+    return digits.startsWith('00') &&
+        digits.length >= 10 &&
+        digits.length <= 14;
   }
 
   void _onCodeTap() {
@@ -280,7 +281,7 @@ class _SignInPageState extends State<SignInPage> {
 
       final digits = input.replaceAll(RegExp(r'[^\d]'), '');
       if (digits.startsWith('00')) {
-        if (!WrytteLibrary.matchesWrytteIdFormat(digits)) {
+        if (!_isValidWrytteId(digits)) {
           throw const FormatException('Invalid Wrytte ID format');
         }
         final search = await AuthService.instance.searchWrytteIdForSignIn(
@@ -822,16 +823,10 @@ class _CountryCodeOrIdFormatter extends TextInputFormatter {
     final digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
     if (digits.isEmpty) return TextEditingValue.empty;
     if (digits.startsWith('0')) {
-      final formatted =
-          InternationalPhoneNumberInputFormatter()
-              .formatEditUpdate(
-                TextEditingValue.empty,
-                TextEditingValue(
-                  text: digits,
-                  selection: TextSelection.collapsed(offset: digits.length),
-                ),
-              )
-              .text;
+      final limitedDigits = digits.length > 14 ? digits.substring(0, 14) : digits;
+      final body =
+          limitedDigits.length > 2 ? limitedDigits.substring(2) : '';
+      final formatted = body.isEmpty ? '00' : '00 $body';
       return TextEditingValue(
         text: '+$formatted',
         selection: TextSelection.collapsed(offset: 1 + formatted.length),
