@@ -13,6 +13,7 @@ import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/widgets/wrytte_id_checkmark.dart';
@@ -544,21 +545,14 @@ class _NewContactPageState extends State<NewContactPage> {
         }
       }
 
-      final freshToken =
-          await AuthService.instance.getMatrixAccessToken() ?? widget.token;
-      final tokenPreviewLength =
-          freshToken.length < 20 ? freshToken.length : 20;
-      debugPrint(
-        '🔑 token: ${freshToken.isEmpty ? "EMPTY" : freshToken.substring(0, tokenPreviewLength)}',
-      );
       final Map<String, String> result;
 
       if (_isWrytteIdMode) {
-        result = await _searchService.searchUsersByPhones(
-          phoneNumbersC: identifier,
-          token: freshToken,
-        );
+        final userId = await _searchWrytteId(identifier);
+        result = userId == null ? {} : {identifier: userId};
       } else {
+        final freshToken =
+            await AuthService.instance.getMatrixAccessToken() ?? widget.token;
         result = await _searchService.searchUsersByPhones(
           phoneNumbersA: [identifier],
           token: freshToken,
@@ -1058,13 +1052,17 @@ class _NewContactPageState extends State<NewContactPage> {
     return showDialog<_UnregisteredWrytteSaveChoice>(
       context: context,
       builder: (dialogContext) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(
+          horizontal: 28,
+          vertical: 20,
+        ),
         backgroundColor: _kBg,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: BorderRadius.circular(24),
           side: const BorderSide(color: Colors.white24),
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 26, 24, 22),
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1073,16 +1071,16 @@ class _NewContactPageState extends State<NewContactPage> {
                 'This Wrytte ID is not on Wrytte',
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 19,
+                  fontSize: 18,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               const Text(
                 'You can save this contact locally and invite them to Wrytte.',
-                style: TextStyle(color: Colors.white70, fontSize: 16),
+                style: TextStyle(color: Colors.white70, fontSize: 15),
               ),
-              const SizedBox(height: 22),
+              const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton(
@@ -1093,19 +1091,19 @@ class _NewContactPageState extends State<NewContactPage> {
                   style: FilledButton.styleFrom(
                     backgroundColor: _kBlue,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: const StadiumBorder(),
                   ),
                   child: const Text('Save and invite'),
                 ),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               _unregisteredDialogButton(
                 dialogContext,
                 label: 'Save only',
                 result: _UnregisteredWrytteSaveChoice.saveOnly,
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               _unregisteredDialogButton(
                 dialogContext,
                 label: 'Cancel',
@@ -1130,7 +1128,7 @@ class _NewContactPageState extends State<NewContactPage> {
         style: TextButton.styleFrom(
           backgroundColor: _kCard,
           foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          padding: const EdgeInsets.symmetric(vertical: 12),
           shape: const StadiumBorder(),
         ),
         child: Text(label),
@@ -1262,6 +1260,27 @@ class _NewContactPageState extends State<NewContactPage> {
     );
   }
 
+  /// Uses the authoritative Wrytte-ID endpoint used by sign-in. The phone
+  /// directory endpoint normalizes `00…` into an E.164 phone number, which
+  /// cannot match the backend's canonical `W…` account identifier.
+  Future<String?> _searchWrytteId(String identifier) async {
+    final digits = _digitsOnly(identifier);
+    final search = await AuthService.instance.searchWrytteIdForSignIn(digits);
+    if (!search.exists) return null;
+
+    final userId = search.userId.trim();
+    if (userId.isEmpty) return null;
+    final matrixUserId = search.matrixUserId.trim();
+    if (matrixUserId.startsWith('@') && matrixUserId.contains(':')) {
+      return matrixUserId;
+    }
+    if (userId.startsWith('@') && userId.contains(':')) return userId;
+
+    final localpart = userId.replaceAll(RegExp(r'[^A-Za-z0-9._=-]'), '');
+    if (localpart.isEmpty) return null;
+    return '@$localpart:${MatrixConfig.serverName}';
+  }
+
   Future<String?> _resolveReceiverIdForSave(String fallbackToken) async {
     final existing = _resolvedUserId?.trim();
     if (existing != null && existing.isNotEmpty) return existing;
@@ -1281,8 +1300,6 @@ class _NewContactPageState extends State<NewContactPage> {
       return null;
     }
 
-    final freshToken =
-        await AuthService.instance.getMatrixAccessToken() ?? fallbackToken;
     apkLog(
       'NewContact.lookup',
       'save forcing final lookup identifier="$identifier" state=$_lookupState',
@@ -1291,11 +1308,11 @@ class _NewContactPageState extends State<NewContactPage> {
     try {
       final Map<String, String> result;
       if (_isWrytteIdMode) {
-        result = await _searchService.searchUsersByPhones(
-          phoneNumbersC: identifier,
-          token: freshToken,
-        );
+        final userId = await _searchWrytteId(identifier);
+        result = userId == null ? {} : {identifier: userId};
       } else {
+        final freshToken =
+            await AuthService.instance.getMatrixAccessToken() ?? fallbackToken;
         result = await _searchService.searchUsersByPhones(
           phoneNumbersA: [identifier],
           token: freshToken,
@@ -1368,6 +1385,10 @@ class _NewContactPageState extends State<NewContactPage> {
   }
 
   String _friendlyError(String raw) {
+    if (raw.contains('M_FORBIDDEN') ||
+        raw.toLowerCase().contains('account data for other users')) {
+      return 'Wrytte could not save this contact to your account. Please try again.';
+    }
     if (raw.toLowerCase().contains('own wrytte account')) {
       return 'You cannot add yourself as a contact.';
     }

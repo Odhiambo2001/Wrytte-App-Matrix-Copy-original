@@ -70,6 +70,7 @@ class WrytteIdSignInSearchResult {
     required this.kface,
     required this.preferredMethod,
     required this.methods,
+    this.matrixUserId = '',
   });
 
   final bool exists;
@@ -83,6 +84,7 @@ class WrytteIdSignInSearchResult {
   bool get keyface => kface;
   final String preferredMethod;
   final List<String> methods;
+  final String matrixUserId;
 }
 
 class KFaceRecoveryData {
@@ -771,6 +773,7 @@ class AuthService {
       kface: flag('kface') || flag('keyface'),
       preferredMethod: (response['preferredMethod'] ?? '').toString().trim(),
       methods: methods,
+      matrixUserId: (response['matrixUserId'] ?? '').toString().trim(),
     );
   }
 

@@ -222,7 +222,22 @@ class ContactService {
 
   Future<void> _writeMatrixAccountContacts(String owner, List<Contact> contacts) async {
     final client = MatrixClientService.instance.client;
-    await client.setAccountData(owner, _contactsAccountDataType, {
+    final sessionUserId = client.userID?.trim();
+    if (sessionUserId == null || sessionUserId.isEmpty) {
+      throw StateError('Cannot sync contacts without an active Matrix session.');
+    }
+    final ownerLocalpart = _matrixLocalpart(owner)?.toLowerCase();
+    final sessionLocalpart = _matrixLocalpart(sessionUserId)?.toLowerCase();
+    if (ownerLocalpart == null || ownerLocalpart != sessionLocalpart) {
+      throw StateError(
+        'The active Matrix account does not match the contact owner.',
+      );
+    }
+
+    // Matrix account data must be written against the authenticated MXID, not
+    // the app's stored Wrytte ID/localpart (for example, "w123" vs
+    // "@w123:wrytte.com").
+    await client.setAccountData(sessionUserId, _contactsAccountDataType, {
       'contacts': contacts.map((contact) => contact.copyWith(isSaved: true).toMap()).toList(),
     });
   }
