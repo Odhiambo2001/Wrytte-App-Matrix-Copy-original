@@ -463,6 +463,9 @@ class ContactService {
               ? incomingUserId
               : existingUserId,
       databaseName: incoming.databaseName ?? existing.databaseName,
+      firstName: incoming.firstName ?? existing.firstName,
+      lastName: incoming.lastName ?? existing.lastName,
+      directRoomId: incoming.directRoomId ?? existing.directRoomId,
       isRecent: existing.isRecent || incoming.isRecent,
       isSaved: true,
     );
@@ -796,12 +799,15 @@ class ContactService {
 
       return Contact(
         displayName: contact.displayName,
+        firstName: contact.firstName,
+        lastName: contact.lastName,
         phones: latestPhone == null ? contact.phones : [latestPhone],
         avatarUrl: latestAvatar ?? contact.avatarUrl,
         bio: latestBio.isEmpty ? contact.bio : latestBio,
         isOnWrytte: contact.isOnWrytte,
         wrytteUserId: contact.wrytteUserId,
         databaseName: contact.databaseName,
+        directRoomId: contact.directRoomId,
         isRecent: contact.isRecent,
         isSaved: true,
       );

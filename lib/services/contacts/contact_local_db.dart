@@ -23,10 +23,13 @@ class ContactLocalDb {
             .map(
               (c) => jsonEncode({
                 'name': c.displayName,
+                'firstName': c.firstName,
+                'lastName': c.lastName,
                 'phones': c.phones.map(_normalizePhone).toList(),
                 'avatar': c.avatarUrl,
                 'bio': c.bio,
                 'wrytteUserId': c.wrytteUserId,
+                'directRoomId': c.directRoomId,
                 'isOnWrytte': c.isOnWrytte,
                 'isSaved': c.isSaved,
               }),
@@ -46,10 +49,13 @@ class ContactLocalDb {
       final json = jsonDecode(e);
       return Contact(
         displayName: json['name'],
+        firstName: json['firstName'],
+        lastName: json['lastName'],
         phones: List<String>.from(json['phones']).map(_normalizePhone).toList(),
         avatarUrl: json['avatar'],
         bio: json['bio'],
         wrytteUserId: json['wrytteUserId'],
+        directRoomId: json['directRoomId'],
         isOnWrytte: json['isOnWrytte'] ?? false,
         isSaved: json['isSaved'] ?? false,
       );
@@ -94,6 +100,8 @@ class ContactLocalDb {
           final json = jsonDecode(raw);
           final contact = Contact(
             displayName: json['name'],
+            firstName: json['firstName'],
+            lastName: json['lastName'],
             phones:
                 List<String>.from(
                   json['phones'] ?? const <String>[],
@@ -101,6 +109,7 @@ class ContactLocalDb {
             avatarUrl: json['avatar'],
             bio: json['bio'],
             wrytteUserId: json['wrytteUserId'],
+            directRoomId: json['directRoomId'],
             isOnWrytte: json['isOnWrytte'] ?? false,
             isSaved: json['isSaved'] ?? false,
           );
@@ -195,12 +204,15 @@ class ContactLocalDb {
 
       final next = Contact(
         displayName: contact.displayName,
+        firstName: contact.firstName,
+        lastName: contact.lastName,
         phones: contact.phones,
         avatarUrl: avatarUrl == null ? contact.avatarUrl : cleanAvatar,
         bio: bio == null ? contact.bio : cleanBio,
         isOnWrytte: contact.isOnWrytte,
         wrytteUserId: contact.wrytteUserId,
         databaseName: contact.databaseName,
+        directRoomId: contact.directRoomId,
         isRecent: contact.isRecent,
         isSaved: contact.isSaved,
       );

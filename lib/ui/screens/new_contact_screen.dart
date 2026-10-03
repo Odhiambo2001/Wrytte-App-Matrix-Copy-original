@@ -31,6 +31,7 @@ const _kDivider = Colors.white12;
 const _kMinPhoneLookupDigits = 8;
 const _kMaxPhoneLookupDigits = 13;
 const _kPhoneLookupDebounce = Duration(milliseconds: 500);
+const _kWrytteIdLookupDebounce = Duration(milliseconds: 300);
 
 String _formatWrytteIdBody(String value) {
   final digits = value.replaceAll(RegExp(r'[^\d]'), '');
@@ -46,6 +47,23 @@ String _formatWrytteIdBody(String value) {
           )
           .text;
   return formatted.replaceFirst(RegExp(r'^00\s?'), '');
+}
+
+String _formatWrytteIdEntry(String value) {
+  final digits = value.replaceAll(RegExp(r'[^\d]'), '');
+  if (digits.isEmpty) return '';
+  final limited = digits.length > 14 ? digits.substring(0, 14) : digits;
+  final formatted =
+      InternationalPhoneNumberInputFormatter()
+          .formatEditUpdate(
+            const TextEditingValue(),
+            TextEditingValue(
+              text: limited,
+              selection: TextSelection.collapsed(offset: limited.length),
+            ),
+          )
+          .text;
+  return '+$formatted';
 }
 
 class _WrytteIdBodyFormatter extends TextInputFormatter {
@@ -123,6 +141,7 @@ class _NewContactPageState extends State<NewContactPage> {
 
   /// The wrytteUserId returned by the lookup — needed for addFriend.
   String? _resolvedUserId;
+  ContactUserProfile1? _lookupProfile1;
   bool _isRegisteredOnWrytte = false;
   String? _lookupError;
 
@@ -156,15 +175,23 @@ class _NewContactPageState extends State<NewContactPage> {
         '';
   }
 
-  bool get _canSave =>
-      _lookupState != _LookupState.duplicate &&
-      _firstNameCtrl.text.trim().isNotEmpty &&
-      _numberCtrl.text.trim().isNotEmpty &&
-      (_hasInvalidCountryCode ||
-          (_selectedCountry != null &&
-              (_isWrytteIdMode
-                  ? WrytteLibrary.matchesWrytteIdFormat(_fullIdentifier)
-                  : _fullIdentifier.isNotEmpty)));
+  bool get _canSave {
+    if (_firstNameCtrl.text.trim().isEmpty || _numberCtrl.text.trim().isEmpty) {
+      return false;
+    }
+    if (_isWrytteIdMode) {
+      final canSaveRegisteredId =
+          _isRegisteredOnWrytte &&
+          (_resolvedUserId?.trim().isNotEmpty ?? false) &&
+          WrytteLibrary.matchesWrytteIdFormat(_fullIdentifier);
+      return canSaveRegisteredId &&
+          (_lookupState == _LookupState.found ||
+              _lookupState == _LookupState.duplicate);
+    }
+    return _lookupState != _LookupState.duplicate &&
+        (_hasInvalidCountryCode ||
+            (_selectedCountry != null && _fullIdentifier.isNotEmpty));
+  }
 
   String get _phoneDigits => _numberCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
 
@@ -213,12 +240,10 @@ class _NewContactPageState extends State<NewContactPage> {
       return;
     }
 
-    final wrytteMode = countriesId.firstWhere(
-      (country) => country.isoCode == 'WID',
-    );
+    const wrytteMode = wryptteId;
     _selectedCountry = wrytteMode;
     _isWrytteIdInput = true;
-    _codeCtrl.text = '+${wrytteMode.dialCode}';
+    _codeCtrl.text = _formatWrytteIdEntry(identifierDigits);
     final body =
         identifierDigits.startsWith('00')
             ? identifierDigits.substring(2)
@@ -287,6 +312,7 @@ class _NewContactPageState extends State<NewContactPage> {
         _lookupState = _LookupState.idle;
         _duplicateContact = null;
         _resolvedUserId = null;
+        _lookupProfile1 = null;
         _isRegisteredOnWrytte = false;
         _lookupError = null;
         _saveError = null;
@@ -310,20 +336,18 @@ class _NewContactPageState extends State<NewContactPage> {
       );
     }
 
-    // A leading zero switches to Wrytte ID entry. Wait until both marker
-    // digits are present before moving from the code field to the ID digits.
+    // Like sign-in, a leading zero switches immediately to Wrytte ID mode.
+    // Keep the complete formatted Wrytte ID in this field while typing.
     if (digitsOnly.startsWith('0')) {
-      final hasWrytteMarker = digitsOnly.startsWith('00');
-      final suppliedIdDigits = hasWrytteMarker ? digitsOnly.substring(2) : '';
-      final wrytteMode = countriesId.firstWhere(
-        (country) => country.isoCode == 'WID',
-      );
+      final body = digitsOnly.startsWith('00') ? digitsOnly.substring(2) : '';
+      const wrytteMode = wryptteId;
+      final formattedEntry = _formatWrytteIdEntry(digitsOnly);
       _debounce?.cancel();
       setState(() {
         _isWrytteIdInput = true;
-        _selectedCountry = hasWrytteMarker ? wrytteMode : null;
+        _selectedCountry = wrytteMode;
         _hasInvalidCountryCode = false;
-        _showDivider = hasWrytteMarker;
+        _showDivider = false;
         _lookupState = _LookupState.idle;
         _duplicateContact = null;
         _resolvedUserId = null;
@@ -331,21 +355,11 @@ class _NewContactPageState extends State<NewContactPage> {
         _lookupError = null;
         _saveError = null;
         _codeCtrl.value = TextEditingValue(
-          text: hasWrytteMarker ? '+00' : '+$digitsOnly',
-          selection: TextSelection.collapsed(
-            offset: (hasWrytteMarker ? 2 : digitsOnly.length) + 1,
-          ),
+          text: formattedEntry,
+          selection: TextSelection.collapsed(offset: formattedEntry.length),
         );
       });
-      _numberCtrl.text = _formatWrytteIdBody(suppliedIdDigits);
-      if (hasWrytteMarker && !_isAutoFilling) {
-        _isAutoFilling = true;
-        Future<void>.delayed(const Duration(milliseconds: 100), () {
-          if (!mounted) return;
-          _numberFocusNode.requestFocus();
-          _isAutoFilling = false;
-        });
-      }
+      _numberCtrl.text = _formatWrytteIdBody(body);
       return;
     }
 
@@ -411,6 +425,7 @@ class _NewContactPageState extends State<NewContactPage> {
       _lookupState = _LookupState.idle;
       _duplicateContact = null;
       _resolvedUserId = null;
+      _lookupProfile1 = null;
       _isRegisteredOnWrytte = false;
       _lookupError = null;
       _saveError = null;
@@ -464,6 +479,7 @@ class _NewContactPageState extends State<NewContactPage> {
       _lookupState = _LookupState.idle;
       _duplicateContact = null;
       _resolvedUserId = null;
+      _lookupProfile1 = null;
       _isRegisteredOnWrytte = false;
       _lookupError = null;
       _saveError = null;
@@ -473,13 +489,20 @@ class _NewContactPageState extends State<NewContactPage> {
     final digits = _phoneDigits;
     if (_selectedCountry == null) return;
     if (_isWrytteIdMode) {
-      if (!WrytteLibrary.matchesWrytteIdFormat(_fullIdentifier)) return;
+      if (digits.length < _kMinPhoneLookupDigits ||
+          digits.length > 12 ||
+          !WrytteLibrary.matchesWrytteIdFormat(_fullIdentifier)) {
+        return;
+      }
     } else if (digits.length < _kMinPhoneLookupDigits ||
         digits.length > _kMaxPhoneLookupDigits) {
       return;
     }
 
-    _debounce = Timer(_kPhoneLookupDebounce, _lookupUser);
+    _debounce = Timer(
+      _isWrytteIdMode ? _kWrytteIdLookupDebounce : _kPhoneLookupDebounce,
+      _lookupUser,
+    );
   }
 
   Future<void> _lookupUser() async {
@@ -489,6 +512,12 @@ class _NewContactPageState extends State<NewContactPage> {
     if (!_isWrytteIdMode &&
         (_phoneDigits.length < _kMinPhoneLookupDigits ||
             _phoneDigits.length > _kMaxPhoneLookupDigits)) {
+      return;
+    }
+    if (_isWrytteIdMode &&
+        (_phoneDigits.length < _kMinPhoneLookupDigits ||
+            _phoneDigits.length > 12 ||
+            !WrytteLibrary.matchesWrytteIdFormat(identifier))) {
       return;
     }
 
@@ -547,9 +576,62 @@ class _NewContactPageState extends State<NewContactPage> {
             lookupValue == UserSearchService.registeredWithoutMatrixId
                 ? null
                 : lookupValue;
+        if (_isWrytteIdMode && matrixUserId != null) {
+          final savedContact = await _findSavedWrytteContact(matrixUserId);
+          if (!mounted || _fullIdentifier != identifier) return;
+          if (savedContact != null) {
+            setState(() {
+              _lookupState = _LookupState.duplicate;
+              _duplicateContact = savedContact;
+              _resolvedUserId = matrixUserId;
+              _lookupProfile1 = null;
+              _isRegisteredOnWrytte = true;
+              _lookupError = null;
+            });
+            return;
+          }
+
+          final profile = await UserProfileService.instance.getProfileByUid(
+            matrixUserId,
+            phone: identifier,
+            forceRefresh: true,
+          );
+          if (!mounted || _fullIdentifier != identifier) return;
+          final profile1 =
+              profile == null
+                  ? null
+                  : ContactUserProfile1.fromBackendProfile(
+                    matrixUserId,
+                    profile,
+                    fallbackPhone: identifier,
+                  );
+          if (profile1 != null) {
+            unawaited(AvatarPreloadService.warm(profile1.avatarUrl));
+            final owner = await AuthService.instance.getCurrentUserId() ?? '';
+            await ContactIdentityCache.instance.upsert(
+              ownerUserId: owner,
+              matrixUserId: matrixUserId,
+              phone: profile1.phone,
+              profileName: profile1.displayName,
+              avatarUrl: profile1.avatarUrl,
+              bio: profile1.bio,
+            );
+            if (!mounted || _fullIdentifier != identifier) return;
+          }
+          setState(() {
+            _lookupState = _LookupState.found;
+            _duplicateContact = null;
+            _resolvedUserId = matrixUserId;
+            _lookupProfile1 = profile1;
+            _isRegisteredOnWrytte = true;
+            _lookupError = null;
+          });
+          return;
+        }
         setState(() {
           _lookupState = _LookupState.found;
           _resolvedUserId = matrixUserId;
+          _lookupProfile1 = null;
           _isRegisteredOnWrytte = true;
           _lookupError = null;
         });
@@ -557,6 +639,7 @@ class _NewContactPageState extends State<NewContactPage> {
         setState(() {
           _lookupState = _LookupState.notFound;
           _resolvedUserId = null;
+          _lookupProfile1 = null;
           _isRegisteredOnWrytte = false;
           _lookupError = null;
         });
@@ -571,6 +654,43 @@ class _NewContactPageState extends State<NewContactPage> {
         _lookupError = _friendlyLookupError(e.toString());
       });
     }
+  }
+
+  Future<Contact?> _findSavedWrytteContact(String matrixUserId) async {
+    final owner = await AuthService.instance.getCurrentUserId() ?? '';
+    if (owner.isEmpty) return null;
+    final targetId =
+        (_matrixLocalpart(matrixUserId) ?? matrixUserId).toLowerCase();
+
+    final savedContacts = await ContactLocalDb.loadSavedContacts(
+      ownerUserId: owner,
+    );
+    for (final contact in savedContacts) {
+      final contactId = contact.wrytteUserId?.trim() ?? '';
+      if (contactId.isNotEmpty &&
+          (_matrixLocalpart(contactId) ?? contactId).toLowerCase() ==
+              targetId) {
+        return contact;
+      }
+    }
+
+    final identity = await ContactIdentityCache.instance.findByMatrixId(
+      ownerUserId: owner,
+      matrixUserId: matrixUserId,
+    );
+    final savedName = identity?.savedName?.trim() ?? '';
+    if (identity == null || savedName.isEmpty) return null;
+    return Contact(
+      displayName: savedName,
+      phones: [
+        if (identity.phone?.trim().isNotEmpty == true) identity.phone!.trim(),
+      ],
+      avatarUrl: identity.avatarUrl,
+      bio: identity.bio,
+      isOnWrytte: true,
+      wrytteUserId: identity.matrixUserId,
+      isSaved: true,
+    );
   }
 
   Future<Contact?> _findExistingContact(String identifier) async {
@@ -702,6 +822,16 @@ class _NewContactPageState extends State<NewContactPage> {
       final receiverId =
           (await _resolveReceiverIdForSave(widget.token))?.trim() ?? '';
 
+      if (_isWrytteIdMode && receiverId.isEmpty) {
+        setState(() {
+          _isSaving = false;
+          _lookupState = _LookupState.notFound;
+          _isRegisteredOnWrytte = false;
+          _resolvedUserId = null;
+        });
+        return;
+      }
+
       if (_matrixLocalpart(receiverId) == selfId) {
         throw StateError(
           'You cannot add your own Wrytte account as a contact.',
@@ -716,9 +846,59 @@ class _NewContactPageState extends State<NewContactPage> {
       final firstName = _firstNameCtrl.text.trim();
       final lastName = _lastNameCtrl.text.trim();
       final contactName = _displayName(firstName, lastName, _fullIdentifier);
+
+      if (_isWrytteIdMode && _duplicateContact != null) {
+        final existing = _duplicateContact!;
+        final savedRoomId = existing.directRoomId?.trim() ?? '';
+        final conversationId =
+            savedRoomId.startsWith('!')
+                ? savedRoomId
+                : await ChatService().getMatrixConversationId(receiverId);
+        if (conversationId == null || !conversationId.startsWith('!')) {
+          throw StateError(
+            'Could not create a private chat with this contact. Try again.',
+          );
+        }
+        final renamedContact = existing.copyWith(
+          displayName: contactName,
+          firstName: firstName,
+          lastName: lastName,
+          directRoomId: conversationId,
+          isOnWrytte: true,
+          wrytteUserId: receiverId,
+          isSaved: true,
+        );
+        await ContactLocalDb.addContact(renamedContact, ownerUserId: selfId);
+        await ContactIdentityCache.instance.upsert(
+          ownerUserId: selfId,
+          matrixUserId: receiverId,
+          phone: renamedContact.primaryPhone,
+          savedName: contactName,
+          avatarUrl: renamedContact.avatarUrl,
+          bio: renamedContact.bio,
+        );
+        await _saveContactToBackendOrThrow(
+          selfId: selfId,
+          receiverId: receiverId,
+          contact: renamedContact,
+        );
+        await ChatService().applySavedContact(renamedContact);
+        ContactService.notifyContactsChanged(selfId);
+        ContactService.invalidateMatrixContactsCache();
+        _contactService.invalidateCache();
+        if (mounted) Navigator.pop(context);
+        return;
+      }
+
       final backendContactProfile =
           receiverId.isEmpty
               ? null
+              : _lookupProfile1 != null && _lookupProfile1!.userId == receiverId
+              ? await UserProfileService.instance.getProfileByUid(
+                receiverId,
+                phone: _fullIdentifier,
+                forceRefresh: false,
+              )
               : await UserProfileService.instance.getProfileByUid(
                 receiverId,
                 phone: _fullIdentifier,
@@ -742,16 +922,37 @@ class _NewContactPageState extends State<NewContactPage> {
       final profileOneAvatar = contactUserProfile1?.avatarUrl;
       final profileOneBio = contactUserProfile1?.bio ?? widget.initialBio;
       unawaited(AvatarPreloadService.warm(profileOneAvatar));
+
+      // Establish the direct room before persisting the contact to account
+      // data, so the saved contact record includes the room ID.
+      final String? conversationId;
+      if (receiverId.isNotEmpty) {
+        conversationId = await ChatService().getMatrixConversationId(
+          receiverId,
+        );
+        if (conversationId == null || !conversationId.startsWith('!')) {
+          throw StateError(
+            'Could not create a private chat with this contact. Try again.',
+          );
+        }
+      } else {
+        conversationId = null;
+      }
+
       final contactUserProfile2 = ContactUserProfile2.fromSavedContact(
         savedDisplayName: contactName,
         typedPhone: _fullIdentifier,
         isOnWrytte: _isRegisteredOnWrytte || receiverId.isNotEmpty,
+        firstName: firstName,
+        lastName: lastName,
         wrytteUserId: receiverId.isEmpty ? null : receiverId,
         contactUserProfile1: contactUserProfile1,
       );
 
-      // ── 1. Save ContactUserProfile2 locally, then sync backend in background.
-      final localContact = contactUserProfile2.toContact();
+      // Save ContactUserProfile2 locally before syncing its server account data.
+      final localContact = contactUserProfile2.toContact().copyWith(
+        directRoomId: conversationId,
+      );
       await ContactLocalDb.addContact(localContact, ownerUserId: selfId);
       ContactService.notifyContactsChanged(selfId);
       apkLog(
@@ -783,33 +984,15 @@ class _NewContactPageState extends State<NewContactPage> {
         return;
       }
 
-      unawaited(
-        _saveContactToBackendOrThrow(
-          selfId: selfId,
-          receiverId: receiverId,
-          contact: localContact,
-        ).catchError((e) {
-          apkLog(
-            'NewContact.save',
-            'backend contact save failed after local success; backend still needs sync error="$e"',
-          );
-        }),
+      await _saveContactToBackendOrThrow(
+        selfId: selfId,
+        receiverId: receiverId,
+        contact: localContact,
       );
-
-      // ── 2. Create or reuse this contact's verified Matrix DM room. ────────
-      // Never carry a group room ID into the personal chat: the room is
-      // resolved exclusively from the saved contact's Matrix user ID.
-      final conversationId = await ChatService().getMatrixConversationId(
-        receiverId,
-      );
-      if (conversationId == null || !conversationId.startsWith('!')) {
-        throw StateError(
-          'Could not create a private chat with this contact. Try again.',
-        );
-      }
+      final directRoomId = conversationId!;
       apkLog(
         'NewContact.save',
-        'direct room ready conversation_id="$conversationId" receiver="$receiverId"',
+        'direct room ready conversation_id="$directRoomId" receiver="$receiverId"',
       );
 
       if (!mounted) return;
@@ -820,7 +1003,7 @@ class _NewContactPageState extends State<NewContactPage> {
           reverseTransitionDuration: const Duration(milliseconds: 220),
           pageBuilder:
               (_, __, ___) => ChatScreen(
-                conversationId: conversationId,
+                conversationId: directRoomId,
                 receiverId:
                     receiverId.isNotEmpty ? receiverId : _fullIdentifier,
                 currentUserId: selfId,
@@ -905,7 +1088,10 @@ class _NewContactPageState extends State<NewContactPage> {
     if (!_isWrytteIdMode && _phoneDigits.length > _kMaxPhoneLookupDigits) {
       return null;
     }
-    if (_isWrytteIdMode && !WrytteLibrary.matchesWrytteIdFormat(identifier)) {
+    if (_isWrytteIdMode &&
+        (_phoneDigits.length < _kMinPhoneLookupDigits ||
+            _phoneDigits.length > 12 ||
+            !WrytteLibrary.matchesWrytteIdFormat(identifier))) {
       return null;
     }
 
@@ -1077,14 +1263,16 @@ class _NewContactPageState extends State<NewContactPage> {
     final userId = contact?.wrytteUserId?.trim() ?? '';
     FocusManager.instance.primaryFocus?.unfocus();
 
-    // A Wrytte contact has a profile page. Replace the unfinished New Contact
-    // page so Back returns naturally to the New Chat contact list.
+    // Keep the New Contact form underneath the profile so the user can return
+    // and update the saved contact name.
     if (contact != null && userId.isNotEmpty) {
-      final conversationId = await ChatService().findMatrixConversationId(
-        userId,
-      );
+      final savedRoomId = contact.directRoomId?.trim() ?? '';
+      final conversationId =
+          savedRoomId.startsWith('!')
+              ? savedRoomId
+              : await ChatService().findMatrixConversationId(userId);
       if (!mounted) return;
-      await Navigator.of(context).pushReplacement(
+      await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder:
               (_) => ProfileScreen(
@@ -1146,9 +1334,7 @@ class _NewContactPageState extends State<NewContactPage> {
         return Padding(
           padding: const EdgeInsets.only(top: 6),
           child: statusRow(
-            isWrytteId
-                ? 'Wrytte number is on Wrytte'
-                : 'Phone number is on Wrytte',
+            isWrytteId ? 'Wrytte ID is on Wrytte' : 'Phone number is on Wrytte',
             checkmark: true,
           ),
         );
@@ -1163,7 +1349,7 @@ class _NewContactPageState extends State<NewContactPage> {
             children: [
               Text(
                 isWrytteId
-                    ? 'This Wrytte number is already in your contacts.'
+                    ? 'Wrytte ID is in your contacts.'
                     : 'This phone number is already in your contacts.',
                 style: const TextStyle(color: Colors.white54, fontSize: 13),
               ),
@@ -1184,7 +1370,7 @@ class _NewContactPageState extends State<NewContactPage> {
           padding: const EdgeInsets.only(top: 6),
           child:
               isWrytteId
-                  ? statusRow('Wrytte number is not on Wrytte.')
+                  ? statusRow('Wrytte ID not on Wrytte')
                   : Row(
                     children: [
                       const Text(
@@ -1306,18 +1492,28 @@ class _NewContactPageState extends State<NewContactPage> {
                   children: [
                     // Country selector row
                     ListTile(
-                      onTap: _pickCountry,
+                      onTap: _isWrytteIdMode ? null : _pickCountry,
                       dense: true,
                       visualDensity: VisualDensity.compact,
-                      contentPadding: const EdgeInsets.symmetric(
+                      contentPadding: EdgeInsets.symmetric(
                         horizontal: 16,
-                        vertical: 6,
+                        vertical: _isWrytteIdMode ? 8 : 6,
                       ),
+                      leading:
+                          _isWrytteIdMode
+                              ? Image.asset(
+                                'assets/images/wrytte_id_signup_icon_128.png',
+                                width: 27,
+                                height: 27,
+                                fit: BoxFit.contain,
+                                filterQuality: FilterQuality.high,
+                              )
+                              : null,
                       title: Text(
                         _hasInvalidCountryCode
                             ? 'Invalid country code'
                             : _isWrytteIdMode
-                            ? 'Wrytte ID number'
+                            ? 'Wrytte ID'
                             : _selectedCountry == null
                             ? 'Country'
                             : '${_selectedCountry!.flag} ${_selectedCountry!.name}',
@@ -1326,7 +1522,7 @@ class _NewContactPageState extends State<NewContactPage> {
                               _selectedCountry == null && !_isWrytteIdMode
                                   ? Colors.white38
                                   : Colors.white,
-                          fontSize: 15,
+                          fontSize: 16,
                           fontWeight:
                               _selectedCountry != null || _isWrytteIdMode
                                   ? FontWeight.w500
@@ -1336,8 +1532,10 @@ class _NewContactPageState extends State<NewContactPage> {
                       trailing: const Icon(
                         Icons.chevron_right,
                         color: Colors.white54,
-                        size: 20,
+                        size: 22,
                       ),
+                      minLeadingWidth: _isWrytteIdMode ? 27 : null,
+                      horizontalTitleGap: _isWrytteIdMode ? 10 : null,
                     ),
 
                     const Padding(
@@ -1345,44 +1543,66 @@ class _NewContactPageState extends State<NewContactPage> {
                       child: Divider(color: _kDivider, height: 1),
                     ),
 
-                    // Code + number row
+                    // Code + number row. Wrytte IDs use a single field, just
+                    // like sign-in; phone numbers keep separate code/number fields.
                     Padding(
-                      padding: const EdgeInsets.symmetric(
+                      padding: EdgeInsets.symmetric(
                         horizontal: 16,
-                        vertical: 10,
+                        vertical: _isWrytteIdMode ? 8 : 10,
                       ),
                       child: Row(
                         children: [
-                          // Dial-code field
-                          SizedBox(
-                            width: 68,
-                            child: TextField(
-                              controller: _codeCtrl,
-                              focusNode: _codeFocusNode,
-                              keyboardType: TextInputType.phone,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 15,
-                              ),
-                              decoration: const InputDecoration(
-                                border: InputBorder.none,
-                                isDense: true,
-                                contentPadding: EdgeInsets.symmetric(
-                                  vertical: 8,
+                          // Country calling code, or the full Wrytte ID entry.
+                          if (_isWrytteIdMode)
+                            Expanded(
+                              child: TextField(
+                                controller: _codeCtrl,
+                                focusNode: _codeFocusNode,
+                                keyboardType: TextInputType.phone,
+                                cursorColor: _kBlue,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
                                 ),
+                                decoration: const InputDecoration(
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
+                                ),
+                                onChanged: _detectCountryFromCode,
+                                onTap: _onCodeFieldTap,
                               ),
-                              onChanged:
-                                  _isWrytteIdMode && _codeCtrl.text == '+00'
-                                      ? null
-                                      : _detectCountryFromCode,
-                              onTap: _onCodeFieldTap,
-                              readOnly:
-                                  _isWrytteIdMode && _codeCtrl.text == '+00',
+                            )
+                          else
+                            SizedBox(
+                              width: 68,
+                              child: TextField(
+                                controller: _codeCtrl,
+                                focusNode: _codeFocusNode,
+                                keyboardType: TextInputType.phone,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                ),
+                                decoration: const InputDecoration(
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
+                                ),
+                                onChanged:
+                                    _isWrytteIdMode && _codeCtrl.text == '+00'
+                                        ? null
+                                        : _detectCountryFromCode,
+                                onTap: _onCodeFieldTap,
+                              ),
                             ),
-                          ),
 
                           // Blue vertical divider
-                          if (_showDivider)
+                          if (!_isWrytteIdMode && _showDivider)
                             Container(
                               height: 22,
                               width: 1,
@@ -1391,48 +1611,51 @@ class _NewContactPageState extends State<NewContactPage> {
                             ),
 
                           // Number / ID field
-                          Expanded(
-                            child: TextField(
-                              controller: _numberCtrl,
-                              focusNode: _numberFocusNode,
-                              keyboardType:
-                                  _isWrytteIdMode
-                                      ? TextInputType.number
-                                      : TextInputType.phone,
-                              inputFormatters: [
-                                if (_isWrytteIdMode)
-                                  const _WrytteIdBodyFormatter()
-                                else if (_selectedCountry != null)
-                                  CountryPhoneNumberInputFormatter(
-                                    _selectedCountry!.isoCode,
-                                  )
-                                else
-                                  FilteringTextInputFormatter.digitsOnly,
-                              ],
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 15,
-                              ),
-                              decoration: InputDecoration(
-                                hintText:
-                                    _selectedCountry != null && _showDivider
-                                        ? (_isWrytteIdMode
-                                            ? 'Wrytte ID'
-                                            : 'Phone number')
-                                        : '',
-                                hintStyle: const TextStyle(
-                                  color: Colors.white38,
+                          if (!_isWrytteIdMode)
+                            Expanded(
+                              child: TextField(
+                                controller: _numberCtrl,
+                                focusNode: _numberFocusNode,
+                                keyboardType:
+                                    _isWrytteIdMode
+                                        ? TextInputType.number
+                                        : TextInputType.phone,
+                                inputFormatters: [
+                                  if (_isWrytteIdMode)
+                                    const _WrytteIdBodyFormatter()
+                                  else if (_selectedCountry != null)
+                                    CountryPhoneNumberInputFormatter(
+                                      _selectedCountry!.isoCode,
+                                    )
+                                  else
+                                    FilteringTextInputFormatter.digitsOnly,
+                                ],
+                                style: const TextStyle(
+                                  color: Colors.white,
                                   fontSize: 15,
                                 ),
-                                border: InputBorder.none,
-                                isDense: true,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  vertical: 8,
+                                decoration: InputDecoration(
+                                  hintText:
+                                      _selectedCountry != null && _showDivider
+                                          ? (_isWrytteIdMode
+                                              ? 'Wrytte ID'
+                                              : 'Phone number')
+                                          : '',
+                                  hintStyle: const TextStyle(
+                                    color: Colors.white38,
+                                    fontSize: 15,
+                                  ),
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
                                 ),
+                                enabled:
+                                    _isWrytteIdMode ||
+                                    (_selectedCountry != null && _showDivider),
                               ),
-                              enabled: _selectedCountry != null && _showDivider,
                             ),
-                          ),
                         ],
                       ),
                     ),
@@ -1544,16 +1767,14 @@ class _NewContactPageState extends State<NewContactPage> {
     final value = scannedValue?.trim() ?? '';
     if (value.isEmpty || !mounted) return;
 
-    final wrytteMode = countriesId.firstWhere(
-      (country) => country.isoCode == 'WID',
-    );
+    const wrytteMode = wryptteId;
     final digits = value.replaceAll(RegExp(r'[^\d]'), '');
     final body = digits.startsWith('00') ? digits.substring(2) : digits;
     setState(() {
       _selectedCountry = wrytteMode;
       _isWrytteIdInput = true;
-      _codeCtrl.text = '+${wrytteMode.dialCode}';
-      _showDivider = true;
+      _codeCtrl.text = _formatWrytteIdEntry(digits);
+      _showDivider = false;
       _lookupState = _LookupState.idle;
       _lookupError = null;
       _resolvedUserId = null;

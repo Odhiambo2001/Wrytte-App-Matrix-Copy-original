@@ -50,6 +50,8 @@ class ContactUserProfile1 {
 /// copies phone, avatar, and bio from ContactUserProfile1 when available.
 class ContactUserProfile2 {
   final String displayName;
+  final String? firstName;
+  final String? lastName;
   final List<String> phones;
   final String? avatarUrl;
   final String? bio;
@@ -61,6 +63,8 @@ class ContactUserProfile2 {
 
   const ContactUserProfile2({
     required this.displayName,
+    this.firstName,
+    this.lastName,
     required this.phones,
     this.avatarUrl,
     this.bio,
@@ -75,12 +79,16 @@ class ContactUserProfile2 {
     required String savedDisplayName,
     required String typedPhone,
     required bool isOnWrytte,
+    String? firstName,
+    String? lastName,
     String? wrytteUserId,
     ContactUserProfile1? contactUserProfile1,
   }) {
     final phoneFromProfile1 = contactUserProfile1?.phone.trim() ?? '';
     return ContactUserProfile2(
       displayName: savedDisplayName,
+      firstName: firstName,
+      lastName: lastName,
       phones: [phoneFromProfile1.isNotEmpty ? phoneFromProfile1 : typedPhone],
       avatarUrl: contactUserProfile1?.avatarUrl,
       bio: contactUserProfile1?.bio,
@@ -93,6 +101,8 @@ class ContactUserProfile2 {
   Contact toContact() {
     return Contact(
       displayName: displayName,
+      firstName: firstName,
+      lastName: lastName,
       phones: phones,
       avatarUrl: avatarUrl,
       bio: bio,

@@ -15,7 +15,9 @@ class _CountryIdPickerPageState extends State<CountryIdPickerPage> {
   final TextEditingController _search = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  static final List<CountryId> _allCountries = [wryptteId, ...countriesId];
+  static final List<CountryId> _allCountries = [
+    ...countriesId.where((country) => country.isoCode != 'WID'),
+  ];
   late List<CountryId> _filtered;
   double _searchBarProgress = 0.0;
 
@@ -53,13 +55,6 @@ class _CountryIdPickerPageState extends State<CountryIdPickerPage> {
                   c.dialCode.contains(q),
             )
             .toList();
-
-    // Ensure Wrytte ID stays first if it matches the query
-    results.sort((a, b) {
-      if (a.isoCode == 'WID') return -1;
-      if (b.isoCode == 'WID') return 1;
-      return 0;
-    });
 
     setState(() => _filtered = results);
   }

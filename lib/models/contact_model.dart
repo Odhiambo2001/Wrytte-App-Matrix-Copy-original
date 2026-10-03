@@ -1,5 +1,7 @@
 class Contact {
   final String? displayName;
+  final String? firstName;
+  final String? lastName;
   final List<String> phones;
   final String? avatarUrl;
   final String? bio;
@@ -12,6 +14,8 @@ class Contact {
 
   Contact({
     required this.displayName,
+    this.firstName,
+    this.lastName,
     required this.phones,
     this.avatarUrl,
     this.bio,
@@ -29,6 +33,8 @@ class Contact {
   // for easier updates
   Contact copyWith({
     String? displayName,
+    String? firstName,
+    String? lastName,
     List<String>? phones,
     String? avatarUrl,
     String? bio,
@@ -41,6 +47,8 @@ class Contact {
   }) {
     return Contact(
       displayName: displayName ?? this.displayName,
+      firstName: firstName ?? this.firstName,
+      lastName: lastName ?? this.lastName,
       phones: phones ?? this.phones,
       avatarUrl: avatarUrl ?? this.avatarUrl,
       bio: bio ?? this.bio,
@@ -62,6 +70,8 @@ class Contact {
   Map<String, dynamic> toMap() {
     return {
       'displayName': displayName,
+      'firstName': firstName,
+      'lastName': lastName,
       'phones': phones,
       'avatarUrl': avatarUrl,
       'bio': bio,
@@ -78,6 +88,8 @@ class Contact {
   factory Contact.fromMap(Map<String, dynamic> map) {
     return Contact(
       displayName: map['displayName'],
+      firstName: map['firstName'],
+      lastName: map['lastName'],
       phones: List<String>.from(map['phones'] ?? []),
       avatarUrl: map['avatarUrl'],
       bio: map['bio'],
