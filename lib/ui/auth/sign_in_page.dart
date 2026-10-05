@@ -824,9 +824,13 @@ class _CountryCodeOrIdFormatter extends TextInputFormatter {
     if (digits.isEmpty) return TextEditingValue.empty;
     if (digits.startsWith('0')) {
       final limitedDigits = digits.length > 14 ? digits.substring(0, 14) : digits;
-      final body =
-          limitedDigits.length > 2 ? limitedDigits.substring(2) : '';
-      final formatted = body.isEmpty ? '00' : '00 $body';
+      // Don't expand a single typed zero into the two-zero Wrytte prefix.
+      // The user types both zeros; only then do we separate the ID body.
+      var formatted = limitedDigits;
+      if (limitedDigits.length >= 2) {
+        final body = limitedDigits.substring(2);
+        formatted = body.isEmpty ? '00' : '00 $body';
+      }
       return TextEditingValue(
         text: '+$formatted',
         selection: TextSelection.collapsed(offset: 1 + formatted.length),
