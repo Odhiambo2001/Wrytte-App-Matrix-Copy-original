@@ -9,6 +9,7 @@ import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/user/user_profile_api_service.dart';
+import 'package:wrytte/utils/wrytte_id.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
 /// Production-grade local-only UserProfileService.
@@ -855,12 +856,15 @@ class UserProfileService {
         '';
     final backendPhone =
         _field(fields, 'Phone') ?? _field(fields, 'phone') ?? '';
+    final wrytteId = WrytteId.forDisplay(backendPhone);
 
     return UserProfile(
       uid: uid,
       name: displayName.trim(),
       username: displayName.trim(),
-      phone: _trustedPhone(backendPhone, fallbackPhone: fallbackPhone),
+      phone:
+          wrytteId ??
+          _trustedPhone(backendPhone, fallbackPhone: fallbackPhone),
       bio: _field(fields, 'Bio') ?? _field(fields, 'bio') ?? '',
       profileImage: _resolveAvatarUrl(avatar),
       avatarVersion: _avatarVersionFromFields(fields),

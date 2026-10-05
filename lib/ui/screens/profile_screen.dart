@@ -26,6 +26,7 @@ import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
 import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'package:wrytte/ui/widgets/wrytte_persistent_image.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
+import 'package:wrytte/utils/wrytte_id.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 import 'edit_profile_screen.dart';
@@ -484,18 +485,28 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (_isOtherUser) {
       // Seeded from the caller (chat header) — present on the very first frame.
       if (_seededSavedName != null && _seededSavedName!.isNotEmpty) {
-        return _seededSavedName!;
+        return WrytteId.forDisplay(_seededSavedName!) ?? _seededSavedName!;
       }
       // Saved contact resolved during load.
       final savedName = _cleanName(_savedContact?.formattedName);
-      if (savedName.isNotEmpty) return savedName;
+      if (savedName.isNotEmpty) {
+        return WrytteId.forDisplay(savedName) ?? savedName;
+      }
       // Identity cache saved name.
       final savedIdentityName = _cleanName(_identity?.savedName);
-      if (savedIdentityName.isNotEmpty) return savedIdentityName;
+      if (savedIdentityName.isNotEmpty) {
+        return WrytteId.forDisplay(savedIdentityName) ?? savedIdentityName;
+      }
     }
     final profileName = _cleanName(_profile?.displayName);
-    if (profileName.isNotEmpty) return profileName;
-    return _cleanName(widget.initialProfileName);
+    if (profileName.isNotEmpty) {
+      return WrytteId.forDisplay(profileName) ?? profileName;
+    }
+    final initialName = _cleanName(widget.initialProfileName);
+    if (initialName.isNotEmpty) {
+      return WrytteId.forDisplay(initialName) ?? initialName;
+    }
+    return _profileWrytteId() ?? '';
   }
 
   String? _profileAvatarUrl() {
@@ -505,6 +516,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profilePhone() {
+    final linkedWrytteId = _profileWrytteId();
+    if (linkedWrytteId != null) return linkedWrytteId;
+
     final raw = _profile?.phone.trim() ?? '';
     final wrytteId = _displayWrytteId(raw);
     if (wrytteId != null) return wrytteId;
@@ -516,9 +530,21 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String? _displayWrytteId(String value) {
-    final match = RegExp(r'^W(\d{8,12})$', caseSensitive: false).firstMatch(value);
-    if (match == null) return null;
-    return '+00 ${match.group(1)}';
+    return WrytteId.forDisplay(value);
+  }
+
+  String? _profileWrytteId() {
+    for (final candidate in [
+      _profile?.uid,
+      _profile?.phone,
+      widget.uid,
+      _identity?.matrixUserId,
+      _savedContact?.wrytteUserId,
+    ]) {
+      final displayId = WrytteId.forDisplay(candidate ?? '');
+      if (displayId != null) return displayId;
+    }
+    return null;
   }
 
   String _formatPhone(String phone) {

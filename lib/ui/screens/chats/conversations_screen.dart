@@ -39,6 +39,7 @@ import 'package:wrytte/ui/screens/firebase_new_chat_screen.dart';
 import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
+import 'package:wrytte/utils/wrytte_id.dart';
 import 'widgets/search_bar.dart' as local_widgets;
 import 'widgets/tab_bar_section.dart';
 
@@ -1676,6 +1677,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       if (groupName.isNotEmpty) return groupName;
       return 'Group';
     }
+    final wrytteId = _wrytteIdForConversation(conv);
+    if (wrytteId != null) return wrytteId;
+
     final phone = _fallbackPhoneForConversation(conv);
     if (phone.isNotEmpty) return _formatPhone(phone);
 
@@ -1739,6 +1743,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       if (contactName.isNotEmpty) return contactName;
     }
 
+    final wrytteId = _wrytteIdForConversation(conv);
+    if (wrytteId != null) return wrytteId;
+
     final identityPhone = _extractPhone(identity?.phone);
     if (identityPhone.isNotEmpty) return _formatPhone(identityPhone);
 
@@ -1796,6 +1803,22 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       }
     }
     return false;
+  }
+
+  String? _wrytteIdForConversation(ChatConversation conv) {
+    final identity = _identityForConversation(conv);
+    for (final candidate in [
+      identity?.matrixUserId,
+      identity?.phone,
+      identity?.profileName,
+      conv.otherUserId,
+      conv.lastMessageSenderId,
+      ...conv.participants,
+    ]) {
+      final displayId = WrytteId.forDisplay(candidate ?? '');
+      if (displayId != null) return displayId;
+    }
+    return null;
   }
 
   bool _isDisplayableGroupConversation(ChatConversation conv) {
@@ -2169,6 +2192,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   String _cleanHumanName(String? value) {
     final trimmed = value?.trim() ?? '';
     if (trimmed.isEmpty) return '';
+    if (WrytteId.forDisplay(trimmed) != null) return '';
     final lowered = trimmed.toLowerCase();
     if (lowered == 'user' ||
         lowered == 'uder' ||

@@ -1,3 +1,5 @@
+import 'package:wrytte/utils/wrytte_id.dart';
+
 class UserProfile {
   final String uid;
   final String name;
@@ -63,9 +65,13 @@ class UserProfile {
 
   /// Display name falls back gracefully: name → username → phone
   String get displayName {
-    if (name.isNotEmpty && !_looksLikePhone(name)) return name;
-    if (username.isNotEmpty && !_looksLikePhone(username)) return username;
-    return phone;
+    if (name.isNotEmpty && !_looksLikePhone(name)) {
+      return WrytteId.forDisplay(name) ?? name;
+    }
+    if (username.isNotEmpty && !_looksLikePhone(username)) {
+      return WrytteId.forDisplay(username) ?? username;
+    }
+    return WrytteId.forDisplay(phone) ?? phone;
   }
 
   /// True only if profileImage is a non-empty valid URL

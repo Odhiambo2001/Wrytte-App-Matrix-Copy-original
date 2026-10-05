@@ -40,6 +40,7 @@ import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
+import 'package:wrytte/utils/wrytte_id.dart';
 
 class ChatScreen extends StatefulWidget {
   final String conversationId;
@@ -1216,6 +1217,20 @@ class _ChatScreenState extends State<ChatScreen> {
     final initialSavedName = _cleanDisplayName(widget.title);
     if (initialSavedName.isNotEmpty) return initialSavedName;
 
+    for (final candidate in [
+      _profilePeerId(),
+      _receiverIdentity?.matrixUserId,
+      _receiverIdentity?.phone,
+      _receiverIdentity?.profileName,
+      _receiverProfile?.uid,
+      _receiverProfile?.phone,
+      widget.receiverId,
+      widget.title,
+    ]) {
+      final wrytteId = WrytteId.forDisplay(candidate ?? '');
+      if (wrytteId != null) return wrytteId;
+    }
+
     final phone = _firstPhoneFrom([
       _receiverIdentity?.phone,
       _receiverProfile?.phone,
@@ -1273,7 +1288,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _cleanDisplayName(String? value) {
     final trimmed = value?.trim() ?? '';
-    if (trimmed.isEmpty || _looksLikePhone(trimmed)) return '';
+    if (trimmed.isEmpty ||
+        _looksLikePhone(trimmed) ||
+        WrytteId.forDisplay(trimmed) != null) {
+      return '';
+    }
     final lowered = trimmed.toLowerCase();
     if (lowered == 'user' || lowered == 'uder' || lowered == 'unknown') {
       return '';
