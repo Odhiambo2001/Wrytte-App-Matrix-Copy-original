@@ -19,7 +19,15 @@ import 'package:wrytte/utils/apk_debug_logger.dart';
 /// Production-grade local-only UserProfileService.
 /// Source of truth is FlutterSecureStorage via AuthService.
 class UserProfileService {
-  UserProfileService._();
+  UserProfileService._() {
+    MatrixClientService.instance.profileUpdateStream.listen(
+      _handlePublicProfileUpdated,
+    );
+    for (final userId
+        in MatrixClientService.instance.takePendingProfileUpdates()) {
+      _handlePublicProfileUpdated(userId);
+    }
+  }
   static final UserProfileService instance = UserProfileService._();
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
@@ -53,16 +61,6 @@ class UserProfileService {
       StreamController<UserProfile?>.broadcast();
   final StreamController<String> _publicProfileUpdateController =
       StreamController<String>.broadcast();
-
-  UserProfileService._() {
-    MatrixClientService.instance.profileUpdateStream.listen(
-      _handlePublicProfileUpdated,
-    );
-    for (final userId
-        in MatrixClientService.instance.takePendingProfileUpdates()) {
-      _handlePublicProfileUpdated(userId);
-    }
-  }
 
   Stream<String> get publicProfileUpdateStream =>
       _publicProfileUpdateController.stream;
@@ -390,6 +388,7 @@ class UserProfileService {
     bool forceRefresh = false,
   }) async {
     final requestedUid = uid.trim();
+    final cacheKey = _publicProfileCacheKey(requestedUid, phone);
     if (requestedUid.isEmpty ||
         requestedUid.startsWith('!') ||
         requestedUid.startsWith('@!')) {
@@ -398,6 +397,10 @@ class UserProfileService {
       );
       return null;
     }
+    debugPrint(
+      '[UserProfileService] profile lookup user_id="$requestedUid" '
+      'force_refresh=$forceRefresh',
+    );
 
     final currentUid = await AuthService.instance.getCurrentUserId();
 
@@ -405,23 +408,49 @@ class UserProfileService {
     if (currentUid != null &&
         _matrixLocalpart(currentUid).toLowerCase() ==
             _matrixLocalpart(uid).toLowerCase()) {
+      debugPrint(
+        '[UserProfileService] profile source=owner_profile user_id="$requestedUid"',
+      );
       return getCurrentUserProfile(forceRefresh: true);
     }
 
-    final cacheKey = _publicProfileCacheKey(uid, phone);
     if (!forceRefresh) {
       final cached = _publicProfileCache[cacheKey];
-      if (cached != null) return cached;
-      if (_publicProfileMisses.contains(cacheKey)) return null;
+      if (cached != null) {
+        debugPrint(
+          '[UserProfileService] profile source=public_cache user_id="$requestedUid"',
+        );
+        return cached;
+      }
+      if (_publicProfileMisses.contains(cacheKey)) {
+        debugPrint(
+          '[UserProfileService] profile source=negative_cache user_id="$requestedUid"',
+        );
+        return null;
+      }
 
       final pending = _publicProfileInFlight[cacheKey];
-      if (pending != null) return pending;
+      if (pending != null) {
+        debugPrint(
+          '[UserProfileService] profile source=in_flight_request user_id="$requestedUid"',
+        );
+        return pending;
+      }
     } else {
       _publicProfileMisses.remove(cacheKey);
       final pending = _publicProfileInFlight[cacheKey];
-      if (pending != null) return pending;
+      if (pending != null) {
+        debugPrint(
+          '[UserProfileService] profile source=in_flight_request user_id="$requestedUid" '
+          'force_refresh=true',
+        );
+        return pending;
+      }
     }
 
+    debugPrint(
+      '[UserProfileService] profile source=module_api user_id="$requestedUid"',
+    );
     final future = _getProfileByUidRemote(uid, phone: phone);
     _publicProfileInFlight[cacheKey] = future;
     return future.whenComplete(() {
@@ -1322,10 +1351,21 @@ class UserProfileService {
     if (ownerRead) copy('displayname', 'DisplayName');
     copy('presence', 'Presence');
     final matrixAvatar = raw['avatar_url']?.toString().trim() ?? '';
-    if (ownerRead && result['AvatarImg'] == null && matrixAvatar.isNotEmpty) {
+    // The Module API has already applied the owner's avatar visibility rule.
+    // Use its standard Matrix avatar for public profiles as well as owner reads.
+    if (result['AvatarImg'] == null && matrixAvatar.isNotEmpty) {
       result['AvatarImg'] = matrixAvatar;
     }
     result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
+    debugPrint(
+      '[ModuleProfile.map] user_id="${fallbackUid ?? profile.userId}" '
+      'owner_read=$ownerRead '
+      'custom_avatar_present=${raw[WrytteProfile.avatarImageUrl]?.toString().trim().isNotEmpty == true} '
+      'matrix_avatar_present=${matrixAvatar.isNotEmpty} '
+      'avatar_returned=${result['AvatarImg']?.trim().isNotEmpty == true} '
+      'bio_present=${raw[WrytteProfile.bio]?.toString().trim().isNotEmpty == true} '
+      'bio_returned=${result['Bio']?.trim().isNotEmpty == true}',
+    );
     return result;
   }
 }

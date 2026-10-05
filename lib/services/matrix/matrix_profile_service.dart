@@ -5,6 +5,7 @@ import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:flutter/foundation.dart';
 
 /// Matrix profile API implementation for Wrytte profile fields.
 /// Owner writes are authenticated by the Matrix access token. Other-user
@@ -35,23 +36,46 @@ class MatrixProfileService {
   }
 
   Future<WrytteProfile> getProfile(String userId) async {
-    final response = await http.get(_profileUri(userId), headers: await _authHeaders());
-    _check(response);
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map) throw const FormatException('Invalid Matrix profile.');
-    final fields = <String, dynamic>{
-      ...((decoded['fields'] is Map)
-          ? Map<String, dynamic>.from(decoded['fields'] as Map)
-          : <String, dynamic>{}),
-    };
-    if (decoded['visibility'] is Map) {
-      fields[WrytteProfile.visibility] =
-          Map<String, dynamic>.from(decoded['visibility'] as Map);
+    final uri = _profileUri(userId);
+    debugPrint('[ModuleProfile.GET] start user_id="$userId" url="$uri"');
+    try {
+      final response = await http.get(uri, headers: await _authHeaders());
+      debugPrint(
+        '[ModuleProfile.GET] response user_id="$userId" status=${response.statusCode}',
+      );
+      _check(response);
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map) {
+        throw const FormatException('Invalid Matrix profile.');
+      }
+      final fields = <String, dynamic>{
+        ...((decoded['fields'] is Map)
+            ? Map<String, dynamic>.from(decoded['fields'] as Map)
+            : <String, dynamic>{}),
+      };
+      if (decoded['visibility'] is Map) {
+        fields[WrytteProfile.visibility] =
+            Map<String, dynamic>.from(decoded['visibility'] as Map);
+      }
+      for (final key in const ['displayname', 'avatar_url', 'presence']) {
+        if (decoded[key] != null) fields[key] = decoded[key];
+      }
+      debugPrint(
+        '[ModuleProfile.GET] parsed user_id="$userId" '
+        'field_keys=${fields.keys.toList()} '
+        'has_display_name=${fields['displayname']?.toString().trim().isNotEmpty == true} '
+        'has_matrix_avatar=${fields['avatar_url']?.toString().trim().isNotEmpty == true} '
+        'has_custom_avatar=${fields[WrytteProfile.avatarImageUrl]?.toString().trim().isNotEmpty == true} '
+        'has_bio=${fields[WrytteProfile.bio]?.toString().trim().isNotEmpty == true}',
+      );
+      return WrytteProfile(userId: userId, fields: fields);
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[ModuleProfile.GET] failed user_id="$userId" url="$uri" error=$error',
+      );
+      debugPrintStack(stackTrace: stackTrace);
+      rethrow;
     }
-    for (final key in const ['displayname', 'avatar_url', 'presence']) {
-      if (decoded[key] != null) fields[key] = decoded[key];
-    }
-    return WrytteProfile(userId: userId, fields: fields);
   }
 
   Future<void> setField(String userId, String field, dynamic value) async {
