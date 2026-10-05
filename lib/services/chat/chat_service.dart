@@ -1370,13 +1370,23 @@ class ChatService {
                 : 'File',
       );
       final bytes = await File(filePath).readAsBytes();
-      final matrixFile =
-          attachmentType == 'file'
-              ? _WrytteDocumentFile(bytes: bytes, name: p.basename(filePath))
-              : mx.MatrixFile.fromMimeType(
-                bytes: bytes,
-                name: p.basename(filePath),
-              );
+      final matrixFile = switch (attachmentType) {
+        'video' => mx.MatrixVideoFile(
+            bytes: bytes,
+            name: p.basename(filePath),
+            mimeType: 'video/mp4',
+          ),
+        'image' => mx.MatrixImageFile(
+            bytes: bytes,
+            name: p.basename(filePath),
+            mimeType: _mediaMimeType(filePath, fallback: 'image/jpeg'),
+          ),
+        'file' => _WrytteDocumentFile(bytes: bytes, name: p.basename(filePath)),
+        _ => mx.MatrixFile.fromMimeType(
+            bytes: bytes,
+            name: p.basename(filePath),
+          ),
+      };
       final mediaCaption = caption?.trim() ?? '';
       final extraContent = <String, dynamic>{
         if (attachmentType == 'file') 'wrytte.sent_as_file': true,
@@ -1417,6 +1427,22 @@ class ChatService {
       );
       return local;
     });
+  }
+
+  String _mediaMimeType(String filePath, {required String fallback}) {
+    switch (p.extension(filePath).toLowerCase()) {
+      case '.jpg':
+      case '.jpeg':
+        return 'image/jpeg';
+      case '.png':
+        return 'image/png';
+      case '.webp':
+        return 'image/webp';
+      case '.heic':
+        return 'image/heic';
+      default:
+        return fallback;
+    }
   }
 
   Future<void> validateAttachmentUpload({

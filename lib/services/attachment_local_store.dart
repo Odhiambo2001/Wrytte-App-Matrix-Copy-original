@@ -173,7 +173,7 @@ class AttachmentLocalStore {
       }
       final response = await client
           .send(request)
-          .timeout(const Duration(seconds: 30));
+          .timeout(const Duration(seconds: 90));
       if (generation != _generation) {
         throw StateError('Attachment download cancelled');
       }
@@ -188,7 +188,7 @@ class AttachmentLocalStore {
       var received = 0;
       try {
         await for (final chunk in response.stream.timeout(
-          const Duration(seconds: 45),
+          const Duration(minutes: 5),
         )) {
           if (generation != _generation) {
             throw StateError('Attachment download cancelled');

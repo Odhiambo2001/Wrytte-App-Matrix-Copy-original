@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -21,6 +22,9 @@ class WrytteVideoThumbnail extends StatefulWidget {
 
 class _WrytteVideoThumbnailState extends State<WrytteVideoThumbnail> {
   static final Map<String, Future<File?>> _thumbnailTasks = {};
+  static const int _maxConcurrentThumbnails = 2;
+  static int _activeThumbnails = 0;
+  static final List<Completer<void>> _thumbnailWaiters = [];
   late Future<File?> _thumbnail;
 
   @override
@@ -55,6 +59,34 @@ class _WrytteVideoThumbnailState extends State<WrytteVideoThumbnail> {
   }
 
   Future<File?> _createThumbnail(String source) async {
+    await _acquireThumbnailSlot();
+    try {
+      return await _createThumbnailWithSlot(source);
+    } finally {
+      _releaseThumbnailSlot();
+    }
+  }
+
+  Future<void> _acquireThumbnailSlot() async {
+    if (_activeThumbnails < _maxConcurrentThumbnails) {
+      _activeThumbnails++;
+      return;
+    }
+    final waiter = Completer<void>();
+    _thumbnailWaiters.add(waiter);
+    await waiter.future;
+    _activeThumbnails++;
+  }
+
+  static void _releaseThumbnailSlot() {
+    if (_thumbnailWaiters.isNotEmpty) {
+      _thumbnailWaiters.removeAt(0).complete();
+    } else {
+      _activeThumbnails--;
+    }
+  }
+
+  Future<File?> _createThumbnailWithSlot(String source) async {
     final cleanSource = source.trim();
     if (cleanSource.isEmpty) return null;
 

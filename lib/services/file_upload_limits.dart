@@ -34,7 +34,7 @@ class FileUploadLimits {
   /// Maximum size accepted by the app for any uploaded media or attachment.
   /// The Matrix homeserver may advertise a lower limit, in which case the
   /// lower server limit remains authoritative.
-  static const int mediaMaxBytes = 100 * 1024 * 1024;
+  static const int mediaMaxBytes = 500 * 1024 * 1024;
 
   static const int avatarImageMaxBytes = 20 * 1024 * 1024;
   static const int voiceMessageMaxBytes = mediaMaxBytes;
