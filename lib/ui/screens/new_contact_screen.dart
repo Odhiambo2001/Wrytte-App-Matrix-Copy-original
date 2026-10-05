@@ -43,6 +43,7 @@ String _formatWrytteIdBody(String value) {
 String _formatWrytteIdEntry(String value) {
   final digits = value.replaceAll(RegExp(r'[^\d]'), '');
   if (digits.isEmpty) return '';
+  if (digits == '0') return '+0';
   final body =
       digits.startsWith('00')
           ? digits.substring(2)
@@ -1133,14 +1134,29 @@ class _NewContactPageState extends State<NewContactPage> {
     });
 
     try {
+      final firstName = _firstNameCtrl.text.trim();
+      final lastName = _lastNameCtrl.text.trim();
+      final name = _displayName(firstName, lastName, _fullIdentifier);
+
+      // An unregistered Wrytte ID invited from this flow belongs only in the
+      // device address book. Do not create a Wrytte Profile 2 or write it to
+      // Matrix account data, where it would appear in the app's contacts.
+      if (saveAndInvite) {
+        await _saveUnregisteredContactToPhone(
+          firstName: firstName,
+          lastName: lastName,
+          displayName: name,
+        );
+        if (!mounted) return;
+        Navigator.pop(context);
+        return;
+      }
+
       final owner = await AuthService.instance.getCurrentUserId() ?? '';
       if (owner.isEmpty) {
         throw StateError('Cannot save contact without a signed-in user.');
       }
 
-      final firstName = _firstNameCtrl.text.trim();
-      final lastName = _lastNameCtrl.text.trim();
-      final name = _displayName(firstName, lastName, _fullIdentifier);
       if (_syncToPhone) {
         await _saveUnregisteredContactToPhone(
           firstName: firstName,
@@ -1155,21 +1171,12 @@ class _NewContactPageState extends State<NewContactPage> {
         isOnWrytte: false,
         firstName: firstName,
         lastName: lastName,
-        inviteStatus: saveAndInvite ? 'invite' : null,
       );
       final contact = profile2.toContact();
       await ContactLocalDb.addContact(contact, ownerUserId: owner);
       ContactService.notifyContactsChanged(owner);
       ContactService.invalidateMatrixContactsCache();
       _contactService.invalidateCache();
-
-      if (saveAndInvite) {
-        await _saveContactToBackendOrThrow(
-          selfId: owner,
-          receiverId: '',
-          contact: contact,
-        );
-      }
 
       if (!mounted) return;
       Navigator.pop(context);
@@ -1192,17 +1199,9 @@ class _NewContactPageState extends State<NewContactPage> {
     }
 
     final digits = _digitsOnly(_fullIdentifier);
-    final existing = await fc.FlutterContacts.getContacts(
-      withProperties: true,
-      withPhoto: false,
-    );
-    final alreadySaved = existing.any(
-      (contact) => contact.phones.any(
-        (phone) => _digitsOnly(phone.number) == digits,
-      ),
-    );
-    if (alreadySaved) return;
-
+    // Avoid reading the entire address book just to check for duplicates: on
+    // devices with many contacts that can leave Save and invite appearing
+    // stuck. Insert directly and return as soon as the platform confirms it.
     await fc.FlutterContacts.insertContact(
       fc.Contact(
         displayName: displayName,
@@ -1559,7 +1558,6 @@ class _NewContactPageState extends State<NewContactPage> {
                   style: TextStyle(color: _kBlue, fontSize: 13),
                 ),
               ),
-              const WrytteIdCheckmark(),
             ],
           ),
         );
