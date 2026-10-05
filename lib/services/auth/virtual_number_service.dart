@@ -174,6 +174,10 @@ class VirtualNumberService {
   /// Ensures the next signup flow generates a different candidate while
   /// preserving the previous number long enough to exclude it from generation.
   Future<void> prepareForNewSignup() async {
+    // This can run after logout without restarting the app. Discard any
+    // in-memory candidate as well as invalidating the persisted one, so the
+    // Wrytte ID signup screen cannot resurrect the previous account's ID.
+    _sessionCandidates.clear();
     final preferences = await SharedPreferences.getInstance();
     if (preferences.containsKey(_numberKey)) {
       await preferences.setBool(_verifiedKey, false);
