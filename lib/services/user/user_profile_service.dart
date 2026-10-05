@@ -4,6 +4,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:matrix/matrix.dart' show MatrixFile;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
@@ -12,7 +13,7 @@ import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_profile_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
-import 'package:wrytte/services/user/user_profile_api_service.dart';
+import 'package:wrytte/services/file_upload_limits.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
@@ -83,7 +84,9 @@ class UserProfileService {
       (key) => _profileCacheLocalpart(key) == localpart,
     );
     _publicProfileUpdateController.add(userId);
-    debugPrint('[UserProfileService] invalidated public profile user_id="$userId"');
+    debugPrint(
+      '[UserProfileService] invalidated public profile user_id="$userId"',
+    );
   }
 
   String _profileCacheLocalpart(String cacheKey) =>
@@ -223,20 +226,15 @@ class UserProfileService {
     await _refreshAndNotify();
 
     try {
-      final uploadedPath = await UserProfileApiService.instance
-          .uploadAvatarImage(File(localPath));
+      final uploadedPath = await _uploadAvatarToMatrix(File(localPath));
       final requestedAvatarVersion = await _nextModuleAvatarVersion(uid);
-      final requestedAvatarUrl = _withAvatarFetchVersion(
-        _resolveAvatarUrl(uploadedPath),
-        uid,
-        requestedAvatarVersion,
-      );
+      final requestedAvatarUrl = uploadedPath;
       if (requestedAvatarUrl.isEmpty) {
-        throw Exception('Avatar upload completed without an image URL.');
+        throw Exception('Matrix avatar upload returned an invalid MXC URI.');
       }
       await MatrixProfileService.instance.setAvatarImageAndVersion(
         uid,
-        url: requestedAvatarUrl,
+        mxcUrl: requestedAvatarUrl,
         version: requestedAvatarVersion,
       );
       final savedAvatar = await MatrixProfileService.instance.getProfile(uid);
@@ -246,9 +244,7 @@ class UserProfileService {
           ) ??
           requestedAvatarVersion;
       final avatarUrl = _withAvatarFetchVersion(
-        _resolveAvatarUrl(
-          savedAvatar[WrytteProfile.avatarImageUrl] ?? requestedAvatarUrl,
-        ),
+        savedAvatar['avatar_url'] ?? requestedAvatarUrl,
         uid,
         avatarVersion,
       );
@@ -335,11 +331,17 @@ class UserProfileService {
       backendFields['Link'] = links.join('\n');
     }
     if (channelAlias != null) {
-      await _storage.write(key: 'profile_channel_alias', value: channelAlias.trim());
+      await _storage.write(
+        key: 'profile_channel_alias',
+        value: channelAlias.trim(),
+      );
       backendFields['ChannelAlias'] = channelAlias.trim();
     }
     if (groupAlias != null) {
-      await _storage.write(key: 'profile_group_alias', value: groupAlias.trim());
+      await _storage.write(
+        key: 'profile_group_alias',
+        value: groupAlias.trim(),
+      );
       backendFields['GroupAlias'] = groupAlias.trim();
     }
     if (visibilitySettings != null) {
@@ -665,7 +667,8 @@ class UserProfileService {
           final remoteAvatar = _resolveAvatarUrl(
             _field(remote, 'AvatarImg') ?? profileImage,
           );
-          if (remoteAvatar.isNotEmpty && !_avatarUrlBelongsToUid(remoteAvatar, uid)) {
+          if (remoteAvatar.isNotEmpty &&
+              !_avatarUrlBelongsToUid(remoteAvatar, uid)) {
             debugPrint(
               '[UserProfileService] rejected cross-account current avatar '
               'active_user="$uid" avatar_url="$remoteAvatar"',
@@ -793,7 +796,8 @@ class UserProfileService {
   /// identifies another account, even if a stale response reaches this code.
   bool _avatarUrlBelongsToUid(String avatarUrl, String uid) {
     final owner = _matrixLocalpart(uid).toLowerCase();
-    final path = Uri.tryParse(avatarUrl)?.path.toLowerCase() ??
+    final path =
+        Uri.tryParse(avatarUrl)?.path.toLowerCase() ??
         avatarUrl.toLowerCase().split('?').first;
     return path.contains('/$owner/');
   }
@@ -882,6 +886,35 @@ class UserProfileService {
     if (uri != null && uri.hasScheme) return trimmed;
     if (trimmed.startsWith('/')) return '${ApiService.baseUrl}$trimmed';
     return '${ApiService.baseUrl}/$trimmed';
+  }
+
+  Future<String> _uploadAvatarToMatrix(File file) async {
+    await FileUploadLimits.validateAvatarImagePath(file.path);
+    final matrix = MatrixClientService.instance.client;
+    final bytes = await file.readAsBytes();
+    final matrixFile = MatrixFile(
+      bytes: bytes,
+      name: file.uri.pathSegments.last,
+      mimeType: _avatarMimeType(file.path),
+    );
+    final mxc = await matrix.uploadContent(
+      matrixFile.bytes,
+      filename: matrixFile.name,
+      contentType: matrixFile.mimeType,
+    );
+    final value = mxc.toString();
+    if (!value.startsWith('mxc://')) {
+      throw StateError('Matrix media upload returned an invalid MXC URI.');
+    }
+    return value;
+  }
+
+  String _avatarMimeType(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    return 'image/jpeg';
   }
 
   String _localProfileImageKey(String uid) =>
@@ -974,18 +1007,13 @@ class UserProfileService {
     }
     try {
       _lastPendingAvatarAttemptAt = DateTime.now();
-      final uploadedPath = await UserProfileApiService.instance
-          .uploadAvatarImage(file);
+      final uploadedPath = await _uploadAvatarToMatrix(file);
       final requestedAvatarVersion = await _nextModuleAvatarVersion(uid);
-      final requestedAvatarUrl = _withAvatarFetchVersion(
-        _resolveAvatarUrl(uploadedPath),
-        uid,
-        requestedAvatarVersion,
-      );
+      final requestedAvatarUrl = uploadedPath;
       if (requestedAvatarUrl.isEmpty) return false;
       await MatrixProfileService.instance.setAvatarImageAndVersion(
         uid,
-        url: requestedAvatarUrl,
+        mxcUrl: requestedAvatarUrl,
         version: requestedAvatarVersion,
       );
       final savedAvatar = await MatrixProfileService.instance.getProfile(uid);
@@ -995,9 +1023,7 @@ class UserProfileService {
           ) ??
           requestedAvatarVersion;
       final avatarUrl = _withAvatarFetchVersion(
-        _resolveAvatarUrl(
-          savedAvatar[WrytteProfile.avatarImageUrl] ?? requestedAvatarUrl,
-        ),
+        savedAvatar['avatar_url'] ?? requestedAvatarUrl,
         uid,
         avatarVersion,
       );
@@ -1066,8 +1092,7 @@ class UserProfileService {
       name: displayName.trim(),
       username: displayName.trim(),
       phone:
-          wrytteId ??
-          _trustedPhone(backendPhone, fallbackPhone: fallbackPhone),
+          wrytteId ?? _trustedPhone(backendPhone, fallbackPhone: fallbackPhone),
       bio: _field(fields, 'Bio') ?? _field(fields, 'bio') ?? '',
       profileImage: _resolveAvatarUrl(avatar),
       onlineStatus: _field(fields, 'Presence') ?? '',
@@ -1339,7 +1364,10 @@ class UserProfileService {
         );
       }
       if (avatarVersion != null) {
-        await MatrixProfileService.instance.setAvatarVersion(uid, avatarVersion);
+        await MatrixProfileService.instance.setAvatarVersion(
+          uid,
+          avatarVersion,
+        );
       }
     } catch (e) {
       debugPrint('[UserProfileService] Module profile save skipped: $e');
@@ -1349,10 +1377,8 @@ class UserProfileService {
 
   Future<int> _nextModuleAvatarVersion(String uid) async {
     final profile = await MatrixProfileService.instance.getProfile(uid);
-    final current = int.tryParse(
-          profile[WrytteProfile.avatarVersion]?.trim() ?? '',
-        ) ??
-        0;
+    final current =
+        int.tryParse(profile[WrytteProfile.avatarVersion]?.trim() ?? '') ?? 0;
     return current + 1;
   }
 
@@ -1385,9 +1411,7 @@ class UserProfileService {
     final matrixAvatar = raw['avatar_url']?.toString().trim() ?? '';
     // The Module API has already applied the owner's avatar visibility rule.
     // Use its standard Matrix avatar for public profiles as well as owner reads.
-    if (result['AvatarImg'] == null && matrixAvatar.isNotEmpty) {
-      result['AvatarImg'] = matrixAvatar;
-    }
+    if (matrixAvatar.isNotEmpty) result['AvatarImg'] = matrixAvatar;
     result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
     debugPrint(
       '[ModuleProfile.map] user_id="${fallbackUid ?? profile.userId}" '
