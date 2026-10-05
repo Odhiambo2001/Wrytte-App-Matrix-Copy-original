@@ -2312,6 +2312,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   String _formatPhone(String phone) {
+    final wrytteId = WrytteId.forDisplay(phone);
+    if (wrytteId != null) return wrytteId;
     return CountryPhoneNumber.formatInternationalDisplay(phone);
   }
 

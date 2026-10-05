@@ -677,6 +677,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _formatPhone(String phone) {
+    final wrytteId = WrytteId.forDisplay(phone);
+    if (wrytteId != null) return wrytteId;
     return CountryPhoneNumber.formatInternationalDisplay(phone);
   }
 
