@@ -169,7 +169,6 @@ void main() {
   runApp(const WrytteApp());
   WidgetsBinding.instance.addPostFrameCallback((_) {
     unawaited(_initializeStartupServices());
-    FlutterNativeSplash.remove();
   });
 }
 
@@ -393,7 +392,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
         }
       }
 
-      FlutterNativeSplash.remove();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        FlutterNativeSplash.remove();
+      });
     } catch (e) {
       debugPrint('[AuthWrapper] Session check error: $e');
       if (mounted) {
@@ -402,7 +403,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
           _checking = false;
         });
       }
-      FlutterNativeSplash.remove();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        FlutterNativeSplash.remove();
+      });
     }
   }
 
@@ -489,8 +492,12 @@ class _AuthWrapperState extends State<AuthWrapper> {
   @override
   Widget build(BuildContext context) {
     if (_checking) {
-      // Show the welcome screen while the saved session is checked.
-      return const WelcomeView();
+      // The native splash stays visible until session restoration is complete.
+      // Keep this route blank so returning users never see signup or a loader.
+      return const Scaffold(
+        backgroundColor: Color(0xFF08090B),
+        body: SizedBox.expand(),
+      );
     }
 
     if (!_isLoggedIn) return const WelcomeView();
