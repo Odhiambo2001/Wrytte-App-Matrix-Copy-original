@@ -15,10 +15,24 @@ class MatrixClientService {
   String? _storeNamespace;
   String? _initializingStoreNamespace;
   StreamSubscription<ToDeviceEvent>? _toDeviceCaptureSub;
+  StreamSubscription<SyncUpdate>? _profileUpdateCaptureSub;
   final List<ToDeviceEvent> _pendingGroupDeletionEvents = [];
+  final List<String> _pendingProfileUpdates = [];
   final Set<String> _capturedGroupDeletionKeys = {};
+  final Map<String, String> _capturedProfileUpdateEventIds = {};
+  final StreamController<String> _profileUpdateController =
+      StreamController<String>.broadcast();
 
   static const String _groupDeletedToDeviceType = 'com.wrytte.group.deleted';
+  static const String profileUpdatedEventType = 'com.wrytte.profile.updated';
+
+  Stream<String> get profileUpdateStream => _profileUpdateController.stream;
+
+  List<String> takePendingProfileUpdates() {
+    final updates = List<String>.of(_pendingProfileUpdates);
+    _pendingProfileUpdates.clear();
+    return updates;
+  }
 
   Client get client {
     final value = _client;
@@ -62,8 +76,59 @@ class MatrixClientService {
     _toDeviceCaptureSub = client.onToDeviceEvent.stream.listen(
       _captureGroupDeletionEvent,
     );
+    _profileUpdateCaptureSub?.cancel();
+    _profileUpdateCaptureSub = client.onSync.stream.listen(
+      _captureProfileUpdateEvents,
+    );
     final cached = client.onToDeviceEvent.value;
     if (cached != null) _captureGroupDeletionEvent(cached);
+  }
+
+  void _captureProfileUpdateEvents(SyncUpdate update) {
+    final joinedRooms = update.rooms?.join;
+    if (joinedRooms == null) return;
+    for (final room in joinedRooms.values) {
+      for (final event in room.timeline?.events ?? const <MatrixEvent>[]) {
+        if (event.type != profileUpdatedEventType) continue;
+        final ownerId = event.content['user_id']?.toString().trim() ?? '';
+        if (event.senderId.isEmpty ||
+            _profileUpdateLocalpart(ownerId) !=
+                _profileUpdateLocalpart(event.senderId)) {
+          continue;
+        }
+        final eventId = event.eventId;
+        final revision = event.content['revision']?.toString() ?? '';
+        final dedupeKey = eventId.isNotEmpty
+            ? eventId
+            : revision.isNotEmpty
+            ? '${event.senderId}|$revision'
+            : '${event.senderId}|${room.hashCode}|${event.originServerTs.microsecondsSinceEpoch}';
+        final ownerKey = _profileUpdateLocalpart(ownerId);
+        if (_capturedProfileUpdateEventIds[dedupeKey] == ownerKey) continue;
+        _capturedProfileUpdateEventIds[dedupeKey] = ownerKey;
+        if (_profileUpdateController.hasListener) {
+          _profileUpdateController.add(ownerId);
+        } else {
+          _pendingProfileUpdates.add(ownerId);
+        }
+      }
+    }
+    if (_capturedProfileUpdateEventIds.length > 2048) {
+      final recent = _capturedProfileUpdateEventIds.entries.toList().reversed.take(1024);
+      _capturedProfileUpdateEventIds
+        ..clear()
+        ..addEntries(recent.toList().reversed);
+    }
+  }
+
+  String _profileUpdateLocalpart(String userId) {
+    final value = userId.trim();
+    if (value.startsWith('@')) {
+      final separator = value.indexOf(':');
+      return (separator > 1 ? value.substring(1, separator) : value.substring(1))
+          .toLowerCase();
+    }
+    return value.toLowerCase();
   }
 
   Future<Client> ensureInitialized({String? storeNamespace}) async {
@@ -228,8 +293,12 @@ class MatrixClientService {
     final matrix = _client;
     await _toDeviceCaptureSub?.cancel();
     _toDeviceCaptureSub = null;
+    await _profileUpdateCaptureSub?.cancel();
+    _profileUpdateCaptureSub = null;
     _pendingGroupDeletionEvents.clear();
+    _pendingProfileUpdates.clear();
     _capturedGroupDeletionKeys.clear();
+    _capturedProfileUpdateEventIds.clear();
     _client = null;
     _initializing = null;
     _storeNamespace = null;

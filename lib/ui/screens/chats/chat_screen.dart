@@ -413,6 +413,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _lastRoomStreamFingerprint;
   StreamSubscription<mx.SyncUpdate>? _roomProfileSyncSub;
   StreamSubscription<String>? _groupContactsChangedSub;
+  StreamSubscription<String>? _profileUpdatesSub;
 
   final List<ChatMessage> _messages = [];
   final List<ChatMessage> _initialStreamBuffer = [];
@@ -420,6 +421,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, String> _groupMemberNames = {};
   final Map<String, String> _groupMemberAvatars = {};
   final Set<String> _groupSenderProfilesInFlight = {};
+  final Set<String> _pendingGroupMemberProfileRefreshes = {};
   final Set<String> _pinUpdatesInFlight = {};
   final Map<String, DateTime> _lastPinUpdateAt = {};
   final Map<String, GlobalKey> _messageKeys = {};
@@ -473,6 +475,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _stableHeaderAvatarUrl = _initialStableHeaderAvatarUrl();
     _subscribeToRoomProfileUpdates();
     _subscribeToGroupContactUpdates();
+    _profileUpdatesSub = UserProfileService.instance.publicProfileUpdateStream
+        .listen(_onPublicProfileUpdated);
     apkLog(
       'ChatScreen',
       '── initState ──  '
@@ -521,6 +525,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _chat.deactivateConversationRead(widget.conversationId);
     _roomProfileSyncSub?.cancel();
     _groupContactsChangedSub?.cancel();
+    _profileUpdatesSub?.cancel();
     final resolvedConversationId = _resolvedConversationId;
     if (resolvedConversationId != null &&
         resolvedConversationId != widget.conversationId) {
@@ -569,6 +574,35 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       setState(() => _stableHeaderAvatarUrl = latestAvatar);
     });
+  }
+
+  void _onPublicProfileUpdated(String userId) {
+    if (!mounted) return;
+    final changed = _matrixLocalpart(userId).toLowerCase();
+    if (changed.isEmpty) return;
+    if (changed == _matrixLocalpart(widget.currentUserId).toLowerCase()) {
+      return;
+    }
+    if (_isGroupChat) {
+      if (!_groupMembers.any(
+        (member) => _matrixLocalpart(member.id).toLowerCase() == changed,
+      )) {
+        return;
+      }
+      _groupMemberNames.removeWhere(
+        (key, _) => _matrixLocalpart(key).toLowerCase() == changed,
+      );
+      _groupMemberAvatars.removeWhere(
+        (key, _) => _matrixLocalpart(key).toLowerCase() == changed,
+      );
+      _pendingGroupMemberProfileRefreshes.add(userId);
+      unawaited(_loadGroupMemberProfileName(userId, forceRefresh: true));
+      return;
+    }
+    final peer = _profilePeerId();
+    if (peer != null && _matrixLocalpart(peer).toLowerCase() == changed) {
+      unawaited(_loadReceiverProfile(forceRefresh: true));
+    }
   }
 
   void _subscribeToGroupContactUpdates() {
@@ -1011,7 +1045,9 @@ class _ChatScreenState extends State<ChatScreen> {
       forceRefresh: forceRefresh,
     );
 
-    final matrixProfile = await _loadMatrixProfile(profileUid);
+    final matrixProfile = profile?.moduleProfileLoaded == true
+        ? null
+        : await _loadMatrixProfile(profileUid);
     final saved =
         ownerUserId == null || ownerUserId.isEmpty
             ? null
@@ -1047,7 +1083,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (ownerUserId != null && ownerUserId.isNotEmpty) {
       if (saved != null && profile != null) {
         final nextAvatar =
-            profile.hasProfileImage
+            profile.moduleProfileLoaded
+                ? (profile.hasProfileImage ? profile.profileImage : null)
+                : profile.hasProfileImage
                 ? profile.profileImage
                 : matrixProfile?.$2 ?? widget.avatarUrl;
         if (nextAvatar?.trim().isNotEmpty == true &&
@@ -1064,7 +1102,8 @@ class _ChatScreenState extends State<ChatScreen> {
               ownerUserId: ownerUserId,
               wrytteUserId: profileUid,
               phone: profile.phone.isNotEmpty ? profile.phone : fallbackPhone,
-              avatarUrl: nextAvatar,
+              avatarUrl:
+                  profile.moduleProfileLoaded ? (nextAvatar ?? '') : nextAvatar,
               bio: profile.bio,
             );
         if (refreshedContact != null) {
@@ -1081,10 +1120,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 : matrixProfile?.$1,
         savedName: saved?.formattedName,
         avatarUrl:
-            profile?.hasProfileImage == true
+            profile?.moduleProfileLoaded == true
+                ? (profile!.hasProfileImage ? profile.profileImage : '')
+                : profile?.hasProfileImage == true
                 ? profile!.profileImage
                 : matrixProfile?.$2 ?? widget.avatarUrl,
         bio: profile?.bio,
+        clearAvatar:
+            profile?.moduleProfileLoaded == true &&
+            profile?.hasProfileImage != true,
+        clearBio: profile?.moduleProfileLoaded == true,
       );
       identity = await ContactIdentityCache.instance.findByMatrixId(
         ownerUserId: ownerUserId,
@@ -1093,7 +1138,9 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     final nextAvatar =
-        profile?.hasProfileImage == true
+        profile?.moduleProfileLoaded == true
+            ? (profile!.hasProfileImage ? profile.profileImage : null)
+            : profile?.hasProfileImage == true
             ? profile!.profileImage
             : identity?.avatarUrl ?? widget.avatarUrl;
     await AvatarPreloadService.warm(
@@ -1191,6 +1238,12 @@ class _ChatScreenState extends State<ChatScreen> {
         forceRefresh: true,
       );
       if (profile == null) return null;
+      if (profile.moduleProfileLoaded) {
+        return (
+          profile.displayName.isEmpty ? null : profile.displayName,
+          profile.hasProfileImage ? profile.profileImage : null,
+        );
+      }
       return (
         profile.name,
         profile.hasProfileImage ? profile.profileImage : null,
@@ -4227,13 +4280,17 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadGroupMemberProfileName(
     String matrixId, {
     String? phoneHint,
+    bool forceRefresh = false,
   }) async {
     final senderId = matrixId.trim();
-    if (senderId.isEmpty ||
-        senderId.startsWith('!') ||
-        !_groupSenderProfilesInFlight.add(senderId)) {
+    if (senderId.isEmpty || senderId.startsWith('!')) {
       return;
     }
+    if (!_groupSenderProfilesInFlight.add(senderId)) {
+      if (forceRefresh) _pendingGroupMemberProfileRefreshes.add(senderId);
+      return;
+    }
+    _pendingGroupMemberProfileRefreshes.remove(senderId);
     try {
       final localpart = _matrixLocalpart(senderId);
       if (localpart.isEmpty) return;
@@ -4250,7 +4307,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 senderId,
                 phone: phoneHint,
               );
-      if (savedContact != null) {
+      if (savedContact != null && !forceRefresh) {
         final name = _cleanDisplayName(savedContact.formattedName);
         final avatar = savedContact.avatarUrl?.trim() ?? '';
         if (!mounted) return;
@@ -4268,7 +4325,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ownerUserId: ownerUserId,
                 matrixUserId: senderId,
               );
-      if (localProfile1 != null) {
+      if (localProfile1 != null && !forceRefresh) {
         final name = _cleanDisplayName(localProfile1.profileName);
         final avatar = localProfile1.avatarUrl?.trim() ?? '';
         if (!mounted) return;
@@ -4282,10 +4339,34 @@ class _ChatScreenState extends State<ChatScreen> {
       final profile = await UserProfileService.instance.getProfileByUid(
         localpart,
         phone: phoneHint,
-        forceRefresh: false,
+        forceRefresh: forceRefresh,
       );
-      final name = _cleanDisplayName(profile?.displayName);
-      final avatar = profile?.profileImage.trim() ?? '';
+      if (profile?.moduleProfileLoaded == true &&
+          (profile!.name.isEmpty || profile.name == profile.phone) &&
+          savedContact == null) {
+        _groupMemberNames.remove(senderId);
+      }
+      final name =
+          forceRefresh && savedContact != null
+              ? _cleanDisplayName(savedContact.formattedName)
+              : _cleanDisplayName(profile?.displayName);
+      final avatar =
+          profile?.moduleProfileLoaded == true
+              ? (profile!.hasProfileImage ? profile.profileImage : '')
+              : profile?.profileImage.trim() ?? '';
+      if (savedContact != null && profile?.moduleProfileLoaded == true) {
+        final refreshedContact =
+            await ContactLocalDb.refreshPublicProfileFields(
+              ownerUserId: ownerUserId,
+              wrytteUserId: senderId,
+              phone: profile!.phone,
+              avatarUrl: avatar,
+              bio: profile.bio,
+            );
+        if (refreshedContact != null) {
+          await ChatService().applySavedContact(refreshedContact);
+        }
+      }
       if (profile != null && ownerUserId.isNotEmpty) {
         await ContactIdentityCache.instance.upsert(
           ownerUserId: ownerUserId,
@@ -4294,6 +4375,9 @@ class _ChatScreenState extends State<ChatScreen> {
           profileName: name,
           avatarUrl: avatar,
           bio: profile.bio,
+          clearAvatar:
+              profile.moduleProfileLoaded && !profile.hasProfileImage,
+          clearBio: profile.moduleProfileLoaded,
         );
       }
       if (!mounted) return;
@@ -4301,11 +4385,17 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {
         if (name.isNotEmpty) _groupMemberNames[senderId] = name;
         if (avatar.isNotEmpty) _groupMemberAvatars[senderId] = avatar;
+        if (avatar.isEmpty && profile?.moduleProfileLoaded == true) {
+          _groupMemberAvatars.remove(senderId);
+        }
       });
     } catch (_) {
       // Matrix display names are kept as fallback.
     } finally {
       _groupSenderProfilesInFlight.remove(senderId);
+      if (_pendingGroupMemberProfileRefreshes.remove(senderId)) {
+        unawaited(_loadGroupMemberProfileName(senderId, forceRefresh: true));
+      }
     }
   }
 

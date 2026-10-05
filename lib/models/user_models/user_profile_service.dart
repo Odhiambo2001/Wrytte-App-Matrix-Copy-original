@@ -12,6 +12,7 @@ class UserProfile {
   final String groupAlias;
   final Map<String, String> visibilitySettings;
   final int avatarVersion;
+  final bool moduleProfileLoaded;
   final String localProfileImagePath;
   final List<String> links;
   final DateTime? createdAt;
@@ -29,6 +30,7 @@ class UserProfile {
     this.groupAlias = '',
     this.visibilitySettings = const {},
     this.avatarVersion = 0,
+    this.moduleProfileLoaded = false,
     this.localProfileImagePath = '',
     required this.links,
     this.createdAt,
@@ -53,6 +55,7 @@ class UserProfile {
             const {},
       ),
       avatarVersion: int.tryParse(data['avatarVersion']?.toString() ?? '') ?? 0,
+      moduleProfileLoaded: data['moduleProfileLoaded'] as bool? ?? false,
       localProfileImagePath: data['localProfileImagePath'] as String? ?? '',
       links: List<String>.from(data['links'] as List? ?? []),
       createdAt: (data['createdAt'] as dynamic)?.toDate() as DateTime?,
@@ -73,6 +76,7 @@ class UserProfile {
       'groupAlias': groupAlias,
       'visibilitySettings': visibilitySettings,
       'avatarVersion': avatarVersion,
+      'moduleProfileLoaded': moduleProfileLoaded,
       'localProfileImagePath': localProfileImagePath,
       'links': links,
     };
@@ -112,6 +116,7 @@ class UserProfile {
     String? groupAlias,
     Map<String, String>? visibilitySettings,
     int? avatarVersion,
+    bool? moduleProfileLoaded,
     String? localProfileImagePath,
     List<String>? links,
   }) {
@@ -127,6 +132,7 @@ class UserProfile {
       groupAlias: groupAlias ?? this.groupAlias,
       visibilitySettings: visibilitySettings ?? this.visibilitySettings,
       avatarVersion: avatarVersion ?? this.avatarVersion,
+      moduleProfileLoaded: moduleProfileLoaded ?? this.moduleProfileLoaded,
       localProfileImagePath:
           localProfileImagePath ?? this.localProfileImagePath,
       links: links ?? this.links,

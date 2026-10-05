@@ -68,6 +68,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _profileLoading = true;
   List<ChatMessage> _conversationMessages = const [];
   StreamSubscription<UserProfile?>? _profileSub;
+  StreamSubscription<String>? _publicProfileUpdatesSub;
   String? _seededSavedName;
 
   late final TabController _tabController;
@@ -103,11 +104,32 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
     _loadProfile();
     _loadConversationMessages();
+    if (_isOtherUser) {
+      _publicProfileUpdatesSub = UserProfileService.instance
+          .publicProfileUpdateStream
+          .listen(_onPublicProfileUpdated);
+    }
+  }
+
+  void _onPublicProfileUpdated(String userId) {
+    if (!mounted) return;
+    final profileUid =
+        _validProfileUid(widget.uid) ??
+        _validProfileUid(_identity?.matrixUserId) ??
+        _validProfileUid(_savedContact?.wrytteUserId) ??
+        _validProfileUid(_profile?.uid);
+    if (profileUid == null ||
+        _matrixLocalpart(profileUid).toLowerCase() !=
+            _matrixLocalpart(userId).toLowerCase()) {
+      return;
+    }
+    unawaited(_loadProfile());
   }
 
   @override
   void dispose() {
     _profileSub?.cancel();
+    _publicProfileUpdatesSub?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -169,7 +191,10 @@ class _ProfileScreenState extends State<ProfileScreen>
       _profileLoading = false;
     });
 
-    final matrixProfile = uid != null ? await _loadMatrixProfile(uid) : null;
+    final matrixProfile =
+        uid != null && profile?.moduleProfileLoaded != true
+            ? await _loadMatrixProfile(uid)
+            : null;
 
     if (uid != null && ownerUserId != null && ownerUserId.isNotEmpty) {
       if (savedContact == null) {
@@ -179,7 +204,11 @@ class _ProfileScreenState extends State<ProfileScreen>
         );
       } else if (profile != null) {
         final nextAvatar =
-            profile.hasProfileImage ? profile.profileImage : matrixProfile?.$2;
+            profile.moduleProfileLoaded
+                ? (profile.hasProfileImage ? profile.profileImage : null)
+                : profile.hasProfileImage
+                ? profile.profileImage
+                : matrixProfile?.$2;
         if (nextAvatar?.trim().isNotEmpty == true) {
           unawaited(
             AvatarPreloadService.replace(
@@ -194,7 +223,8 @@ class _ProfileScreenState extends State<ProfileScreen>
               wrytteUserId: uid,
               phone:
                   profile.phone.isNotEmpty ? profile.phone : profileLookupPhone,
-              avatarUrl: nextAvatar,
+              avatarUrl:
+                  profile.moduleProfileLoaded ? (nextAvatar ?? '') : nextAvatar,
               bio: profile.bio,
             );
         if (refreshedContact != null) {
@@ -213,13 +243,21 @@ class _ProfileScreenState extends State<ProfileScreen>
                 : identity?.profileName,
         savedName: savedContact?.formattedName,
         avatarUrl:
-            profile?.hasProfileImage == true
+            profile?.moduleProfileLoaded == true
+                ? (profile!.hasProfileImage ? profile.profileImage : '')
+                : profile?.hasProfileImage == true
                 ? profile!.profileImage
                 : matrixProfile?.$2,
         bio:
-            profile?.bio.trim().isNotEmpty == true
+            profile?.moduleProfileLoaded == true
+                ? profile!.bio
+                : profile?.bio.trim().isNotEmpty == true
                 ? profile!.bio
                 : identity?.bio,
+        clearAvatar:
+            profile?.moduleProfileLoaded == true &&
+            profile?.hasProfileImage != true,
+        clearBio: profile?.moduleProfileLoaded == true,
       );
       identity = await ContactIdentityCache.instance.findByMatrixId(
         ownerUserId: ownerUserId,
@@ -397,14 +435,24 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
     try {
-      final profile = await MatrixProfileService.instance.getProfile(uid);
+      final profile = await UserProfileService.instance.getProfileByUid(
+        uid,
+        forceRefresh: true,
+      );
+      if (profile?.moduleProfileLoaded == true) {
+        return (
+          profile!.displayName.isEmpty ? null : profile.displayName,
+          profile.hasProfileImage ? profile.profileImage : null,
+        );
+      }
+      final matrixProfile = await MatrixProfileService.instance.getProfile(uid);
       return (
-        profile.displayName ??
-            [profile.firstNameValue, profile.lastNameValue]
+        matrixProfile.displayName ??
+            [matrixProfile.firstNameValue, matrixProfile.lastNameValue]
                 .whereType<String>()
                 .where((part) => part.trim().isNotEmpty)
                 .join(' '),
-        profile.avatarUrl ?? profile[WrytteProfile.avatarImageUrl],
+        matrixProfile.avatarUrl ?? matrixProfile[WrytteProfile.avatarImageUrl],
       );
     } catch (_) {
       return null;

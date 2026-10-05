@@ -96,6 +96,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   StreamSubscription<bool>? _chatConnectionSub;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   StreamSubscription<String>? _contactsChangedSub;
+  StreamSubscription<String>? _profileUpdatesSub;
   StreamSubscription? _matrixSyncSub;
   Timer? _conversationBatchTimer;
   Timer? _groupExitTimer;
@@ -145,6 +146,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // mapping used by older cached conversations. _initialize first loads the
     // persisted identity cache and Profile 2 contacts, then publishes rows.
     _scrollCtrl.addListener(_onScroll);
+    _profileUpdatesSub = UserProfileService.instance.publicProfileUpdateStream
+        .listen(_onPublicProfileUpdated);
     Future.microtask(_initialize);
     try {
       _matrixSyncSub = MatrixClientService.instance.client.onSync.stream.listen(
@@ -165,12 +168,67 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
   }
 
+  void _onPublicProfileUpdated(String userId) {
+    if (!mounted) return;
+    final changedLocalpart = _matrixLocalpart(userId)?.toLowerCase();
+    if (changedLocalpart == null || changedLocalpart.isEmpty) return;
+    final hasConversation = _conversations.any((conversation) {
+      final profileUid = _profileUidForConversation(conversation);
+      return profileUid != null &&
+          _matrixLocalpart(profileUid)?.toLowerCase() == changedLocalpart;
+    });
+    if (hasConversation) {
+      final matching = _conversations.where((conversation) {
+        final uid = _profileUidForConversation(conversation);
+        return uid != null &&
+            _matrixLocalpart(uid)?.toLowerCase() == changedLocalpart;
+      });
+      for (final conversation in matching) {
+        unawaited(_refreshConversationProfile(conversation));
+      }
+    }
+  }
+
+  Future<void> _refreshConversationProfile(ChatConversation conversation) async {
+    final refreshed = await _enrichConversationFromPublicProfile(conversation);
+    if (!mounted) return;
+    setState(() {
+      _conversations = [
+        for (final current in _conversations)
+          if (current.id == refreshed.id)
+            refreshed.copyWith(
+              lastMessage: current.lastMessage,
+              lastMessageTime: current.lastMessageTime,
+              lastMessageSenderId: current.lastMessageSenderId,
+              lastMessageType: current.lastMessageType,
+              unreadCount: current.unreadCount,
+              isArchived: current.isArchived,
+              isMuted: current.isMuted,
+              isPinned: current.isPinned,
+              mutedUntil: current.mutedUntil,
+              lastSeen: current.lastSeen,
+              createdAt: current.createdAt,
+              deletedAt: current.deletedAt,
+              deletedBy: current.deletedBy,
+              participants: current.participants,
+              otherUserId: current.otherUserId,
+              conversationKind: current.conversationKind,
+              otherUserName: refreshed.otherUserName,
+              otherUserAvatar: refreshed.otherUserAvatar,
+            )
+          else
+            current,
+      ];
+    });
+  }
+
   @override
   void dispose() {
     _convSub?.cancel();
     _chatConnectionSub?.cancel();
     _connectivitySub?.cancel();
     _contactsChangedSub?.cancel();
+    _profileUpdatesSub?.cancel();
     _matrixSyncSub?.cancel();
     _conversationBatchTimer?.cancel();
     _groupExitTimer?.cancel();
@@ -1455,7 +1513,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       phone: fallbackPhone,
       forceRefresh: false,
     );
-    final matrixProfile = await _loadMatrixProfile(profileUid);
+    final matrixProfile = profile?.moduleProfileLoaded == true
+        ? null
+        : await _loadMatrixProfile(profileUid);
     if (profile == null && matrixProfile == null) return conv;
 
     final contactKey = _contactKeyForConversation(conv);
@@ -1482,11 +1542,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     );
     final matrixAvatar = _safeDirectAvatarUrl(matrixProfile?.$2);
     final avatar =
-        contactAvatar ??
-        profileAvatar ??
-        matrixAvatar ??
-        existingAvatar ??
-        identityAvatar;
+        profile?.moduleProfileLoaded == true
+            ? profileAvatar
+            : contactAvatar ??
+                profileAvatar ??
+                matrixAvatar ??
+                existingAvatar ??
+                identityAvatar;
     if ((avatar ?? '').trim().isNotEmpty &&
         avatar?.trim() != conv.otherUserAvatar?.trim()) {
       unawaited(
@@ -1503,7 +1565,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
               ownerUserId: _currentUserId,
               wrytteUserId: profileUid,
               phone: profile.phone.isNotEmpty ? profile.phone : phone,
-              avatarUrl: avatar,
+              avatarUrl:
+                  profile.moduleProfileLoaded ? (avatar ?? '') : avatar,
               bio: profile.bio,
             );
     if (refreshedSavedContact != null) {
@@ -1541,16 +1604,21 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           'bio=${profile?.bio.trim().isNotEmpty == true}',
     );
 
-    if (resolvedName.trim().isNotEmpty || (avatar ?? '').trim().isNotEmpty) {
+    if (resolvedName.trim().isNotEmpty ||
+        (avatar ?? '').trim().isNotEmpty ||
+        profile?.moduleProfileLoaded == true) {
       await ChatLocalDb.instance.updateConversationUserInfo(
         conversationId: conv.id,
         name: resolvedName.trim(),
         avatar: avatar,
         clearAvatar:
-            avatar == null &&
-            ContactAvatarSanitizer.sanitizeAvatarUrl(conv.otherUserAvatar) ==
-                null &&
-            (conv.otherUserAvatar?.trim().isNotEmpty ?? false),
+            (profile?.moduleProfileLoaded == true && avatar == null) ||
+                (avatar == null &&
+                    ContactAvatarSanitizer.sanitizeAvatarUrl(
+                          conv.otherUserAvatar,
+                        ) ==
+                        null &&
+                    (conv.otherUserAvatar?.trim().isNotEmpty ?? false)),
       );
       final identity = ContactIdentity(
         matrixUserId: profileUid,
@@ -1577,6 +1645,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                 : null,
         avatarUrl: avatar,
         bio: profile?.bio,
+        clearAvatar: profile?.moduleProfileLoaded == true && avatar == null,
+        clearBio: profile?.moduleProfileLoaded == true,
       );
     }
     return enriched;
@@ -1624,6 +1694,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       if (profile == null) {
         _matrixProfileCache[uid] = null;
         return null;
+      }
+      if (profile.moduleProfileLoaded) {
+        final result = (
+          profile.displayName.isEmpty ? null : profile.displayName,
+          profile.hasProfileImage ? profile.profileImage : null,
+        );
+        _matrixProfileCache[uid] = result;
+        return result;
       }
       final result = (
         profile.name,

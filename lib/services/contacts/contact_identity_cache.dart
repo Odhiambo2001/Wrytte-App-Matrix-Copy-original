@@ -73,6 +73,8 @@ class ContactIdentityCache {
     String? savedName,
     String? avatarUrl,
     String? bio,
+    bool clearAvatar = false,
+    bool clearBio = false,
   }) async {
     final owner = ownerUserId.trim();
     final mxid = _toMatrixUserId(matrixUserId);
@@ -80,14 +82,14 @@ class ContactIdentityCache {
 
     final identities = await loadAll(ownerUserId: owner);
     final existing = identities[_identityKey(mxid)];
-    identities[_identityKey(
-      mxid,
-    )] = (existing ?? ContactIdentity(matrixUserId: mxid)).copyWith(
-      phone: _normalizedPhone(phone) ?? existing?.phone,
-      profileName: _clean(profileName) ?? existing?.profileName,
-      savedName: _clean(savedName) ?? existing?.savedName,
-      avatarUrl: _clean(avatarUrl) ?? existing?.avatarUrl,
-      bio: _cleanBio(bio) ?? existing?.bio,
+    final previous = existing ?? ContactIdentity(matrixUserId: mxid);
+    identities[_identityKey(mxid)] = ContactIdentity(
+      matrixUserId: mxid,
+      phone: _normalizedPhone(phone) ?? previous.phone,
+      profileName: _clean(profileName) ?? previous.profileName,
+      savedName: _clean(savedName) ?? previous.savedName,
+      avatarUrl: clearAvatar ? null : _clean(avatarUrl) ?? previous.avatarUrl,
+      bio: clearBio ? null : _cleanBio(bio) ?? previous.bio,
     );
     await _saveAll(ownerUserId: owner, identities: identities);
   }

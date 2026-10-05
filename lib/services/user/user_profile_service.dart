@@ -11,6 +11,7 @@ import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_profile_service.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/user/user_profile_api_service.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
@@ -39,6 +40,7 @@ class UserProfileService {
   final Map<String, UserProfile> _publicProfileCache = {};
   final Map<String, Future<UserProfile?>> _publicProfileInFlight = {};
   final Map<String, DateTime> _publicProfileFetchedAt = {};
+  final Map<String, int> _publicProfileRevisions = {};
   final Set<String> _publicProfileMisses = {};
   Future<UserProfile?>? _loginProfileInFlight;
   DateTime? _currentProfileBackendFetchedAt;
@@ -49,6 +51,45 @@ class UserProfileService {
   bool _suppressBackendProfileReads = false;
   final StreamController<UserProfile?> _profileController =
       StreamController<UserProfile?>.broadcast();
+  final StreamController<String> _publicProfileUpdateController =
+      StreamController<String>.broadcast();
+
+  UserProfileService._() {
+    MatrixClientService.instance.profileUpdateStream.listen(
+      _handlePublicProfileUpdated,
+    );
+    for (final userId
+        in MatrixClientService.instance.takePendingProfileUpdates()) {
+      _handlePublicProfileUpdated(userId);
+    }
+  }
+
+  Stream<String> get publicProfileUpdateStream =>
+      _publicProfileUpdateController.stream;
+
+  void _handlePublicProfileUpdated(String userId) {
+    final localpart = _matrixLocalpart(userId).toLowerCase();
+    if (localpart.isEmpty) return;
+    _publicProfileRevisions.update(
+      localpart,
+      (revision) => revision + 1,
+      ifAbsent: () => 1,
+    );
+    _publicProfileCache.removeWhere(
+      (key, _) => _profileCacheLocalpart(key) == localpart,
+    );
+    _publicProfileFetchedAt.removeWhere(
+      (key, _) => _profileCacheLocalpart(key) == localpart,
+    );
+    _publicProfileMisses.removeWhere(
+      (key) => _profileCacheLocalpart(key) == localpart,
+    );
+    _publicProfileUpdateController.add(userId);
+    debugPrint('[UserProfileService] invalidated public profile user_id="$userId"');
+  }
+
+  String _profileCacheLocalpart(String cacheKey) =>
+      cacheKey.split('|').first.toLowerCase();
 
   // ─────────────────────────────────────────────────────────────────────────
   // PUBLIC API
@@ -357,11 +398,13 @@ class UserProfileService {
       );
       return null;
     }
+
     final currentUid = await AuthService.instance.getCurrentUserId();
 
     // If it's the current user, use the full local profile
     if (currentUid != null &&
-        _matrixLocalpart(currentUid) == _matrixLocalpart(uid)) {
+        _matrixLocalpart(currentUid).toLowerCase() ==
+            _matrixLocalpart(uid).toLowerCase()) {
       return getCurrentUserProfile(forceRefresh: true);
     }
 
@@ -394,12 +437,18 @@ class UserProfileService {
   }) async {
     final generation = _sessionGeneration;
     final cacheKey = _publicProfileCacheKey(uid, phone);
+    final localpart = _matrixLocalpart(uid).toLowerCase();
+    final profileRevision = _publicProfileRevisions[localpart] ?? 0;
     final remote = await _readPublicBackendProfileBestEffort(uid, phone: phone);
     if (generation != _sessionGeneration) return null;
-    if (remote.isEmpty) {
-      final fallback = _fallbackPublicProfile(uid, phone: phone);
-      _publicProfileCache[cacheKey] = fallback;
-      return fallback;
+    if ((_publicProfileRevisions[localpart] ?? 0) != profileRevision) {
+      return _getProfileByUidRemote(uid, phone: phone);
+    }
+    if (remote == null) {
+      // A network/module failure is not a successful empty profile. Keep
+      // existing UI/cache values and allow a later retry instead of clearing
+      // identity fields on transient errors.
+      return null;
     }
     if (!_matchesRequestedPublicProfile(remote, uid: uid, phone: phone)) {
       debugPrint(
@@ -437,6 +486,7 @@ class UserProfileService {
     _publicProfileCache.clear();
     _publicProfileInFlight.clear();
     _publicProfileFetchedAt.clear();
+    _publicProfileRevisions.clear();
     _publicProfileMisses.clear();
     _loginProfileInFlight = null;
     _currentProfileBackendFetchedAt = null;
@@ -912,13 +962,19 @@ class UserProfileService {
           firstName,
           lastName,
         ].where((part) => part.trim().isNotEmpty).join(' ').trim();
-    final displayName =
+    final moduleDisplayName =
         _field(fields, 'DisplayName') ??
         _field(fields, 'displayName') ??
         _field(fields, 'Name') ??
         _field(fields, 'name') ??
         _field(fields, 'Username') ??
         joinedName;
+    final displayName =
+        moduleDisplayName.trim().isNotEmpty
+            ? moduleDisplayName
+            : (_field(fields, 'displayname') ?? '').trim().isNotEmpty
+            ? _field(fields, 'displayname') ?? ''
+            : joinedName;
     final avatar =
         _field(fields, 'AvatarImg') ??
         _field(fields, 'avatarImg') ??
@@ -956,6 +1012,7 @@ class UserProfileService {
       groupAlias: _field(fields, 'GroupAlias') ?? '',
       visibilitySettings: visibilitySettings,
       avatarVersion: _avatarVersionFromFields(fields),
+      moduleProfileLoaded: true,
       links:
           [
                 _field(fields, 'Link'),
@@ -972,6 +1029,7 @@ class UserProfileService {
   UserProfile _reuseStablePublicAvatar(String cacheKey, UserProfile fresh) {
     final cached = _publicProfileCache[cacheKey];
     if (cached == null) return fresh;
+    if (fresh.moduleProfileLoaded) return fresh;
 
     final freshAvatar = fresh.profileImage.trim();
     final cachedAvatar = cached.profileImage.trim();
@@ -1092,6 +1150,7 @@ class UserProfileService {
       if (uid == null || uid.trim().isEmpty) return const {};
       return _moduleProfileFields(
         await MatrixProfileService.instance.getProfile(uid),
+        ownerRead: true,
       );
     } catch (e) {
       debugPrint('[UserProfileService] Module profile get skipped: $e');
@@ -1114,7 +1173,7 @@ class UserProfileService {
     }
   }
 
-  Future<Map<String, String>> _readPublicBackendProfileBestEffort(
+  Future<Map<String, String>?> _readPublicBackendProfileBestEffort(
     String uid, {
     String? phone,
   }) async {
@@ -1125,7 +1184,7 @@ class UserProfileService {
       );
     } catch (e) {
       debugPrint('[UserProfileService] Public Module profile get skipped: $e');
-      return const {};
+      return null;
     }
   }
 
@@ -1239,6 +1298,7 @@ class UserProfileService {
   Map<String, String> _moduleProfileFields(
     WrytteProfile profile, {
     String? fallbackUid,
+    bool ownerRead = false,
   }) {
     final raw = profile.fields;
     final result = <String, String>{
@@ -1259,14 +1319,13 @@ class UserProfileService {
     copy(WrytteProfile.link, 'Link');
     copy(WrytteProfile.channelAlias, 'ChannelAlias');
     copy(WrytteProfile.groupAlias, 'GroupAlias');
-    result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
-    copy('displayname', 'DisplayName');
+    if (ownerRead) copy('displayname', 'DisplayName');
     copy('presence', 'Presence');
-    result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
     final matrixAvatar = raw['avatar_url']?.toString().trim() ?? '';
-    if (result['AvatarImg'] == null && matrixAvatar.isNotEmpty) {
+    if (ownerRead && result['AvatarImg'] == null && matrixAvatar.isNotEmpty) {
       result['AvatarImg'] = matrixAvatar;
     }
+    result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
     return result;
   }
 }
