@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
-import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/face/biometric_prewarm_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
@@ -28,7 +27,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final TextEditingController _linkController = TextEditingController();
   final TextEditingController _channelAliasController = TextEditingController();
   final TextEditingController _groupAliasController = TextEditingController();
-  final Map<String, String> _visibilitySettings = {};
 
   bool _isLoading = false;
   bool _isSaving = false;
@@ -84,20 +82,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _linkController.text = profile.links.isNotEmpty ? profile.links[0] : '';
     _channelAliasController.text = profile.channelAlias;
     _groupAliasController.text = profile.groupAlias;
-    _visibilitySettings
-      ..clear()
-      ..addAll(profile.visibilitySettings);
-    for (final field in const [
-      WrytteProfile.avatarImageUrl,
-      WrytteProfile.bio,
-      WrytteProfile.link,
-      WrytteProfile.onlineStatus,
-    ]) {
-      _visibilitySettings.putIfAbsent(field, () => 'everyone');
-    }
-    _visibilitySettings.putIfAbsent(WrytteProfile.phoneNumber, () => 'everyone');
-    _visibilitySettings.putIfAbsent(WrytteProfile.channelAlias, () => 'everyone');
-    _visibilitySettings.putIfAbsent(WrytteProfile.groupAlias, () => 'everyone');
     _currentImageUrl = profile.hasProfileImage ? profile.profileImage : null;
     _currentLocalImagePath =
         profile.localProfileImagePath.trim().isNotEmpty
@@ -203,7 +187,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         links: existingLinks,
         channelAlias: _channelAliasController.text.trim(),
         groupAlias: _groupAliasController.text.trim(),
-        visibilitySettings: Map<String, String>.from(_visibilitySettings),
       );
       final refreshedProfile = await UserProfileService.instance
           .getCurrentUserProfile(forceRefresh: true);
@@ -305,50 +288,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           horizontal: 16,
           vertical: 16,
         ),
-      ),
-    );
-  }
-
-  Widget _visibilityRow(String label, String field) {
-    const options = <String, String>{
-      'everyone': 'Everyone',
-      'contacts': 'Contacts',
-      'approved_users': 'Approved users',
-      'nobody': 'Nobody',
-    };
-    final value = _visibilitySettings[field] ?? 'everyone';
-    return Container(
-      margin: const EdgeInsets.only(top: 6, bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFF23262C),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              '$label visibility',
-              style: const TextStyle(color: Color(0xFFB9BBC1), fontSize: 14),
-            ),
-          ),
-          DropdownButton<String>(
-            value: options.containsKey(value) ? value : 'everyone',
-            dropdownColor: const Color(0xFF23262C),
-            underline: const SizedBox.shrink(),
-            style: const TextStyle(color: Colors.white, fontSize: 14),
-            items: options.entries
-                .map((entry) => DropdownMenuItem<String>(
-                      value: entry.key,
-                      child: Text(entry.value),
-                    ))
-                .toList(),
-            onChanged: (next) {
-              if (next == null) return;
-              setState(() => _visibilitySettings[field] = next);
-            },
-          ),
-        ],
       ),
     );
   }
@@ -467,7 +406,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                           style: TextStyle(color: accent, fontSize: 16),
                         ),
                       ),
-                      _visibilityRow('Avatar photo', WrytteProfile.avatarImageUrl),
                       const SizedBox(height: 28),
 
                       // Name
@@ -494,7 +432,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         ),
                         child: _inputRow('Bio', _bioController),
                       ),
-                      _visibilityRow('Bio', WrytteProfile.bio),
                       const SizedBox(height: 12),
 
                       // Link
@@ -505,7 +442,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         ),
                         child: _inputRow('Link', _linkController),
                       ),
-                      _visibilityRow('Link', WrytteProfile.link),
                       const SizedBox(height: 12),
 
                       Container(
@@ -521,9 +457,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                           ],
                         ),
                       ),
-                      _visibilityRow('Channel alias', WrytteProfile.channelAlias),
-                      _visibilityRow('Group alias', WrytteProfile.groupAlias),
-                      _visibilityRow('Online status', WrytteProfile.onlineStatus),
                       const SizedBox(height: 12),
 
                       // Account info
@@ -567,7 +500,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                 ],
                               ),
                             ),
-                            _visibilityRow('Phone number', WrytteProfile.phoneNumber),
                             _divider(),
                           ],
                         ),
