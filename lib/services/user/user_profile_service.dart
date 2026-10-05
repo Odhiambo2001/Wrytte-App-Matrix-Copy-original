@@ -225,21 +225,34 @@ class UserProfileService {
     try {
       final uploadedPath = await UserProfileApiService.instance
           .uploadAvatarImage(File(localPath));
-      final avatarVersion = await _nextModuleAvatarVersion(uid);
-      final avatarUrl = _withAvatarFetchVersion(
+      final requestedAvatarVersion = await _nextModuleAvatarVersion(uid);
+      final requestedAvatarUrl = _withAvatarFetchVersion(
         _resolveAvatarUrl(uploadedPath),
+        uid,
+        requestedAvatarVersion,
+      );
+      if (requestedAvatarUrl.isEmpty) {
+        throw Exception('Avatar upload completed without an image URL.');
+      }
+      await MatrixProfileService.instance.setAvatarImageAndVersion(
+        uid,
+        url: requestedAvatarUrl,
+        version: requestedAvatarVersion,
+      );
+      final savedAvatar = await MatrixProfileService.instance.getProfile(uid);
+      final avatarVersion =
+          int.tryParse(
+            savedAvatar[WrytteProfile.avatarVersion]?.trim() ?? '',
+          ) ??
+          requestedAvatarVersion;
+      final avatarUrl = _withAvatarFetchVersion(
+        _resolveAvatarUrl(
+          savedAvatar[WrytteProfile.avatarImageUrl] ?? requestedAvatarUrl,
+        ),
         uid,
         avatarVersion,
       );
-      if (avatarUrl.isEmpty) {
-        throw Exception('Avatar upload completed without an image URL.');
-      }
       await _storage.write(key: _profileImageKey, value: avatarUrl);
-      await MatrixProfileService.instance.setAvatarImageAndVersion(
-        uid,
-        url: avatarUrl,
-        version: avatarVersion,
-      );
       await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
       _cache = null;
@@ -963,19 +976,32 @@ class UserProfileService {
       _lastPendingAvatarAttemptAt = DateTime.now();
       final uploadedPath = await UserProfileApiService.instance
           .uploadAvatarImage(file);
-      final avatarVersion = await _nextModuleAvatarVersion(uid);
-      final avatarUrl = _withAvatarFetchVersion(
+      final requestedAvatarVersion = await _nextModuleAvatarVersion(uid);
+      final requestedAvatarUrl = _withAvatarFetchVersion(
         _resolveAvatarUrl(uploadedPath),
+        uid,
+        requestedAvatarVersion,
+      );
+      if (requestedAvatarUrl.isEmpty) return false;
+      await MatrixProfileService.instance.setAvatarImageAndVersion(
+        uid,
+        url: requestedAvatarUrl,
+        version: requestedAvatarVersion,
+      );
+      final savedAvatar = await MatrixProfileService.instance.getProfile(uid);
+      final avatarVersion =
+          int.tryParse(
+            savedAvatar[WrytteProfile.avatarVersion]?.trim() ?? '',
+          ) ??
+          requestedAvatarVersion;
+      final avatarUrl = _withAvatarFetchVersion(
+        _resolveAvatarUrl(
+          savedAvatar[WrytteProfile.avatarImageUrl] ?? requestedAvatarUrl,
+        ),
         uid,
         avatarVersion,
       );
-      if (avatarUrl.isEmpty) return false;
       await _storage.write(key: _profileImageKey, value: avatarUrl);
-      await MatrixProfileService.instance.setAvatarImageAndVersion(
-        uid,
-        url: avatarUrl,
-        version: avatarVersion,
-      );
       await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
       return true;

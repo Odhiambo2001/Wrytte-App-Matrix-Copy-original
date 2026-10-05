@@ -178,6 +178,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           _matrixLocalpart(profileUid)?.toLowerCase() == changedLocalpart;
     });
     if (hasConversation) {
+      apkLog(
+        'Profile.realtime',
+        'event_received user_id="$changedLocalpart" '
+            'matching_conversations=true',
+      );
       final matching = _conversations.where((conversation) {
         final uid = _profileUidForConversation(conversation);
         return uid != null &&
@@ -190,8 +195,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Future<void> _refreshConversationProfile(ChatConversation conversation) async {
-    final refreshed = await _enrichConversationFromPublicProfile(conversation);
+    final refreshed = await _enrichConversationFromPublicProfile(
+      conversation,
+      forceRefresh: true,
+    );
     if (!mounted) return;
+    apkLog(
+      'Profile.realtime',
+      'row_refreshed conversation_id="${conversation.id}" '
+          'avatar_present=${refreshed.otherUserAvatar?.trim().isNotEmpty == true}',
+    );
     setState(() {
       _conversations = [
         for (final current in _conversations)
@@ -1495,8 +1508,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Future<ChatConversation> _enrichConversationFromPublicProfile(
-    ChatConversation conv,
-  ) async {
+    ChatConversation conv, {
+    bool forceRefresh = false,
+  }) async {
     if (_isGroupConversation(conv)) return conv;
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final profileUid =
@@ -1511,7 +1525,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final profile = await UserProfileService.instance.getProfileByUid(
       profileUid,
       phone: fallbackPhone,
-      forceRefresh: false,
+      forceRefresh: forceRefresh,
     );
     final matrixProfile = profile?.moduleProfileLoaded == true
         ? null

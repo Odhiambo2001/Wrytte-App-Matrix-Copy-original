@@ -63,6 +63,7 @@ class MatrixProfileService {
       debugPrint(
         '[ModuleProfile.GET] parsed user_id="$userId" '
         'field_keys=${fields.keys.toList()} '
+        'avatar_version=${fields[WrytteProfile.avatarVersion] ?? "missing"} '
         'has_display_name=${fields['displayname']?.toString().trim().isNotEmpty == true} '
         'has_matrix_avatar=${fields['avatar_url']?.toString().trim().isNotEmpty == true} '
         'has_custom_avatar=${fields[WrytteProfile.avatarImageUrl]?.toString().trim().isNotEmpty == true} '
@@ -177,13 +178,37 @@ class MatrixProfileService {
     String userId, {
     required String url,
     required int version,
-  }) =>
-      _patch(userId, {
+  }) async {
+    final response = await http.patch(
+      _profileUri(userId),
+      headers: await _authHeaders(),
+      body: jsonEncode({
         'fields': {
           WrytteProfile.avatarImageUrl: url,
           WrytteProfile.avatarVersion: version.toString(),
         },
-      });
+      }),
+    );
+    _check(response);
+    final decoded = jsonDecode(response.body);
+    final fields =
+        decoded is Map && decoded['fields'] is Map
+            ? Map<String, dynamic>.from(decoded['fields'] as Map)
+            : <String, dynamic>{};
+    final savedUrl = fields[WrytteProfile.avatarImageUrl]?.toString().trim();
+    final savedVersion = int.tryParse(
+      fields[WrytteProfile.avatarVersion]?.toString().trim() ?? '',
+    );
+    if (savedUrl == null || savedUrl.isEmpty || savedVersion == null) {
+      throw StateError(
+        'Module API did not return the saved avatar URL and version.',
+      );
+    }
+    debugPrint(
+      '[ModuleProfile.avatar] saved user_id="$userId" '
+      'version=$savedVersion',
+    );
+  }
 
   Future<void> setAvatarVersion(String userId, int version) =>
       setField(userId, WrytteProfile.avatarVersion, version.toString());
