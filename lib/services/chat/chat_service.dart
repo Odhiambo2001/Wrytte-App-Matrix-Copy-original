@@ -1235,7 +1235,8 @@ class ChatService {
       final file = mx.MatrixAudioFile(
         bytes: bytes,
         name: p.basename(filePath),
-        mimeType: 'audio/mpeg',
+        // MessageInputField records AAC ADTS data to a `.aac` file.
+        mimeType: 'audio/aac',
         duration: durationSeconds * 1000,
       );
       final eventId = await room.sendAudioEvent(

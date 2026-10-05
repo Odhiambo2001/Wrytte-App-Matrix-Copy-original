@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 
 class AttachmentLocalCopy {
   final File file;
@@ -154,17 +155,19 @@ class AttachmentLocalStore {
 
     final client = http.Client();
     try {
+      final sourceUri = Uri.parse(cleanSource);
+      final headers = _matrixMediaHeaders(sourceUri);
       int? totalBytes;
       try {
         final head = await client
-            .head(Uri.parse(cleanSource))
+            .head(sourceUri, headers: headers)
             .timeout(const Duration(seconds: 15));
         totalBytes = int.tryParse(head.headers['content-length'] ?? '');
       } catch (_) {}
 
       final shouldPartial =
           allowPartial && totalBytes != null && totalBytes > initialFileBytes;
-      final request = http.Request('GET', Uri.parse(cleanSource));
+      final request = http.Request('GET', sourceUri)..headers.addAll(headers);
       if (shouldPartial) {
         request.headers['Range'] = 'bytes=0-${initialFileBytes - 1}';
       }
@@ -226,6 +229,21 @@ class AttachmentLocalStore {
     } finally {
       client.close();
     }
+  }
+
+  /// Synapse may require authentication for media downloads. Never send the
+  /// Matrix access token to another host (for example the Wrytte API host).
+  Map<String, String> _matrixMediaHeaders(Uri uri) {
+    final matrix = MatrixClientService.instance;
+    if (!matrix.isInitialized || !matrix.isLoggedIn) return const {};
+
+    final client = matrix.client;
+    final homeserver = client.homeserver;
+    final token = client.accessToken?.trim() ?? '';
+    if (homeserver == null || uri.origin != homeserver.origin || token.isEmpty) {
+      return const {};
+    }
+    return {'Authorization': 'Bearer $token'};
   }
 
   Future<File> _targetFile(String source, String fileName) async {
