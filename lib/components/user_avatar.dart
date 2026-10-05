@@ -341,12 +341,14 @@ class _UserAvatarState extends State<UserAvatar> {
     if (uri.host.isEmpty || mediaId.isEmpty) return '';
     final homeserver = Uri.tryParse(MatrixConfig.homeserver);
     if (homeserver == null || !homeserver.hasScheme) return '';
-    return homeserver
-        .resolve(
+    final downloadUri = homeserver.resolve(
           '/_matrix/client/v1/media/download/'
           '${Uri.encodeComponent(uri.host)}/'
           '${Uri.encodeComponent(mediaId)}',
-        )
+        );
+    final version = uri.queryParameters['v'];
+    return downloadUri
+        .replace(queryParameters: version == null ? null : {'v': version})
         .toString();
   }
 

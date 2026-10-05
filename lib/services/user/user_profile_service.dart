@@ -57,6 +57,7 @@ class UserProfileService {
   String? _activeAccountUid;
   bool _logoutInProgress = false;
   static const _currentProfileFreshness = Duration(minutes: 5);
+  static const _publicProfileFreshness = Duration(seconds: 30);
   bool _suppressBackendProfileReads = false;
   final StreamController<UserProfile?> _profileController =
       StreamController<UserProfile?>.broadcast();
@@ -84,9 +85,22 @@ class UserProfileService {
       (key) => _profileCacheLocalpart(key) == localpart,
     );
     _publicProfileUpdateController.add(userId);
+    unawaited(_refreshOwnerProfileIfChanged(userId));
     debugPrint(
       '[UserProfileService] invalidated public profile user_id="$userId"',
     );
+  }
+
+  Future<void> _refreshOwnerProfileIfChanged(String userId) async {
+    final currentUserId = await AuthService.instance.getCurrentUserId();
+    if (currentUserId == null ||
+        _matrixLocalpart(currentUserId).toLowerCase() !=
+            _matrixLocalpart(userId).toLowerCase()) {
+      return;
+    }
+    _cache = null;
+    _currentProfileBackendFetchedAt = null;
+    await _refreshAndNotify(forceRefresh: true);
   }
 
   String _profileCacheLocalpart(String cacheKey) =>
@@ -178,7 +192,7 @@ class UserProfileService {
       'FirstName': parts.$1,
       'LastName': parts.$2,
       if (phone != null && phone.trim().isNotEmpty) 'Phone': phone.trim(),
-    }, create: true);
+    });
     debugPrint('[UserProfileService] Display name updated: "$trimmed"');
   }
 
@@ -190,7 +204,22 @@ class UserProfileService {
     );
     await _saveBackendProfileBestEffort({'AvatarImg': url.trim()});
     _cache = null;
-    await _refreshAndNotify();
+    await _refreshAndNotify(forceRefresh: true);
+  }
+
+  Future<void> deleteProfileImage() async {
+    final uid = await AuthService.instance.getCurrentUserId();
+    if (uid == null || uid.trim().isEmpty) {
+      throw StateError('Not authenticated.');
+    }
+    await MatrixProfileService.instance.deleteAvatar(uid);
+    await _storage.delete(key: _profileImageKey);
+    await _writeAvatarVersion(uid, 0);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_pendingProfileImageKey(uid));
+    _cache = null;
+    await _clearLocalAvatarCache(uid);
+    await _refreshAndNotify(forceRefresh: true);
   }
 
   /// Saves a newly selected avatar locally so profile surfaces can display it
@@ -227,24 +256,21 @@ class UserProfileService {
 
     try {
       final uploadedPath = await _uploadAvatarToMatrix(File(localPath));
-      final requestedAvatarVersion = await _nextModuleAvatarVersion(uid);
       final requestedAvatarUrl = uploadedPath;
       if (requestedAvatarUrl.isEmpty) {
-        throw Exception('Matrix avatar upload returned an invalid MXC URI.');
+        throw Exception('Avatar upload returned an empty URL.');
       }
-      await MatrixProfileService.instance.setAvatarImageAndVersion(
+      final currentAvatar = await MatrixProfileService.instance.getProfile(uid);
+      final avatarVersion = await MatrixProfileService.instance.setAvatarImageAndVersion(
         uid,
         mxcUrl: requestedAvatarUrl,
-        version: requestedAvatarVersion,
+        create: currentAvatar.avatarUrl?.trim().isNotEmpty != true,
       );
       final savedAvatar = await MatrixProfileService.instance.getProfile(uid);
-      final avatarVersion =
-          int.tryParse(
-            savedAvatar[WrytteProfile.avatarVersion]?.trim() ?? '',
-          ) ??
-          requestedAvatarVersion;
       final avatarUrl = _withAvatarFetchVersion(
-        savedAvatar['avatar_url'] ?? requestedAvatarUrl,
+        savedAvatar[WrytteProfile.avatarImageUrl]?.trim().isNotEmpty == true
+            ? savedAvatar[WrytteProfile.avatarImageUrl]!
+            : requestedAvatarUrl,
         uid,
         avatarVersion,
       );
@@ -435,7 +461,10 @@ class UserProfileService {
 
     if (!forceRefresh) {
       final cached = _publicProfileCache[cacheKey];
-      if (cached != null) {
+      final fetchedAt = _publicProfileFetchedAt[cacheKey];
+      if (cached != null &&
+          fetchedAt != null &&
+          DateTime.now().difference(fetchedAt) < _publicProfileFreshness) {
         debugPrint(
           '[UserProfileService] profile source=public_cache user_id="$requestedUid"',
         );
@@ -665,7 +694,7 @@ class UserProfileService {
             }
           }
           final remoteAvatar = _resolveAvatarUrl(
-            _field(remote, 'AvatarImg') ?? profileImage,
+            _field(remote, 'AvatarImg') ?? '',
           );
           if (remoteAvatar.isNotEmpty &&
               !_avatarUrlBelongsToUid(remoteAvatar, uid)) {
@@ -703,7 +732,20 @@ class UserProfileService {
           if (profileImage.isNotEmpty) {
             await _storage.write(key: _profileImageKey, value: profileImage);
             await _writeAvatarVersion(uid, avatarVersion);
+          } else {
+            await _storage.delete(key: _profileImageKey);
+            await _writeAvatarVersion(uid, 0);
+            final prefs = await SharedPreferences.getInstance();
+            final pendingPath =
+                prefs.getString(_pendingProfileImageKey(uid))?.trim() ?? '';
+            if (pendingPath.isNotEmpty && File(pendingPath).existsSync()) {
+              localProfileImagePath = pendingPath;
+            } else {
+              localProfileImagePath = '';
+              await _clearLocalAvatarCache(uid);
+            }
           }
+          _currentProfileBackendFetchedAt = DateTime.now();
         }
       }
       if (!_hasRealName(name) && !ignoreStoredProfile) {
@@ -795,6 +837,7 @@ class UserProfileService {
   /// `/usrimg/<user-id>/avatar_img.jpg`). Never display an avatar whose path
   /// identifies another account, even if a stale response reaches this code.
   bool _avatarUrlBelongsToUid(String avatarUrl, String uid) {
+    if (avatarUrl.trim().startsWith('mxc://')) return true;
     final owner = _matrixLocalpart(uid).toLowerCase();
     final path =
         Uri.tryParse(avatarUrl)?.path.toLowerCase() ??
@@ -946,6 +989,20 @@ class UserProfileService {
     return File(path).existsSync() ? path : '';
   }
 
+  Future<void> _clearLocalAvatarCache(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    final path = prefs.getString(_localProfileImageKey(uid))?.trim() ?? '';
+    await prefs.remove(_localProfileImageKey(uid));
+    if (path.isNotEmpty) {
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (error) {
+        debugPrint('[UserProfileService] local avatar cleanup skipped: $error');
+      }
+    }
+  }
+
   Future<String> _cacheProfileImageFile(String uid, File source) async {
     final supportDir = await getApplicationSupportDirectory();
     final avatarDir = Directory('${supportDir.path}/profile_avatars');
@@ -1008,22 +1065,20 @@ class UserProfileService {
     try {
       _lastPendingAvatarAttemptAt = DateTime.now();
       final uploadedPath = await _uploadAvatarToMatrix(file);
-      final requestedAvatarVersion = await _nextModuleAvatarVersion(uid);
       final requestedAvatarUrl = uploadedPath;
       if (requestedAvatarUrl.isEmpty) return false;
-      await MatrixProfileService.instance.setAvatarImageAndVersion(
+      final currentAvatar = await MatrixProfileService.instance.getProfile(uid);
+      final avatarVersion = await MatrixProfileService.instance
+          .setAvatarImageAndVersion(
         uid,
         mxcUrl: requestedAvatarUrl,
-        version: requestedAvatarVersion,
+        create: currentAvatar.avatarUrl?.trim().isNotEmpty != true,
       );
       final savedAvatar = await MatrixProfileService.instance.getProfile(uid);
-      final avatarVersion =
-          int.tryParse(
-            savedAvatar[WrytteProfile.avatarVersion]?.trim() ?? '',
-          ) ??
-          requestedAvatarVersion;
       final avatarUrl = _withAvatarFetchVersion(
-        savedAvatar['avatar_url'] ?? requestedAvatarUrl,
+        savedAvatar[WrytteProfile.avatarImageUrl]?.trim().isNotEmpty == true
+            ? savedAvatar[WrytteProfile.avatarImageUrl]!
+            : requestedAvatarUrl,
         uid,
         avatarVersion,
       );
@@ -1158,7 +1213,15 @@ class UserProfileService {
 
   String _withAvatarFetchVersion(String url, String userId, int avatarVersion) {
     final trimmed = url.trim();
-    if (trimmed.isEmpty || trimmed.startsWith('mxc://')) return trimmed;
+    if (trimmed.isEmpty) return trimmed;
+    if (trimmed.startsWith('mxc://')) {
+      final uri = Uri.tryParse(trimmed);
+      if (uri == null) return trimmed;
+      return uri.replace(queryParameters: {
+        ...uri.queryParameters,
+        'v': '${_matrixLocalpart(userId).toLowerCase()}-$avatarVersion',
+      }).toString();
+    }
     final uri = Uri.tryParse(trimmed);
     if (uri == null || !uri.hasScheme) return trimmed;
     // A fetch timestamp is not an avatar version. Using it here changed the
@@ -1290,7 +1353,6 @@ class UserProfileService {
       final moduleFields = <String, dynamic>{};
       final visibility = <String, String>{};
       String? displayName;
-      int? avatarVersion;
       for (final entry in fields.entries) {
         switch (entry.key.toLowerCase()) {
           case 'firstname':
@@ -1332,9 +1394,6 @@ class UserProfileService {
           case 'profileimage':
             moduleFields[WrytteProfile.avatarImageUrl] = entry.value;
             break;
-          case 'avatarversion':
-            avatarVersion = int.tryParse(entry.value);
-            break;
           case 'displayname':
             displayName = entry.value;
             break;
@@ -1346,7 +1405,6 @@ class UserProfileService {
           uid,
           fields: moduleFields,
           visibility: visibility,
-          displayName: displayName,
         );
       } else {
         await MatrixProfileService.instance.updateOwnerProfile(
@@ -1363,23 +1421,10 @@ class UserProfileService {
           avatarUrl: moduleFields[WrytteProfile.avatarImageUrl]?.toString(),
         );
       }
-      if (avatarVersion != null) {
-        await MatrixProfileService.instance.setAvatarVersion(
-          uid,
-          avatarVersion,
-        );
-      }
     } catch (e) {
       debugPrint('[UserProfileService] Module profile save skipped: $e');
       rethrow;
     }
-  }
-
-  Future<int> _nextModuleAvatarVersion(String uid) async {
-    final profile = await MatrixProfileService.instance.getProfile(uid);
-    final current =
-        int.tryParse(profile[WrytteProfile.avatarVersion]?.trim() ?? '') ?? 0;
-    return current + 1;
   }
 
   Map<String, String> _moduleProfileFields(
@@ -1408,16 +1453,12 @@ class UserProfileService {
     copy(WrytteProfile.groupAlias, 'GroupAlias');
     if (ownerRead) copy('displayname', 'DisplayName');
     copy('presence', 'Presence');
-    final matrixAvatar = raw['avatar_url']?.toString().trim() ?? '';
-    // The Module API has already applied the owner's avatar visibility rule.
-    // Use its standard Matrix avatar for public profiles as well as owner reads.
-    if (matrixAvatar.isNotEmpty) result['AvatarImg'] = matrixAvatar;
     result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
     debugPrint(
       '[ModuleProfile.map] user_id="${fallbackUid ?? profile.userId}" '
       'owner_read=$ownerRead '
       'custom_avatar_present=${raw[WrytteProfile.avatarImageUrl]?.toString().trim().isNotEmpty == true} '
-      'matrix_avatar_present=${matrixAvatar.isNotEmpty} '
+      'matrix_avatar_present=false '
       'avatar_returned=${result['AvatarImg']?.trim().isNotEmpty == true} '
       'bio_present=${raw[WrytteProfile.bio]?.toString().trim().isNotEmpty == true} '
       'bio_returned=${result['Bio']?.trim().isNotEmpty == true}',

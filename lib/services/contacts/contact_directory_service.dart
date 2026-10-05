@@ -190,14 +190,9 @@ class ContactDirectoryService {
       displayName: _stringValue(
         raw['displayName'] ?? raw['name'] ?? raw['username'],
       ),
-      avatarUrl: _resolveAvatarUrl(
-        _stringValue(
-          raw['AvatarImg'] ??
-              raw['avatarImg'] ??
-              raw['avatarUrl'] ??
-              raw['avatar_url'],
-        ),
-      ),
+      // Identity search resolves account membership only. Avatar visibility
+      // is enforced by the Matrix Wrytte Profile Module GET endpoint.
+      avatarUrl: null,
     );
   }
 
@@ -250,15 +245,6 @@ class ContactDirectoryService {
   String? _stringValue(Object? value) {
     final string = value?.toString().trim();
     return string == null || string.isEmpty ? null : string;
-  }
-
-  String? _resolveAvatarUrl(String? raw) {
-    final trimmed = raw?.trim() ?? '';
-    if (trimmed.isEmpty) return null;
-    final uri = Uri.tryParse(trimmed);
-    if (uri != null && uri.hasScheme) return trimmed;
-    if (trimmed.startsWith('/')) return '${ApiService.baseUrl}$trimmed';
-    return '${ApiService.baseUrl}/$trimmed';
   }
 
   bool _hasUsableBackendToken(String? token) {

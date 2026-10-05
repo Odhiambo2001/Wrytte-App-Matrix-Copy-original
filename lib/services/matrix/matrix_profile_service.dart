@@ -62,7 +62,9 @@ class MatrixProfileService {
           decoded['visibility'] as Map,
         );
       }
-      for (final key in const ['displayname', 'avatar_url', 'presence']) {
+      // The Module's displayname is composed only from fields the requester
+      // may see; this is not Matrix's globally visible displayname field.
+      for (final key in const ['displayname', 'presence']) {
         if (decoded[key] != null) fields[key] = decoded[key];
       }
       debugPrint(
@@ -70,7 +72,6 @@ class MatrixProfileService {
         'field_keys=${fields.keys.toList()} '
         'avatar_version=${fields[WrytteProfile.avatarVersion] ?? "missing"} '
         'has_display_name=${fields['displayname']?.toString().trim().isNotEmpty == true} '
-        'has_matrix_avatar=${fields['avatar_url']?.toString().trim().isNotEmpty == true} '
         'has_custom_avatar=${fields[WrytteProfile.avatarImageUrl]?.toString().trim().isNotEmpty == true} '
         'has_bio=${fields[WrytteProfile.bio]?.toString().trim().isNotEmpty == true}',
       );
@@ -99,11 +100,9 @@ class MatrixProfileService {
     String userId, {
     Map<String, dynamic> fields = const {},
     Map<String, String> visibility = const {},
-    String? displayName,
   }) => _post(userId, {
     if (fields.isNotEmpty) 'fields': fields,
     if (visibility.isNotEmpty) 'visibility': visibility,
-    if (displayName != null) 'displayname': displayName,
   });
 
   Future<void> deleteField(String userId, String field) async {
@@ -143,6 +142,7 @@ class MatrixProfileService {
   }) async {
     final fields = <String, dynamic>{};
     final removeFields = <String>[];
+    final nameParts = _splitName(displayName);
     void add(String field, String? value) {
       if (value == null) return;
       final clean = value.trim();
@@ -153,19 +153,24 @@ class MatrixProfileService {
       }
     }
 
-    add(WrytteProfile.firstName, firstName);
-    add(WrytteProfile.lastName, lastName);
+    add(WrytteProfile.firstName, firstName ?? nameParts?.$1);
+    add(WrytteProfile.lastName, lastName ?? nameParts?.$2);
     add(WrytteProfile.phoneNumber, phoneNumber);
     add(WrytteProfile.bio, bio);
     add(WrytteProfile.link, link);
     add(WrytteProfile.channelAlias, channelAlias);
     add(WrytteProfile.groupAlias, groupAlias);
 
+    if (avatarUrl != null) {
+      if (avatarUrl.trim().isEmpty) {
+        removeFields.add(WrytteProfile.avatarImageUrl);
+      } else {
+        fields[WrytteProfile.avatarImageUrl] = avatarUrl.trim();
+      }
+    }
     await _patch(userId, {
       if (fields.isNotEmpty) 'fields': fields,
       if (removeFields.isNotEmpty) 'remove_fields': removeFields,
-      if (displayName != null) 'displayname': displayName.trim(),
-      if (avatarUrl != null) 'avatar_url': avatarUrl.trim(),
       if (visibilitySettings != null) 'visibility': visibilitySettings,
     });
   }
@@ -174,71 +179,69 @@ class MatrixProfileService {
     return setAvatarImageUrl(userId, mxcUrl);
   }
 
-  Future<void> setAvatarImageUrl(String userId, String? url) =>
-      _patch(userId, {'avatar_url': url?.trim() ?? ''});
-
-  /// Saves Matrix's standard avatar_url and Wrytte's cache version. Synapse
-  /// automatically propagates standard avatar changes into joined rooms.
-  Future<void> setAvatarImageAndVersion(
-    String userId, {
-    required String mxcUrl,
-    required int version,
-  }) async {
-    final normalizedUserId =
-        userId.startsWith('@')
-            ? userId
-            : '@${userId.replaceFirst(RegExp(r'^@'), '')}:${MatrixConfig.serverName}';
-    if (!mxcUrl.startsWith('mxc://')) {
-      throw ArgumentError.value(
-        mxcUrl,
-        'mxcUrl',
-        'Expected a Matrix mxc:// URI.',
-      );
+  Future<void> setAvatarImageUrl(String userId, String? url) async {
+    final clean = url?.trim() ?? '';
+    if (clean.isEmpty) {
+      await deleteAvatar(userId);
+      return;
     }
-
-    final response = await http.patch(
-      _profileUri(userId),
-      headers: await _authHeaders(),
-      body: jsonEncode({
-        'avatar_url': mxcUrl,
-        'fields': {WrytteProfile.avatarVersion: version.toString()},
-      }),
-    );
-    _check(response);
-    final decoded = jsonDecode(response.body);
-    final fields =
-        decoded is Map && decoded['fields'] is Map
-            ? Map<String, dynamic>.from(decoded['fields'] as Map)
-            : <String, dynamic>{};
-    final savedVersion = int.tryParse(
-      fields[WrytteProfile.avatarVersion]?.toString().trim() ?? '',
-    );
-    if (savedVersion == null) {
-      throw StateError('Module API did not return the saved avatar version.');
-    }
-    // Synapse returns only the standard profile fields from this GET. The
-    // Module response includes that same avatar_url when the write succeeds.
-    final actualAvatar =
-        decoded is Map ? decoded['avatar_url']?.toString() : null;
-    // Some Module deployments return only custom fields; verify via the
-    // standard Matrix endpoint in that case.
-    final confirmedAvatar =
-        actualAvatar ??
-        (await MatrixClientService.instance.client.getProfileField(
-          normalizedUserId,
-          'avatar_url',
-        ))['avatar_url']?.toString();
-    if (confirmedAvatar != mxcUrl) {
-      throw StateError('Matrix did not save the requested avatar_url.');
-    }
-    debugPrint(
-      '[ModuleProfile.avatar] saved user_id="$userId" '
-      'version=$savedVersion matrix_avatar=true',
+    final current = await getProfile(userId);
+    await setAvatarImageAndVersion(
+      userId,
+      mxcUrl: clean,
+      create: current.avatarUrl?.trim().isNotEmpty != true,
     );
   }
 
-  Future<void> setAvatarVersion(String userId, int version) =>
-      setField(userId, WrytteProfile.avatarVersion, version.toString());
+  /// Saves the custom Wrytte avatar field. The Module owns the version and
+  /// returns the versioned URL in its response; Matrix avatar_url is untouched.
+  Future<int> setAvatarImageAndVersion(
+    String userId, {
+    required String mxcUrl,
+    required bool create,
+  }) async {
+    final avatarUrl = mxcUrl.trim();
+    if (avatarUrl.isEmpty) {
+      throw ArgumentError.value(avatarUrl, 'mxcUrl', 'Avatar URL is empty.');
+    }
+    final body = {'fields': {WrytteProfile.avatarImageUrl: avatarUrl}};
+    final response = create
+        ? await http.post(
+          _profileUri(userId),
+          headers: await _authHeaders(),
+          body: jsonEncode(body),
+        )
+        : await http.patch(
+          _profileUri(userId),
+          headers: await _authHeaders(),
+          body: jsonEncode(body),
+        );
+    _check(response);
+    final fields = _fieldsFromResponse(response);
+    final savedVersion = int.tryParse(
+      fields[WrytteProfile.avatarVersion]?.toString().trim() ?? '',
+    );
+    if (savedVersion == null || savedVersion < 1) {
+      throw StateError('Module API did not return the saved avatar version.');
+    }
+    debugPrint(
+      '[ModuleProfile.avatar] saved user_id="$userId" '
+      'version=$savedVersion custom_avatar=true method=${create ? "POST" : "PATCH"}',
+    );
+    return savedVersion;
+  }
+
+  Future<void> replaceOwnerProfile(
+    String userId, {
+    required Map<String, dynamic> fields,
+    Map<String, String> visibility = const {},
+  }) => _put(userId, {
+    'fields': fields,
+    'visibility': visibility,
+  });
+
+  Future<void> deleteAvatar(String userId) =>
+      deleteField(userId, WrytteProfile.avatarImageUrl);
 
   Future<void> setOnlineVisibility(String userId, String value) =>
       setVisibility(userId, {WrytteProfile.onlineStatus: value});
@@ -247,12 +250,24 @@ class MatrixProfileService {
       _patch(userId, {'presence': online ? 'online' : 'offline'});
 
   Future<void> setDisplayName(String userId, String? value) async {
-    final response = await http.patch(
-      _profileUri(userId),
-      headers: await _authHeaders(),
-      body: jsonEncode({'displayname': value?.trim() ?? ''}),
-    );
-    _check(response);
+    final name = _splitName(value);
+    final fields = <String, dynamic>{};
+    final removeFields = <String>[];
+    for (final entry in <String, String?>{
+      WrytteProfile.firstName: name?.$1,
+      WrytteProfile.lastName: name?.$2,
+    }.entries) {
+      final value = entry.value?.trim() ?? '';
+      if (value.isEmpty) {
+        removeFields.add(entry.key);
+      } else {
+        fields[entry.key] = value;
+      }
+    }
+    await _patch(userId, {
+      if (fields.isNotEmpty) 'fields': fields,
+      if (removeFields.isNotEmpty) 'remove_fields': removeFields,
+    });
   }
 
   Future<void> setFirstName(String userId, String? value) =>
@@ -299,6 +314,29 @@ class MatrixProfileService {
       body: jsonEncode(body),
     );
     _check(response);
+  }
+
+  Future<void> _put(String userId, Map<String, dynamic> body) async {
+    final response = await http.put(
+      _profileUri(userId),
+      headers: await _authHeaders(),
+      body: jsonEncode(body),
+    );
+    _check(response);
+  }
+
+  Map<String, dynamic> _fieldsFromResponse(http.Response response) {
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map || decoded['fields'] is! Map) {
+      throw const FormatException('Module response omitted profile fields.');
+    }
+    return Map<String, dynamic>.from(decoded['fields'] as Map);
+  }
+
+  (String, String)? _splitName(String? value) {
+    final parts = (value ?? '').trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return null;
+    return (parts.first, parts.skip(1).join(' '));
   }
 
   void _check(http.Response response) {

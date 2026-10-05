@@ -101,7 +101,8 @@ class UserProfile {
 
   /// True only if profileImage is a non-empty valid URL
   bool get hasProfileImage =>
-      profileImage.isNotEmpty && profileImage.startsWith('http');
+      profileImage.isNotEmpty &&
+      (profileImage.startsWith('http') || profileImage.startsWith('mxc://'));
 
   bool get isOnline => onlineStatus.toLowerCase() == 'online';
 

@@ -61,6 +61,7 @@ class MatrixClientService {
   }
 
   void _captureGroupDeletionEvent(ToDeviceEvent event) {
+    _captureProfileUpdateToDeviceEvent(event);
     if (event.type != _groupDeletedToDeviceType) return;
     final roomId = event.content['room_id']?.toString().trim() ?? '';
     if (roomId.isEmpty) return;
@@ -69,6 +70,29 @@ class MatrixClientService {
     final key = '$roomId|$deletedAt';
     if (!_capturedGroupDeletionKeys.add(key)) return;
     _pendingGroupDeletionEvents.add(event);
+  }
+
+  void _captureProfileUpdateToDeviceEvent(ToDeviceEvent event) {
+    if (event.type != profileUpdatedEventType) return;
+    final ownerId = event.content['user_id']?.toString().trim() ?? '';
+    final senderId = event.senderId.trim();
+    if (ownerId.isEmpty ||
+        senderId.isEmpty ||
+        _profileUpdateLocalpart(ownerId) != _profileUpdateLocalpart(senderId)) {
+      return;
+    }
+    final revision = event.content['revision']?.toString().trim() ?? '';
+    final dedupeKey = revision.isNotEmpty
+        ? '$senderId|$revision'
+        : '$senderId|to-device|${event.content.hashCode}';
+    if (_capturedProfileUpdateEventIds.containsKey(dedupeKey)) return;
+    _capturedProfileUpdateEventIds[dedupeKey] =
+        _profileUpdateLocalpart(ownerId);
+    if (_profileUpdateController.hasListener) {
+      _profileUpdateController.add(ownerId);
+    } else {
+      _pendingProfileUpdates.add(ownerId);
+    }
   }
 
   void _startEarlyToDeviceCapture(Client client) {
@@ -98,10 +122,10 @@ class MatrixClientService {
         }
         final eventId = event.eventId;
         final revision = event.content['revision']?.toString() ?? '';
-        final dedupeKey = eventId.isNotEmpty
-            ? eventId
-            : revision.isNotEmpty
+        final dedupeKey = revision.isNotEmpty
             ? '${event.senderId}|$revision'
+            : eventId.isNotEmpty
+            ? eventId
             : '${event.senderId}|${room.hashCode}|${event.originServerTs.microsecondsSinceEpoch}';
         final ownerKey = _profileUpdateLocalpart(ownerId);
         if (_capturedProfileUpdateEventIds[dedupeKey] == ownerKey) continue;
