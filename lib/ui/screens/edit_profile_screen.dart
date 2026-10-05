@@ -96,8 +96,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       _visibilitySettings.putIfAbsent(field, () => 'everyone');
     }
     _visibilitySettings.putIfAbsent(WrytteProfile.phoneNumber, () => 'everyone');
-    _visibilitySettings.putIfAbsent(WrytteProfile.channelAlias, () => 'nobody');
-    _visibilitySettings.putIfAbsent(WrytteProfile.groupAlias, () => 'nobody');
+    _visibilitySettings.putIfAbsent(WrytteProfile.channelAlias, () => 'everyone');
+    _visibilitySettings.putIfAbsent(WrytteProfile.groupAlias, () => 'everyone');
     _currentImageUrl = profile.hasProfileImage ? profile.profileImage : null;
     _currentLocalImagePath =
         profile.localProfileImagePath.trim().isNotEmpty
