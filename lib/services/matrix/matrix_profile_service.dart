@@ -170,6 +170,21 @@ class MatrixProfileService {
   Future<void> setAvatarImageUrl(String userId, String? url) =>
       _setOrDelete(userId, WrytteProfile.avatarImageUrl, url);
 
+  /// Saves the avatar URL and cache version together. The Module API emits a
+  /// profile update after this PATCH, so clients never refresh against an
+  /// intermediate avatar URL/version pair.
+  Future<void> setAvatarImageAndVersion(
+    String userId, {
+    required String url,
+    required int version,
+  }) =>
+      _patch(userId, {
+        'fields': {
+          WrytteProfile.avatarImageUrl: url,
+          WrytteProfile.avatarVersion: version.toString(),
+        },
+      });
+
   Future<void> setAvatarVersion(String userId, int version) =>
       setField(userId, WrytteProfile.avatarVersion, version.toString());
 

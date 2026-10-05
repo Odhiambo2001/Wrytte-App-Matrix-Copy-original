@@ -225,7 +225,7 @@ class UserProfileService {
     try {
       final uploadedPath = await UserProfileApiService.instance
           .uploadAvatarImage(File(localPath));
-      final avatarVersion = await _incrementModuleAvatarVersion(uid);
+      final avatarVersion = await _nextModuleAvatarVersion(uid);
       final avatarUrl = _withAvatarFetchVersion(
         _resolveAvatarUrl(uploadedPath),
         uid,
@@ -235,7 +235,11 @@ class UserProfileService {
         throw Exception('Avatar upload completed without an image URL.');
       }
       await _storage.write(key: _profileImageKey, value: avatarUrl);
-      await MatrixProfileService.instance.setAvatarImageUrl(uid, avatarUrl);
+      await MatrixProfileService.instance.setAvatarImageAndVersion(
+        uid,
+        url: avatarUrl,
+        version: avatarVersion,
+      );
       await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
       _cache = null;
@@ -959,7 +963,7 @@ class UserProfileService {
       _lastPendingAvatarAttemptAt = DateTime.now();
       final uploadedPath = await UserProfileApiService.instance
           .uploadAvatarImage(file);
-      final avatarVersion = await _incrementModuleAvatarVersion(uid);
+      final avatarVersion = await _nextModuleAvatarVersion(uid);
       final avatarUrl = _withAvatarFetchVersion(
         _resolveAvatarUrl(uploadedPath),
         uid,
@@ -967,7 +971,11 @@ class UserProfileService {
       );
       if (avatarUrl.isEmpty) return false;
       await _storage.write(key: _profileImageKey, value: avatarUrl);
-      await MatrixProfileService.instance.setAvatarImageUrl(uid, avatarUrl);
+      await MatrixProfileService.instance.setAvatarImageAndVersion(
+        uid,
+        url: avatarUrl,
+        version: avatarVersion,
+      );
       await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
       return true;
@@ -1313,15 +1321,13 @@ class UserProfileService {
     }
   }
 
-  Future<int> _incrementModuleAvatarVersion(String uid) async {
+  Future<int> _nextModuleAvatarVersion(String uid) async {
     final profile = await MatrixProfileService.instance.getProfile(uid);
     final current = int.tryParse(
           profile[WrytteProfile.avatarVersion]?.trim() ?? '',
         ) ??
         0;
-    final next = current + 1;
-    await MatrixProfileService.instance.setAvatarVersion(uid, next);
-    return next;
+    return current + 1;
   }
 
   Map<String, String> _moduleProfileFields(
