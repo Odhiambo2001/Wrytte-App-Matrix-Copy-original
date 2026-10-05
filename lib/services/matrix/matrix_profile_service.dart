@@ -14,7 +14,12 @@ class MatrixProfileService {
   static final instance = MatrixProfileService._();
 
   Uri _profileUri(String userId) {
-    final encodedUser = Uri.encodeComponent(userId);
+    final trimmed = userId.trim();
+    final matrixUserId =
+        trimmed.startsWith('@') && trimmed.contains(':')
+            ? trimmed
+            : '@${trimmed.replaceFirst(RegExp(r'^@'), '')}:${MatrixConfig.serverName}';
+    final encodedUser = Uri.encodeComponent(matrixUserId);
     return Uri.parse(
       '${MatrixConfig.homeserver}/_synapse/client/wrytte/profile/$encodedUser',
     );
@@ -39,6 +44,10 @@ class MatrixProfileService {
           ? Map<String, dynamic>.from(decoded['fields'] as Map)
           : <String, dynamic>{}),
     };
+    if (decoded['visibility'] is Map) {
+      fields[WrytteProfile.visibility] =
+          Map<String, dynamic>.from(decoded['visibility'] as Map);
+    }
     for (final key in const ['displayname', 'avatar_url', 'presence']) {
       if (decoded[key] != null) fields[key] = decoded[key];
     }
@@ -54,6 +63,18 @@ class MatrixProfileService {
     _check(response);
   }
 
+  Future<void> addFields(
+    String userId, {
+    Map<String, dynamic> fields = const {},
+    Map<String, String> visibility = const {},
+    String? displayName,
+  }) =>
+      _post(userId, {
+        if (fields.isNotEmpty) 'fields': fields,
+        if (visibility.isNotEmpty) 'visibility': visibility,
+        if (displayName != null) 'displayname': displayName,
+      });
+
   Future<void> deleteField(String userId, String field) async {
     final uri = _profileUri(userId).replace(queryParameters: {'field': field});
     final response = await http.delete(uri, headers: await _authHeaders());
@@ -61,7 +82,15 @@ class MatrixProfileService {
   }
 
   Future<void> setVisibility(String userId, Map<String, String> settings) =>
-      setField(userId, WrytteProfile.visibility, settings);
+      _patch(userId, {'visibility': settings});
+
+  Future<void> clearVisibility(String userId, String field) async {
+    final uri = _profileUri(userId).replace(
+      queryParameters: {'field': 'visibility:$field'},
+    );
+    final response = await http.delete(uri, headers: await _authHeaders());
+    _check(response);
+  }
 
   Future<String?> getPresence(String userId) async {
     final profile = await getProfile(userId);
@@ -81,28 +110,59 @@ class MatrixProfileService {
     String? groupAlias,
     Map<String, String>? visibilitySettings,
   }) async {
-    final operations = <Future<void>>[];
-    if (avatarUrl != null) operations.add(setAvatar(userId, avatarUrl));
-    if (displayName != null) operations.add(setDisplayName(userId, displayName));
-    if (firstName != null) operations.add(setFirstName(userId, firstName));
-    if (lastName != null) operations.add(setLastName(userId, lastName));
-    if (phoneNumber != null) operations.add(setPhoneNumber(userId, phoneNumber));
-    if (bio != null) operations.add(setBio(userId, bio));
-    if (link != null) operations.add(setLink(userId, link));
-    if (channelAlias != null) operations.add(setChannelAlias(userId, channelAlias));
-    if (groupAlias != null) operations.add(setGroupAlias(userId, groupAlias));
-    if (visibilitySettings != null) operations.add(setVisibility(userId, visibilitySettings));
-    await Future.wait(operations);
+    final fields = <String, dynamic>{};
+    final removeFields = <String>[];
+    void add(String field, String? value) {
+      if (value == null) return;
+      final clean = value.trim();
+      if (clean.isEmpty) {
+        removeFields.add(field);
+      } else {
+        fields[field] = clean;
+      }
+    }
+
+    add(WrytteProfile.avatarImageUrl, avatarUrl);
+    add(WrytteProfile.firstName, firstName);
+    add(WrytteProfile.lastName, lastName);
+    add(WrytteProfile.phoneNumber, phoneNumber);
+    add(WrytteProfile.bio, bio);
+    add(WrytteProfile.link, link);
+    add(WrytteProfile.channelAlias, channelAlias);
+    add(WrytteProfile.groupAlias, groupAlias);
+
+    await _patch(userId, {
+      if (fields.isNotEmpty) 'fields': fields,
+      if (removeFields.isNotEmpty) 'remove_fields': removeFields,
+      if (displayName != null) 'displayname': displayName.trim(),
+      if (visibilitySettings != null) 'visibility': visibilitySettings,
+    });
   }
 
   Future<void> setAvatar(String userId, String? mxcUrl) async {
-    final value = mxcUrl?.trim() ?? '';
-    if (value.isEmpty) return deleteField(userId, 'avatar_url');
-    return setField(userId, 'avatar_url', value);
+    return setAvatarImageUrl(userId, mxcUrl);
   }
 
-  Future<void> setDisplayName(String userId, String? value) =>
-      _setOrDelete(userId, 'displayname', value);
+  Future<void> setAvatarImageUrl(String userId, String? url) =>
+      _setOrDelete(userId, WrytteProfile.avatarImageUrl, url);
+
+  Future<void> setAvatarVersion(String userId, int version) =>
+      setField(userId, WrytteProfile.avatarVersion, version.toString());
+
+  Future<void> setOnlineVisibility(String userId, String value) =>
+      setVisibility(userId, {WrytteProfile.onlineStatus: value});
+
+  Future<void> setOnlineStatus(String userId, bool online) =>
+      _patch(userId, {'presence': online ? 'online' : 'offline'});
+
+  Future<void> setDisplayName(String userId, String? value) async {
+    final response = await http.patch(
+      _profileUri(userId),
+      headers: await _authHeaders(),
+      body: jsonEncode({'displayname': value?.trim() ?? ''}),
+    );
+    _check(response);
+  }
 
   Future<void> setFirstName(String userId, String? value) =>
       _setOrDelete(userId, WrytteProfile.firstName, value);
@@ -128,6 +188,24 @@ class MatrixProfileService {
   Future<void> _setOrDelete(String userId, String field, String? value) {
     final clean = value?.trim() ?? '';
     return clean.isEmpty ? deleteField(userId, field) : setField(userId, field, clean);
+  }
+
+  Future<void> _patch(String userId, Map<String, dynamic> body) async {
+    final response = await http.patch(
+      _profileUri(userId),
+      headers: await _authHeaders(),
+      body: jsonEncode(body),
+    );
+    _check(response);
+  }
+
+  Future<void> _post(String userId, Map<String, dynamic> body) async {
+    final response = await http.post(
+      _profileUri(userId),
+      headers: await _authHeaders(),
+      body: jsonEncode(body),
+    );
+    _check(response);
   }
 
   void _check(http.Response response) {

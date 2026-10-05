@@ -208,9 +208,34 @@ class ContactService {
 
   Future<List<Contact>> _readMatrixAccountContacts(String owner) async {
     final client = MatrixClientService.instance.client;
-    final accountData = client.accountData[_contactsAccountDataType];
-    if (accountData == null) return [];
-    final value = accountData.content['contacts'];
+    final sessionUserId = client.userID?.trim();
+    if (sessionUserId == null || sessionUserId.isEmpty) {
+      throw StateError('Cannot read contacts without an active Matrix session.');
+    }
+    final ownerLocalpart = _matrixLocalpart(owner)?.toLowerCase();
+    final sessionLocalpart = _matrixLocalpart(sessionUserId)?.toLowerCase();
+    if (ownerLocalpart == null || ownerLocalpart != sessionLocalpart) {
+      throw StateError(
+        'The active Matrix account does not match the contact owner.',
+      );
+    }
+
+    // Matrix account data is private to its owner. Fetch it directly from the
+    // authenticated homeserver instead of relying on possibly stale sync data.
+    Map<String, Object?> accountData;
+    try {
+      accountData = await client.getAccountData(
+        sessionUserId,
+        _contactsAccountDataType,
+      );
+    } catch (error) {
+      final message = error.toString();
+      if (message.contains('M_NOT_FOUND') || message.contains('404')) {
+        return const [];
+      }
+      rethrow;
+    }
+    final value = accountData['contacts'];
     if (value is! List) return [];
     return value
         .whereType<Map>()
@@ -297,8 +322,8 @@ class ContactService {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Fetch contacts saved by this user. Local cache paints immediately; backend
-  // can restore contacts after reinstall/login. Matrix is not used here.
+  // Fetch this owner's contacts from local cache and their private Matrix
+  // account data. The authenticated SDK request is owner scoped.
   // ──────────────────────────────────────────────────────────────────────
   Future<List<Contact>> getMatrixContacts(String ownerUserId) async {
     final owner = ownerUserId.trim();

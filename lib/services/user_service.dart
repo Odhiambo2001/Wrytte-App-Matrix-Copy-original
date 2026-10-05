@@ -4,8 +4,8 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
-import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_profile_service.dart';
 
 class UserService {
   // The development backend currently exposes no FCM registration route.
@@ -52,26 +52,22 @@ class UserService {
     }
 
     try {
-      await MatrixAuthService.instance.restore();
-      final client = MatrixClientService.instance.client;
-      final matrixUserId = client.userID;
-      if (matrixUserId == null) return;
-      if (name != null && name.trim().isNotEmpty) {
-        await client.setProfileField(matrixUserId, 'm.displayname', {
-          'displayname': name.trim(),
-        });
-      }
-      if (profileImage != null &&
-          profileImage.isNotEmpty &&
-          profileImage.startsWith('mxc://')) {
-        await client.setProfileField(matrixUserId, 'm.avatar_url', {
-          'avatar_url': profileImage,
-        });
-      }
+      final uid = await AuthService.instance.getCurrentUserId();
+      if (uid == null || uid.trim().isEmpty) return;
+      await MatrixProfileService.instance.updateOwnerProfile(
+        userId: uid,
+        displayName: name,
+        avatarUrl: profileImage,
+        bio: about,
+      );
     } catch (_) {}
   }
 
-  Future<void> setUserOnlineStatus(bool isOnline) async {}
+  Future<void> setUserOnlineStatus(bool isOnline) async {
+    final uid = await AuthService.instance.getCurrentUserId();
+    if (uid == null || uid.trim().isEmpty) return;
+    await MatrixProfileService.instance.setOnlineStatus(uid, isOnline);
+  }
 
   Future<List<Map<String, dynamic>>> searchUsersByPhone(
     List<String> phoneNumbers,

@@ -13,11 +13,14 @@ class WrytteProfile {
   static const firstName = 'com.wrytte.first_name';
   static const lastName = 'com.wrytte.last_name';
   static const phoneNumber = 'com.wrytte.phone_number';
+  static const avatarImageUrl = 'com.wrytte.avatar_image_url';
+  static const avatarVersion = 'com.wrytte.avatar_version';
   static const bio = 'com.wrytte.bio';
   static const link = 'com.wrytte.link';
   static const channelAlias = 'com.wrytte.channel_alias';
   static const groupAlias = 'com.wrytte.group_alias';
   static const visibility = 'com.wrytte.profile_visibility';
+  static const onlineStatus = 'com.wrytte.online_status';
 
   final String userId;
   final Map<String, dynamic> fields;

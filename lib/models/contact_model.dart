@@ -73,6 +73,10 @@ class Contact {
   // Convert to Map
   Map<String, dynamic> toMap() {
     return {
+      // Canonical account-data fields consumed by Matrix contact readers.
+      'userId': wrytteUserId,
+      'roomId': directRoomId,
+      'number': primaryPhone,
       'displayName': displayName,
       'firstName': firstName,
       'lastName': lastName,
@@ -95,13 +99,18 @@ class Contact {
       displayName: map['displayName'],
       firstName: map['firstName'],
       lastName: map['lastName'],
-      phones: List<String>.from(map['phones'] ?? []),
+      phones: List<String>.from(
+        map['phones'] ??
+            (map['number'] == null || map['number'].toString().isEmpty
+                ? const <String>[]
+                : <String>[map['number'].toString()]),
+      ),
       avatarUrl: map['avatarUrl'],
       bio: map['bio'],
       isOnWrytte: map['isOnWrytte'] ?? false,
-      wrytteUserId: map['wrytteUserId'],
+      wrytteUserId: map['wrytteUserId'] ?? map['userId'],
       databaseName: map['databaseName'],
-      directRoomId: map['directRoomId'],
+      directRoomId: map['directRoomId'] ?? map['roomId'],
       inviteStatus: map['inviteStatus'],
       isRecent: map['isRecent'] ?? false,
       isSaved: map['isSaved'] ?? false,

@@ -1617,15 +1617,18 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
     if (_matrixProfileCache.containsKey(uid)) return _matrixProfileCache[uid];
     try {
-      if (!MatrixClientService.instance.isLoggedIn) return null;
-      final matrixUserId =
-          uid.startsWith('@') ? uid : '@$uid:${MatrixConfig.serverName}';
-      final profile = await MatrixClientService.instance.client
-          .getProfileFromUserId(
-            matrixUserId,
-            timeout: const Duration(seconds: 2),
-          );
-      final result = (profile.displayName, profile.avatarUrl?.toString());
+      final profile = await UserProfileService.instance.getProfileByUid(
+        uid,
+        forceRefresh: true,
+      );
+      if (profile == null) {
+        _matrixProfileCache[uid] = null;
+        return null;
+      }
+      final result = (
+        profile.name,
+        profile.hasProfileImage ? profile.profileImage : null,
+      );
       _matrixProfileCache[uid] = result;
       return result;
     } catch (_) {

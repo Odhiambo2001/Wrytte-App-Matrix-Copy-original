@@ -1251,19 +1251,6 @@ class AuthService {
         !_looksLikePhone(trimmed)) {
       await _archiveProfile(phone: phone, userId: userId, username: trimmed);
     }
-    final client =
-        MatrixClientService.instance.isInitialized
-            ? MatrixClientService.instance.client
-            : null;
-    if (client?.userID != null) {
-      try {
-        await client!.setProfileField(client.userID!, 'displayname', {
-          'displayname': username.trim(),
-        });
-      } catch (e) {
-        debugPrint('[AuthService] Matrix display-name update failed: $e');
-      }
-    }
   }
 
   Future<bool> isLoggedIn() async {

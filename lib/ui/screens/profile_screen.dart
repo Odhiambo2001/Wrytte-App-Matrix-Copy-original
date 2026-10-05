@@ -16,6 +16,8 @@ import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/services/matrix/matrix_profile_service.dart';
+import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
@@ -395,14 +397,15 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
     try {
-      if (!MatrixClientService.instance.isLoggedIn) return null;
-      final matrixUserId = _toMatrixUserId(uid);
-      final profile = await MatrixClientService.instance.client
-          .getProfileFromUserId(
-            matrixUserId,
-            timeout: const Duration(seconds: 5),
-          );
-      return (profile.displayName, profile.avatarUrl?.toString());
+      final profile = await MatrixProfileService.instance.getProfile(uid);
+      return (
+        profile.displayName ??
+            [profile.firstNameValue, profile.lastNameValue]
+                .whereType<String>()
+                .where((part) => part.trim().isNotEmpty)
+                .join(' '),
+        profile.avatarUrl ?? profile[WrytteProfile.avatarImageUrl],
+      );
     } catch (_) {
       return null;
     }

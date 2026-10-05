@@ -1,13 +1,16 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
+import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
+import 'package:wrytte/services/matrix/matrix_profile_service.dart';
 import 'package:wrytte/services/user/user_profile_api_service.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
@@ -125,12 +128,15 @@ class UserProfileService {
     await _storage.write(key: _lastNameKey, value: parts.$2);
     // Also keep AuthService in sync (it owns the same key)
     await AuthService.instance.updateStoredUsername(trimmed);
+    final phone = await AuthService.instance.getSavedPhone();
     _cache = null;
     await _readFromStorage(allowBackendRefresh: false);
-    unawaited(_saveBackendProfileBestEffort({
+    await _saveBackendProfileBestEffort({
+      'DisplayName': trimmed,
       'FirstName': parts.$1,
-      if (parts.$2.isNotEmpty) 'LastName': parts.$2,
-    }));
+      'LastName': parts.$2,
+      if (phone != null && phone.trim().isNotEmpty) 'Phone': phone.trim(),
+    }, create: true);
     debugPrint('[UserProfileService] Display name updated: "$trimmed"');
   }
 
@@ -140,6 +146,7 @@ class UserProfileService {
       key: _profileImageKey,
       value: _resolveAvatarUrl(url.trim()),
     );
+    await _saveBackendProfileBestEffort({'AvatarImg': url.trim()});
     _cache = null;
     await _refreshAndNotify();
   }
@@ -179,8 +186,7 @@ class UserProfileService {
     try {
       final uploadedPath = await UserProfileApiService.instance
           .uploadAvatarImage(File(localPath));
-      final avatarVersion =
-          await UserProfileApiService.instance.incrementAvatarVersion();
+      final avatarVersion = await _incrementModuleAvatarVersion(uid);
       final avatarUrl = _withAvatarFetchVersion(
         _resolveAvatarUrl(uploadedPath),
         uid,
@@ -190,6 +196,7 @@ class UserProfileService {
         throw Exception('Avatar upload completed without an image URL.');
       }
       await _storage.write(key: _profileImageKey, value: avatarUrl);
+      await MatrixProfileService.instance.setAvatarImageUrl(uid, avatarUrl);
       await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
       _cache = null;
@@ -228,18 +235,24 @@ class UserProfileService {
     String? profileImage,
     String? bio,
     List<String>? links,
+    String? channelAlias,
+    String? groupAlias,
+    Map<String, String>? visibilitySettings,
   }) async {
     final backendFields = <String, String>{};
     if (name != null && name.trim().isNotEmpty) {
       await _storage.write(key: _nameKey, value: name.trim());
       await AuthService.instance.updateStoredUsername(name.trim());
+      backendFields['DisplayName'] = name.trim();
+      final phone = await AuthService.instance.getSavedPhone();
+      if (phone != null && phone.trim().isNotEmpty) {
+        backendFields['Phone'] = phone.trim();
+      }
       final parts = _splitName(name.trim());
       await _storage.write(key: _firstNameKey, value: firstName ?? parts.$1);
       await _storage.write(key: _lastNameKey, value: lastName ?? parts.$2);
       backendFields['FirstName'] = firstName?.trim() ?? parts.$1;
-      if ((lastName?.trim() ?? parts.$2).isNotEmpty) {
-        backendFields['LastName'] = lastName?.trim() ?? parts.$2;
-      }
+      backendFields['LastName'] = lastName?.trim() ?? parts.$2;
     } else {
       if (firstName != null) {
         await _storage.write(key: _firstNameKey, value: firstName.trim());
@@ -255,6 +268,7 @@ class UserProfileService {
         key: _profileImageKey,
         value: _resolveAvatarUrl(profileImage.trim()),
       );
+      backendFields['AvatarImg'] = _resolveAvatarUrl(profileImage.trim());
     }
     if (bio != null) {
       await _storage.write(key: _bioKey, value: bio.trim());
@@ -262,6 +276,22 @@ class UserProfileService {
     }
     if (links != null) {
       await _storage.write(key: 'user_links', value: links.join('\n'));
+      backendFields['Link'] = links.join('\n');
+    }
+    if (channelAlias != null) {
+      await _storage.write(key: 'profile_channel_alias', value: channelAlias.trim());
+      backendFields['ChannelAlias'] = channelAlias.trim();
+    }
+    if (groupAlias != null) {
+      await _storage.write(key: 'profile_group_alias', value: groupAlias.trim());
+      backendFields['GroupAlias'] = groupAlias.trim();
+    }
+    if (visibilitySettings != null) {
+      await _storage.write(
+        key: 'profile_visibility_settings',
+        value: jsonEncode(visibilitySettings),
+      );
+      backendFields['VisibilitySettings'] = jsonEncode(visibilitySettings);
     }
     if (backendFields.isNotEmpty) {
       await _saveBackendProfileBestEffort(backendFields);
@@ -468,6 +498,24 @@ class UserProfileService {
               : await _storage.read(key: _lastNameKey) ?? '';
       var bio =
           ignoreStoredProfile ? '' : await _storage.read(key: _bioKey) ?? '';
+      var onlineStatus = '';
+      var channelAlias = '';
+      var groupAlias = '';
+      var visibilitySettings = <String, String>{};
+      if (!ignoreStoredProfile) {
+        channelAlias = await _storage.read(key: 'profile_channel_alias') ?? '';
+        groupAlias = await _storage.read(key: 'profile_group_alias') ?? '';
+        final storedVisibility =
+            await _storage.read(key: 'profile_visibility_settings') ?? '';
+        if (storedVisibility.isNotEmpty) {
+          final decoded = jsonDecode(storedVisibility);
+          if (decoded is Map) {
+            visibilitySettings = decoded.map(
+              (key, value) => MapEntry(key.toString(), value.toString()),
+            );
+          }
+        }
+      }
       var profileImage =
           ignoreStoredAvatar || ignoreStoredProfile
               ? ''
@@ -495,9 +543,29 @@ class UserProfileService {
         final remote = await _readBackendProfileBestEffort();
         if (!_isActiveSession(generation, uid)) return null;
         if (remote.isNotEmpty) {
+          if (phone.trim().isNotEmpty && _field(remote, 'Phone') == null) {
+            try {
+              await MatrixProfileService.instance.setPhoneNumber(uid, phone);
+              remote['Phone'] = phone;
+            } catch (e) {
+              debugPrint('[UserProfileService] Module number sync skipped: $e');
+            }
+          }
           firstName = _field(remote, 'FirstName') ?? firstName;
           lastName = _field(remote, 'LastName') ?? lastName;
           bio = _field(remote, 'Bio') ?? bio;
+          onlineStatus = _field(remote, 'Presence') ?? onlineStatus;
+          channelAlias = _field(remote, 'ChannelAlias') ?? channelAlias;
+          groupAlias = _field(remote, 'GroupAlias') ?? groupAlias;
+          final visibilityJson = _field(remote, 'VisibilitySettings');
+          if (visibilityJson != null && visibilityJson.isNotEmpty) {
+            final decoded = jsonDecode(visibilityJson);
+            if (decoded is Map) {
+              visibilitySettings = decoded.map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              );
+            }
+          }
           final remoteAvatar = _resolveAvatarUrl(
             _field(remote, 'AvatarImg') ?? profileImage,
           );
@@ -562,6 +630,10 @@ class UserProfileService {
         phone: phone,
         bio: bio,
         profileImage: profileImage,
+        onlineStatus: onlineStatus,
+        channelAlias: channelAlias,
+        groupAlias: groupAlias,
+        visibilitySettings: visibilitySettings,
         avatarVersion: avatarVersion,
         localProfileImagePath: localProfileImagePath,
         links:
@@ -808,8 +880,7 @@ class UserProfileService {
       _lastPendingAvatarAttemptAt = DateTime.now();
       final uploadedPath = await UserProfileApiService.instance
           .uploadAvatarImage(file);
-      final avatarVersion =
-          await UserProfileApiService.instance.incrementAvatarVersion();
+      final avatarVersion = await _incrementModuleAvatarVersion(uid);
       final avatarUrl = _withAvatarFetchVersion(
         _resolveAvatarUrl(uploadedPath),
         uid,
@@ -817,6 +888,7 @@ class UserProfileService {
       );
       if (avatarUrl.isEmpty) return false;
       await _storage.write(key: _profileImageKey, value: avatarUrl);
+      await MatrixProfileService.instance.setAvatarImageUrl(uid, avatarUrl);
       await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
       return true;
@@ -857,6 +929,18 @@ class UserProfileService {
     final backendPhone =
         _field(fields, 'Phone') ?? _field(fields, 'phone') ?? '';
     final wrytteId = WrytteId.forDisplay(backendPhone);
+    final rawVisibility = _field(fields, 'VisibilitySettings') ?? '';
+    var visibilitySettings = <String, String>{};
+    if (rawVisibility.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawVisibility);
+        if (decoded is Map) {
+          visibilitySettings = decoded.map(
+            (key, value) => MapEntry(key.toString(), value.toString()),
+          );
+        }
+      } catch (_) {}
+    }
 
     return UserProfile(
       uid: uid,
@@ -867,6 +951,10 @@ class UserProfileService {
           _trustedPhone(backendPhone, fallbackPhone: fallbackPhone),
       bio: _field(fields, 'Bio') ?? _field(fields, 'bio') ?? '',
       profileImage: _resolveAvatarUrl(avatar),
+      onlineStatus: _field(fields, 'Presence') ?? '',
+      channelAlias: _field(fields, 'ChannelAlias') ?? '',
+      groupAlias: _field(fields, 'GroupAlias') ?? '',
+      visibilitySettings: visibilitySettings,
       avatarVersion: _avatarVersionFromFields(fields),
       links:
           [
@@ -1000,9 +1088,13 @@ class UserProfileService {
 
   Future<Map<String, String>> _readBackendProfileBestEffort() async {
     try {
-      return await UserProfileApiService.instance.getProfile();
+      final uid = await AuthService.instance.getCurrentUserId();
+      if (uid == null || uid.trim().isEmpty) return const {};
+      return _moduleProfileFields(
+        await MatrixProfileService.instance.getProfile(uid),
+      );
     } catch (e) {
-      debugPrint('[UserProfileService] Backend profile get skipped: $e');
+      debugPrint('[UserProfileService] Module profile get skipped: $e');
       return const {};
     }
   }
@@ -1027,13 +1119,12 @@ class UserProfileService {
     String? phone,
   }) async {
     try {
-      return await UserProfileApiService.instance.getPublicProfile(
-        userId: uid,
-        matrixUserId: uid,
-        phone: phone,
+      return _moduleProfileFields(
+        await MatrixProfileService.instance.getProfile(uid),
+        fallbackUid: uid,
       );
     } catch (e) {
-      debugPrint('[UserProfileService] Public backend profile get skipped: $e');
+      debugPrint('[UserProfileService] Public Module profile get skipped: $e');
       return const {};
     }
   }
@@ -1042,11 +1133,140 @@ class UserProfileService {
     return '${_matrixLocalpart(uid).toLowerCase()}|${_normalizePhone(phone ?? '')}';
   }
 
-  Future<void> _saveBackendProfileBestEffort(Map<String, String> fields) async {
+  Future<void> _saveBackendProfileBestEffort(
+    Map<String, String> fields, {
+    bool create = false,
+  }) async {
     try {
-      await UserProfileApiService.instance.saveProfileFields(fields);
+      final uid = await AuthService.instance.getCurrentUserId();
+      if (uid == null || uid.trim().isEmpty) return;
+      final moduleFields = <String, dynamic>{};
+      final visibility = <String, String>{};
+      String? displayName;
+      int? avatarVersion;
+      for (final entry in fields.entries) {
+        switch (entry.key.toLowerCase()) {
+          case 'firstname':
+            moduleFields[WrytteProfile.firstName] = entry.value;
+            break;
+          case 'lastname':
+            moduleFields[WrytteProfile.lastName] = entry.value;
+            break;
+          case 'bio':
+            moduleFields[WrytteProfile.bio] = entry.value;
+            break;
+          case 'phone':
+            moduleFields[WrytteProfile.phoneNumber] = entry.value;
+            break;
+          case 'link':
+          case 'website':
+            moduleFields[WrytteProfile.link] = entry.value;
+            break;
+          case 'channelalias':
+            moduleFields[WrytteProfile.channelAlias] = entry.value;
+            break;
+          case 'groupalias':
+            moduleFields[WrytteProfile.groupAlias] = entry.value;
+            break;
+          case 'visibilitysettings':
+            try {
+              final decoded = jsonDecode(entry.value);
+              if (decoded is Map) {
+                visibility.addAll(
+                  decoded.map(
+                    (key, value) => MapEntry(key.toString(), value.toString()),
+                  ),
+                );
+              }
+            } catch (_) {}
+            break;
+          case 'avatarimg':
+          case 'avatarurl':
+          case 'profileimage':
+            moduleFields[WrytteProfile.avatarImageUrl] = entry.value;
+            break;
+          case 'avatarversion':
+            avatarVersion = int.tryParse(entry.value);
+            break;
+          case 'displayname':
+            displayName = entry.value;
+            break;
+        }
+      }
+      if (create) {
+        moduleFields.removeWhere((_, value) => value.toString().trim().isEmpty);
+        await MatrixProfileService.instance.addFields(
+          uid,
+          fields: moduleFields,
+          visibility: visibility,
+          displayName: displayName,
+        );
+      } else {
+        await MatrixProfileService.instance.updateOwnerProfile(
+          userId: uid,
+          displayName: displayName,
+          firstName: moduleFields[WrytteProfile.firstName]?.toString(),
+          lastName: moduleFields[WrytteProfile.lastName]?.toString(),
+          bio: moduleFields[WrytteProfile.bio]?.toString(),
+          phoneNumber: moduleFields[WrytteProfile.phoneNumber]?.toString(),
+          link: moduleFields[WrytteProfile.link]?.toString(),
+          channelAlias: moduleFields[WrytteProfile.channelAlias]?.toString(),
+          groupAlias: moduleFields[WrytteProfile.groupAlias]?.toString(),
+          visibilitySettings: visibility.isEmpty ? null : visibility,
+          avatarUrl: moduleFields[WrytteProfile.avatarImageUrl]?.toString(),
+        );
+      }
+      if (avatarVersion != null) {
+        await MatrixProfileService.instance.setAvatarVersion(uid, avatarVersion);
+      }
     } catch (e) {
-      debugPrint('[UserProfileService] Backend profile save skipped: $e');
+      debugPrint('[UserProfileService] Module profile save skipped: $e');
+      rethrow;
     }
+  }
+
+  Future<int> _incrementModuleAvatarVersion(String uid) async {
+    final profile = await MatrixProfileService.instance.getProfile(uid);
+    final current = int.tryParse(
+          profile[WrytteProfile.avatarVersion]?.trim() ?? '',
+        ) ??
+        0;
+    final next = current + 1;
+    await MatrixProfileService.instance.setAvatarVersion(uid, next);
+    return next;
+  }
+
+  Map<String, String> _moduleProfileFields(
+    WrytteProfile profile, {
+    String? fallbackUid,
+  }) {
+    final raw = profile.fields;
+    final result = <String, String>{
+      'userId': fallbackUid ?? profile.userId,
+      'userid': fallbackUid ?? profile.userId,
+    };
+    void copy(String source, String target) {
+      final value = raw[source]?.toString().trim() ?? '';
+      if (value.isNotEmpty) result[target] = value;
+    }
+
+    copy(WrytteProfile.firstName, 'FirstName');
+    copy(WrytteProfile.lastName, 'LastName');
+    copy(WrytteProfile.phoneNumber, 'Phone');
+    copy(WrytteProfile.avatarImageUrl, 'AvatarImg');
+    copy(WrytteProfile.avatarVersion, 'AvatarVersion');
+    copy(WrytteProfile.bio, 'Bio');
+    copy(WrytteProfile.link, 'Link');
+    copy(WrytteProfile.channelAlias, 'ChannelAlias');
+    copy(WrytteProfile.groupAlias, 'GroupAlias');
+    result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
+    copy('displayname', 'DisplayName');
+    copy('presence', 'Presence');
+    result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
+    final matrixAvatar = raw['avatar_url']?.toString().trim() ?? '';
+    if (result['AvatarImg'] == null && matrixAvatar.isNotEmpty) {
+      result['AvatarImg'] = matrixAvatar;
+    }
+    return result;
   }
 }

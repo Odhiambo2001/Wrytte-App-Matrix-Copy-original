@@ -1186,14 +1186,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
     try {
-      if (!MatrixClientService.instance.isLoggedIn) return null;
-      final matrixUserId = _toMatrixUserId(uid);
-      final profile = await MatrixClientService.instance.client
-          .getProfileFromUserId(
-            matrixUserId,
-            timeout: const Duration(seconds: 5),
-          );
-      return (profile.displayName, profile.avatarUrl?.toString());
+      final profile = await UserProfileService.instance.getProfileByUid(
+        uid,
+        forceRefresh: true,
+      );
+      if (profile == null) return null;
+      return (
+        profile.name,
+        profile.hasProfileImage ? profile.profileImage : null,
+      );
     } catch (_) {
       return null;
     }

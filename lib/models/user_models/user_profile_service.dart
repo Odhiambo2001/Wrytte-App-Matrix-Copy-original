@@ -7,6 +7,10 @@ class UserProfile {
   final String phone;
   final String bio;
   final String profileImage;
+  final String onlineStatus;
+  final String channelAlias;
+  final String groupAlias;
+  final Map<String, String> visibilitySettings;
   final int avatarVersion;
   final String localProfileImagePath;
   final List<String> links;
@@ -20,6 +24,10 @@ class UserProfile {
     required this.phone,
     required this.bio,
     required this.profileImage,
+    this.onlineStatus = '',
+    this.channelAlias = '',
+    this.groupAlias = '',
+    this.visibilitySettings = const {},
     this.avatarVersion = 0,
     this.localProfileImagePath = '',
     required this.links,
@@ -35,6 +43,15 @@ class UserProfile {
       phone: data['phone'] as String? ?? '',
       bio: data['bio'] as String? ?? '',
       profileImage: data['profileImage'] as String? ?? '',
+      onlineStatus: data['onlineStatus'] as String? ?? '',
+      channelAlias: data['channelAlias'] as String? ?? '',
+      groupAlias: data['groupAlias'] as String? ?? '',
+      visibilitySettings: Map<String, String>.from(
+        (data['visibilitySettings'] as Map?)?.map(
+              (key, value) => MapEntry(key.toString(), value.toString()),
+            ) ??
+            const {},
+      ),
       avatarVersion: int.tryParse(data['avatarVersion']?.toString() ?? '') ?? 0,
       localProfileImagePath: data['localProfileImagePath'] as String? ?? '',
       links: List<String>.from(data['links'] as List? ?? []),
@@ -51,6 +68,10 @@ class UserProfile {
       'phone': phone,
       'bio': bio,
       'profileImage': profileImage,
+      'onlineStatus': onlineStatus,
+      'channelAlias': channelAlias,
+      'groupAlias': groupAlias,
+      'visibilitySettings': visibilitySettings,
       'avatarVersion': avatarVersion,
       'localProfileImagePath': localProfileImagePath,
       'links': links,
@@ -78,12 +99,18 @@ class UserProfile {
   bool get hasProfileImage =>
       profileImage.isNotEmpty && profileImage.startsWith('http');
 
+  bool get isOnline => onlineStatus.toLowerCase() == 'online';
+
   UserProfile copyWith({
     String? name,
     String? username,
     String? phone,
     String? bio,
     String? profileImage,
+    String? onlineStatus,
+    String? channelAlias,
+    String? groupAlias,
+    Map<String, String>? visibilitySettings,
     int? avatarVersion,
     String? localProfileImagePath,
     List<String>? links,
@@ -95,6 +122,10 @@ class UserProfile {
       phone: phone ?? this.phone,
       bio: bio ?? this.bio,
       profileImage: profileImage ?? this.profileImage,
+      onlineStatus: onlineStatus ?? this.onlineStatus,
+      channelAlias: channelAlias ?? this.channelAlias,
+      groupAlias: groupAlias ?? this.groupAlias,
+      visibilitySettings: visibilitySettings ?? this.visibilitySettings,
       avatarVersion: avatarVersion ?? this.avatarVersion,
       localProfileImagePath:
           localProfileImagePath ?? this.localProfileImagePath,
