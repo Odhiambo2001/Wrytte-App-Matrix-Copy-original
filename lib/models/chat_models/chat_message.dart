@@ -401,7 +401,7 @@ String? _attachmentUrlFromMatrix(mx.Event event) {
   if (homeserver == null) return null;
   return homeserver
       .resolve(
-        '_matrix/media/v3/download/${mxcUrl.host}${mxcUrl.hasPort ? ':${mxcUrl.port}' : ''}${mxcUrl.path}',
+        '_matrix/client/v1/media/download/${mxcUrl.host}${mxcUrl.hasPort ? ':${mxcUrl.port}' : ''}${mxcUrl.path}',
       )
       .toString();
 }

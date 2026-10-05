@@ -343,7 +343,7 @@ class _UserAvatarState extends State<UserAvatar> {
     if (homeserver == null || !homeserver.hasScheme) return '';
     return homeserver
         .resolve(
-          '/_matrix/media/v3/download/'
+          '/_matrix/client/v1/media/download/'
           '${Uri.encodeComponent(uri.host)}/'
           '${Uri.encodeComponent(mediaId)}',
         )

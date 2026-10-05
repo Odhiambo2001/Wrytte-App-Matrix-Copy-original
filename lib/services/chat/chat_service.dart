@@ -1976,7 +1976,7 @@ class ChatService {
     if (homeserver == null) return null;
     return homeserver
         .resolve(
-          '_matrix/media/v3/download/${uri.host}${uri.hasPort ? ':${uri.port}' : ''}${uri.path}',
+          '_matrix/client/v1/media/download/${uri.host}${uri.hasPort ? ':${uri.port}' : ''}${uri.path}',
         )
         .toString();
   }
@@ -3605,14 +3605,21 @@ class ChatService {
     }
     final segments = uri.pathSegments;
     final mediaIndex = segments.indexOf('media');
-    if (mediaIndex >= 1 &&
+    final isLegacyMedia = mediaIndex >= 1 &&
         mediaIndex + 4 < segments.length &&
         segments[mediaIndex - 1] == '_matrix' &&
         segments[mediaIndex + 1] == 'v3' &&
         (segments[mediaIndex + 2] == 'download' ||
-            segments[mediaIndex + 2] == 'thumbnail')) {
-      final serverName = segments[mediaIndex + 3];
-      final mediaId = segments.sublist(mediaIndex + 4).join('/');
+            segments[mediaIndex + 2] == 'thumbnail');
+    final isAuthenticatedMedia = mediaIndex >= 2 &&
+        mediaIndex + 3 < segments.length &&
+        segments[mediaIndex - 2] == '_matrix' &&
+        segments[mediaIndex - 1] == 'client' &&
+        segments[mediaIndex + 1] == 'download';
+    if (isLegacyMedia || isAuthenticatedMedia) {
+      final serverIndex = isLegacyMedia ? mediaIndex + 3 : mediaIndex + 2;
+      final serverName = segments[serverIndex];
+      final mediaId = segments.sublist(serverIndex + 1).join('/');
       if (serverName.isNotEmpty && mediaId.isNotEmpty) {
         return 'mxc://$serverName/$mediaId';
       }
