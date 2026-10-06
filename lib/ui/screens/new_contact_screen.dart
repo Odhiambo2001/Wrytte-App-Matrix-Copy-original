@@ -1920,7 +1920,6 @@ class _NewContactPageState extends State<NewContactPage> {
                       ),
                     ],
                   ),
-                  ),
                 ),
               ),
             ],
