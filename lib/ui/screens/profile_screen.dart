@@ -742,11 +742,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profileBio() {
-    final profileBio = _profile?.bio.trim() ?? '';
-    if (_profile?.moduleProfileLoaded == true) return profileBio;
-    if (profileBio.isNotEmpty) return profileBio;
-    if (!_isOtherUser) return 'Available on Wrytte';
-    return '';
+    return _profile?.bio.trim() ?? '';
   }
 
   @override

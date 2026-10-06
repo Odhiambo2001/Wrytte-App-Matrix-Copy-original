@@ -108,7 +108,9 @@ class NewContactPage extends StatefulWidget {
 }
 
 class _NewContactPageState extends State<NewContactPage> {
-  bool get _isEditingExistingContact => _duplicateContact != null;
+  bool get _isIdentityResolved =>
+      _lookupState == _LookupState.found ||
+      _lookupState == _LookupState.duplicate;
 
   // ── Controllers & focus ──────────────────────────────────────
   final _firstNameCtrl = TextEditingController();
@@ -118,6 +120,7 @@ class _NewContactPageState extends State<NewContactPage> {
 
   final _codeFocusNode = FocusNode();
   final _numberFocusNode = FocusNode();
+  final _firstNameFocusNode = FocusNode();
 
   // ── Country ───────────────────────────────────────────────────
   CountryId? _selectedCountry;
@@ -173,6 +176,16 @@ class _NewContactPageState extends State<NewContactPage> {
         '';
   }
 
+  String get _resolvedIdentifierDisplay {
+    final formatted = InternationalPhoneNumberInputFormatter()
+        .formatEditUpdate(
+          const TextEditingValue(),
+          TextEditingValue(text: _fullIdentifier),
+        )
+        .text;
+    return formatted.startsWith('+') ? formatted : '+$formatted';
+  }
+
   bool get _canSave {
     if (_firstNameCtrl.text.trim().isEmpty || _numberCtrl.text.trim().isEmpty) {
       return false;
@@ -204,17 +217,12 @@ class _NewContactPageState extends State<NewContactPage> {
     super.initState();
     _prefillInitialContact();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_codeCtrl.text.isEmpty) {
-        _codeCtrl.text = '+';
-        _codeCtrl.selection = TextSelection.fromPosition(
-          const TextPosition(offset: 1),
-        );
-        _codeFocusNode.requestFocus();
-      } else {
+      if (_firstNameCtrl.text.isNotEmpty) {
         _firstNameCtrl.selection = TextSelection.fromPosition(
           TextPosition(offset: _firstNameCtrl.text.length),
         );
       }
+      _firstNameFocusNode.requestFocus();
     });
     _numberCtrl.addListener(_onNumberChanged);
     _firstNameCtrl.addListener(() => setState(() {}));
@@ -289,6 +297,7 @@ class _NewContactPageState extends State<NewContactPage> {
     _numberCtrl.dispose();
     _codeFocusNode.dispose();
     _numberFocusNode.dispose();
+    _firstNameFocusNode.dispose();
     _debounce?.cancel();
     super.dispose();
   }
@@ -527,6 +536,7 @@ class _NewContactPageState extends State<NewContactPage> {
         final existingContact = await _findExistingContact(identifier);
         if (!mounted || _fullIdentifier != identifier) return;
         if (existingContact != null) {
+          _firstNameFocusNode.requestFocus();
           setState(() {
             _lookupState = _LookupState.duplicate;
             _duplicateContact = existingContact;
@@ -574,6 +584,7 @@ class _NewContactPageState extends State<NewContactPage> {
           final savedContact = await _findSavedWrytteContact(matrixUserId);
           if (!mounted || _fullIdentifier != identifier) return;
           if (savedContact != null) {
+            _firstNameFocusNode.requestFocus();
             setState(() {
               _lookupState = _LookupState.duplicate;
               _duplicateContact = savedContact;
@@ -584,6 +595,19 @@ class _NewContactPageState extends State<NewContactPage> {
             });
             return;
           }
+
+          // Lock the identifier as soon as Wrytte confirms it. Loading the
+          // optional profile details below can take longer and must not leave
+          // the verified ID editable during that request.
+          _firstNameFocusNode.requestFocus();
+          setState(() {
+            _lookupState = _LookupState.found;
+            _duplicateContact = null;
+            _resolvedUserId = matrixUserId;
+            _lookupProfile1 = null;
+            _isRegisteredOnWrytte = true;
+            _lookupError = null;
+          });
 
           final profile = await UserProfileService.instance.getProfileByUid(
             matrixUserId,
@@ -611,17 +635,13 @@ class _NewContactPageState extends State<NewContactPage> {
               bio: profile1.bio,
             );
             if (!mounted || _fullIdentifier != identifier) return;
+            setState(() {
+              _lookupProfile1 = profile1;
+            });
           }
-          setState(() {
-            _lookupState = _LookupState.found;
-            _duplicateContact = null;
-            _resolvedUserId = matrixUserId;
-            _lookupProfile1 = profile1;
-            _isRegisteredOnWrytte = true;
-            _lookupError = null;
-          });
           return;
         }
+        _firstNameFocusNode.requestFocus();
         setState(() {
           _lookupState = _LookupState.found;
           _resolvedUserId = matrixUserId;
@@ -1660,6 +1680,7 @@ class _NewContactPageState extends State<NewContactPage> {
                   children: [
                     _NameField(
                       controller: _firstNameCtrl,
+                      focusNode: _firstNameFocusNode,
                       hint: 'First name',
                       onChanged: (_) => setState(() {}),
                     ),
@@ -1675,24 +1696,48 @@ class _NewContactPageState extends State<NewContactPage> {
 
               const SizedBox(height: 22),
 
-              // ── Label ─────────────────────────────────────────
-              const Padding(
-                padding: EdgeInsets.only(left: 4, bottom: 8),
-                child: Text(
-                  'Add phone number or Wrytte number here',
-                  style: TextStyle(color: Colors.white54, fontSize: 13),
+              if (_isIdentityResolved)
+                _Card(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _resolvedIdentifierDisplay,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                            ),
+                          ),
+                        ),
+                        const WrytteIdCheckmark(),
+                      ],
+                    ),
+                  ),
+                )
+              else ...[
+                // ── Label ─────────────────────────────────────────
+                const Padding(
+                  padding: EdgeInsets.only(left: 4, bottom: 8),
+                  child: Text(
+                    'Add phone number or Wrytte number here',
+                    style: TextStyle(color: Colors.white54, fontSize: 13),
+                  ),
                 ),
-              ),
 
-              // ── Country + Phone card ───────────────────────────
-              _Card(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
+                // ── Country + Phone card ───────────────────────────
+                _Card(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
                     // Country selector row
                     ListTile(
                       onTap:
-                          _isEditingExistingContact || _isWrytteIdMode
+                          _isIdentityResolved || _isWrytteIdMode
                               ? null
                               : _pickCountry,
                       dense: true,
@@ -1745,8 +1790,8 @@ class _NewContactPageState extends State<NewContactPage> {
                       child: Divider(color: _kDivider, height: 1),
                     ),
 
-                    // Code + number row. Wrytte IDs use a single field, just
-                    // like sign-in; phone numbers keep separate code/number fields.
+                    // Keep the Wrytte prefix separate from its editable body,
+                    // like a phone calling code and local number.
                     Padding(
                       padding: EdgeInsets.symmetric(
                         horizontal: 16,
@@ -1754,65 +1799,54 @@ class _NewContactPageState extends State<NewContactPage> {
                       ),
                       child: Row(
                         children: [
-                          // Country calling code, or the full Wrytte ID entry.
+                          // Country calling code or the fixed Wrytte prefix.
                           if (_isWrytteIdMode)
-                            Expanded(
-                              child: TextField(
-                                controller: _codeCtrl,
-                                focusNode: _codeFocusNode,
-                                readOnly: _isEditingExistingContact,
-                                keyboardType: TextInputType.phone,
-                                cursorColor: _kBlue,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                ),
-                                decoration: const InputDecoration(
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                  contentPadding: EdgeInsets.symmetric(
-                                    vertical: 8,
-                                  ),
-                                ),
-                                onChanged: _detectCountryFromCode,
-                                onTap:
-                                    _isEditingExistingContact
-                                        ? null
-                                        : _onCodeFieldTap,
+                            const Text(
+                              '+00',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
                               ),
                             )
                           else
                             SizedBox(
                               width: 68,
-                              child: TextField(
-                                controller: _codeCtrl,
-                                focusNode: _codeFocusNode,
-                                readOnly: _isEditingExistingContact,
-                                keyboardType: TextInputType.phone,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                ),
-                                decoration: const InputDecoration(
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                  contentPadding: EdgeInsets.symmetric(
-                                    vertical: 8,
+                              child: AbsorbPointer(
+                                absorbing: _isIdentityResolved,
+                                child: TextField(
+                                  controller: _codeCtrl,
+                                  focusNode: _codeFocusNode,
+                                  readOnly: _isIdentityResolved,
+                                  showCursor: !_isIdentityResolved,
+                                  enableInteractiveSelection:
+                                      !_isIdentityResolved,
+                                  keyboardType: TextInputType.phone,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
                                   ),
+                                  decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    isDense: true,
+                                    contentPadding: EdgeInsets.symmetric(
+                                      vertical: 8,
+                                    ),
+                                  ),
+                                  onChanged:
+                                      _isWrytteIdMode &&
+                                              _codeCtrl.text == '+00'
+                                          ? null
+                                          : _detectCountryFromCode,
+                                  onTap:
+                                      _isIdentityResolved
+                                          ? null
+                                          : _onCodeFieldTap,
                                 ),
-                                onChanged:
-                                    _isWrytteIdMode && _codeCtrl.text == '+00'
-                                        ? null
-                                        : _detectCountryFromCode,
-                                onTap:
-                                    _isEditingExistingContact
-                                        ? null
-                                        : _onCodeFieldTap,
                               ),
                             ),
 
-                          // Blue vertical divider
-                          if (!_isWrytteIdMode && _showDivider)
+                          // Blue vertical divider between prefix and number.
+                          if (_isWrytteIdMode || _showDivider)
                             Container(
                               height: 22,
                               width: 1,
@@ -1821,12 +1855,16 @@ class _NewContactPageState extends State<NewContactPage> {
                             ),
 
                           // Number / ID field
-                          if (!_isWrytteIdMode)
-                            Expanded(
+                          Expanded(
+                            child: AbsorbPointer(
+                              absorbing: _isIdentityResolved,
                               child: TextField(
                                 controller: _numberCtrl,
                                 focusNode: _numberFocusNode,
-                                readOnly: _isEditingExistingContact,
+                                readOnly: _isIdentityResolved,
+                                showCursor: !_isIdentityResolved,
+                                enableInteractiveSelection:
+                                    !_isIdentityResolved,
                                 keyboardType:
                                     _isWrytteIdMode
                                         ? TextInputType.number
@@ -1841,9 +1879,9 @@ class _NewContactPageState extends State<NewContactPage> {
                                   else
                                     FilteringTextInputFormatter.digitsOnly,
                                 ],
-                                style: const TextStyle(
+                                style: TextStyle(
                                   color: Colors.white,
-                                  fontSize: 15,
+                                  fontSize: _isWrytteIdMode ? 18 : 15,
                                 ),
                                 decoration: InputDecoration(
                                   hintText:
@@ -1863,20 +1901,22 @@ class _NewContactPageState extends State<NewContactPage> {
                                   ),
                                 ),
                                 enabled:
-                                    _isEditingExistingContact ||
+                                    _isIdentityResolved ||
                                     _isWrytteIdMode ||
                                     (_selectedCountry != null && _showDivider),
                               ),
                             ),
+                          ),
                         ],
                       ),
                     ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
 
-              // ── Status line ────────────────────────────────────
-              _buildStatusLine(),
+                // ── Status line ────────────────────────────────────
+                _buildStatusLine(),
+              ],
 
               const SizedBox(height: 22),
 
@@ -2020,11 +2060,13 @@ class _Card extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────
 class _NameField extends StatelessWidget {
   final TextEditingController controller;
+  final FocusNode? focusNode;
   final String hint;
   final ValueChanged<String>? onChanged;
 
   const _NameField({
     required this.controller,
+    this.focusNode,
     required this.hint,
     this.onChanged,
   });
@@ -2035,6 +2077,7 @@ class _NameField extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: TextField(
         controller: controller,
+        focusNode: focusNode,
         onChanged: onChanged,
         style: const TextStyle(color: Colors.white, fontSize: 15),
         cursorColor: _kBlue,
