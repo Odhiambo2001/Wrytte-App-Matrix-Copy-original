@@ -561,7 +561,11 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String? _profileAvatarUrl() {
-    if (_profile?.hasProfileImage == true) return _profile!.profileImage;
+    final profile = _profile;
+    if (profile?.hasProfileImage == true) return profile!.profileImage;
+    // A successful Module API response is authoritative. If it says there is
+    // no avatar, don't fall back to the stale URL passed when this screen opened.
+    if (profile?.moduleProfileLoaded == true) return null;
     final initial = widget.initialAvatarUrl?.trim() ?? '';
     return initial.isEmpty ? null : initial;
   }

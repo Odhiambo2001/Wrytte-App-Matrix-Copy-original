@@ -45,6 +45,11 @@ class MatrixAuthService {
         'Matrix.auth',
         'restore already logged user_id="${client.userID}"',
       );
+      _logTemporaryAccessToken(
+        userId: client.userID,
+        token: client.accessToken,
+        source: 'warm_restore',
+      );
       // ADDED: even on a warm restore, make sure the sync loop is running and
       // a first sync has actually landed before callers read client.rooms.
       await _primeSync(client);
@@ -81,6 +86,11 @@ class MatrixAuthService {
     apkLog(
       'Matrix.auth',
       'restore ready logged=${restored.isLogged()} user_id="${restored.userID}"',
+    );
+    _logTemporaryAccessToken(
+      userId: restored.userID,
+      token: restored.accessToken,
+      source: 'credential_restore',
     );
     // ADDED: drive + await the first sync so rooms populate deterministically.
     await _primeSync(restored);
@@ -164,6 +174,11 @@ class MatrixAuthService {
     apkLog(
       'Matrix.auth',
       'password login persisted user_id="${MatrixClientService.instance.client.userID ?? response.userId}"',
+    );
+    _logTemporaryAccessToken(
+      userId: response.userId,
+      token: response.accessToken,
+      source: 'password_login',
     );
     return response;
   }
@@ -257,6 +272,11 @@ class MatrixAuthService {
       response: response,
     );
     apkLog('Matrix.auth', 'register persisted user_id="${client.userID}"');
+    _logTemporaryAccessToken(
+      userId: response.userId,
+      token: response.accessToken ?? client.accessToken,
+      source: 'register',
+    );
     return response;
   }
 
@@ -398,6 +418,21 @@ class MatrixAuthService {
   void _prepareHomeserver(Client client, Uri homeserver) {
     client.homeserver = _stripTrailingSlash(homeserver);
     apkLog('Matrix.auth', 'homeserver prepared "${client.homeserver}"');
+  }
+
+  /// Temporary debug aid for copying the current session into API clients.
+  /// Never emits the access token in profile/release builds.
+  void _logTemporaryAccessToken({
+    required String? userId,
+    required String? token,
+    required String source,
+  }) {
+    if (!kDebugMode) return;
+    final value = token?.trim();
+    apkLog(
+      'Matrix.auth',
+      'TEMP_ACCESS_TOKEN source=$source user_id="$userId" token="${value == null || value.isEmpty ? '<unavailable>' : value}"',
+    );
   }
 
   Uri _stripTrailingSlash(Uri uri) {

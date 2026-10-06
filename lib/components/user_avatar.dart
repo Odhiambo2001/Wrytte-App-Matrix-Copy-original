@@ -81,8 +81,20 @@ class _UserAvatarState extends State<UserAvatar> {
   @override
   void didUpdateWidget(covariant UserAvatar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.cacheIdentity != widget.cacheIdentity) {
+
+    final identityChanged = oldWidget.cacheIdentity != widget.cacheIdentity;
+    final oldImageUrl = oldWidget.imageUrl?.trim() ?? '';
+    final newImageUrl = widget.imageUrl?.trim() ?? '';
+    final oldLocalPath = oldWidget.localImagePath?.trim() ?? '';
+    final newLocalPath = widget.localImagePath?.trim() ?? '';
+
+    // Keep the last good source during ordinary rebuilds, but an explicit
+    // transition to an empty source means the profile owner removed the
+    // avatar. Do not let _effectiveImageUrl/_localImageFile resurrect it.
+    if (identityChanged || (oldImageUrl.isNotEmpty && newImageUrl.isEmpty)) {
       _lastGoodImageUrl = null;
+    }
+    if (identityChanged || (oldLocalPath.isNotEmpty && newLocalPath.isEmpty)) {
       _lastGoodLocalImagePath = null;
     }
     _rememberStableSources();
