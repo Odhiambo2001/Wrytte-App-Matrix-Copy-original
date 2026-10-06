@@ -63,7 +63,16 @@ class _BottomNavBarState extends State<BottomNavBar> {
     if (widget.initialProfile == oldWidget.initialProfile) return;
     final initial =
         widget.initialProfile ?? UserProfileService.instance.cachedProfile;
-    if (_isDisplayReadyProfile(initial)) {
+    // The profile stream is authoritative after this widget has received a
+    // profile. HomeScreen's one-time startup preload can finish late and pass
+    // an older same-account profile through initialProfile; never let it
+    // overwrite a newer live avatar from the stream.
+    final currentUid = _profile?.uid.trim().toLowerCase();
+    final initialUid = initial?.uid.trim().toLowerCase();
+    final isDifferentAccount =
+        currentUid != null && initialUid != null && currentUid != initialUid;
+    if (_isDisplayReadyProfile(initial) &&
+        (_profile == null || isDifferentAccount)) {
       _profile = initial;
     }
   }
