@@ -111,6 +111,15 @@ class MatrixClientService {
   }
 
   void _captureProfileUpdateEvents(SyncUpdate update) {
+    for (final presence in update.presence ?? const []) {
+      final userId = presence.senderId.trim();
+      if (userId.isEmpty) continue;
+      debugPrint(
+        '[Matrix.presence] sync_update user_id="$userId" '
+        'status="${presence.presence.presence.name}"',
+      );
+    }
+
     final joinedRooms = update.rooms?.join;
     if (joinedRooms == null) return;
     for (final room in joinedRooms.values) {

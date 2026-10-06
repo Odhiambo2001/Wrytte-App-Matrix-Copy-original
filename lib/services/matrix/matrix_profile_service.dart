@@ -305,10 +305,28 @@ class MatrixProfileService {
         'A client can only update its own Matrix presence.',
       );
     }
-    await client.setPresence(
-      matrixUserId,
-      online ? mx.PresenceType.online : mx.PresenceType.offline,
+    final status = online ? 'online' : 'offline';
+    final stopwatch = Stopwatch()..start();
+    debugPrint(
+      '[Matrix.presence] set_request user_id="$matrixUserId" status="$status"',
     );
+    try {
+      await client.setPresence(
+        matrixUserId,
+        online ? mx.PresenceType.online : mx.PresenceType.offline,
+      );
+      debugPrint(
+        '[Matrix.presence] set_success user_id="$matrixUserId" '
+        'status="$status" duration_ms=${stopwatch.elapsedMilliseconds}',
+      );
+    } catch (error) {
+      debugPrint(
+        '[Matrix.presence] set_failed user_id="$matrixUserId" '
+        'status="$status" duration_ms=${stopwatch.elapsedMilliseconds} '
+        'error="$error"',
+      );
+      rethrow;
+    }
   }
 
   Future<void> setDisplayName(String userId, String? value) async {
