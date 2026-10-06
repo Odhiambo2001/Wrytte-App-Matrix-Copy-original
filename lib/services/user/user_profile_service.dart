@@ -307,11 +307,25 @@ class UserProfileService {
     await _refreshAndNotify(forceRefresh: true);
   }
 
+  /// Saves the Wrytte custom phone field, then invalidates local profile data.
+  /// Account-number changes must still go through the verified account flow.
+  Future<void> updatePhoneNumber(String phoneNumber) async {
+    final clean = phoneNumber.trim();
+    final uid = await AuthService.instance.getCurrentUserId();
+    if (uid == null || uid.trim().isEmpty) {
+      throw StateError('Cannot update profile number without a user ID.');
+    }
+    await MatrixProfileService.instance.setPhoneNumber(uid, clean);
+    _cache = null;
+    await _refreshAndNotify(forceRefresh: true);
+  }
+
   /// Convenience: update multiple fields in one write pass.
   Future<void> updateProfile({
     String? name,
     String? firstName,
     String? lastName,
+    String? phoneNumber,
     String? profileImage,
     String? bio,
     List<String>? links,
@@ -356,6 +370,10 @@ class UserProfileService {
     if (bio != null) {
       await _storage.write(key: _bioKey, value: bio.trim());
       backendFields['Bio'] = bio.trim();
+    }
+    if (phoneNumber != null) {
+      final cleanPhone = phoneNumber.trim();
+      backendFields['Phone'] = cleanPhone;
     }
     if (links != null) {
       await _storage.write(key: 'user_links', value: links.join('\n'));
@@ -617,7 +635,7 @@ class UserProfileService {
       final generation = _bindActiveAccount(uid);
       if (_logoutInProgress || !_isActiveSession(generation, uid)) return null;
 
-      final phone = _normalizePhone(await _storage.read(key: _phoneKey) ?? '');
+      var phone = _normalizePhone(await _storage.read(key: _phoneKey) ?? '');
       var name =
           ignoreStoredProfile ? '' : await _storage.read(key: _nameKey) ?? '';
       var bio =
@@ -671,14 +689,8 @@ class UserProfileService {
         if (remote.isNotEmpty) {
           moduleProfileLoaded = true;
           matrixDisplayNameLoaded = remote.containsKey('DisplayName');
-          if (phone.trim().isNotEmpty && _field(remote, 'Phone') == null) {
-            try {
-              await MatrixProfileService.instance.setPhoneNumber(uid, phone);
-              remote['Phone'] = phone;
-            } catch (e) {
-              debugPrint('[UserProfileService] Module number sync skipped: $e');
-            }
-          }
+          final remotePhone = _normalizePhone(_field(remote, 'Phone') ?? '');
+          if (remotePhone.isNotEmpty) phone = remotePhone;
           // A successful Module response is authoritative: omitted fields
           // have been deleted or are no longer visible, so clear stale local
           // values instead of carrying them forward.
@@ -1450,7 +1462,12 @@ class UserProfileService {
     if (raw.containsKey('displayname')) {
       result['DisplayName'] = raw['displayname']?.toString().trim() ?? '';
     }
+    // The Module's Matrix presence value is authoritative. Keep the custom
+    // field as a compatibility fallback for older Module responses.
     copy('presence', 'Presence');
+    if (!result.containsKey('Presence')) {
+      copy(WrytteProfile.onlineStatus, 'Presence');
+    }
     result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
     debugPrint(
       '[ModuleProfile.map] user_id="${fallbackUid ?? profile.userId}" '

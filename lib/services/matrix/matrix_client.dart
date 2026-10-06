@@ -21,6 +21,7 @@ class MatrixClientService {
   final Set<String> _capturedGroupDeletionKeys = {};
   final Map<String, String> _capturedProfileUpdateEventIds = {};
   final Map<String, String> _observedMatrixDisplayNames = {};
+  final Map<String, String> _observedPresenceStates = {};
   final StreamController<String> _profileUpdateController =
       StreamController<String>.broadcast();
 
@@ -110,6 +111,23 @@ class MatrixClientService {
   }
 
   void _captureProfileUpdateEvents(SyncUpdate update) {
+    for (final presence in update.presence ?? const []) {
+      final userId = presence.senderId.trim();
+      final status = presence.presence.presence.name;
+      if (userId.isEmpty || status.isEmpty) continue;
+      final userKey = _profileUpdateLocalpart(userId);
+      if (_observedPresenceStates[userKey] == status) continue;
+      _observedPresenceStates[userKey] = status;
+      if (_profileUpdateController.hasListener) {
+        _profileUpdateController.add(userId);
+      } else {
+        _pendingProfileUpdates.add(userId);
+      }
+      debugPrint(
+        '[Matrix.presence] changed user_id="$userId" status="$status"',
+      );
+    }
+
     final joinedRooms = update.rooms?.join;
     if (joinedRooms == null) return;
     for (final room in joinedRooms.values) {

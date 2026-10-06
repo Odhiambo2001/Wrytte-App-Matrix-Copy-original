@@ -10,6 +10,7 @@ import 'package:wrytte/services/backend/backend_realtime_service.dart';
 import 'package:wrytte/services/call_listener_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
+import 'package:wrytte/services/user_service.dart';
 import 'package:wrytte/ui/screens/chats/conversations_screen.dart'; // ← this one
 import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'calls/calls_screen.dart';
@@ -55,6 +56,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     UserProfileService.instance.setFirstSignupMode(widget.isFirstSignup);
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_setMatrixPresence(true));
     if (widget.isFirstSignup) {
       final initialProfile = _initialSessionProfile();
       if (_isDisplayReadyProfile(initialProfile)) {
@@ -164,15 +166,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      unawaited(_setMatrixPresence(true));
       _refreshBackendTokenIfNeeded();
       _scheduleBackendTokenRefresh();
       unawaited(BackendRealtimeService.instance.connect());
       unawaited(_activeDeviceChallenges.start());
     } else {
+      unawaited(_setMatrixPresence(false));
       _backendTokenTimer?.cancel();
       _backendTokenTimer = null;
       unawaited(BackendRealtimeService.instance.disconnect());
       unawaited(_activeDeviceChallenges.stop());
+    }
+  }
+
+  Future<void> _setMatrixPresence(bool online) async {
+    try {
+      await UserService().setUserOnlineStatus(online);
+    } catch (error) {
+      debugPrint('[Matrix.presence] lifecycle update failed: $error');
     }
   }
 
