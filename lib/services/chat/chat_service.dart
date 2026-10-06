@@ -5596,7 +5596,6 @@ class ChatService {
       final profile = await UserProfileService.instance.getProfileByUid(
         peerId,
         phone: phoneHint,
-        forceRefresh: true,
       );
       if (profile == null) {
         apkLog(

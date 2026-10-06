@@ -1029,7 +1029,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadReceiverProfile({
     bool publish = true,
-    bool forceRefresh = true,
+    bool forceRefresh = false,
   }) async {
     // A group has no receiver profile. Its identity is the room ID and its
     // avatar may only come from the room's m.room.avatar state event. Looking
@@ -1235,7 +1235,6 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final profile = await UserProfileService.instance.getProfileByUid(
         uid,
-        forceRefresh: true,
       );
       if (profile == null) return null;
       if (profile.moduleProfileLoaded) {

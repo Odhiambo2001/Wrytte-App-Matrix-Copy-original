@@ -15,6 +15,7 @@ import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_profile_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/file_upload_limits.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
@@ -49,7 +50,7 @@ class UserProfileService {
   DateTime? _lastPendingAvatarAttemptAt;
   final Map<String, UserProfile> _publicProfileCache = {};
   final Map<String, Future<UserProfile?>> _publicProfileInFlight = {};
-  final Map<String, DateTime> _publicProfileFetchedAt = {};
+  final Map<String, String> _publicProfilePreviousAvatarUrls = {};
   final Map<String, int> _publicProfileRevisions = {};
   final Set<String> _publicProfileMisses = {};
   Future<UserProfile?>? _loginProfileInFlight;
@@ -60,7 +61,6 @@ class UserProfileService {
   String? _activeAccountUid;
   bool _logoutInProgress = false;
   static const _currentProfileFreshness = Duration(minutes: 5);
-  static const _publicProfileFreshness = Duration(seconds: 30);
   bool _suppressBackendProfileReads = false;
   final StreamController<UserProfile?> _profileController =
       StreamController<UserProfile?>.broadcast();
@@ -73,15 +73,17 @@ class UserProfileService {
   void _handlePublicProfileUpdated(String userId) {
     final localpart = _matrixLocalpart(userId).toLowerCase();
     if (localpart.isEmpty) return;
+    final cachedProfile = cachedPublicProfileByUid(userId);
+    if (cachedProfile?.profileImage.isNotEmpty == true) {
+      _publicProfilePreviousAvatarUrls[localpart] =
+          cachedProfile!.profileImage;
+    }
     _publicProfileRevisions.update(
       localpart,
       (revision) => revision + 1,
       ifAbsent: () => 1,
     );
     _publicProfileCache.removeWhere(
-      (key, _) => _profileCacheLocalpart(key) == localpart,
-    );
-    _publicProfileFetchedAt.removeWhere(
       (key, _) => _profileCacheLocalpart(key) == localpart,
     );
     _publicProfileMisses.removeWhere(
@@ -499,24 +501,21 @@ class UserProfileService {
       'force_refresh=$forceRefresh',
     );
 
-    final currentUid = await AuthService.instance.getCurrentUserId();
-
     // If it's the current user, use the full local profile
-    if (currentUid != null &&
-        _matrixLocalpart(currentUid).toLowerCase() ==
-            _matrixLocalpart(uid).toLowerCase()) {
+    final ownerProfile = await _publicProfileForOwner(uid);
+    if (ownerProfile != null) {
       debugPrint(
         '[UserProfileService] profile source=owner_profile user_id="$requestedUid"',
       );
-      return getCurrentUserProfile(forceRefresh: true);
+      return forceRefresh
+          ? getCurrentUserProfile(forceRefresh: true)
+          : ownerProfile;
     }
 
     if (!forceRefresh) {
-      final cached = _publicProfileCache[cacheKey];
-      final fetchedAt = _publicProfileFetchedAt[cacheKey];
-      if (cached != null &&
-          fetchedAt != null &&
-          DateTime.now().difference(fetchedAt) < _publicProfileFreshness) {
+      final cached = _publicProfileCache[cacheKey] ??
+          cachedPublicProfileByUid(requestedUid);
+      if (cached != null) {
         debugPrint(
           '[UserProfileService] profile source=public_cache user_id="$requestedUid"',
         );
@@ -568,6 +567,14 @@ class UserProfileService {
     final cacheKey = _publicProfileCacheKey(uid, phone);
     final localpart = _matrixLocalpart(uid).toLowerCase();
     final profileRevision = _publicProfileRevisions[localpart] ?? 0;
+    final previousProfile = cachedPublicProfileByUid(uid, phone: phone);
+    if (previousProfile?.profileImage.isNotEmpty == true &&
+        !_publicProfilePreviousAvatarUrls.containsKey(localpart)) {
+      _publicProfilePreviousAvatarUrls.putIfAbsent(
+        localpart,
+        () => previousProfile!.profileImage,
+      );
+    }
     final remote = await _readPublicBackendProfileBestEffort(uid, phone: phone);
     if (generation != _sessionGeneration) return null;
     if ((_publicProfileRevisions[localpart] ?? 0) != profileRevision) {
@@ -587,7 +594,6 @@ class UserProfileService {
       _publicProfileCache[cacheKey] = fallback;
       return fallback;
     }
-    final fetchedAt = DateTime.now();
     var profile = _profileFromBackendFields(uid, remote, fallbackPhone: phone);
     if (profile.hasProfileImage) {
       profile = profile.copyWith(
@@ -599,11 +605,24 @@ class UserProfileService {
       );
     }
     profile = _reuseStablePublicAvatar(cacheKey, profile);
+    final previousAvatar = _publicProfilePreviousAvatarUrls.remove(localpart);
+    if (previousAvatar != null &&
+        previousAvatar.isNotEmpty &&
+        previousAvatar != profile.profileImage) {
+      await UserAvatar.evictCachedUrl(previousAvatar);
+      if (profile.hasProfileImage) {
+        unawaited(
+          AvatarPreloadService.replace(
+            oldUrl: previousAvatar,
+            newUrl: profile.profileImage,
+          ),
+        );
+      }
+    }
     // Public/member avatars remain URL-backed and are cached lazily by
     // CachedNetworkImage when rendered. Eager file downloads here duplicated
     // that cache and repeatedly timed out for profiles not on screen.
     _publicProfileCache[cacheKey] = profile;
-    _publicProfileFetchedAt[cacheKey] = fetchedAt;
     return profile;
   }
 
@@ -616,7 +635,7 @@ class UserProfileService {
     _cache = null;
     _publicProfileCache.clear();
     _publicProfileInFlight.clear();
-    _publicProfileFetchedAt.clear();
+    _publicProfilePreviousAvatarUrls.clear();
     _publicProfileRevisions.clear();
     _publicProfileMisses.clear();
     _loginProfileInFlight = null;
@@ -640,13 +659,17 @@ class UserProfileService {
     if (localpart.isEmpty) return null;
 
     final cacheKey = _publicProfileCacheKey(uid, phone);
-    final exact = _publicProfileCache[cacheKey];
-    if (exact != null) return exact;
+    return _publicProfileCache[cacheKey];
+  }
 
-    for (final entry in _publicProfileCache.entries) {
-      if (entry.key.startsWith('$localpart|')) return entry.value;
+  Future<UserProfile?> _publicProfileForOwner(String uid) async {
+    final currentUid = await AuthService.instance.getCurrentUserId();
+    if (currentUid == null ||
+        _matrixLocalpart(currentUid).toLowerCase() !=
+            _matrixLocalpart(uid).toLowerCase()) {
+      return null;
     }
-    return null;
+    return getCurrentUserProfile();
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1438,7 +1461,7 @@ class UserProfileService {
   }
 
   String _publicProfileCacheKey(String uid, String? phone) {
-    return '${_matrixLocalpart(uid).toLowerCase()}|${_normalizePhone(phone ?? '')}';
+    return _matrixLocalpart(uid).toLowerCase();
   }
 
   Future<void> _saveBackendProfileBestEffort(

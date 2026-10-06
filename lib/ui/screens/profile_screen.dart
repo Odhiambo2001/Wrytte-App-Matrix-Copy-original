@@ -123,7 +123,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             _matrixLocalpart(userId).toLowerCase()) {
       return;
     }
-    unawaited(_loadProfile());
+    unawaited(_loadProfile(forceRefresh: true));
   }
 
   @override
@@ -134,7 +134,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     super.dispose();
   }
 
-  Future<void> _loadProfile() async {
+  Future<void> _loadProfile({bool forceRefresh = false}) async {
     var uid = _validProfileUid(widget.uid);
     uid ??= await _resolveProfileUidFromConversation();
     final ownerUserId = await AuthService.instance.getCurrentUserId();
@@ -175,12 +175,12 @@ class _ProfileScreenState extends State<ProfileScreen>
             ? await UserProfileService.instance.getProfileByUid(
               uid,
               phone: profileLookupPhone,
-              forceRefresh: true,
+              forceRefresh: forceRefresh,
             )
             : _isOtherUser
             ? _profile
             : await UserProfileService.instance.getCurrentUserProfile(
-              forceRefresh: true,
+              forceRefresh: forceRefresh,
             );
 
     if (!mounted) return;
@@ -437,7 +437,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     try {
       final profile = await UserProfileService.instance.getProfileByUid(
         uid,
-        forceRefresh: true,
+        forceRefresh: false,
       );
       if (profile?.moduleProfileLoaded == true) {
         return (

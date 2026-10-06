@@ -1702,7 +1702,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     try {
       final profile = await UserProfileService.instance.getProfileByUid(
         uid,
-        forceRefresh: true,
       );
       if (profile == null) {
         _matrixProfileCache[uid] = null;

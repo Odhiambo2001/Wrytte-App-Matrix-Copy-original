@@ -811,7 +811,6 @@ class ContactService {
       final profile = await UserProfileService.instance.getProfileByUid(
         wrytteUserId,
         phone: contact.primaryPhone,
-        forceRefresh: true,
       );
       if (profile == null) return contact;
 
