@@ -8,6 +8,7 @@ import 'package:wrytte/services/face/biometric_prewarm_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/welcome_view.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
+import 'package:wrytte/utils/wrytte_id.dart';
 
 class EditProfileScreen extends StatefulWidget {
   final UserProfile? initialProfile;
@@ -79,7 +80,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _firstNameController.text = nameParts.isNotEmpty ? nameParts[0] : '';
     _lastNameController.text =
         nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
-    _phoneNumberController.text = profile.phone;
+    _phoneNumberController.text = _formatProfileNumber(
+      profile.phone,
+      accountId: profile.uid,
+    );
     _bioController.text = profile.bio;
     _linkController.text = profile.links.isNotEmpty ? profile.links[0] : '';
     _channelAliasController.text = profile.channelAlias;
@@ -92,6 +96,30 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (_currentImageUrl != null) {
       _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
     }
+  }
+
+  String _formatProfileNumber(String value, {String accountId = ''}) {
+    final number = value.trim();
+    if (number.isEmpty) return '';
+    final wrytteId = WrytteId.forDisplay(number);
+    if (wrytteId != null) return wrytteId;
+
+    final accountWrytteId = WrytteId.forDisplay(accountId);
+    final accountIdDigits = accountWrytteId
+        ?.replaceAll(RegExp(r'[^0-9]'), '')
+        .replaceFirst(RegExp(r'^00'), '');
+    final numberDigits = number.replaceAll(RegExp(r'[^0-9]'), '');
+    if (accountWrytteId != null && numberDigits == accountIdDigits) {
+      return accountWrytteId;
+    }
+
+    return CountryPhoneNumber.formatInternationalDisplay(number);
+  }
+
+  String _formattedAccountNumber() {
+    final profile = _profile;
+    if (profile == null) return '';
+    return _formatProfileNumber(profile.phone, accountId: profile.uid);
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -443,26 +471,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                           color: cardBg,
                           borderRadius: BorderRadius.circular(25),
                         ),
-                        child: Column(
-                          children: [
-                            _inputRow(
-                              'Profile phone number',
-                              _phoneNumberController,
-                            ),
-                            const Padding(
-                              padding: EdgeInsets.fromLTRB(16, 0, 16, 14),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  'This profile field does not change your sign-in number.',
-                                  style: TextStyle(
-                                    color: Color(0xFF8A8D94),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
+                        child: _inputRow(
+                          'Profile phone number',
+                          _phoneNumberController,
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -516,9 +527,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   ),
                                   const Spacer(),
                                   Text(
-                                    CountryPhoneNumber.formatInternationalDisplay(
-                                      _profile?.phone ?? '',
-                                    ),
+                                    _formattedAccountNumber(),
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 16,
