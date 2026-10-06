@@ -26,6 +26,18 @@ class MatrixProfileService {
     );
   }
 
+  Uri _matrixProfileFieldUri(String userId, String field) {
+    final trimmed = userId.trim();
+    final matrixUserId =
+        trimmed.startsWith('@') && trimmed.contains(':')
+            ? trimmed
+            : '@${trimmed.replaceFirst(RegExp(r'^@'), '')}:${MatrixConfig.serverName}';
+    return Uri.parse(
+      '${MatrixConfig.homeserver}/_matrix/client/v3/profile/'
+      '${Uri.encodeComponent(matrixUserId)}/${Uri.encodeComponent(field)}',
+    );
+  }
+
   Future<Map<String, String>> _authHeaders() async {
     final token =
         MatrixClientService.instance.accessToken ??
@@ -62,10 +74,32 @@ class MatrixProfileService {
           decoded['visibility'] as Map,
         );
       }
-      // The Module's displayname is composed only from fields the requester
-      // may see; this is not Matrix's globally visible displayname field.
-      for (final key in const ['displayname', 'presence']) {
-        if (decoded[key] != null) fields[key] = decoded[key];
+      if (decoded['presence'] != null) fields['presence'] = decoded['presence'];
+      // Name is the Matrix-standard displayname, not the legacy split-name
+      // fields returned by the Wrytte Module.
+      fields.remove('displayname');
+      try {
+        final matrixResponse = await http.get(
+          _matrixProfileFieldUri(userId, 'displayname'),
+        );
+        if (matrixResponse.statusCode == 200) {
+          final matrixProfile = jsonDecode(matrixResponse.body);
+          if (matrixProfile is Map) {
+            fields['displayname'] =
+                matrixProfile['displayname']?.toString() ?? '';
+          }
+        } else if (matrixResponse.statusCode == 404) {
+          fields['displayname'] = '';
+        } else {
+          debugPrint(
+            '[MatrixProfile.displayname] GET user_id="$userId" '
+            'status=${matrixResponse.statusCode}',
+          );
+        }
+      } catch (error) {
+        debugPrint(
+          '[MatrixProfile.displayname] GET failed user_id="$userId" error=$error',
+        );
       }
       debugPrint(
         '[ModuleProfile.GET] parsed user_id="$userId" '
@@ -131,8 +165,6 @@ class MatrixProfileService {
     required String userId,
     String? avatarUrl,
     String? displayName,
-    String? firstName,
-    String? lastName,
     String? phoneNumber,
     String? bio,
     String? link,
@@ -140,9 +172,12 @@ class MatrixProfileService {
     String? groupAlias,
     Map<String, String>? visibilitySettings,
   }) async {
+    if (displayName != null) {
+      await setDisplayName(userId, displayName);
+    }
+
     final fields = <String, dynamic>{};
     final removeFields = <String>[];
-    final nameParts = _splitName(displayName);
     void add(String field, String? value) {
       if (value == null) return;
       final clean = value.trim();
@@ -153,8 +188,7 @@ class MatrixProfileService {
       }
     }
 
-    add(WrytteProfile.firstName, firstName ?? nameParts?.$1);
-    add(WrytteProfile.lastName, lastName ?? nameParts?.$2);
+    // Matrix stores a single displayname; do not write split names to Module.
     add(WrytteProfile.phoneNumber, phoneNumber);
     add(WrytteProfile.bio, bio);
     add(WrytteProfile.link, link);
@@ -167,6 +201,9 @@ class MatrixProfileService {
       } else {
         fields[WrytteProfile.avatarImageUrl] = avatarUrl.trim();
       }
+    }
+    if (fields.isEmpty && removeFields.isEmpty && visibilitySettings == null) {
+      return;
     }
     await _patch(userId, {
       if (fields.isNotEmpty) 'fields': fields,
@@ -250,31 +287,39 @@ class MatrixProfileService {
       _patch(userId, {'presence': online ? 'online' : 'offline'});
 
   Future<void> setDisplayName(String userId, String? value) async {
-    final name = _splitName(value);
-    final fields = <String, dynamic>{};
-    final removeFields = <String>[];
-    for (final entry in <String, String?>{
-      WrytteProfile.firstName: name?.$1,
-      WrytteProfile.lastName: name?.$2,
-    }.entries) {
-      final value = entry.value?.trim() ?? '';
-      if (value.isEmpty) {
-        removeFields.add(entry.key);
-      } else {
-        fields[entry.key] = value;
+    final uri = _matrixProfileFieldUri(userId, 'displayname');
+    final clean = value?.trim() ?? '';
+    final headers = await _authHeaders();
+    final response =
+        clean.isEmpty
+            ? await http.delete(uri, headers: headers)
+            : await http.put(
+              uri,
+              headers: headers,
+              body: jsonEncode({'displayname': clean}),
+            );
+    _check(response);
+    debugPrint(
+      '[MatrixProfile.displayname] saved user_id="$userId" '
+      'present=${clean.isNotEmpty}',
+    );
+
+    // Remove obsolete split-name profile fields after Matrix accepts the
+    // standard name. This does not alter the user's saved contact labels.
+    for (final legacyField in [
+      WrytteProfile.firstName,
+      WrytteProfile.lastName,
+    ]) {
+      try {
+        await deleteField(userId, legacyField);
+      } catch (error) {
+        debugPrint(
+          '[ModuleProfile.legacyName] delete skipped user_id="$userId" '
+          'field="$legacyField" error=$error',
+        );
       }
     }
-    await _patch(userId, {
-      if (fields.isNotEmpty) 'fields': fields,
-      if (removeFields.isNotEmpty) 'remove_fields': removeFields,
-    });
   }
-
-  Future<void> setFirstName(String userId, String? value) =>
-      _setOrDelete(userId, WrytteProfile.firstName, value);
-
-  Future<void> setLastName(String userId, String? value) =>
-      _setOrDelete(userId, WrytteProfile.lastName, value);
 
   Future<void> setPhoneNumber(String userId, String? value) =>
       _setOrDelete(userId, WrytteProfile.phoneNumber, value);
@@ -331,12 +376,6 @@ class MatrixProfileService {
       throw const FormatException('Module response omitted profile fields.');
     }
     return Map<String, dynamic>.from(decoded['fields'] as Map);
-  }
-
-  (String, String)? _splitName(String? value) {
-    final parts = (value ?? '').trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return null;
-    return (parts.first, parts.skip(1).join(' '));
   }
 
   void _check(http.Response response) {

@@ -20,6 +20,7 @@ class MatrixClientService {
   final List<String> _pendingProfileUpdates = [];
   final Set<String> _capturedGroupDeletionKeys = {};
   final Map<String, String> _capturedProfileUpdateEventIds = {};
+  final Map<String, String> _observedMatrixDisplayNames = {};
   final StreamController<String> _profileUpdateController =
       StreamController<String>.broadcast();
 
@@ -112,7 +113,12 @@ class MatrixClientService {
     final joinedRooms = update.rooms?.join;
     if (joinedRooms == null) return;
     for (final room in joinedRooms.values) {
-      for (final event in room.timeline?.events ?? const <MatrixEvent>[]) {
+      final stateAndTimelineEvents = <MatrixEvent>[
+        ...?room.state,
+        ...?room.timeline?.events,
+      ];
+      for (final event in stateAndTimelineEvents) {
+        _captureMatrixDisplayNameChange(event);
         if (event.type != profileUpdatedEventType) continue;
         final ownerId = event.content['user_id']?.toString().trim() ?? '';
         if (event.senderId.isEmpty ||
@@ -142,6 +148,44 @@ class MatrixClientService {
       _capturedProfileUpdateEventIds
         ..clear()
         ..addEntries(recent.toList().reversed);
+    }
+  }
+
+  void _captureMatrixDisplayNameChange(MatrixEvent event) {
+    if (event.type != 'm.room.member' || event.stateKey == null) return;
+    final userId = event.stateKey!.trim();
+    if (userId.isEmpty || !event.content.containsKey('displayname')) return;
+    final localpart = _profileUpdateLocalpart(userId);
+    final observedUserKey = userId.toLowerCase();
+    final displayName = event.content['displayname']?.toString() ?? '';
+    final previous = _observedMatrixDisplayNames[observedUserKey];
+    _observedMatrixDisplayNames[observedUserKey] = displayName;
+
+    // The first sync contains current room state for many users. Only an
+    // observed value change should invalidate an already-running profile UI.
+    // If this is the first event seen for the user, use Matrix's prev_content
+    // when present so a rename during startup is not missed.
+    final unsignedPrevious = event.unsigned?['prev_content'];
+    final previousEventName =
+        unsignedPrevious is Map
+            ? unsignedPrevious['displayname']?.toString() ?? ''
+            : null;
+    final changed =
+        previous != null
+            ? previous != displayName
+            : previousEventName != null && previousEventName != displayName;
+    if (!changed) return;
+    final eventId = event.eventId.trim();
+    final dedupeKey =
+        eventId.isNotEmpty
+            ? 'matrix-displayname|$eventId'
+            : 'matrix-displayname|$localpart|$displayName|${event.originServerTs.microsecondsSinceEpoch}';
+    if (_capturedProfileUpdateEventIds.containsKey(dedupeKey)) return;
+    _capturedProfileUpdateEventIds[dedupeKey] = localpart;
+    if (_profileUpdateController.hasListener) {
+      _profileUpdateController.add(userId);
+    } else {
+      _pendingProfileUpdates.add(userId);
     }
   }
 

@@ -177,23 +177,25 @@ class UserProfileService {
   /// Persists an updated display name and invalidates the cache.
   Future<void> updateDisplayName(String name) async {
     final trimmed = name.trim();
-    if (trimmed.isEmpty) return;
-    await _storage.write(key: _nameKey, value: trimmed);
-    final parts = _splitName(trimmed);
-    await _storage.write(key: _firstNameKey, value: parts.$1);
-    await _storage.write(key: _lastNameKey, value: parts.$2);
-    // Also keep AuthService in sync (it owns the same key)
-    await AuthService.instance.updateStoredUsername(trimmed);
-    final phone = await AuthService.instance.getSavedPhone();
+    final uid = await AuthService.instance.getCurrentUserId();
+    if (uid == null || uid.trim().isEmpty) {
+      throw StateError('Cannot update Matrix displayname without a user ID.');
+    }
+    await MatrixProfileService.instance.setDisplayName(uid, trimmed);
+    if (trimmed.isEmpty) {
+      await _storage.delete(key: _nameKey);
+    } else {
+      await _storage.write(key: _nameKey, value: trimmed);
+      await AuthService.instance.updateStoredUsername(trimmed);
+    }
+    await _storage.delete(key: _firstNameKey);
+    await _storage.delete(key: _lastNameKey);
     _cache = null;
-    await _readFromStorage(allowBackendRefresh: false);
-    await _saveBackendProfileBestEffort({
-      'DisplayName': trimmed,
-      'FirstName': parts.$1,
-      'LastName': parts.$2,
-      if (phone != null && phone.trim().isNotEmpty) 'Phone': phone.trim(),
-    });
-    debugPrint('[UserProfileService] Display name updated: "$trimmed"');
+    await _refreshAndNotify(forceRefresh: true);
+    debugPrint(
+      '[UserProfileService] Matrix displayname updated user_id="$uid" '
+      'present=${trimmed.isNotEmpty}',
+    );
   }
 
   /// Persists a profile image URL and invalidates the cache.
@@ -318,28 +320,31 @@ class UserProfileService {
     Map<String, String>? visibilitySettings,
   }) async {
     final backendFields = <String, String>{};
-    if (name != null && name.trim().isNotEmpty) {
-      await _storage.write(key: _nameKey, value: name.trim());
-      await AuthService.instance.updateStoredUsername(name.trim());
-      backendFields['DisplayName'] = name.trim();
-      final phone = await AuthService.instance.getSavedPhone();
-      if (phone != null && phone.trim().isNotEmpty) {
-        backendFields['Phone'] = phone.trim();
+    final String? displayNameToSave =
+        name != null
+            ? name.trim()
+            : (firstName != null || lastName != null)
+            ? [firstName?.trim() ?? '', lastName?.trim() ?? '']
+                .where((part) => part.isNotEmpty)
+                .join(' ')
+            : null;
+    if (displayNameToSave != null) {
+      final uid = await AuthService.instance.getCurrentUserId();
+      if (uid == null || uid.trim().isEmpty) {
+        throw StateError('Cannot update Matrix displayname without a user ID.');
       }
-      final parts = _splitName(name.trim());
-      await _storage.write(key: _firstNameKey, value: firstName ?? parts.$1);
-      await _storage.write(key: _lastNameKey, value: lastName ?? parts.$2);
-      backendFields['FirstName'] = firstName?.trim() ?? parts.$1;
-      backendFields['LastName'] = lastName?.trim() ?? parts.$2;
-    } else {
-      if (firstName != null) {
-        await _storage.write(key: _firstNameKey, value: firstName.trim());
-        backendFields['FirstName'] = firstName.trim();
+      await MatrixProfileService.instance.setDisplayName(
+        uid,
+        displayNameToSave,
+      );
+      if (displayNameToSave.isEmpty) {
+        await _storage.delete(key: _nameKey);
+      } else {
+        await _storage.write(key: _nameKey, value: displayNameToSave);
+        await AuthService.instance.updateStoredUsername(displayNameToSave);
       }
-      if (lastName != null) {
-        await _storage.write(key: _lastNameKey, value: lastName.trim());
-        backendFields['LastName'] = lastName.trim();
-      }
+      await _storage.delete(key: _firstNameKey);
+      await _storage.delete(key: _lastNameKey);
     }
     if (profileImage != null) {
       await _storage.write(
@@ -615,16 +620,9 @@ class UserProfileService {
       final phone = _normalizePhone(await _storage.read(key: _phoneKey) ?? '');
       var name =
           ignoreStoredProfile ? '' : await _storage.read(key: _nameKey) ?? '';
-      var firstName =
-          ignoreStoredProfile
-              ? ''
-              : await _storage.read(key: _firstNameKey) ?? '';
-      var lastName =
-          ignoreStoredProfile
-              ? ''
-              : await _storage.read(key: _lastNameKey) ?? '';
       var bio =
           ignoreStoredProfile ? '' : await _storage.read(key: _bioKey) ?? '';
+      var moduleProfileLoaded = false;
       var onlineStatus = '';
       var channelAlias = '';
       var groupAlias = '';
@@ -655,6 +653,7 @@ class UserProfileService {
           ignoreStoredAvatar || ignoreStoredProfile
               ? 0
               : await _readAvatarVersion(uid);
+      var matrixDisplayNameLoaded = false;
 
       if (forceRefresh && !ignoreStoredProfile) {
         final uploaded = await _syncPendingAvatarUploadForUid(uid);
@@ -670,6 +669,8 @@ class UserProfileService {
         final remote = await _readBackendProfileBestEffort();
         if (!_isActiveSession(generation, uid)) return null;
         if (remote.isNotEmpty) {
+          moduleProfileLoaded = true;
+          matrixDisplayNameLoaded = remote.containsKey('DisplayName');
           if (phone.trim().isNotEmpty && _field(remote, 'Phone') == null) {
             try {
               await MatrixProfileService.instance.setPhoneNumber(uid, phone);
@@ -678,13 +679,15 @@ class UserProfileService {
               debugPrint('[UserProfileService] Module number sync skipped: $e');
             }
           }
-          firstName = _field(remote, 'FirstName') ?? firstName;
-          lastName = _field(remote, 'LastName') ?? lastName;
-          bio = _field(remote, 'Bio') ?? bio;
-          onlineStatus = _field(remote, 'Presence') ?? onlineStatus;
-          channelAlias = _field(remote, 'ChannelAlias') ?? channelAlias;
-          groupAlias = _field(remote, 'GroupAlias') ?? groupAlias;
+          // A successful Module response is authoritative: omitted fields
+          // have been deleted or are no longer visible, so clear stale local
+          // values instead of carrying them forward.
+          bio = _field(remote, 'Bio') ?? '';
+          onlineStatus = _field(remote, 'Presence') ?? '';
+          channelAlias = _field(remote, 'ChannelAlias') ?? '';
+          groupAlias = _field(remote, 'GroupAlias') ?? '';
           final visibilityJson = _field(remote, 'VisibilitySettings');
+          visibilitySettings = <String, String>{};
           if (visibilityJson != null && visibilityJson.isNotEmpty) {
             final decoded = jsonDecode(visibilityJson);
             if (decoded is Map) {
@@ -715,20 +718,41 @@ class UserProfileService {
             );
           }
           final remoteName =
-              [
-                firstName,
-                lastName,
-              ].where((part) => part.trim().isNotEmpty).join(' ').trim();
-          if (_hasRealName(remoteName)) {
+              (_field(remote, 'DisplayName') ??
+                      _field(remote, 'displayname') ??
+                      '')
+                  .trim();
+          if (matrixDisplayNameLoaded) {
             if (!_isActiveSession(generation, uid)) return null;
             name = remoteName;
-            await _storage.write(key: _nameKey, value: name);
-            await _storage.write(key: _firstNameKey, value: firstName);
-            await _storage.write(key: _lastNameKey, value: lastName);
-            await AuthService.instance.updateStoredUsername(name);
+            await _storage.delete(key: _firstNameKey);
+            await _storage.delete(key: _lastNameKey);
+            if (_hasRealName(name)) {
+              await _storage.write(key: _nameKey, value: name);
+              await AuthService.instance.updateStoredUsername(name);
+            } else {
+              await _storage.delete(key: _nameKey);
+              await AuthService.instance.clearStoredUsername();
+            }
           }
           if (!_isActiveSession(generation, uid)) return null;
           await _storage.write(key: _bioKey, value: bio);
+          await _storage.write(
+            key: 'profile_channel_alias',
+            value: channelAlias,
+          );
+          await _storage.write(
+            key: 'profile_group_alias',
+            value: groupAlias,
+          );
+          await _storage.write(
+            key: 'user_links',
+            value: _field(remote, 'Link') ?? '',
+          );
+          await _storage.write(
+            key: 'profile_visibility_settings',
+            value: jsonEncode(visibilitySettings),
+          );
           if (profileImage.isNotEmpty) {
             await _storage.write(key: _profileImageKey, value: profileImage);
             await _writeAvatarVersion(uid, avatarVersion);
@@ -748,11 +772,15 @@ class UserProfileService {
           _currentProfileBackendFetchedAt = DateTime.now();
         }
       }
-      if (!_hasRealName(name) && !ignoreStoredProfile) {
+      if (!_hasRealName(name) &&
+          !ignoreStoredProfile &&
+          !matrixDisplayNameLoaded) {
         await AuthService.instance.getValidBackendToken();
         name = await _storage.read(key: _nameKey) ?? name;
       }
-      if (!_hasRealName(name) && !ignoreStoredProfile) {
+      if (!_hasRealName(name) &&
+          !ignoreStoredProfile &&
+          !matrixDisplayNameLoaded) {
         final restored = await AuthService.instance.hydrateStoredProfile(uid);
         if (restored != null && restored.hasUsableName) {
           name = restored.username;
@@ -776,6 +804,7 @@ class UserProfileService {
         groupAlias: groupAlias,
         visibilitySettings: visibilitySettings,
         avatarVersion: avatarVersion,
+        moduleProfileLoaded: moduleProfileLoaded,
         localProfileImagePath: localProfileImagePath,
         links:
             linksRaw
@@ -905,12 +934,6 @@ class UserProfileService {
       r'^[a-f0-9]{24,}$',
       caseSensitive: false,
     ).hasMatch(localpart);
-  }
-
-  (String, String) _splitName(String value) {
-    final parts = value.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty) return ('', '');
-    return (parts.first, parts.length > 1 ? parts.sublist(1).join(' ') : '');
   }
 
   String? _field(Map<String, String> fields, String wanted) {
@@ -1099,26 +1122,14 @@ class UserProfileService {
     Map<String, String> fields, {
     String? fallbackPhone,
   }) {
-    final firstName = _field(fields, 'FirstName') ?? '';
-    final lastName = _field(fields, 'LastName') ?? '';
-    final joinedName =
-        [
-          firstName,
-          lastName,
-        ].where((part) => part.trim().isNotEmpty).join(' ').trim();
-    final moduleDisplayName =
+    final displayName =
+        _field(fields, 'displayname') ??
         _field(fields, 'DisplayName') ??
         _field(fields, 'displayName') ??
         _field(fields, 'Name') ??
         _field(fields, 'name') ??
         _field(fields, 'Username') ??
-        joinedName;
-    final displayName =
-        moduleDisplayName.trim().isNotEmpty
-            ? moduleDisplayName
-            : (_field(fields, 'displayname') ?? '').trim().isNotEmpty
-            ? _field(fields, 'displayname') ?? ''
-            : joinedName;
+        '';
     final avatar =
         _field(fields, 'AvatarImg') ??
         _field(fields, 'avatarImg') ??
@@ -1352,15 +1363,8 @@ class UserProfileService {
       if (uid == null || uid.trim().isEmpty) return;
       final moduleFields = <String, dynamic>{};
       final visibility = <String, String>{};
-      String? displayName;
       for (final entry in fields.entries) {
         switch (entry.key.toLowerCase()) {
-          case 'firstname':
-            moduleFields[WrytteProfile.firstName] = entry.value;
-            break;
-          case 'lastname':
-            moduleFields[WrytteProfile.lastName] = entry.value;
-            break;
           case 'bio':
             moduleFields[WrytteProfile.bio] = entry.value;
             break;
@@ -1394,9 +1398,6 @@ class UserProfileService {
           case 'profileimage':
             moduleFields[WrytteProfile.avatarImageUrl] = entry.value;
             break;
-          case 'displayname':
-            displayName = entry.value;
-            break;
         }
       }
       if (create) {
@@ -1409,9 +1410,6 @@ class UserProfileService {
       } else {
         await MatrixProfileService.instance.updateOwnerProfile(
           userId: uid,
-          displayName: displayName,
-          firstName: moduleFields[WrytteProfile.firstName]?.toString(),
-          lastName: moduleFields[WrytteProfile.lastName]?.toString(),
           bio: moduleFields[WrytteProfile.bio]?.toString(),
           phoneNumber: moduleFields[WrytteProfile.phoneNumber]?.toString(),
           link: moduleFields[WrytteProfile.link]?.toString(),
@@ -1442,8 +1440,6 @@ class UserProfileService {
       if (value.isNotEmpty) result[target] = value;
     }
 
-    copy(WrytteProfile.firstName, 'FirstName');
-    copy(WrytteProfile.lastName, 'LastName');
     copy(WrytteProfile.phoneNumber, 'Phone');
     copy(WrytteProfile.avatarImageUrl, 'AvatarImg');
     copy(WrytteProfile.avatarVersion, 'AvatarVersion');
@@ -1451,7 +1447,9 @@ class UserProfileService {
     copy(WrytteProfile.link, 'Link');
     copy(WrytteProfile.channelAlias, 'ChannelAlias');
     copy(WrytteProfile.groupAlias, 'GroupAlias');
-    if (ownerRead) copy('displayname', 'DisplayName');
+    if (raw.containsKey('displayname')) {
+      result['DisplayName'] = raw['displayname']?.toString().trim() ?? '';
+    }
     copy('presence', 'Presence');
     result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
     debugPrint(

@@ -1213,9 +1213,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   // ===========================================================================
   //  ENRICHMENT
   //
-  //  Pass 1 — saved contact names (ALWAYS applied, even over Matrix displayname).
-  //    Matrix displayname is set at registration, not the
-  //    local user's chosen contact name.
+  //  Pass 1 — saved contact names take priority over the account's Matrix
+  //  displayname, because a local contact label is the viewer's own choice.
   //
   // ===========================================================================
 
@@ -1418,8 +1417,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   ) {
     final deduped = _dedupeLocalPlaceholders(_realConversationRows(convs));
 
-    // Saved contact names always win. Matrix displayname is the registered
-    // profile name, not necessarily this user's saved contact label.
+    // Saved contact names always win. Matrix displayname is used when there
+    // is no local contact label.
     final enriched =
         deduped.map((c) {
           if (_isGroupConversation(c)) {

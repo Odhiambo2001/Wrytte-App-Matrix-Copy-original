@@ -948,6 +948,8 @@ class AuthService {
       'ProfileImage',
     ]);
     final writes = <Future<void>>[];
+    writes.add(_storage.delete(key: 'profile_first_name'));
+    writes.add(_storage.delete(key: 'profile_last_name'));
     if (avatar.isNotEmpty) {
       writes.add(
         _storage.write(
@@ -971,18 +973,6 @@ class AuthService {
     final restoredConversations = _extractChatConversations(payload, owner);
     if (restoredConversations.isNotEmpty) {
       writes.add(ChatLocalDb.instance.saveConversations(restoredConversations));
-    }
-
-    final name = displayName?.trim() ?? '';
-    if (_hasRealProfileName(name)) {
-      final parts = name.split(RegExp(r'\s+'));
-      writes.add(_storage.write(key: 'profile_first_name', value: parts.first));
-      writes.add(
-        _storage.write(
-          key: 'profile_last_name',
-          value: parts.length > 1 ? parts.sublist(1).join(' ') : '',
-        ),
-      );
     }
 
     if (writes.isEmpty) return;
@@ -1251,6 +1241,10 @@ class AuthService {
         !_looksLikePhone(trimmed)) {
       await _archiveProfile(phone: phone, userId: userId, username: trimmed);
     }
+  }
+
+  Future<void> clearStoredUsername() async {
+    await _storage.delete(key: _usernameKey);
   }
 
   Future<bool> isLoggedIn() async {
