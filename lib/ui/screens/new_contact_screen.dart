@@ -40,43 +40,10 @@ String _formatWrytteIdBody(String value) {
   return digits.length > 12 ? digits.substring(0, 12) : digits;
 }
 
-String _formatWrytteIdEntry(String value) {
-  final digits = value.replaceAll(RegExp(r'[^\d]'), '');
-  if (digits.isEmpty) return '';
-  if (digits == '0') return '+0';
-  final body =
-      digits.startsWith('00')
-          ? digits.substring(2)
-          : digits.startsWith('0')
-          ? ''
-          : digits;
-  final limitedBody = body.length > 12 ? body.substring(0, 12) : body;
-  return limitedBody.isEmpty ? '+00' : '+00 $limitedBody';
-}
-
 bool _isValidWrytteId(String value) {
   final digits = value.replaceAll(RegExp(r'[^\d]'), '');
   final bodyLength = digits.startsWith('00') ? digits.length - 2 : 0;
   return bodyLength >= 8 && bodyLength <= 12;
-}
-
-class _WrytteIdBodyFormatter extends TextInputFormatter {
-  const _WrytteIdBodyFormatter();
-
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final digits = newValue.text.replaceAll(RegExp(r'[^\d]'), '');
-    final body = digits.length > 12 ? digits.substring(0, 12) : digits;
-    final formatted = _formatWrytteIdBody(body);
-    return TextEditingValue(
-      text: formatted,
-      selection: TextSelection.collapsed(offset: formatted.length),
-      composing: TextRange.empty,
-    );
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -93,6 +60,7 @@ class NewContactPage extends StatefulWidget {
   final String? initialWrytteUserId;
   final String? initialName;
   final String? initialBio;
+  final bool readOnlyIdentifier;
 
   const NewContactPage({
     super.key,
@@ -101,6 +69,7 @@ class NewContactPage extends StatefulWidget {
     this.initialWrytteUserId,
     this.initialName,
     this.initialBio,
+    this.readOnlyIdentifier = false,
   });
 
   @override
@@ -108,9 +77,7 @@ class NewContactPage extends StatefulWidget {
 }
 
 class _NewContactPageState extends State<NewContactPage> {
-  bool get _isIdentityResolved =>
-      _lookupState == _LookupState.found ||
-      _lookupState == _LookupState.duplicate;
+  bool get _isIdentityResolved => widget.readOnlyIdentifier;
 
   // ── Controllers & focus ──────────────────────────────────────
   final _firstNameCtrl = TextEditingController();
@@ -177,31 +144,33 @@ class _NewContactPageState extends State<NewContactPage> {
   }
 
   String get _resolvedIdentifierDisplay {
-    final formatted = InternationalPhoneNumberInputFormatter()
-        .formatEditUpdate(
-          const TextEditingValue(),
-          TextEditingValue(text: _fullIdentifier),
-        )
-        .text;
+    final formatted =
+        InternationalPhoneNumberInputFormatter()
+            .formatEditUpdate(
+              const TextEditingValue(),
+              TextEditingValue(text: _fullIdentifier),
+            )
+            .text;
     return formatted.startsWith('+') ? formatted : '+$formatted';
   }
 
   bool get _canSave {
-    if (_firstNameCtrl.text.trim().isEmpty || _numberCtrl.text.trim().isEmpty) {
-      return false;
-    }
+    if (_numberCtrl.text.trim().isEmpty) return false;
     if (_isWrytteIdMode) {
+      if (!_isValidWrytteId(_fullIdentifier)) return false;
+      final canSaveUnregisteredId =
+          !_isRegisteredOnWrytte && _lookupState == _LookupState.notFound;
+      if (canSaveUnregisteredId) return true;
+      if (_firstNameCtrl.text.trim().isEmpty) return false;
       final canSaveRegisteredId =
           _isRegisteredOnWrytte &&
           (_resolvedUserId?.trim().isNotEmpty ?? false) &&
           _isValidWrytteId(_fullIdentifier);
-      final canSaveUnregisteredId =
-          !_isRegisteredOnWrytte && _lookupState == _LookupState.notFound;
-      return canSaveUnregisteredId ||
-          (canSaveRegisteredId &&
-              (_lookupState == _LookupState.found ||
-                  _lookupState == _LookupState.duplicate));
+      return canSaveRegisteredId &&
+          (_lookupState == _LookupState.found ||
+              _lookupState == _LookupState.duplicate);
     }
+    if (_firstNameCtrl.text.trim().isEmpty) return false;
     return _lookupState != _LookupState.duplicate &&
         (_hasInvalidCountryCode ||
             (_selectedCountry != null && _fullIdentifier.isNotEmpty));
@@ -252,11 +221,11 @@ class _NewContactPageState extends State<NewContactPage> {
     const wrytteMode = wryptteId;
     _selectedCountry = wrytteMode;
     _isWrytteIdInput = true;
-    _codeCtrl.text = _formatWrytteIdEntry(identifierDigits);
     final body =
         identifierDigits.startsWith('00')
             ? identifierDigits.substring(2)
             : identifierDigits;
+    _codeCtrl.text = '+00$body';
     _numberCtrl.text = _formatWrytteIdBody(body);
     _showDivider = true;
   }
@@ -338,6 +307,7 @@ class _NewContactPageState extends State<NewContactPage> {
   void _detectCountryFromCode(String value) {
     if (_isAutoFilling) return;
 
+    final incomingSelection = _codeCtrl.selection;
     final digitsOnly = value.replaceAll(RegExp(r'[^\d]'), '');
     if (!value.startsWith('+') || value != '+$digitsOnly') {
       _codeCtrl.text = '+$digitsOnly';
@@ -347,11 +317,20 @@ class _NewContactPageState extends State<NewContactPage> {
     }
 
     // Like sign-in, a leading zero switches immediately to Wrytte ID mode.
-    // Keep the complete formatted Wrytte ID in this field while typing.
+    // Keep the entire Wrytte ID in this same field while typing and deleting.
     if (digitsOnly.startsWith('0')) {
       final body = digitsOnly.startsWith('00') ? digitsOnly.substring(2) : '';
       const wrytteMode = wryptteId;
-      final formattedEntry = _formatWrytteIdEntry(digitsOnly);
+      final combinedValue = '+$digitsOnly';
+      final rawCaretOffset =
+          incomingSelection.extentOffset.clamp(0, value.length).toInt();
+      final digitsBeforeCaret =
+          value
+              .substring(0, rawCaretOffset)
+              .replaceAll(RegExp(r'[^\d]'), '')
+              .length;
+      final caretOffset =
+          (digitsBeforeCaret + 1).clamp(1, combinedValue.length).toInt();
       _debounce?.cancel();
       setState(() {
         _isWrytteIdInput = true;
@@ -365,8 +344,8 @@ class _NewContactPageState extends State<NewContactPage> {
         _lookupError = null;
         _saveError = null;
         _codeCtrl.value = TextEditingValue(
-          text: formattedEntry,
-          selection: TextSelection.collapsed(offset: formattedEntry.length),
+          text: combinedValue,
+          selection: TextSelection.collapsed(offset: caretOffset),
         );
       });
       _numberCtrl.text = _formatWrytteIdBody(body);
@@ -494,6 +473,7 @@ class _NewContactPageState extends State<NewContactPage> {
       _lookupError = null;
       _saveError = null;
     });
+
     _debounce?.cancel();
 
     final digits = _phoneDigits;
@@ -1064,68 +1044,70 @@ class _NewContactPageState extends State<NewContactPage> {
   Future<_UnregisteredWrytteSaveChoice?> _showUnregisteredWrytteDialog() {
     return showDialog<_UnregisteredWrytteSaveChoice>(
       context: context,
-      builder: (dialogContext) => Dialog(
-        insetPadding: const EdgeInsets.symmetric(
-          horizontal: 28,
-          vertical: 20,
-        ),
-        backgroundColor: _kBg,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-          side: const BorderSide(color: Colors.white24),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'This Wrytte ID is not on Wrytte',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'You can save this contact locally and invite them to Wrytte.',
-                style: TextStyle(color: Colors.white70, fontSize: 15),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () => Navigator.pop(
+      builder:
+          (dialogContext) => Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 28,
+              vertical: 20,
+            ),
+            backgroundColor: _kBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+              side: const BorderSide(color: Colors.white24),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'This Wrytte ID is not on Wrytte',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'You can save this contact locally and invite them to Wrytte.',
+                    style: TextStyle(color: Colors.white70, fontSize: 15),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed:
+                          () => Navigator.pop(
+                            dialogContext,
+                            _UnregisteredWrytteSaveChoice.saveAndInvite,
+                          ),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _kBlue,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: const StadiumBorder(),
+                      ),
+                      child: const Text('Save and invite'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _unregisteredDialogButton(
                     dialogContext,
-                    _UnregisteredWrytteSaveChoice.saveAndInvite,
+                    label: 'Save',
+                    result: _UnregisteredWrytteSaveChoice.saveOnly,
                   ),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: _kBlue,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: const StadiumBorder(),
+                  const SizedBox(height: 8),
+                  _unregisteredDialogButton(
+                    dialogContext,
+                    label: 'Cancel',
+                    result: null,
                   ),
-                  child: const Text('Save and invite'),
-                ),
+                ],
               ),
-              const SizedBox(height: 8),
-              _unregisteredDialogButton(
-                dialogContext,
-                label: 'Save only',
-                result: _UnregisteredWrytteSaveChoice.saveOnly,
-              ),
-              const SizedBox(height: 8),
-              _unregisteredDialogButton(
-                dialogContext,
-                label: 'Cancel',
-                result: null,
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
     );
   }
 
@@ -1714,7 +1696,6 @@ class _NewContactPageState extends State<NewContactPage> {
                             ),
                           ),
                         ),
-                        const WrytteIdCheckmark(),
                       ],
                     ),
                   ),
@@ -1734,189 +1715,217 @@ class _NewContactPageState extends State<NewContactPage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                    // Country selector row
-                    ListTile(
-                      onTap:
-                          _isIdentityResolved || _isWrytteIdMode
-                              ? null
-                              : _pickCountry,
-                      dense: true,
-                      visualDensity: VisualDensity.compact,
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: _isWrytteIdMode ? 8 : 6,
+                      // Country selector row
+                      ListTile(
+                        onTap:
+                            _isIdentityResolved || _isWrytteIdMode
+                                ? null
+                                : _pickCountry,
+                        dense: true,
+                        visualDensity: VisualDensity.compact,
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: _isWrytteIdMode ? 8 : 6,
+                        ),
+                        leading:
+                            _isWrytteIdMode
+                                ? Image.asset(
+                                  'assets/images/wrytte_id_signup_icon_128.png',
+                                  width: 27,
+                                  height: 27,
+                                  fit: BoxFit.contain,
+                                  filterQuality: FilterQuality.high,
+                                )
+                                : null,
+                        title: Text(
+                          _hasInvalidCountryCode
+                              ? 'Invalid country code'
+                              : _isWrytteIdMode
+                              ? 'Wrytte ID'
+                              : _selectedCountry == null
+                              ? 'Country'
+                              : '${_selectedCountry!.flag} ${_selectedCountry!.name}',
+                          style: TextStyle(
+                            color:
+                                _selectedCountry == null && !_isWrytteIdMode
+                                    ? Colors.white38
+                                    : Colors.white,
+                            fontSize: 16,
+                            fontWeight:
+                                _selectedCountry != null || _isWrytteIdMode
+                                    ? FontWeight.w500
+                                    : FontWeight.normal,
+                          ),
+                        ),
+                        trailing: const Icon(
+                          Icons.chevron_right,
+                          color: Colors.white54,
+                          size: 22,
+                        ),
+                        minLeadingWidth: _isWrytteIdMode ? 27 : null,
+                        horizontalTitleGap: _isWrytteIdMode ? 10 : null,
                       ),
-                      leading:
-                          _isWrytteIdMode
-                              ? Image.asset(
-                                'assets/images/wrytte_id_signup_icon_128.png',
-                                width: 27,
-                                height: 27,
-                                fit: BoxFit.contain,
-                                filterQuality: FilterQuality.high,
+
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: Divider(color: _kDivider, height: 1),
+                      ),
+
+                      // Wrytte IDs stay in one text field so backspace runs
+                      // naturally through the prefix and the ID without moving
+                      // the caret between separate fields.
+                      Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: _isWrytteIdMode ? 8 : 10,
+                        ),
+                        child: Row(
+                          children: [
+                            if (_isWrytteIdMode)
+                              Expanded(
+                                child: AbsorbPointer(
+                                  absorbing: _isIdentityResolved,
+                                  child: TextField(
+                                    controller: _codeCtrl,
+                                    focusNode: _codeFocusNode,
+                                    readOnly: _isIdentityResolved,
+                                    showCursor: !_isIdentityResolved,
+                                    cursorOpacityAnimates: false,
+                                    enableInteractiveSelection:
+                                        !_isIdentityResolved,
+                                    keyboardType: TextInputType.number,
+                                    inputFormatters: [
+                                      FilteringTextInputFormatter.allow(
+                                        RegExp(r'[+0-9 ]'),
+                                      ),
+                                    ],
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                    ),
+                                    decoration: const InputDecoration(
+                                      border: InputBorder.none,
+                                      isDense: true,
+                                      contentPadding: EdgeInsets.symmetric(
+                                        vertical: 8,
+                                      ),
+                                    ),
+                                    onChanged: _detectCountryFromCode,
+                                    onTap:
+                                        _isIdentityResolved
+                                            ? null
+                                            : _onCodeFieldTap,
+                                  ),
+                                ),
                               )
-                              : null,
-                      title: Text(
-                        _hasInvalidCountryCode
-                            ? 'Invalid country code'
-                            : _isWrytteIdMode
-                            ? 'Wrytte ID'
-                            : _selectedCountry == null
-                            ? 'Country'
-                            : '${_selectedCountry!.flag} ${_selectedCountry!.name}',
-                        style: TextStyle(
-                          color:
-                              _selectedCountry == null && !_isWrytteIdMode
-                                  ? Colors.white38
-                                  : Colors.white,
-                          fontSize: 16,
-                          fontWeight:
-                              _selectedCountry != null || _isWrytteIdMode
-                                  ? FontWeight.w500
-                                  : FontWeight.normal,
+                            else ...[
+                              // Phone country calling code.
+                              SizedBox(
+                                width: 68,
+                                child: AbsorbPointer(
+                                  absorbing: _isIdentityResolved,
+                                  child: TextField(
+                                    controller: _codeCtrl,
+                                    focusNode: _codeFocusNode,
+                                    readOnly: _isIdentityResolved,
+                                    showCursor: !_isIdentityResolved,
+                                    cursorOpacityAnimates: true,
+                                    enableInteractiveSelection:
+                                        !_isIdentityResolved,
+                                    keyboardType: TextInputType.phone,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                    ),
+                                    decoration: const InputDecoration(
+                                      border: InputBorder.none,
+                                      isDense: true,
+                                      contentPadding: EdgeInsets.symmetric(
+                                        vertical: 8,
+                                      ),
+                                    ),
+                                    onChanged: _detectCountryFromCode,
+                                    onTap:
+                                        _isIdentityResolved
+                                            ? null
+                                            : _onCodeFieldTap,
+                                  ),
+                                ),
+                              ),
+
+                              // Blue divider between phone country code and number.
+                              if (_showDivider)
+                                Container(
+                                  height: 22,
+                                  width: 1,
+                                  color: _kBlue,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                  ),
+                                ),
+
+                              // Phone number field.
+                              Expanded(
+                                child: AbsorbPointer(
+                                  absorbing: _isIdentityResolved,
+                                  child: TextField(
+                                    controller: _numberCtrl,
+                                    focusNode: _numberFocusNode,
+                                    readOnly: _isIdentityResolved,
+                                    showCursor: !_isIdentityResolved,
+                                    cursorOpacityAnimates: true,
+                                    enableInteractiveSelection:
+                                        !_isIdentityResolved,
+                                    keyboardType: TextInputType.phone,
+                                    inputFormatters: [
+                                      if (_selectedCountry != null)
+                                        CountryPhoneNumberInputFormatter(
+                                          _selectedCountry!.isoCode,
+                                        )
+                                      else
+                                        FilteringTextInputFormatter.digitsOnly,
+                                    ],
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                    ),
+                                    decoration: InputDecoration(
+                                      hintText:
+                                          _selectedCountry != null &&
+                                                  _showDivider
+                                              ? (_isWrytteIdMode
+                                                  ? 'Wrytte ID'
+                                                  : 'Phone number')
+                                              : '',
+                                      hintStyle: const TextStyle(
+                                        color: Colors.white38,
+                                        fontSize: 15,
+                                      ),
+                                      border: InputBorder.none,
+                                      isDense: true,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                            vertical: 8,
+                                          ),
+                                    ),
+                                    enabled:
+                                        _isIdentityResolved ||
+                                        (_selectedCountry != null &&
+                                            _showDivider),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
-                      trailing: const Icon(
-                        Icons.chevron_right,
-                        color: Colors.white54,
-                        size: 22,
-                      ),
-                      minLeadingWidth: _isWrytteIdMode ? 27 : null,
-                      horizontalTitleGap: _isWrytteIdMode ? 10 : null,
-                    ),
-
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Divider(color: _kDivider, height: 1),
-                    ),
-
-                    // Keep the Wrytte prefix separate from its editable body,
-                    // like a phone calling code and local number.
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: _isWrytteIdMode ? 8 : 10,
-                      ),
-                      child: Row(
-                        children: [
-                          // Country calling code or the fixed Wrytte prefix.
-                          if (_isWrytteIdMode)
-                            const Text(
-                              '+00',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                              ),
-                            )
-                          else
-                            SizedBox(
-                              width: 68,
-                              child: AbsorbPointer(
-                                absorbing: _isIdentityResolved,
-                                child: TextField(
-                                  controller: _codeCtrl,
-                                  focusNode: _codeFocusNode,
-                                  readOnly: _isIdentityResolved,
-                                  showCursor: !_isIdentityResolved,
-                                  enableInteractiveSelection:
-                                      !_isIdentityResolved,
-                                  keyboardType: TextInputType.phone,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 15,
-                                  ),
-                                  decoration: const InputDecoration(
-                                    border: InputBorder.none,
-                                    isDense: true,
-                                    contentPadding: EdgeInsets.symmetric(
-                                      vertical: 8,
-                                    ),
-                                  ),
-                                  onChanged:
-                                      _isWrytteIdMode &&
-                                              _codeCtrl.text == '+00'
-                                          ? null
-                                          : _detectCountryFromCode,
-                                  onTap:
-                                      _isIdentityResolved
-                                          ? null
-                                          : _onCodeFieldTap,
-                                ),
-                              ),
-                            ),
-
-                          // Blue vertical divider between prefix and number.
-                          if (_isWrytteIdMode || _showDivider)
-                            Container(
-                              height: 22,
-                              width: 1,
-                              color: _kBlue,
-                              margin: const EdgeInsets.symmetric(horizontal: 8),
-                            ),
-
-                          // Number / ID field
-                          Expanded(
-                            child: AbsorbPointer(
-                              absorbing: _isIdentityResolved,
-                              child: TextField(
-                                controller: _numberCtrl,
-                                focusNode: _numberFocusNode,
-                                readOnly: _isIdentityResolved,
-                                showCursor: !_isIdentityResolved,
-                                enableInteractiveSelection:
-                                    !_isIdentityResolved,
-                                keyboardType:
-                                    _isWrytteIdMode
-                                        ? TextInputType.number
-                                        : TextInputType.phone,
-                                inputFormatters: [
-                                  if (_isWrytteIdMode)
-                                    const _WrytteIdBodyFormatter()
-                                  else if (_selectedCountry != null)
-                                    CountryPhoneNumberInputFormatter(
-                                      _selectedCountry!.isoCode,
-                                    )
-                                  else
-                                    FilteringTextInputFormatter.digitsOnly,
-                                ],
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: _isWrytteIdMode ? 18 : 15,
-                                ),
-                                decoration: InputDecoration(
-                                  hintText:
-                                      _selectedCountry != null && _showDivider
-                                          ? (_isWrytteIdMode
-                                              ? 'Wrytte ID'
-                                              : 'Phone number')
-                                          : '',
-                                  hintStyle: const TextStyle(
-                                    color: Colors.white38,
-                                    fontSize: 15,
-                                  ),
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    vertical: 8,
-                                  ),
-                                ),
-                                enabled:
-                                    _isIdentityResolved ||
-                                    _isWrytteIdMode ||
-                                    (_selectedCountry != null && _showDivider),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                     ],
                   ),
                 ),
-
-                // ── Status line ────────────────────────────────────
-                _buildStatusLine(),
               ],
+
+              // Show lookup results for both editable and verified IDs.
+              _buildStatusLine(),
 
               const SizedBox(height: 22),
 
@@ -2025,7 +2034,7 @@ class _NewContactPageState extends State<NewContactPage> {
     setState(() {
       _selectedCountry = wrytteMode;
       _isWrytteIdInput = true;
-      _codeCtrl.text = _formatWrytteIdEntry(digits);
+      _codeCtrl.text = '+00$body';
       _showDivider = false;
       _lookupState = _LookupState.idle;
       _lookupError = null;

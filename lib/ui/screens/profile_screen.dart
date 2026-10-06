@@ -643,6 +643,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               initialWrytteUserId: uid == null ? null : _toMatrixUserId(uid),
               initialName: _profileDisplayName(),
               initialBio: _profileBio(),
+              readOnlyIdentifier: true,
             ),
       ),
     );
