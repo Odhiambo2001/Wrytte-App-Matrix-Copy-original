@@ -21,6 +21,9 @@ class UserAvatar extends StatefulWidget {
 
   static void clearMemoryCache() => _UserAvatarState.clearMemoryCache();
 
+  static Future<void> evictCachedUrl(String? rawUrl) =>
+      _UserAvatarState.evictCachedUrl(rawUrl);
+
   const UserAvatar({
     super.key,
     this.size = 40.0,
@@ -65,6 +68,39 @@ class _UserAvatarState extends State<UserAvatar> {
     _loggedPaintKeys.clear();
     _loggedLoadKeys.clear();
     _knownGoodLocalPaths.clear();
+  }
+
+  /// Removes every app and CachedNetworkImage cache entry for this avatar URL,
+  /// including entries keyed by a surface-specific cache identity.
+  static Future<void> evictCachedUrl(String? rawUrl) async {
+    final url = _resolveImageUrl(rawUrl);
+    if (url.isEmpty) return;
+    final baseUrl = _stripVersion(url);
+    final matchingKeys =
+        _resolvedImageCache.keys.where((key) {
+          final cachedUrl = key.contains('|') ? key.split('|').last : key;
+          return _stripVersion(cachedUrl) == baseUrl;
+        }).toList();
+
+    for (final key in matchingKeys) {
+      final provider = _resolvedImageCache.remove(key);
+      _loggedPaintKeys.remove(key);
+      _loggedLoadKeys.remove(key);
+      if (provider != null) await provider.evict();
+      final cachedUrl = key.contains('|') ? key.split('|').last : key;
+      try {
+        await CachedNetworkImage.evictFromCache(cachedUrl, cacheKey: key);
+      } catch (error) {
+        debugPrint('[UserAvatar] cache eviction skipped: $error');
+      }
+    }
+
+    try {
+      await CachedNetworkImage.evictFromCache(url);
+      if (baseUrl != url) await CachedNetworkImage.evictFromCache(baseUrl);
+    } catch (error) {
+      debugPrint('[UserAvatar] cache eviction skipped: $error');
+    }
   }
 
   String? _backendToken;
@@ -303,7 +339,7 @@ class _UserAvatarState extends State<UserAvatar> {
         fadeInDuration: Duration.zero,
         fadeOutDuration: Duration.zero,
         placeholderFadeInDuration: Duration.zero,
-        useOldImageOnUrlChange: true,
+        useOldImageOnUrlChange: false,
         placeholder: (context, url) => _buildPlaceholder(),
         errorWidget: (context, url, error) {
           debugPrint('[UserAvatar] image load failed url="$url" error=$error');
@@ -339,14 +375,14 @@ class _UserAvatarState extends State<UserAvatar> {
     return identity.isEmpty ? url : '$identity|$url';
   }
 
-  String _resolveImageUrl(String? raw) {
+  static String _resolveImageUrl(String? raw) {
     final url = raw?.trim() ?? '';
     if (url.isEmpty) return '';
     if (url.startsWith('mxc://')) return _resolveMxcUrl(url);
     return url.startsWith('/') ? '${ApiService.baseUrl}$url' : url;
   }
 
-  String _resolveMxcUrl(String raw) {
+  static String _resolveMxcUrl(String raw) {
     final uri = Uri.tryParse(raw);
     if (uri == null || !uri.isScheme('mxc')) return '';
     final mediaId = uri.pathSegments.join('/');
@@ -354,13 +390,22 @@ class _UserAvatarState extends State<UserAvatar> {
     final homeserver = Uri.tryParse(MatrixConfig.homeserver);
     if (homeserver == null || !homeserver.hasScheme) return '';
     final downloadUri = homeserver.resolve(
-          '/_matrix/client/v1/media/download/'
-          '${Uri.encodeComponent(uri.host)}/'
-          '${Uri.encodeComponent(mediaId)}',
-        );
+      '/_matrix/client/v1/media/download/'
+      '${Uri.encodeComponent(uri.host)}/'
+      '${Uri.encodeComponent(mediaId)}',
+    );
     final version = uri.queryParameters['v'];
     return downloadUri
         .replace(queryParameters: version == null ? null : {'v': version})
+        .toString();
+  }
+
+  static String _stripVersion(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasQuery) return url;
+    final params = Map<String, String>.from(uri.queryParameters)..remove('v');
+    return uri
+        .replace(queryParameters: params.isEmpty ? null : params)
         .toString();
   }
 

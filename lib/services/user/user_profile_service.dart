@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart' show MatrixFile;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/auth/api_service.dart';
@@ -54,6 +55,8 @@ class UserProfileService {
   Future<UserProfile?>? _loginProfileInFlight;
   DateTime? _currentProfileBackendFetchedAt;
   int _sessionGeneration = 0;
+  int _profileReadRevision = 0;
+  int _avatarMutationRevision = 0;
   String? _activeAccountUid;
   bool _logoutInProgress = false;
   static const _currentProfileFreshness = Duration(minutes: 5);
@@ -200,6 +203,8 @@ class UserProfileService {
 
   /// Persists a profile image URL and invalidates the cache.
   Future<void> updateProfileImage(String url) async {
+    final previousAvatarUrl = await _storage.read(key: _profileImageKey);
+    _avatarMutationRevision++;
     await _storage.write(
       key: _profileImageKey,
       value: _resolveAvatarUrl(url.trim()),
@@ -207,6 +212,9 @@ class UserProfileService {
     await _saveBackendProfileBestEffort({'AvatarImg': url.trim()});
     _cache = null;
     await _refreshAndNotify(forceRefresh: true);
+    if (previousAvatarUrl?.trim() != _resolveAvatarUrl(url.trim())) {
+      await UserAvatar.evictCachedUrl(previousAvatarUrl);
+    }
   }
 
   Future<void> deleteProfileImage() async {
@@ -214,6 +222,8 @@ class UserProfileService {
     if (uid == null || uid.trim().isEmpty) {
       throw StateError('Not authenticated.');
     }
+    final previousAvatarUrl = await _storage.read(key: _profileImageKey);
+    _avatarMutationRevision++;
     await MatrixProfileService.instance.deleteAvatar(uid);
     await _storage.delete(key: _profileImageKey);
     await _writeAvatarVersion(uid, 0);
@@ -222,6 +232,7 @@ class UserProfileService {
     _cache = null;
     await _clearLocalAvatarCache(uid);
     await _refreshAndNotify(forceRefresh: true);
+    await UserAvatar.evictCachedUrl(previousAvatarUrl);
   }
 
   /// Saves a newly selected avatar locally so profile surfaces can display it
@@ -232,6 +243,7 @@ class UserProfileService {
       throw Exception('Not authenticated.');
     }
 
+    _avatarMutationRevision++;
     final localPath = await _cacheProfileImageFile(uid, file);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_localProfileImageKey(uid), localPath);
@@ -249,6 +261,9 @@ class UserProfileService {
       throw Exception('Not authenticated.');
     }
 
+    final previousAvatarUrl = await _storage.read(key: _profileImageKey);
+    final previousLocalPath = await _readLocalProfileImagePath(uid);
+    _avatarMutationRevision++;
     final localPath = await _cacheProfileImageFile(uid, file);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_localProfileImageKey(uid), localPath);
@@ -263,11 +278,12 @@ class UserProfileService {
         throw Exception('Avatar upload returned an empty URL.');
       }
       final currentAvatar = await MatrixProfileService.instance.getProfile(uid);
-      final avatarVersion = await MatrixProfileService.instance.setAvatarImageAndVersion(
-        uid,
-        mxcUrl: requestedAvatarUrl,
-        create: currentAvatar.avatarUrl?.trim().isNotEmpty != true,
-      );
+      final avatarVersion = await MatrixProfileService.instance
+          .setAvatarImageAndVersion(
+            uid,
+            mxcUrl: requestedAvatarUrl,
+            create: currentAvatar.avatarUrl?.trim().isNotEmpty != true,
+          );
       final savedAvatar = await MatrixProfileService.instance.getProfile(uid);
       final avatarUrl = _withAvatarFetchVersion(
         savedAvatar[WrytteProfile.avatarImageUrl]?.trim().isNotEmpty == true
@@ -276,11 +292,16 @@ class UserProfileService {
         uid,
         avatarVersion,
       );
+      // Invalidate reads that started while the upload was in progress before
+      // committing the new canonical URL.
+      _avatarMutationRevision++;
       await _storage.write(key: _profileImageKey, value: avatarUrl);
       await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
+      await _deleteCachedAvatarFile(previousLocalPath, keepPath: localPath);
       _cache = null;
       await _refreshAndNotify(forceRefresh: true);
+      await UserAvatar.evictCachedUrl(previousAvatarUrl);
       return avatarUrl;
     } catch (e) {
       _lastPendingAvatarAttemptAt = DateTime.now();
@@ -334,13 +355,15 @@ class UserProfileService {
     Map<String, String>? visibilitySettings,
   }) async {
     final backendFields = <String, String>{};
+    String? previousAvatarForEviction;
     final String? displayNameToSave =
         name != null
             ? name.trim()
             : (firstName != null || lastName != null)
-            ? [firstName?.trim() ?? '', lastName?.trim() ?? '']
-                .where((part) => part.isNotEmpty)
-                .join(' ')
+            ? [
+              firstName?.trim() ?? '',
+              lastName?.trim() ?? '',
+            ].where((part) => part.isNotEmpty).join(' ')
             : null;
     if (displayNameToSave != null) {
       final uid = await AuthService.instance.getCurrentUserId();
@@ -361,11 +384,14 @@ class UserProfileService {
       await _storage.delete(key: _lastNameKey);
     }
     if (profileImage != null) {
-      await _storage.write(
-        key: _profileImageKey,
-        value: _resolveAvatarUrl(profileImage.trim()),
-      );
-      backendFields['AvatarImg'] = _resolveAvatarUrl(profileImage.trim());
+      final normalizedAvatar = _resolveAvatarUrl(profileImage.trim());
+      final storedAvatar = await _storage.read(key: _profileImageKey) ?? '';
+      if (storedAvatar != normalizedAvatar) {
+        _avatarMutationRevision++;
+        previousAvatarForEviction = storedAvatar;
+      }
+      await _storage.write(key: _profileImageKey, value: normalizedAvatar);
+      backendFields['AvatarImg'] = normalizedAvatar;
     }
     if (bio != null) {
       await _storage.write(key: _bioKey, value: bio.trim());
@@ -405,6 +431,9 @@ class UserProfileService {
     }
     _cache = null;
     await _refreshAndNotify(forceRefresh: true);
+    if (previousAvatarForEviction != null) {
+      await UserAvatar.evictCachedUrl(previousAvatarForEviction);
+    }
   }
 
   /// Stream that emits the current user's profile immediately from cache,
@@ -581,6 +610,8 @@ class UserProfileService {
   /// Wipe cache on logout.
   void clearCache() {
     _sessionGeneration += 1;
+    _profileReadRevision += 1;
+    _avatarMutationRevision += 1;
     _activeAccountUid = null;
     _cache = null;
     _publicProfileCache.clear();
@@ -628,6 +659,8 @@ class UserProfileService {
     bool ignoreStoredAvatar = false,
     bool ignoreStoredProfile = false,
   }) async {
+    final readRevision = ++_profileReadRevision;
+    final avatarRevisionAtStart = _avatarMutationRevision;
     try {
       if (_logoutInProgress) return null;
       final uid = await AuthService.instance.getCurrentUserId();
@@ -685,7 +718,10 @@ class UserProfileService {
           !_suppressBackendProfileReads &&
           (forceRefresh || !_hasRealName(name) || profileImage.isEmpty)) {
         final remote = await _readBackendProfileBestEffort();
-        if (!_isActiveSession(generation, uid)) return null;
+        if (!_isActiveSession(generation, uid) ||
+            readRevision != _profileReadRevision) {
+          return null;
+        }
         if (remote.isNotEmpty) {
           moduleProfileLoaded = true;
           matrixDisplayNameLoaded = remote.containsKey('DisplayName');
@@ -708,26 +744,37 @@ class UserProfileService {
               );
             }
           }
-          final remoteAvatar = _resolveAvatarUrl(
-            _field(remote, 'AvatarImg') ?? '',
-          );
-          if (remoteAvatar.isNotEmpty &&
-              !_avatarUrlBelongsToUid(remoteAvatar, uid)) {
-            debugPrint(
-              '[UserProfileService] rejected cross-account current avatar '
-              'active_user="$uid" avatar_url="$remoteAvatar"',
-            );
-            profileImage = '';
+          final remoteAvatarVersion = _avatarVersionFromFields(remote);
+          if (avatarRevisionAtStart != _avatarMutationRevision ||
+              remoteAvatarVersion < avatarVersion) {
+            // A local avatar write began while this profile request was in
+            // flight, or the backend response carries an older version. Keep
+            // the committed FE source instead of restoring a stale avatar.
+            profileImage = await _storage.read(key: _profileImageKey) ?? '';
+            localProfileImagePath = await _readLocalProfileImagePath(uid);
+            avatarVersion = await _readAvatarVersion(uid);
           } else {
-            profileImage = remoteAvatar;
-          }
-          avatarVersion = _avatarVersionFromFields(remote);
-          if (profileImage.isNotEmpty) {
-            profileImage = _withAvatarFetchVersion(
-              profileImage,
-              uid,
-              avatarVersion,
+            final remoteAvatar = _resolveAvatarUrl(
+              _field(remote, 'AvatarImg') ?? '',
             );
+            if (remoteAvatar.isNotEmpty &&
+                !_avatarUrlBelongsToUid(remoteAvatar, uid)) {
+              debugPrint(
+                '[UserProfileService] rejected cross-account current avatar '
+                'active_user="$uid" avatar_url="$remoteAvatar"',
+              );
+              profileImage = '';
+            } else {
+              profileImage = remoteAvatar;
+            }
+            avatarVersion = remoteAvatarVersion;
+            if (profileImage.isNotEmpty) {
+              profileImage = _withAvatarFetchVersion(
+                profileImage,
+                uid,
+                avatarVersion,
+              );
+            }
           }
           final remoteName =
               (_field(remote, 'DisplayName') ??
@@ -753,10 +800,7 @@ class UserProfileService {
             key: 'profile_channel_alias',
             value: channelAlias,
           );
-          await _storage.write(
-            key: 'profile_group_alias',
-            value: groupAlias,
-          );
+          await _storage.write(key: 'profile_group_alias', value: groupAlias);
           await _storage.write(
             key: 'user_links',
             value: _field(remote, 'Link') ?? '',
@@ -765,20 +809,22 @@ class UserProfileService {
             key: 'profile_visibility_settings',
             value: jsonEncode(visibilitySettings),
           );
-          if (profileImage.isNotEmpty) {
-            await _storage.write(key: _profileImageKey, value: profileImage);
-            await _writeAvatarVersion(uid, avatarVersion);
-          } else {
-            await _storage.delete(key: _profileImageKey);
-            await _writeAvatarVersion(uid, 0);
-            final prefs = await SharedPreferences.getInstance();
-            final pendingPath =
-                prefs.getString(_pendingProfileImageKey(uid))?.trim() ?? '';
-            if (pendingPath.isNotEmpty && File(pendingPath).existsSync()) {
-              localProfileImagePath = pendingPath;
+          if (avatarRevisionAtStart == _avatarMutationRevision) {
+            if (profileImage.isNotEmpty) {
+              await _storage.write(key: _profileImageKey, value: profileImage);
+              await _writeAvatarVersion(uid, avatarVersion);
             } else {
-              localProfileImagePath = '';
-              await _clearLocalAvatarCache(uid);
+              await _storage.delete(key: _profileImageKey);
+              await _writeAvatarVersion(uid, 0);
+              final prefs = await SharedPreferences.getInstance();
+              final pendingPath =
+                  prefs.getString(_pendingProfileImageKey(uid))?.trim() ?? '';
+              if (pendingPath.isNotEmpty && File(pendingPath).existsSync()) {
+                localProfileImagePath = pendingPath;
+              } else {
+                localProfileImagePath = '';
+                await _clearLocalAvatarCache(uid);
+              }
             }
           }
           _currentProfileBackendFetchedAt = DateTime.now();
@@ -803,6 +849,12 @@ class UserProfileService {
           ignoreStoredProfile
               ? ''
               : await _storage.read(key: 'user_links') ?? '';
+
+      if (avatarRevisionAtStart != _avatarMutationRevision) {
+        profileImage = await _storage.read(key: _profileImageKey) ?? '';
+        localProfileImagePath = await _readLocalProfileImagePath(uid);
+        avatarVersion = await _readAvatarVersion(uid);
+      }
 
       final profile = UserProfile(
         uid: uid,
@@ -829,7 +881,10 @@ class UserProfileService {
       // A logout/account switch may finish while a backend request from the
       // previous screen is still in flight. Never allow that stale completion
       // to repopulate the process-wide profile cache for the next account.
-      if (!_isActiveSession(generation, uid)) return null;
+      if (!_isActiveSession(generation, uid) ||
+          readRevision != _profileReadRevision) {
+        return null;
+      }
       _cache = profile;
       _profileController.add(profile);
       return profile;
@@ -1038,6 +1093,20 @@ class UserProfileService {
     }
   }
 
+  Future<void> _deleteCachedAvatarFile(
+    String oldPath, {
+    required String keepPath,
+  }) async {
+    final oldFilePath = oldPath.trim();
+    if (oldFilePath.isEmpty || oldFilePath == keepPath.trim()) return;
+    try {
+      final oldFile = File(oldFilePath);
+      if (await oldFile.exists()) await oldFile.delete();
+    } catch (error) {
+      debugPrint('[UserProfileService] old avatar cleanup skipped: $error');
+    }
+  }
+
   Future<String> _cacheProfileImageFile(String uid, File source) async {
     final supportDir = await getApplicationSupportDirectory();
     final avatarDir = Directory('${supportDir.path}/profile_avatars');
@@ -1105,10 +1174,10 @@ class UserProfileService {
       final currentAvatar = await MatrixProfileService.instance.getProfile(uid);
       final avatarVersion = await MatrixProfileService.instance
           .setAvatarImageAndVersion(
-        uid,
-        mxcUrl: requestedAvatarUrl,
-        create: currentAvatar.avatarUrl?.trim().isNotEmpty != true,
-      );
+            uid,
+            mxcUrl: requestedAvatarUrl,
+            create: currentAvatar.avatarUrl?.trim().isNotEmpty != true,
+          );
       final savedAvatar = await MatrixProfileService.instance.getProfile(uid);
       final avatarUrl = _withAvatarFetchVersion(
         savedAvatar[WrytteProfile.avatarImageUrl]?.trim().isNotEmpty == true
@@ -1117,9 +1186,13 @@ class UserProfileService {
         uid,
         avatarVersion,
       );
+      final previousAvatarUrl =
+          await _storage.read(key: _profileImageKey) ?? '';
+      _avatarMutationRevision++;
       await _storage.write(key: _profileImageKey, value: avatarUrl);
       await _writeAvatarVersion(uid, avatarVersion);
       await prefs.remove(_pendingProfileImageKey(uid));
+      await UserAvatar.evictCachedUrl(previousAvatarUrl);
       return true;
     } catch (e) {
       debugPrint(
@@ -1240,10 +1313,14 @@ class UserProfileService {
     if (trimmed.startsWith('mxc://')) {
       final uri = Uri.tryParse(trimmed);
       if (uri == null) return trimmed;
-      return uri.replace(queryParameters: {
-        ...uri.queryParameters,
-        'v': '${_matrixLocalpart(userId).toLowerCase()}-$avatarVersion',
-      }).toString();
+      return uri
+          .replace(
+            queryParameters: {
+              ...uri.queryParameters,
+              'v': '${_matrixLocalpart(userId).toLowerCase()}-$avatarVersion',
+            },
+          )
+          .toString();
     }
     final uri = Uri.tryParse(trimmed);
     if (uri == null || !uri.hasScheme) return trimmed;
@@ -1333,9 +1410,7 @@ class UserProfileService {
   }
 
   Future<UserProfile?> _refreshAndNotify({bool forceRefresh = false}) async {
-    final fresh = await _readFromStorage(forceRefresh: forceRefresh);
-    _profileController.add(fresh);
-    return fresh;
+    return _readFromStorage(forceRefresh: forceRefresh);
   }
 
   Future<void> _syncPendingAvatarAndRefresh() async {
