@@ -108,6 +108,8 @@ class NewContactPage extends StatefulWidget {
 }
 
 class _NewContactPageState extends State<NewContactPage> {
+  bool get _isEditingExistingContact => _duplicateContact != null;
+
   // ── Controllers & focus ──────────────────────────────────────
   final _firstNameCtrl = TextEditingController();
   final _lastNameCtrl = TextEditingController();
@@ -1689,7 +1691,10 @@ class _NewContactPageState extends State<NewContactPage> {
                   children: [
                     // Country selector row
                     ListTile(
-                      onTap: _isWrytteIdMode ? null : _pickCountry,
+                      onTap:
+                          _isEditingExistingContact || _isWrytteIdMode
+                              ? null
+                              : _pickCountry,
                       dense: true,
                       visualDensity: VisualDensity.compact,
                       contentPadding: EdgeInsets.symmetric(
@@ -1755,6 +1760,7 @@ class _NewContactPageState extends State<NewContactPage> {
                               child: TextField(
                                 controller: _codeCtrl,
                                 focusNode: _codeFocusNode,
+                                readOnly: _isEditingExistingContact,
                                 keyboardType: TextInputType.phone,
                                 cursorColor: _kBlue,
                                 style: const TextStyle(
@@ -1769,7 +1775,10 @@ class _NewContactPageState extends State<NewContactPage> {
                                   ),
                                 ),
                                 onChanged: _detectCountryFromCode,
-                                onTap: _onCodeFieldTap,
+                                onTap:
+                                    _isEditingExistingContact
+                                        ? null
+                                        : _onCodeFieldTap,
                               ),
                             )
                           else
@@ -1778,6 +1787,7 @@ class _NewContactPageState extends State<NewContactPage> {
                               child: TextField(
                                 controller: _codeCtrl,
                                 focusNode: _codeFocusNode,
+                                readOnly: _isEditingExistingContact,
                                 keyboardType: TextInputType.phone,
                                 style: const TextStyle(
                                   color: Colors.white,
@@ -1794,7 +1804,10 @@ class _NewContactPageState extends State<NewContactPage> {
                                     _isWrytteIdMode && _codeCtrl.text == '+00'
                                         ? null
                                         : _detectCountryFromCode,
-                                onTap: _onCodeFieldTap,
+                                onTap:
+                                    _isEditingExistingContact
+                                        ? null
+                                        : _onCodeFieldTap,
                               ),
                             ),
 
@@ -1813,6 +1826,7 @@ class _NewContactPageState extends State<NewContactPage> {
                               child: TextField(
                                 controller: _numberCtrl,
                                 focusNode: _numberFocusNode,
+                                readOnly: _isEditingExistingContact,
                                 keyboardType:
                                     _isWrytteIdMode
                                         ? TextInputType.number
@@ -1849,6 +1863,7 @@ class _NewContactPageState extends State<NewContactPage> {
                                   ),
                                 ),
                                 enabled:
+                                    _isEditingExistingContact ||
                                     _isWrytteIdMode ||
                                     (_selectedCountry != null && _showDivider),
                               ),
@@ -1904,6 +1919,7 @@ class _NewContactPageState extends State<NewContactPage> {
                         ),
                       ),
                     ],
+                  ),
                   ),
                 ),
               ),
