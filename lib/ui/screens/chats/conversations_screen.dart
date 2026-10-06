@@ -97,7 +97,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   StreamSubscription<String>? _contactsChangedSub;
   StreamSubscription<String>? _profileUpdatesSub;
-  StreamSubscription? _matrixSyncSub;
   Timer? _conversationBatchTimer;
   Timer? _groupExitTimer;
   GroupExitRequest? _pendingGroupExit;
@@ -149,13 +148,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _profileUpdatesSub = UserProfileService.instance.publicProfileUpdateStream
         .listen(_onPublicProfileUpdated);
     Future.microtask(_initialize);
-    try {
-      _matrixSyncSub = MatrixClientService.instance.client.onSync.stream.listen(
-        (_) {
-          if (mounted && _tabController.index == 1) setState(() {});
-        },
-      );
-    } catch (_) {}
   }
 
   void _seedHydratedConversationSnapshot() {
@@ -187,28 +179,30 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         final uid = _profileUidForConversation(conversation);
         return uid != null &&
             _matrixLocalpart(uid)?.toLowerCase() == changedLocalpart;
-      });
-      for (final conversation in matching) {
-        unawaited(_refreshConversationProfile(conversation));
+      }).toList(growable: false);
+      if (matching.isNotEmpty) {
+        unawaited(_refreshConversationProfiles(matching));
       }
     }
   }
 
-  Future<void> _refreshConversationProfile(ChatConversation conversation) async {
+  Future<void> _refreshConversationProfiles(
+    List<ChatConversation> matching,
+  ) async {
     final refreshed = await _enrichConversationFromPublicProfile(
-      conversation,
+      matching.first,
       forceRefresh: true,
     );
     if (!mounted) return;
+    final matchingIds = matching.map((item) => item.id).toSet();
     apkLog(
       'Profile.realtime',
-      'row_refreshed conversation_id="${conversation.id}" '
-          'avatar_present=${refreshed.otherUserAvatar?.trim().isNotEmpty == true}',
+      'peer_rows_refreshed count=${matchingIds.length}',
     );
     setState(() {
       _conversations = [
         for (final current in _conversations)
-          if (current.id == refreshed.id)
+          if (matchingIds.contains(current.id))
             refreshed.copyWith(
               lastMessage: current.lastMessage,
               lastMessageTime: current.lastMessageTime,
@@ -242,7 +236,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _connectivitySub?.cancel();
     _contactsChangedSub?.cancel();
     _profileUpdatesSub?.cancel();
-    _matrixSyncSub?.cancel();
     _conversationBatchTimer?.cancel();
     _groupExitTimer?.cancel();
     _scrollCtrl.removeListener(_onScroll);
@@ -1538,6 +1531,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             : _cleanHumanName(_contactNameCache[contactKey]);
     final contactAvatar = _safeDirectAvatarUrl(
       contactKey == null ? null : _contactAvatarCache[contactKey],
+      rejectPlaceholderVersion: true,
     );
     final phone = _fallbackPhoneForConversation(conv);
     final name =
@@ -1546,12 +1540,17 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             : phone.isNotEmpty
             ? _formatPhone(phone)
             : '';
-    final existingAvatar = _safeDirectAvatarUrl(conv.otherUserAvatar);
+    final existingAvatar = _safeDirectAvatarUrl(
+      conv.otherUserAvatar,
+      rejectPlaceholderVersion: true,
+    );
     final identityAvatar = _safeDirectAvatarUrl(
       _identityForConversation(conv)?.avatarUrl,
+      rejectPlaceholderVersion: true,
     );
     final profileAvatar = _safeDirectAvatarUrl(
       profile?.hasProfileImage == true ? profile!.profileImage : null,
+      rejectPlaceholderVersion: profile?.moduleProfileLoaded != true,
     );
     final matrixAvatar = _safeDirectAvatarUrl(matrixProfile?.$2);
     final avatar =
@@ -1965,6 +1964,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final contactKey = _contactKeyForConversation(conv);
     final contactAvatar = _safeDirectAvatarUrl(
       contactKey == null ? null : _contactAvatarCache[contactKey],
+      rejectPlaceholderVersion: true,
     );
     if (contactAvatar != null) {
       return contactAvatar;
@@ -1979,6 +1979,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     final identityAvatar = _safeDirectAvatarUrl(
       _identityForConversation(conv)?.avatarUrl,
+      rejectPlaceholderVersion: true,
     );
     if (identityAvatar != null) {
       return identityAvatar;
@@ -2000,6 +2001,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
     final contactAvatar = _safeDirectAvatarUrl(
       contactKey == null ? null : _contactAvatarCache[contactKey],
+      rejectPlaceholderVersion: true,
     );
     if (contactAvatar != null) {
       return contactAvatar;
@@ -2014,6 +2016,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     final identityAvatar = _safeDirectAvatarUrl(
       _identityForConversation(conv)?.avatarUrl,
+      rejectPlaceholderVersion: true,
     );
     if (identityAvatar != null) {
       return identityAvatar;
@@ -2022,12 +2025,20 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     return null;
   }
 
-  String? _safeDirectAvatarUrl(String? avatarUrl) {
+  String? _safeDirectAvatarUrl(
+    String? avatarUrl, {
+    bool rejectPlaceholderVersion = false,
+  }) {
     final safe = ContactAvatarSanitizer.sanitizeAvatarUrl(avatarUrl);
     // A contact and a room may legitimately use the same image URL. The
     // conversation kind and peer ID establish ownership; URL equality does
     // not make a valid direct-contact avatar unsafe.
     if (safe == null) return null;
+    if (rejectPlaceholderVersion) {
+      final uri = Uri.tryParse(safe);
+      final version = uri?.queryParameters['v'] ?? '';
+      if (version.endsWith('-0')) return null;
+    }
     return safe;
   }
 
@@ -2039,7 +2050,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       uid,
       phone: fallbackPhone,
     );
-    return cached?.hasProfileImage == true ? cached!.profileImage : null;
+    if (cached?.hasProfileImage != true) return null;
+    return _safeDirectAvatarUrl(
+      cached!.profileImage,
+      rejectPlaceholderVersion: true,
+    );
   }
 
   String? _localAvatarPathForConversation(ChatConversation conv) {

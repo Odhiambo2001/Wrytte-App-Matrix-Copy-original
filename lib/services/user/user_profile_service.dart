@@ -66,6 +66,8 @@ class UserProfileService {
       StreamController<UserProfile?>.broadcast();
   final StreamController<String> _publicProfileUpdateController =
       StreamController<String>.broadcast();
+  final Map<String, String> _pendingPublicProfileUpdates = {};
+  Timer? _publicProfileUpdateFlushTimer;
 
   Stream<String> get publicProfileUpdateStream =>
       _publicProfileUpdateController.stream;
@@ -73,6 +75,23 @@ class UserProfileService {
   void _handlePublicProfileUpdated(String userId) {
     final localpart = _matrixLocalpart(userId).toLowerCase();
     if (localpart.isEmpty) return;
+    _pendingPublicProfileUpdates[localpart] = userId;
+    _publicProfileUpdateFlushTimer ??= Timer(
+      const Duration(milliseconds: 120),
+      _flushPublicProfileUpdates,
+    );
+  }
+
+  void _flushPublicProfileUpdates() {
+    _publicProfileUpdateFlushTimer = null;
+    final updates = Map<String, String>.of(_pendingPublicProfileUpdates);
+    _pendingPublicProfileUpdates.clear();
+    for (final entry in updates.entries) {
+      _invalidatePublicProfile(entry.key, entry.value);
+    }
+  }
+
+  void _invalidatePublicProfile(String localpart, String userId) {
     final cachedProfile = cachedPublicProfileByUid(userId);
     if (cachedProfile?.profileImage.isNotEmpty == true) {
       _publicProfilePreviousAvatarUrls[localpart] =
@@ -496,11 +515,6 @@ class UserProfileService {
       );
       return null;
     }
-    debugPrint(
-      '[UserProfileService] profile lookup user_id="$requestedUid" '
-      'force_refresh=$forceRefresh',
-    );
-
     // If it's the current user, use the full local profile
     final ownerProfile = await _publicProfileForOwner(uid);
     if (ownerProfile != null) {
@@ -516,23 +530,14 @@ class UserProfileService {
       final cached = _publicProfileCache[cacheKey] ??
           cachedPublicProfileByUid(requestedUid);
       if (cached != null) {
-        debugPrint(
-          '[UserProfileService] profile source=public_cache user_id="$requestedUid"',
-        );
         return cached;
       }
       if (_publicProfileMisses.contains(cacheKey)) {
-        debugPrint(
-          '[UserProfileService] profile source=negative_cache user_id="$requestedUid"',
-        );
         return null;
       }
 
       final pending = _publicProfileInFlight[cacheKey];
       if (pending != null) {
-        debugPrint(
-          '[UserProfileService] profile source=in_flight_request user_id="$requestedUid"',
-        );
         return pending;
       }
     } else {
@@ -628,6 +633,9 @@ class UserProfileService {
 
   /// Wipe cache on logout.
   void clearCache() {
+    _publicProfileUpdateFlushTimer?.cancel();
+    _publicProfileUpdateFlushTimer = null;
+    _pendingPublicProfileUpdates.clear();
     _sessionGeneration += 1;
     _profileReadRevision += 1;
     _avatarMutationRevision += 1;
