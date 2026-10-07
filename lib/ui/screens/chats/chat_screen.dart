@@ -451,6 +451,7 @@ class _ChatScreenState extends State<ChatScreen> {
   UserProfile? _receiverProfile;
   ContactIdentity? _receiverIdentity;
   bool _receiverIsSavedContact = false;
+  bool _receiverOnline = false;
   ChatMessage? _replyingTo;
   ChatMessage? _editingMessage;
   double? _stableStatusBarH;
@@ -472,6 +473,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _chat.activateConversationRead(widget.conversationId);
+    _receiverOnline = _currentPeerPresenceIsOnline();
     _stableHeaderAvatarUrl = _initialStableHeaderAvatarUrl();
     _subscribeToRoomProfileUpdates();
     _subscribeToGroupContactUpdates();
@@ -543,8 +545,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _subscribeToRoomProfileUpdates() {
-    _roomProfileSyncSub = MatrixChatService.instance.syncStream.listen((_) {
+    _roomProfileSyncSub = MatrixChatService.instance.syncStream.listen((update) {
       if (!mounted) return;
+      _applyPeerPresenceUpdate(update);
       final room = MatrixChatService.instance.getRoomById(
         _resolvedConversationId ?? widget.conversationId,
       );
@@ -574,6 +577,41 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       setState(() => _stableHeaderAvatarUrl = latestAvatar);
     });
+  }
+
+  bool _currentPeerPresenceIsOnline() {
+    if (_isGroupChat || !MatrixClientService.instance.isInitialized) {
+      return false;
+    }
+    final peerId = _profilePeerId();
+    if (peerId == null || peerId.trim().isEmpty) return false;
+    final peerLocalpart = _matrixLocalpart(peerId).toLowerCase();
+    final client = MatrixClientService.instance.client;
+    for (final entry in client.presences.entries) {
+      if (_matrixLocalpart(entry.key).toLowerCase() != peerLocalpart) continue;
+      return entry.value.presence == mx.PresenceType.online;
+    }
+    return false;
+  }
+
+  void _applyPeerPresenceUpdate(mx.SyncUpdate update) {
+    if (_isGroupChat) return;
+    final peerId = _profilePeerId();
+    if (peerId == null || peerId.trim().isEmpty) return;
+    final peerLocalpart = _matrixLocalpart(peerId).toLowerCase();
+    for (final presence in update.presence ?? const []) {
+      if (_matrixLocalpart(presence.senderId).toLowerCase() != peerLocalpart) {
+        continue;
+      }
+      final isOnline = presence.presence.presence == mx.PresenceType.online;
+      if (isOnline == _receiverOnline) continue;
+      setState(() => _receiverOnline = isOnline);
+      apkLog(
+        'Matrix.presence',
+        'chat_peer_status user_id="$peerId" '
+        'status="${isOnline ? 'online' : 'offline'}"',
+      );
+    }
   }
 
   void _onPublicProfileUpdated(String userId) {
@@ -3923,7 +3961,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                           child: Text(
                                             isGroupChat
                                                 ? _groupSubtitle()
-                                                : 'Online',
+                                                : _receiverOnline
+                                                ? 'Online'
+                                                : 'Offline',
                                             style: TextStyle(
                                               color: Colors.white.withValues(
                                                 alpha: 0.5,

@@ -24,7 +24,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
-  final TextEditingController _phoneNumberController = TextEditingController();
   final TextEditingController _bioController = TextEditingController();
   final TextEditingController _linkController = TextEditingController();
   final TextEditingController _channelAliasController = TextEditingController();
@@ -80,10 +79,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _firstNameController.text = nameParts.isNotEmpty ? nameParts[0] : '';
     _lastNameController.text =
         nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
-    _phoneNumberController.text = _formatProfileNumber(
-      profile.phone,
-      accountId: profile.uid,
-    );
     _bioController.text = profile.bio;
     _linkController.text = profile.links.isNotEmpty ? profile.links[0] : '';
     _channelAliasController.text = profile.channelAlias;
@@ -197,7 +192,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         lastName,
       ].where((s) => s.isNotEmpty).join(' ');
       final bio = _bioController.text.trim();
-      final phoneNumber = _phoneNumberController.text.trim();
       final link = _linkController.text.trim();
       final existingLinks = List<String>.from(_profile?.links ?? []);
       if (link.isNotEmpty) {
@@ -213,7 +207,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         name: fullName,
         firstName: firstName,
         lastName: lastName,
-        phoneNumber: phoneNumber,
         profileImage: newImageUrl,
         bio: bio,
         links: existingLinks,
@@ -466,18 +459,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       ),
                       const SizedBox(height: 12),
 
-                      Container(
-                        decoration: BoxDecoration(
-                          color: cardBg,
-                          borderRadius: BorderRadius.circular(25),
-                        ),
-                        child: _inputRow(
-                          'Profile phone number',
-                          _phoneNumberController,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-
                       // Link
                       Container(
                         decoration: BoxDecoration(
@@ -591,7 +572,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   void dispose() {
     _firstNameController.dispose();
     _lastNameController.dispose();
-    _phoneNumberController.dispose();
     _bioController.dispose();
     _linkController.dispose();
     _channelAliasController.dispose();

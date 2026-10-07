@@ -40,6 +40,12 @@ String _formatWrytteIdBody(String value) {
   return digits.length > 12 ? digits.substring(0, 12) : digits;
 }
 
+String _formatWrytteIdInput(String digits) {
+  final normalized = digits.replaceAll(RegExp(r'[^\d]'), '');
+  if (normalized.length <= 2) return '+$normalized';
+  return '+${normalized.substring(0, 2)} ${normalized.substring(2)}';
+}
+
 bool _isValidWrytteId(String value) {
   final digits = value.replaceAll(RegExp(r'[^\d]'), '');
   final bodyLength = digits.startsWith('00') ? digits.length - 2 : 0;
@@ -154,14 +160,18 @@ class _NewContactPageState extends State<NewContactPage> {
     return formatted.startsWith('+') ? formatted : '+$formatted';
   }
 
+  bool get _hasContactName =>
+      _firstNameCtrl.text.trim().isNotEmpty ||
+      _lastNameCtrl.text.trim().isNotEmpty;
+
   bool get _canSave {
+    if (!_hasContactName) return false;
     if (_numberCtrl.text.trim().isEmpty) return false;
     if (_isWrytteIdMode) {
       if (!_isValidWrytteId(_fullIdentifier)) return false;
       final canSaveUnregisteredId =
           !_isRegisteredOnWrytte && _lookupState == _LookupState.notFound;
       if (canSaveUnregisteredId) return true;
-      if (_firstNameCtrl.text.trim().isEmpty) return false;
       final canSaveRegisteredId =
           _isRegisteredOnWrytte &&
           (_resolvedUserId?.trim().isNotEmpty ?? false) &&
@@ -170,10 +180,8 @@ class _NewContactPageState extends State<NewContactPage> {
           (_lookupState == _LookupState.found ||
               _lookupState == _LookupState.duplicate);
     }
-    if (_firstNameCtrl.text.trim().isEmpty) return false;
-    return _lookupState != _LookupState.duplicate &&
-        (_hasInvalidCountryCode ||
-            (_selectedCountry != null && _fullIdentifier.isNotEmpty));
+    return _hasInvalidCountryCode ||
+        (_selectedCountry != null && _fullIdentifier.isNotEmpty);
   }
 
   String get _phoneDigits => _numberCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
@@ -191,7 +199,12 @@ class _NewContactPageState extends State<NewContactPage> {
           TextPosition(offset: _firstNameCtrl.text.length),
         );
       }
-      _firstNameFocusNode.requestFocus();
+      if (widget.readOnlyIdentifier) {
+        _firstNameFocusNode.requestFocus();
+      } else {
+        _onCodeFieldTap();
+        _codeFocusNode.requestFocus();
+      }
     });
     _numberCtrl.addListener(_onNumberChanged);
     _firstNameCtrl.addListener(() => setState(() {}));
@@ -225,7 +238,7 @@ class _NewContactPageState extends State<NewContactPage> {
         identifierDigits.startsWith('00')
             ? identifierDigits.substring(2)
             : identifierDigits;
-    _codeCtrl.text = '+00$body';
+    _codeCtrl.text = _formatWrytteIdInput('00$body');
     _numberCtrl.text = _formatWrytteIdBody(body);
     _showDivider = true;
   }
@@ -321,7 +334,7 @@ class _NewContactPageState extends State<NewContactPage> {
     if (digitsOnly.startsWith('0')) {
       final body = digitsOnly.startsWith('00') ? digitsOnly.substring(2) : '';
       const wrytteMode = wryptteId;
-      final combinedValue = '+$digitsOnly';
+      final combinedValue = _formatWrytteIdInput(digitsOnly);
       final rawCaretOffset =
           incomingSelection.extentOffset.clamp(0, value.length).toInt();
       final digitsBeforeCaret =
@@ -330,7 +343,9 @@ class _NewContactPageState extends State<NewContactPage> {
               .replaceAll(RegExp(r'[^\d]'), '')
               .length;
       final caretOffset =
-          (digitsBeforeCaret + 1).clamp(1, combinedValue.length).toInt();
+          (digitsBeforeCaret + 1 + (digitsBeforeCaret > 2 ? 1 : 0))
+              .clamp(1, combinedValue.length)
+              .toInt();
       _debounce?.cancel();
       setState(() {
         _isWrytteIdInput = true;
@@ -850,41 +865,47 @@ class _NewContactPageState extends State<NewContactPage> {
       final lastName = _lastNameCtrl.text.trim();
       final contactName = _displayName(firstName, lastName, _fullIdentifier);
 
-      if (_isWrytteIdMode && _duplicateContact != null) {
+      if (_duplicateContact != null) {
         final existing = _duplicateContact!;
         final savedRoomId = existing.directRoomId?.trim() ?? '';
-        final conversationId =
-            savedRoomId.startsWith('!')
-                ? savedRoomId
-                : await ChatService().getMatrixConversationId(receiverId);
-        if (conversationId == null || !conversationId.startsWith('!')) {
-          throw StateError(
-            'Could not create a private chat with this contact. Try again.',
+        String? conversationId =
+            savedRoomId.startsWith('!') ? savedRoomId : null;
+        if (receiverId.isNotEmpty && conversationId == null) {
+          conversationId = await ChatService().getMatrixConversationId(
+            receiverId,
           );
+          if (conversationId == null || !conversationId.startsWith('!')) {
+            throw StateError(
+              'Could not create a private chat with this contact. Try again.',
+            );
+          }
         }
         final renamedContact = existing.copyWith(
           displayName: contactName,
           firstName: firstName,
           lastName: lastName,
-          directRoomId: conversationId,
-          isOnWrytte: true,
-          wrytteUserId: receiverId,
+          directRoomId: conversationId ?? existing.directRoomId,
+          isOnWrytte: existing.isOnWrytte || receiverId.isNotEmpty,
+          wrytteUserId:
+              receiverId.isNotEmpty ? receiverId : existing.wrytteUserId,
           isSaved: true,
         );
         await ContactLocalDb.addContact(renamedContact, ownerUserId: selfId);
-        await ContactIdentityCache.instance.upsert(
-          ownerUserId: selfId,
-          matrixUserId: receiverId,
-          phone: renamedContact.primaryPhone,
-          savedName: contactName,
-          avatarUrl: renamedContact.avatarUrl,
-          bio: renamedContact.bio,
-        );
-        await _saveContactToBackendOrThrow(
-          selfId: selfId,
-          receiverId: receiverId,
-          contact: renamedContact,
-        );
+        if (receiverId.isNotEmpty) {
+          await ContactIdentityCache.instance.upsert(
+            ownerUserId: selfId,
+            matrixUserId: receiverId,
+            phone: renamedContact.primaryPhone,
+            savedName: contactName,
+            avatarUrl: renamedContact.avatarUrl,
+            bio: renamedContact.bio,
+          );
+          await _saveContactToBackendOrThrow(
+            selfId: selfId,
+            receiverId: receiverId,
+            contact: renamedContact,
+          );
+        }
         await ChatService().applySavedContact(renamedContact);
         ContactService.notifyContactsChanged(selfId);
         ContactService.invalidateMatrixContactsCache();
@@ -1636,7 +1657,7 @@ class _NewContactPageState extends State<NewContactPage> {
             child: Text(
               'Save',
               style: TextStyle(
-                color: _canSave ? _kBlue : Colors.white38,
+                color: _canSave ? Colors.white : Colors.white38,
                 fontSize: 16,
                 fontWeight: FontWeight.w500,
               ),
@@ -2034,7 +2055,7 @@ class _NewContactPageState extends State<NewContactPage> {
     setState(() {
       _selectedCountry = wrytteMode;
       _isWrytteIdInput = true;
-      _codeCtrl.text = '+00$body';
+      _codeCtrl.text = _formatWrytteIdInput('00$body');
       _showDivider = false;
       _lookupState = _LookupState.idle;
       _lookupError = null;
