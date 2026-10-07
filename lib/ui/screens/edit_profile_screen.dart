@@ -127,7 +127,35 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
+  bool get _hasAvatarToRemove =>
+      _currentImageUrl?.trim().isNotEmpty == true ||
+      _currentLocalImagePath?.trim().isNotEmpty == true ||
+      _profile?.hasProfileImage == true;
+
+  Future<void> _removeAvatar() async {
+    if (_isSaving) return;
+    setState(() => _isSaving = true);
+    try {
+      await UserProfileService.instance.deleteProfileImage();
+      if (!mounted) return;
+      setState(() {
+        _pickedImageFile = null;
+        _currentImageUrl = null;
+        _currentLocalImagePath = null;
+        _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
+        _profile = UserProfileService.instance.cachedProfile ?? _profile;
+        _isSaving = false;
+      });
+      _showSnack('Profile photo removed.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      _showSnack(e.toString(), isError: true);
+    }
+  }
+
   void _showImageOptions() {
+    final hasAvatar = _hasAvatarToRemove;
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF23262C),
@@ -158,6 +186,18 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     _pickImage(ImageSource.camera);
                   },
                 ),
+                if (hasAvatar)
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                    title: const Text(
+                      'Remove',
+                      style: TextStyle(color: Colors.redAccent),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _removeAvatar();
+                    },
+                  ),
               ],
             ),
           ),
