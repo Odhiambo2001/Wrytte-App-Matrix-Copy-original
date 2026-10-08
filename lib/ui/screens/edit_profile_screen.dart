@@ -36,6 +36,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool _isSaving = false;
   bool _isLoggingOut = false;
 
+  bool get _hasName =>
+      _firstNameController.text.trim().isNotEmpty ||
+      _lastNameController.text.trim().isNotEmpty;
+
   File? _pickedImageFile;
   final ImagePicker _picker = ImagePicker();
 
@@ -208,7 +212,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   Future<void> _save() async {
-    if (_isSaving) return;
+    if (_isSaving || !_hasName) return;
     final uid = await AuthService.instance.getCurrentUserId();
     if (uid == null || uid.isEmpty) {
       _showSnack('Not authenticated.', isError: true);
@@ -546,27 +550,38 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 style: TextStyle(color: Colors.white, fontSize: 17),
               ),
             ),
-            TextButton(
-              onPressed: _isSaving ? null : _save,
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child:
-                  _isSaving
-                      ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                      : const Text(
-                        'Save',
-                        style: TextStyle(color: Colors.white, fontSize: 17),
-                      ),
+            AnimatedBuilder(
+              animation: Listenable.merge([
+                _firstNameController,
+                _lastNameController,
+              ]),
+              builder: (context, _) {
+                final canSave = _hasName && !_isSaving;
+                return TextButton(
+                  onPressed: canSave ? _save : null,
+                  style: TextButton.styleFrom(
+                    foregroundColor:
+                        canSave ? Colors.white : const Color(0xFF666970),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child:
+                      _isSaving
+                          ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                          : const Text(
+                            'Save',
+                            style: TextStyle(fontSize: 17),
+                          ),
+                );
+              },
             ),
           ],
         ),
