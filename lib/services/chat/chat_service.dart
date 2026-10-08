@@ -25,6 +25,13 @@ import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+class RoomEventPage {
+  final List<ChatMessage> messages;
+  final bool hasMore;
+
+  const RoomEventPage({required this.messages, required this.hasMore});
+}
+
 class ChatService {
   ChatService._internal();
   static final ChatService _instance = ChatService._internal();
@@ -108,6 +115,9 @@ class ChatService {
   final Map<String, DateTime> _lastReadAtByConversation = {};
   final Map<String, Future<void>> _profileRefreshInFlight = {};
   final Map<String, Future<List<ChatMessage>>> _suggestedPreviewInFlight = {};
+  final Map<String, String?> _profileRoomEventTokens = {};
+  final Set<String> _profileRoomEventHasMore = {};
+  final Map<String, Future<RoomEventPage>> _profileRoomEventInFlight = {};
   final Map<String, Future<List<ChatMessage>>> _roomHistoryInFlight = {};
   final Map<String, Set<String>> _attachmentCacheExpectedByRoom = {};
   final Map<String, Set<String>> _attachmentCacheCompleteByRoom = {};
@@ -1585,6 +1595,65 @@ class ChatService {
     }
   }
 
+  /// Loads one bounded page for a room opened from a user profile. The profile
+  /// screen itself only reads room summary metadata; event history is requested
+  /// after the user taps the channel/group.
+  Future<RoomEventPage> fetchProfileRoomEventPage({
+    required String roomId,
+    int limit = 15,
+    bool initial = false,
+  }) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return const RoomEventPage(messages: [], hasMore: false);
+    if (initial) {
+      _profileRoomEventTokens.remove(id);
+      _profileRoomEventHasMore.remove(id);
+    } else if (!_profileRoomEventHasMore.contains(id)) {
+      return const RoomEventPage(messages: [], hasMore: false);
+    }
+    final pending = _profileRoomEventInFlight[id];
+    if (pending != null) return pending;
+    final request = _withMatrixTokenRetry('fetchProfileRoomEventPage', () async {
+      await _waitForConnection();
+      final client = MatrixClientService.instance.client;
+      final response = await _enqueueMatrixPaginationRequest(
+        () => client.getRoomEvents(
+          id,
+          mx.Direction.b,
+          from: _profileRoomEventTokens[id],
+          limit: limit,
+        ),
+      );
+      final next = response.end?.trim();
+      final hasMore = next != null && next.isNotEmpty && next != _profileRoomEventTokens[id];
+      _profileRoomEventTokens[id] = hasMore ? next : null;
+      if (hasMore) {
+        _profileRoomEventHasMore.add(id);
+      } else {
+        _profileRoomEventHasMore.remove(id);
+      }
+      final messages = response.chunk
+          .map((event) => _publicGroupPreviewMessage(event, roomId: id, client: client))
+          .whereType<ChatMessage>()
+          .toList()
+        ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      apkLog(
+        'Profile.roomEvents',
+        'page room_id="$id" events=${response.chunk.length} '
+            'messages=${messages.length} has_more=$hasMore',
+      );
+      return RoomEventPage(messages: messages, hasMore: hasMore);
+    });
+    _profileRoomEventInFlight[id] = request;
+    try {
+      return await request;
+    } finally {
+      if (identical(_profileRoomEventInFlight[id], request)) {
+        _profileRoomEventInFlight.remove(id);
+      }
+    }
+  }
+
   Future<List<ChatMessage>> _enqueueSuggestedPreview(
     String roomId, {
     int? limit,
@@ -1686,7 +1755,12 @@ class ChatService {
         await ChatLocalDb.instance.saveSuggestedPreviewMembers(id, memberRows);
         await ChatLocalDb.instance.saveSuggestedRoomProfile(
           id,
-          _suggestedRoomProfileRow(latestProfileState),
+          _suggestedRoomProfileRow(
+            latestProfileState,
+            memberCount: memberRows
+                .where((row) => row['membership'] == 'join')
+                .length,
+          ),
         );
         if (messages.isNotEmpty) {
           _messagesCache[id] = messages;
@@ -1794,8 +1868,9 @@ class ChatService {
   }
 
   Map<String, dynamic> _suggestedRoomProfileRow(
-    Map<String, mx.MatrixEvent> state,
-  ) {
+    Map<String, mx.MatrixEvent> state, {
+    int memberCount = 0,
+  }) {
     final info = state['com.wrytte.group.info']?.content ?? const {};
     int version(String key) => int.tryParse(info[key]?.toString() ?? '') ?? 0;
     return {
@@ -1805,6 +1880,7 @@ class ChatService {
           state[mx.EventTypes.RoomCanonicalAlias]?.content['alias']?.toString(),
       'description':
           state[mx.EventTypes.RoomTopic]?.content['topic']?.toString(),
+      'memberCount': memberCount,
       'link': info['link']?.toString(),
       'avatarVersion': version('avatar_version'),
       'nameVersion': version('name_version'),
@@ -1816,6 +1892,11 @@ class ChatService {
 
   Future<Map<String, dynamic>?> loadSuggestedRoomProfile(String roomId) =>
       ChatLocalDb.instance.loadSuggestedRoomProfile(roomId);
+
+  Future<void> cacheSuggestedRoomProfile(
+    String roomId,
+    Map<String, dynamic> profile,
+  ) => ChatLocalDb.instance.saveSuggestedRoomProfile(roomId, profile);
 
   Map<String, dynamic> _suggestedPreviewMemberRow(
     mx.MatrixEvent event, {
@@ -1874,7 +1955,12 @@ class ChatService {
           if (profileState.isNotEmpty) {
             await ChatLocalDb.instance.saveSuggestedRoomProfile(
               id,
-              _suggestedRoomProfileRow(profileState),
+              _suggestedRoomProfileRow(
+                profileState,
+                memberCount: rows
+                    .where((row) => row['membership'] == 'join')
+                    .length,
+              ),
             );
           }
           apkLog(

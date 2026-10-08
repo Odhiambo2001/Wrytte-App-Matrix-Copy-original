@@ -511,6 +511,38 @@ class _ProfileScreenState extends State<ProfileScreen>
   }) async {
     final local = _profileRoomFromJoinedRooms(reference, isChannel: isChannel);
     if (local != null) return local;
+    // Suggested rooms may not have a Matrix Room object in the local client.
+    // Reuse their locally saved room profile before making a summary request.
+    try {
+      final chat = ChatService();
+      final cached = await chat.loadSuggestedRoomProfile(reference.trim());
+      if (cached != null) {
+        final cachedMembers = await chat.loadSuggestedPreviewMembers(
+          reference.trim(),
+        );
+        final joinedCount = cachedMembers
+            .where((member) => member['membership']?.toString() == 'join')
+            .length;
+        return MatrixPublicGroup(
+          roomId: reference.trim(),
+          name: cached['name']?.toString().trim().isNotEmpty == true
+              ? cached['name'].toString().trim()
+              : reference.trim(),
+          avatarUrl: cached['avatarUrl']?.toString(),
+          canonicalAlias: cached['canonicalAlias']?.toString(),
+          topic: cached['description']?.toString(),
+          memberCount:
+              (cached['memberCount'] as num?)?.toInt() ?? joinedCount,
+          worldReadable: true,
+          roomType: isChannel ? MatrixPublicGroup.channelRoomType : 'group',
+        );
+      }
+    } catch (error) {
+      apkLog(
+        'Profile.room',
+        'local suggested-room lookup failed ref="${reference.trim()}" error="$error"',
+      );
+    }
     try {
       final client = await MatrixChatService.instance.connect();
       final summary = await client.getRoomSummary(reference);
@@ -528,15 +560,26 @@ class _ProfileScreenState extends State<ProfileScreen>
           (!isChannel && summaryIsChannel)) {
         return null;
       }
+      final summaryName = summary.name?.trim() ?? '';
+      final summaryAvatar = summary.avatarUrl?.toString();
+      final summaryTopic = summary.topic;
+      unawaited(
+        ChatService()
+            .cacheSuggestedRoomProfile(summary.roomId, {
+          'name': summaryName,
+          'avatarUrl': summaryAvatar,
+          'canonicalAlias': summary.canonicalAlias,
+          'description': summaryTopic,
+          'memberCount': summary.numJoinedMembers,
+        })
+            .catchError((_) {}),
+      );
       return MatrixPublicGroup(
         roomId: summary.roomId,
-        name:
-            summary.name?.trim().isNotEmpty == true
-                ? summary.name!.trim()
-                : reference.trim(),
-        avatarUrl: summary.avatarUrl?.toString(),
+        name: summaryName.isNotEmpty ? summaryName : reference.trim(),
+        avatarUrl: summaryAvatar,
         canonicalAlias: summary.canonicalAlias,
-        topic: summary.topic,
+        topic: summaryTopic,
         memberCount: summary.numJoinedMembers,
         worldReadable: summary.worldReadable,
         roomType: summary.roomType,
@@ -592,20 +635,22 @@ class _ProfileScreenState extends State<ProfileScreen>
     final room = MatrixChatService.instance.getRoomById(group.roomId);
     final alreadyJoined = room?.membership == mx.Membership.join;
     var previewMessages = const <ChatMessage>[];
-    if (!alreadyJoined) {
-      try {
-        final chatService = ChatService();
-        await chatService.connect();
-        previewMessages = await chatService.fetchPublicGroupPreview(
-          roomId: group.roomId,
-          limit: 40,
-        );
-      } catch (error) {
-        apkLog(
-          'Profile.room',
-          'preview lookup failed room_id="${group.roomId}" error="$error"',
-        );
-      }
+    var hasMoreRoomEvents = false;
+    try {
+      final chatService = ChatService();
+      await chatService.connect();
+      final page = await chatService.fetchProfileRoomEventPage(
+        roomId: group.roomId,
+        limit: 15,
+        initial: true,
+      );
+      previewMessages = page.messages;
+      hasMoreRoomEvents = page.hasMore;
+    } catch (error) {
+      apkLog(
+        'Profile.room',
+        'preview lookup failed room_id="${group.roomId}" error="$error"',
+      );
     }
     final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
     if (!mounted) return;
@@ -620,6 +665,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                 title: group.name,
                 avatarUrl: group.avatarUrl,
                 initialPosts: previewMessages,
+                loadRoomEventsOnDemand: true,
+                initialEventsHaveMore: hasMoreRoomEvents,
                 subscriberCount: group.memberCount,
                 readOnlyUntilSubscribe: !alreadyJoined,
                 subscribeAlias: group.roomId,
@@ -638,6 +685,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                 title: group.name,
                 avatarUrl: group.avatarUrl,
                 initialMessages: previewMessages,
+                loadRoomEventsOnDemand: true,
+                initialEventsHaveMore: hasMoreRoomEvents,
                 readOnlyUntilJoin: !alreadyJoined,
                 initialMemberCount: group.memberCount,
                 groupAlias: group.roomId,

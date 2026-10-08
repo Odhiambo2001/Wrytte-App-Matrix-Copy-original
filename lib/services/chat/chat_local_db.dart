@@ -68,7 +68,7 @@ class ChatLocalDb {
 
     return openDatabase(
       path,
-      version: 15,
+      version: 16,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE messages (
@@ -283,6 +283,14 @@ class ChatLocalDb {
             'INTEGER NOT NULL DEFAULT 0',
           );
         }
+        if (oldVersion < 16) {
+          await _addColumnIfMissing(
+            db,
+            'suggested_room_profiles',
+            'memberCount',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+        }
       },
     );
   }
@@ -364,6 +372,7 @@ class ChatLocalDb {
         avatarUrl           TEXT,
         canonicalAlias      TEXT,
         description         TEXT,
+        memberCount         INTEGER NOT NULL DEFAULT 0,
         link                TEXT,
         avatarVersion       INTEGER NOT NULL DEFAULT 0,
         nameVersion         INTEGER NOT NULL DEFAULT 0,

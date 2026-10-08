@@ -55,6 +55,8 @@ class ChatScreen extends StatefulWidget {
   final String? groupDescription;
   final String conversationKind;
   final int? initialRoomProfileVersion;
+  final bool loadRoomEventsOnDemand;
+  final bool initialEventsHaveMore;
 
   const ChatScreen({
     super.key,
@@ -70,6 +72,8 @@ class ChatScreen extends StatefulWidget {
     this.groupDescription,
     this.conversationKind = ConversationKind.unknown,
     this.initialRoomProfileVersion,
+    this.loadRoomEventsOnDemand = false,
+    this.initialEventsHaveMore = false,
   });
 
   @override
@@ -511,6 +515,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _mergeMessages(widget.initialMessages);
       _loadingInitial = false;
     }
+    _hasMoreOlder = widget.initialEventsHaveMore;
     _focusNode.addListener(_onInputFocusChanged);
     _loadInitial();
     _scrollCtrl.addListener(_onScroll);
@@ -858,8 +863,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadInitial() async {
     _matrixAvailable = false;
-    _hasMoreOlder = false;
-    if (_suppliedRoomMatchesScreenKind) {
+    _hasMoreOlder = widget.initialEventsHaveMore;
+    if (_suppliedRoomMatchesScreenKind && !widget.loadRoomEventsOnDemand) {
       await _hydrateAndSubscribe(widget.conversationId);
     }
 
@@ -904,7 +909,9 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
 
-    if (realConvId.startsWith('!') && !_isReadOnlySuggestedGroup) {
+    if (realConvId.startsWith('!') &&
+        !_isReadOnlySuggestedGroup &&
+        !widget.loadRoomEventsOnDemand) {
       final restored = await _chat.fetchMessageHistory(
         conversationID: realConvId,
       );
@@ -937,7 +944,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _loadingInitial = false;
     });
 
-    await _hydrateAndSubscribe(realConvId, publishHydrated: false);
+    if (!widget.loadRoomEventsOnDemand) {
+      await _hydrateAndSubscribe(realConvId, publishHydrated: false);
+    }
   }
 
   bool get _suppliedRoomMatchesScreenKind {
@@ -1413,10 +1422,24 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadOlderMessages() async {
     if (_loadingOlder || !_hasMoreOlder) return;
-    setState(() {
-      _hasMoreOlder = false;
-      _loadingOlder = false;
-    });
+    if (!widget.loadRoomEventsOnDemand) return;
+    setState(() => _loadingOlder = true);
+    try {
+      final page = await _chat.fetchProfileRoomEventPage(
+        roomId: _resolvedConversationId ?? widget.conversationId,
+        limit: 15,
+      );
+      if (!mounted) return;
+      setState(() {
+        _mergeMessages(page.messages);
+        _hasMoreOlder = page.hasMore;
+        _loadingOlder = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loadingOlder = false);
+      apkLog('ChatScreen.historyPage', 'older page failed: $error');
+    }
   }
 
   // ─── SEND TEXT ─────────────────────────────────────────────────────────────

@@ -33,6 +33,8 @@ class ChannelFeedScreen extends StatefulWidget {
   final bool readOnlyUntilSubscribe;
   final String? subscribeAlias;
   final bool canPost;
+  final bool loadRoomEventsOnDemand;
+  final bool initialEventsHaveMore;
 
   const ChannelFeedScreen({
     super.key,
@@ -46,6 +48,8 @@ class ChannelFeedScreen extends StatefulWidget {
     this.readOnlyUntilSubscribe = false,
     this.subscribeAlias,
     this.canPost = false,
+    this.loadRoomEventsOnDemand = false,
+    this.initialEventsHaveMore = false,
   });
 
   @override
@@ -85,6 +89,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final Set<String> _viewedPostIds = {};
 
   bool _publishing = false;
+  bool _loadingOlderRoomEvents = false;
+  bool _hasMoreRoomEvents = false;
   int _subscriberCount = 0;
   String? _channelAvatarUrl;
   String? _highlightedPostId;
@@ -103,16 +109,18 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     super.initState();
     _postController.addListener(_onPostTextChanged);
     _posts = List<ChatMessage>.from(widget.initialPosts);
+    _hasMoreRoomEvents = widget.initialEventsHaveMore;
     _subscriberCount = widget.subscriberCount;
     _channelAvatarUrl =
         widget.avatarUrl?.trim().isNotEmpty == true
             ? widget.avatarUrl!.trim()
             : null;
     _pinnedEventIds = _chat.pinnedEventIdsForRoom(widget.conversationId);
-    _loadPosts();
+    if (!widget.loadRoomEventsOnDemand) _loadPosts();
     _loadInteractionState();
     _resolveChannelAvatar();
-    _postsSubscription = _chat.messagesStreamFor(widget.conversationId).listen((
+    if (!widget.loadRoomEventsOnDemand) {
+      _postsSubscription = _chat.messagesStreamFor(widget.conversationId).listen((
       posts,
     ) {
       if (!mounted) return;
@@ -125,7 +133,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         return;
       }
       setState(() => _posts = merged);
-    });
+      });
+    }
+    _postsScrollController.addListener(_onPostsScroll);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refreshSubscriberCount();
@@ -256,6 +266,40 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     if (!mounted) return;
     setState(() => _posts = posts);
     await _loadInteractionState();
+  }
+
+  void _onPostsScroll() {
+    if (!widget.loadRoomEventsOnDemand ||
+        !_postsScrollController.hasClients ||
+        _loadingOlderRoomEvents ||
+        !_hasMoreRoomEvents) {
+      return;
+    }
+    final position = _postsScrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 120) {
+      unawaited(_loadOlderRoomEvents());
+    }
+  }
+
+  Future<void> _loadOlderRoomEvents() async {
+    if (_loadingOlderRoomEvents || !_hasMoreRoomEvents) return;
+    setState(() => _loadingOlderRoomEvents = true);
+    try {
+      final page = await _chat.fetchProfileRoomEventPage(
+        roomId: widget.conversationId,
+        limit: 15,
+      );
+      if (!mounted) return;
+      setState(() {
+        _posts = _mergeIncomingPosts([..._posts, ...page.messages]);
+        _hasMoreRoomEvents = page.hasMore;
+        _loadingOlderRoomEvents = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loadingOlderRoomEvents = false);
+      debugPrint('[ChannelFeed.historyPage] older page failed: $error');
+    }
   }
 
   /// Open the channel profile page (tapping the header pill).
