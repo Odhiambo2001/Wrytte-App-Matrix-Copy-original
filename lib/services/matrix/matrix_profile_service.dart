@@ -177,6 +177,14 @@ class MatrixProfileService {
       await setDisplayName(userId, displayName);
     }
 
+    await _saveProfileRoomFields(
+      userId,
+      fields: {
+        if (channelAlias != null) WrytteProfile.channelAlias: channelAlias,
+        if (groupAlias != null) WrytteProfile.groupAlias: groupAlias,
+      },
+    );
+
     final fields = <String, dynamic>{};
     final removeFields = <String>[];
     void add(String field, String? value) {
@@ -193,8 +201,6 @@ class MatrixProfileService {
     add(WrytteProfile.phoneNumber, phoneNumber);
     add(WrytteProfile.bio, bio);
     add(WrytteProfile.link, link);
-    add(WrytteProfile.channelAlias, channelAlias);
-    add(WrytteProfile.groupAlias, groupAlias);
 
     if (avatarUrl != null) {
       if (avatarUrl.trim().isEmpty) {
@@ -374,10 +380,64 @@ class MatrixProfileService {
       _setOrDelete(userId, WrytteProfile.link, value);
 
   Future<void> setChannelAlias(String userId, String? value) =>
-      _setOrDelete(userId, WrytteProfile.channelAlias, value);
+      _saveProfileRoomFields(
+        userId,
+        fields: {WrytteProfile.channelAlias: value},
+      );
 
   Future<void> setGroupAlias(String userId, String? value) =>
-      _setOrDelete(userId, WrytteProfile.groupAlias, value);
+      _saveProfileRoomFields(
+        userId,
+        fields: {WrytteProfile.groupAlias: value},
+      );
+
+  /// Uses the Module API lifecycle for the profile's channel/group references:
+  /// POST a missing custom field, PATCH an existing value, and DELETE a cleared
+  /// field. Both references are checked together so one GET can serve a Save.
+  Future<void> _saveProfileRoomFields(
+    String userId, {
+    required Map<String, String?> fields,
+  }) async {
+    if (fields.isEmpty) return;
+    final current = await getProfile(userId);
+    final postFields = <String, dynamic>{};
+    final patchFields = <String, dynamic>{};
+    final deleteFields = <String>[];
+
+    for (final entry in fields.entries) {
+      final desired = entry.value?.trim() ?? '';
+      final existing = current.fields[entry.key]?.toString().trim() ?? '';
+      if (desired == existing) continue;
+      if (desired.isEmpty) {
+        if (existing.isNotEmpty) deleteFields.add(entry.key);
+      } else if (existing.isEmpty) {
+        postFields[entry.key] = desired;
+      } else {
+        patchFields[entry.key] = desired;
+      }
+    }
+
+    if (postFields.isNotEmpty) {
+      debugPrint(
+        '[ModuleProfile.fields] method=POST user_id="$userId" '
+        'fields=${postFields.keys.toList()}',
+      );
+      await addFields(userId, fields: postFields);
+    }
+    if (patchFields.isNotEmpty) {
+      debugPrint(
+        '[ModuleProfile.fields] method=PATCH user_id="$userId" '
+        'fields=${patchFields.keys.toList()}',
+      );
+      await _patch(userId, {'fields': patchFields});
+    }
+    for (final field in deleteFields) {
+      debugPrint(
+        '[ModuleProfile.fields] method=DELETE user_id="$userId" field="$field"',
+      );
+      await deleteField(userId, field);
+    }
+  }
 
   Future<void> _setOrDelete(String userId, String field, String? value) {
     final clean = value?.trim() ?? '';

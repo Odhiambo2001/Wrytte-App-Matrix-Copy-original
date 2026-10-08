@@ -21,6 +21,8 @@ import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
+import 'package:wrytte/ui/screens/channels/channel_feed_screen.dart';
+import 'package:wrytte/ui/screens/group_profile_screen.dart';
 import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
 import 'package:wrytte/ui/widgets/full_screen_video_viewer.dart';
 import 'package:wrytte/ui/widgets/profile_tab_bar_section.dart';
@@ -70,6 +72,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   StreamSubscription<UserProfile?>? _profileSub;
   StreamSubscription<String>? _publicProfileUpdatesSub;
   String? _seededSavedName;
+  MatrixPublicGroup? _profileChannel;
+  MatrixPublicGroup? _profileGroup;
+  int _profileRoomResolveRevision = 0;
 
   late final TabController _tabController;
 
@@ -91,6 +96,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     ); // ← add, runs before first build
     _tabController = TabController(length: _tabs.length, vsync: this);
     _seedProfileForFirstPaint();
+    if (_profile != null) unawaited(_loadProfileRoomCards(_profile!));
     if (!_isOtherUser) {
       _profileSub = UserProfileService.instance
           .getCurrentUserProfileStream()
@@ -100,12 +106,14 @@ class _ProfileScreenState extends State<ProfileScreen>
               _profile = profile;
               _profileLoading = false;
             });
+            unawaited(_loadProfileRoomCards(profile));
           });
     }
     _loadProfile();
     _loadConversationMessages();
     if (_isOtherUser) {
-      _publicProfileUpdatesSub = UserProfileService.instance
+      _publicProfileUpdatesSub = UserProfileService
+          .instance
           .publicProfileUpdateStream
           .listen(_onPublicProfileUpdated);
     }
@@ -190,6 +198,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       _identity = identity;
       _profileLoading = false;
     });
+    if (profile != null) unawaited(_loadProfileRoomCards(profile));
 
     final matrixProfile =
         uid != null && profile?.moduleProfileLoaded != true
@@ -402,6 +411,193 @@ class _ProfileScreenState extends State<ProfileScreen>
         profile.hasProfileImage ||
         profile.localProfileImagePath.trim().isNotEmpty ||
         profile.bio.trim().isNotEmpty;
+  }
+
+  String _visibilityKey(String value) =>
+      value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  bool _canViewProfileField(UserProfile? profile, String field) {
+    if (!_isOtherUser) return true;
+    final settings = profile?.visibilitySettings ?? const <String, String>{};
+    final expectedKeys = <String>{
+      _visibilityKey(field),
+      _visibilityKey('com.wrytte.$field'),
+      _visibilityKey('${field}Alias'),
+      _visibilityKey('com.wrytte.${field.toLowerCase()}_alias'),
+    };
+    String? configured;
+    for (final entry in settings.entries) {
+      if (expectedKeys.contains(_visibilityKey(entry.key))) {
+        configured = entry.value;
+        break;
+      }
+    }
+    final visibility = (configured ?? 'everyone').trim().toLowerCase();
+    if (visibility == 'nobody' ||
+        visibility == 'none' ||
+        visibility == 'private') {
+      return false;
+    }
+    if (visibility == 'contacts' || visibility == 'contacts_only') {
+      return _savedContact != null;
+    }
+    return visibility == 'everyone' ||
+        visibility == 'public' ||
+        visibility.isEmpty;
+  }
+
+  MatrixPublicGroup? _profileRoomFromJoinedRooms(
+    String reference, {
+    required bool isChannel,
+  }) {
+    final normalized = reference.trim();
+    if (normalized.isEmpty) return null;
+    final matrix = MatrixChatService.instance;
+    for (final room in matrix.rooms) {
+      if (room.id != normalized && room.canonicalAlias.trim() != normalized) {
+        continue;
+      }
+      final roomIsChannel = matrix.isChannelRoom(room);
+      final roomIsGroup = matrix.isMatrixGroupRoom(room) && !roomIsChannel;
+      if ((isChannel && !roomIsChannel) || (!isChannel && !roomIsGroup)) {
+        continue;
+      }
+      return MatrixPublicGroup(
+        roomId: room.id,
+        name: room.getLocalizedDisplayname(),
+        avatarUrl: room.avatar?.toString(),
+        canonicalAlias:
+            room.canonicalAlias.trim().isEmpty ? null : room.canonicalAlias,
+        topic: room.topic,
+        memberCount: matrix.groupMemberCount(room),
+        worldReadable:
+            room.historyVisibility == mx.HistoryVisibility.worldReadable,
+        roomType: isChannel ? MatrixPublicGroup.channelRoomType : 'group',
+      );
+    }
+    return null;
+  }
+
+  Future<MatrixPublicGroup?> _resolveProfileRoom(
+    String reference, {
+    required bool isChannel,
+  }) async {
+    final local = _profileRoomFromJoinedRooms(reference, isChannel: isChannel);
+    if (local != null) return local;
+    try {
+      final client = await MatrixChatService.instance.connect();
+      final summary = await client.getRoomSummary(reference);
+      final canonicalAlias = summary.canonicalAlias?.trim() ?? '';
+      final aliasLocalpart =
+          canonicalAlias.startsWith('#')
+              ? canonicalAlias.substring(1)
+              : canonicalAlias;
+      final summaryIsChannel =
+          summary.roomType?.trim().toLowerCase() ==
+              MatrixPublicGroup.channelRoomType ||
+          (aliasLocalpart.startsWith('@') &&
+              !aliasLocalpart.startsWith('gr.@'));
+      if ((isChannel && !summaryIsChannel) ||
+          (!isChannel && summaryIsChannel)) {
+        return null;
+      }
+      return MatrixPublicGroup(
+        roomId: summary.roomId,
+        name:
+            summary.name?.trim().isNotEmpty == true
+                ? summary.name!.trim()
+                : reference.trim(),
+        avatarUrl: summary.avatarUrl?.toString(),
+        canonicalAlias: summary.canonicalAlias,
+        topic: summary.topic,
+        memberCount: summary.numJoinedMembers,
+        worldReadable: summary.worldReadable,
+        roomType: summary.roomType,
+      );
+    } catch (error) {
+      apkLog(
+        'Profile.room',
+        'summary lookup failed ref="${reference.trim()}" error="$error"',
+      );
+      return null;
+    }
+  }
+
+  Future<void> _loadProfileRoomCards(UserProfile profile) async {
+    final revision = ++_profileRoomResolveRevision;
+    final channelRef =
+        _canViewProfileField(profile, 'Channel')
+            ? profile.channelAlias.trim()
+            : '';
+    final groupRef =
+        _canViewProfileField(profile, 'Group') ? profile.groupAlias.trim() : '';
+    final results = await Future.wait<MatrixPublicGroup?>([
+      channelRef.isEmpty
+          ? Future<MatrixPublicGroup?>.value(null)
+          : _resolveProfileRoom(channelRef, isChannel: true),
+      groupRef.isEmpty
+          ? Future<MatrixPublicGroup?>.value(null)
+          : _resolveProfileRoom(groupRef, isChannel: false),
+    ]);
+    if (!mounted || revision != _profileRoomResolveRevision) return;
+    setState(() {
+      _profileChannel = results[0];
+      _profileGroup = results[1];
+    });
+  }
+
+  Future<void> _openProfileRoom(
+    String reference, {
+    required bool isChannel,
+  }) async {
+    final group = await _resolveProfileRoom(reference, isChannel: isChannel);
+    if (!mounted) return;
+    if (group == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'This ${isChannel ? 'channel' : 'group'} is unavailable.',
+          ),
+        ),
+      );
+      return;
+    }
+    final room = MatrixChatService.instance.getRoomById(group.roomId);
+    final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
+    if (!mounted) return;
+    if (isChannel) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder:
+              (_) => ChannelFeedScreen(
+                conversationId: group.roomId,
+                currentUserId: currentUserId,
+                title: group.name,
+                avatarUrl: group.avatarUrl,
+                subscriberCount: group.memberCount,
+                readOnlyUntilSubscribe: room?.membership != mx.Membership.join,
+                subscribeAlias: group.canonicalAlias ?? reference,
+              ),
+        ),
+      );
+    } else {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder:
+              (_) => GroupProfileScreen(
+                roomId: group.roomId,
+                groupName: group.name,
+                avatarUrl: group.avatarUrl,
+                alias: group.canonicalAlias ?? reference,
+                initialDescription: group.topic,
+                initialMemberCount: group.memberCount,
+                initiallyJoined: room?.membership == mx.Membership.join,
+              ),
+        ),
+      );
+    }
   }
 
   Future<Contact?> _findSavedContact(String uid, {String? phone}) async {
@@ -739,7 +935,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool get _hasCard {
     final bio = _profileBio();
     final links = _profile?.links ?? [];
-    return bio.isNotEmpty || links.isNotEmpty;
+    return bio.isNotEmpty ||
+        links.isNotEmpty ||
+        (_canViewProfileField(_profile, 'Channel') &&
+            (_profile?.channelAlias.trim().isNotEmpty ?? false)) ||
+        (_canViewProfileField(_profile, 'Group') &&
+            (_profile?.groupAlias.trim().isNotEmpty ?? false));
   }
 
   String _profileBio() {
@@ -764,6 +965,14 @@ class _ProfileScreenState extends State<ProfileScreen>
     final String phone = _profileLoading && !hasProfile ? '' : _profilePhone();
     final String bioText = _profileBio();
     final List<String> links = _profile?.links ?? [];
+    final channelRef =
+        _canViewProfileField(_profile, 'Channel')
+            ? _profile?.channelAlias.trim() ?? ''
+            : '';
+    final groupRef =
+        _canViewProfileField(_profile, 'Group')
+            ? _profile?.groupAlias.trim() ?? ''
+            : '';
 
     return Theme(
       data: theme.copyWith(
@@ -774,248 +983,288 @@ class _ProfileScreenState extends State<ProfileScreen>
         backgroundColor: const Color(0xFF08090B),
         extendBodyBehindAppBar: true,
         body: Stack(
-        children: [
-          NestedScrollView(
-            physics: const BouncingScrollPhysics(
-              parent: AlwaysScrollableScrollPhysics(),
-            ),
-            headerSliverBuilder:
-                (context, innerBoxIsScrolled) => [
-                  SliverToBoxAdapter(
-                    child: Column(
-                      children: [
-                        SizedBox(height: topBarHeight + 20),
+          children: [
+            NestedScrollView(
+              physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics(),
+              ),
+              headerSliverBuilder:
+                  (context, innerBoxIsScrolled) => [
+                    SliverToBoxAdapter(
+                      child: Column(
+                        children: [
+                          SizedBox(height: topBarHeight + 20),
 
-                        // ── Avatar ──────────────────────────────────────────
-                        _profileLoading && !hasProfile && !hasInitialAvatar
-                            ? _buildAvatarShimmer(100)
-                            : UserAvatar(
-                              size: 100,
-                              imageUrl: _profileAvatarUrl(),
-                              localImagePath: _profile?.localProfileImagePath,
-                              cacheIdentity:
-                                  'user:${(widget.uid ?? _profile?.uid ?? '').trim().toLowerCase()}',
-                              name: displayName,
-                            ),
-
-                        const SizedBox(height: 12),
-
-                        // ── Name ────────────────────────────────────────────
-                        if (!_isOtherUser || displayName.isNotEmpty)
-                          Text(
-                            _isOtherUser
-                                ? displayName
-                                : displayName.isNotEmpty
-                                ? displayName
-                                : 'You',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-
-                        const SizedBox(height: 4),
-
-                        // ── Phone ───────────────────────────────────────────
-                        if (phone.isNotEmpty)
-                          Text(
-                            phone,
-                            style: const TextStyle(
-                              color: Color(0xFF4DA3FF),
-                              fontSize: 16,
-                            ),
-                          ),
-
-                        if (bioText.isNotEmpty) ...[
-                          const SizedBox(height: 10),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 32),
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 18,
-                                vertical: 12,
+                          // ── Avatar ──────────────────────────────────────────
+                          _profileLoading && !hasProfile && !hasInitialAvatar
+                              ? _buildAvatarShimmer(100)
+                              : UserAvatar(
+                                size: 100,
+                                imageUrl: _profileAvatarUrl(),
+                                localImagePath: _profile?.localProfileImagePath,
+                                cacheIdentity:
+                                    'user:${(widget.uid ?? _profile?.uid ?? '').trim().toLowerCase()}',
+                                name: displayName,
                               ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF23262C),
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: _buildBio(bioText),
-                            ),
-                          ),
-                        ],
 
-                        const SizedBox(height: 16),
+                          const SizedBox(height: 12),
 
-                        // ── Quick actions (other user only) ─────────────────
-                        if (_isOtherUser) ...[
-                          _buildQuickActions(),
-                          const SizedBox(height: 20),
-                        ],
-
-                        // ── Links card (only when content exists) ───────────
-                        if (!_profileLoading && links.isNotEmpty) ...[
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF23262C),
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [_buildLinks(links)],
+                          // ── Name ────────────────────────────────────────────
+                          if (!_isOtherUser || displayName.isNotEmpty)
+                            Text(
+                              _isOtherUser
+                                  ? displayName
+                                  : displayName.isNotEmpty
+                                  ? displayName
+                                  : 'You',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                          ),
-                          const SizedBox(height: 20),
-                        ],
 
-                        if (_profileLoading || !_hasCard)
                           const SizedBox(height: 4),
-                      ],
-                    ),
-                  ),
 
-                  // ── Sticky tab bar — pins just below the top app bar ──────
-                  SliverPersistentHeader(
-                    pinned: true,
-                    delegate: _StickyTabBarDelegate(
-                      topOffset: topBarHeight,
-                      child: Container(
-                        color: const Color(0xFF08090B),
-                        child: ProfileTabBarSection(
-                          controller: _tabController,
-                          tabs: _tabs,
+                          // ── Phone ───────────────────────────────────────────
+                          if (phone.isNotEmpty)
+                            Text(
+                              phone,
+                              style: const TextStyle(
+                                color: Color(0xFF4DA3FF),
+                                fontSize: 16,
+                              ),
+                            ),
+
+                          if (bioText.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 32,
+                              ),
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF23262C),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: _buildBio(bioText),
+                              ),
+                            ),
+                          ],
+
+                          const SizedBox(height: 16),
+
+                          // ── Quick actions (other user only) ─────────────────
+                          if (_isOtherUser) ...[
+                            _buildQuickActions(),
+                            const SizedBox(height: 20),
+                          ],
+
+                          // ── Links and featured rooms ───────────────────────
+                          if (!_profileLoading &&
+                              (links.isNotEmpty ||
+                                  channelRef.isNotEmpty ||
+                                  groupRef.isNotEmpty)) ...[
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                              ),
+                              child: Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF23262C),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (links.isNotEmpty) _buildLinks(links),
+                                    if (links.isNotEmpty &&
+                                        (channelRef.isNotEmpty ||
+                                            groupRef.isNotEmpty))
+                                      const Divider(
+                                        height: 24,
+                                        color: Color(0xFF34373E),
+                                      ),
+                                    if (channelRef.isNotEmpty)
+                                      _buildFeaturedRoomRow(
+                                        label: 'Channel',
+                                        reference: channelRef,
+                                        room: _profileChannel,
+                                        isChannel: true,
+                                      ),
+                                    if (channelRef.isNotEmpty &&
+                                        groupRef.isNotEmpty)
+                                      const Divider(
+                                        height: 1,
+                                        color: Color(0xFF34373E),
+                                        indent: 54,
+                                      ),
+                                    if (groupRef.isNotEmpty)
+                                      _buildFeaturedRoomRow(
+                                        label: 'Group',
+                                        reference: groupRef,
+                                        room: _profileGroup,
+                                        isChannel: false,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                          ],
+
+                          if (_profileLoading || !_hasCard)
+                            const SizedBox(height: 4),
+                        ],
+                      ),
+                    ),
+
+                    // ── Sticky tab bar — pins just below the top app bar ──────
+                    SliverPersistentHeader(
+                      pinned: true,
+                      delegate: _StickyTabBarDelegate(
+                        topOffset: topBarHeight,
+                        child: Container(
+                          color: const Color(0xFF08090B),
+                          child: ProfileTabBarSection(
+                            controller: _tabController,
+                            tabs: _tabs,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ],
-            body: TabBarView(
-              controller: _tabController,
-              physics: const BouncingScrollPhysics(),
-              children:
-                  _isOtherUser
-                      ? [
-                        _buildMediaTab(),
-                        _buildFilesTab(),
-                        _buildEmptyTab(Icons.dynamic_feed_outlined, 'No feed'),
-                        _buildLinksTab(),
-                      ]
-                      : [_buildPostsTab(), _buildSavedTab()],
+                  ],
+              body: TabBarView(
+                controller: _tabController,
+                physics: const BouncingScrollPhysics(),
+                children:
+                    _isOtherUser
+                        ? [
+                          _buildMediaTab(),
+                          _buildFilesTab(),
+                          _buildEmptyTab(
+                            Icons.dynamic_feed_outlined,
+                            'No feed',
+                          ),
+                          _buildLinksTab(),
+                        ]
+                        : [_buildPostsTab(), _buildSavedTab()],
+              ),
             ),
-          ),
 
-          // ── Top gradient scrim ────────────────────────────────────────
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: topBarHeight + 20,
-            child: IgnorePointer(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: const [0.0, 0.6, 1.0],
-                    colors: [
-                      const Color(0xFF08090B).withValues(alpha: 0.95),
-                      const Color(0xFF08090B).withValues(alpha: 0.75),
-                      const Color(0xFF08090B).withValues(alpha: 0.0),
-                    ],
+            // ── Top gradient scrim ────────────────────────────────────────
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: topBarHeight + 20,
+              child: IgnorePointer(
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: const [0.0, 0.6, 1.0],
+                      colors: [
+                        const Color(0xFF08090B).withValues(alpha: 0.95),
+                        const Color(0xFF08090B).withValues(alpha: 0.75),
+                        const Color(0xFF08090B).withValues(alpha: 0.0),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
 
-          // ── Top bar ───────────────────────────────────────────────────
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Padding(
-              padding: EdgeInsets.only(top: statusBarHeight),
-              child: SizedBox(
-                height: kToolbarHeight,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Row(
-                    children: [
-                      // ── Back button ──────────────────────────────────
-                      widget.embeddedInHome
-                          ? const SizedBox(width: 44)
-                          : _glassButton(
+            // ── Top bar ───────────────────────────────────────────────────
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Padding(
+                padding: EdgeInsets.only(top: statusBarHeight),
+                child: SizedBox(
+                  height: kToolbarHeight,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Row(
+                      children: [
+                        // ── Back button ──────────────────────────────────
+                        widget.embeddedInHome
+                            ? const SizedBox(width: 44)
+                            : _glassButton(
                               icon: Icons.arrow_back_ios,
                               onTap: () => Navigator.pop(context),
                             ),
 
-                      // ── Title — only shown for own profile, truly centered ─
-                      Expanded(
-                        child:
-                            _isOtherUser
-                                ? const SizedBox.shrink()
-                                : const Center(
-                                  child: Text(
-                                    "Profile",
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.w600,
+                        // ── Title — only shown for own profile, truly centered ─
+                        Expanded(
+                          child:
+                              _isOtherUser
+                                  ? const SizedBox.shrink()
+                                  : const Center(
+                                    child: Text(
+                                      "Profile",
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ),
-                                ),
-                      ),
+                        ),
 
-                      // ── Edit / action button ─────────────────────────
-                      _isOtherUser
-                          ? _glassButton(
-                            icon: Icons.more_vert,
-                            onTap: _showMoreActions,
-                          )
-                          : _glassTextButton(
-                            text: "Edit",
-                            onTap: () async {
-                              final message = await Navigator.push<String>(
-                                context,
-                                MaterialPageRoute(
-                                  builder:
-                                      (_) => EditProfileScreen(
-                                        initialProfile: _profile,
-                                      ),
-                                ),
-                              );
-                              if (!context.mounted) return;
-                              unawaited(_loadProfile());
-                              if (message?.trim().isNotEmpty == true) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(message!),
-                                    backgroundColor: const Color(0xFF4DA3FF),
-                                    behavior: SnackBarBehavior.floating,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    margin: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 12,
-                                    ),
+                        // ── Edit / action button ─────────────────────────
+                        _isOtherUser
+                            ? _glassButton(
+                              icon: Icons.more_vert,
+                              onTap: _showMoreActions,
+                            )
+                            : _glassTextButton(
+                              text: "Edit",
+                              onTap: () async {
+                                final message = await Navigator.push<String>(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder:
+                                        (_) => EditProfileScreen(
+                                          initialProfile: _profile,
+                                        ),
                                   ),
                                 );
-                              }
-                            },
-                          ),
-                    ],
+                                if (!context.mounted) return;
+                                unawaited(_loadProfile());
+                                if (message?.trim().isNotEmpty == true) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(message!),
+                                      backgroundColor: const Color(0xFF4DA3FF),
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      margin: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
         ),
       ),
     );
@@ -1120,10 +1369,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 fontWeight: FontWeight.w500,
               ),
             ),
-            child: const Text(
-              "Add storie",
-              style: TextStyle(fontSize: 15),
-            ),
+            child: const Text("Add storie", style: TextStyle(fontSize: 15)),
           ),
         ),
       ],
@@ -1404,11 +1650,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (_bioExpanded) {
       return GestureDetector(
         onTap: () => setState(() => _bioExpanded = false),
-        child: Text(
-          bioText,
-          textAlign: TextAlign.center,
-          style: _bioStyle,
-        ),
+        child: Text(bioText, textAlign: TextAlign.center, style: _bioStyle),
       );
     }
 
@@ -1421,11 +1663,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         )..layout(maxWidth: constraints.maxWidth);
 
         if (!fullPainter.didExceedMaxLines) {
-          return Text(
-            bioText,
-            textAlign: TextAlign.center,
-            style: _bioStyle,
-          );
+          return Text(bioText, textAlign: TextAlign.center, style: _bioStyle);
         }
 
         int lo = 0, hi = bioText.length;
@@ -1550,6 +1788,78 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Widget _buildFeaturedRoomRow({
+    required String label,
+    required String reference,
+    required MatrixPublicGroup? room,
+    required bool isChannel,
+  }) {
+    final title =
+        room?.name.trim().isNotEmpty == true
+            ? room!.name.trim()
+            : reference.startsWith('!')
+            ? label
+            : reference;
+    final count = room?.memberCount;
+    final countLabel =
+        count == null
+            ? ''
+            : isChannel
+            ? '$count ${count == 1 ? 'subscriber' : 'subscribers'}'
+            : '$count ${count == 1 ? 'member' : 'members'}';
+    return InkWell(
+      onTap: () => _openProfileRoom(reference, isChannel: isChannel),
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            UserAvatar(
+              size: 42,
+              imageUrl: room?.avatarUrl,
+              name: title,
+              cacheIdentity:
+                  room == null
+                      ? null
+                      : 'room:${room.roomId}:${room.profileVersionFingerprint}',
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (countLabel.isNotEmpty)
+                    Text(
+                      countLabel,
+                      style: const TextStyle(
+                        color: Color(0xFFB9BBC1),
+                        fontSize: 13,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(color: Color(0xFFB9BBC1), fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ── Glass helpers ──────────────────────────────────────────────────────────
 
   Widget _glassButton({required IconData icon, required VoidCallback onTap}) {
@@ -1592,10 +1902,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             child: Center(
               child: Text(
                 text,
-                style: const TextStyle(
-                  color: Color(0xFF4DA3FF),
-                  fontSize: 16,
-                ),
+                style: const TextStyle(color: Color(0xFF4DA3FF), fontSize: 16),
               ),
             ),
           ),

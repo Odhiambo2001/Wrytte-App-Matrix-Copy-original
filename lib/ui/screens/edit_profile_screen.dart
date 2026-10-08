@@ -253,8 +253,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         profileImage: newImageUrl,
         bio: bio,
         links: existingLinks,
-        channelAlias: _channelAliasController.text.trim(),
-        groupAlias: _groupAliasController.text.trim(),
+        channelAlias: _profileRoomReferenceForSave(
+          _channelAliasController.text,
+          isChannel: true,
+        ),
+        groupAlias: _profileRoomReferenceForSave(
+          _groupAliasController.text,
+          isChannel: false,
+        ),
       );
       final refreshedProfile = await UserProfileService.instance
           .getCurrentUserProfile(forceRefresh: true);
@@ -374,6 +380,18 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       if (roomMatches && kindMatches) return room;
     }
     return null;
+  }
+
+  String _profileRoomReferenceForSave(
+    String value, {
+    required bool isChannel,
+  }) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return '';
+    // Convert previously saved aliases to room IDs whenever the room is
+    // available locally. The existing custom profile field names stay stable.
+    return _selectedProfileRoom(normalized, isChannel: isChannel)?.id.trim() ??
+        normalized;
   }
 
   Future<void> _openProfileRoomPicker(

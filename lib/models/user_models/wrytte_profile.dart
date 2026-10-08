@@ -17,6 +17,7 @@ class WrytteProfile {
   static const avatarVersion = 'com.wrytte.avatar_version';
   static const bio = 'com.wrytte.bio';
   static const link = 'com.wrytte.link';
+  // These legacy wire keys now store Matrix room IDs, not room aliases.
   static const channelAlias = 'com.wrytte.channel_alias';
   static const groupAlias = 'com.wrytte.group_alias';
   static const visibility = 'com.wrytte.profile_visibility';

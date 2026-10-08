@@ -46,10 +46,7 @@ class _ProfileRoomPickerScreenState extends State<ProfileRoomPickerScreen> {
       );
   }
 
-  String _roomValue(mx.Room room) =>
-      room.canonicalAlias.trim().isNotEmpty
-          ? room.canonicalAlias.trim()
-          : room.id;
+  String _roomValue(mx.Room room) => room.id.trim();
 
   bool _isSelected(mx.Room room) {
     final value = widget.selectedValue?.trim() ?? '';
