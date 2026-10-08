@@ -1,12 +1,15 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/face/biometric_prewarm_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/welcome_view.dart';
+import 'package:wrytte/ui/screens/profile_room_picker_screen.dart';
+import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 
@@ -357,6 +360,110 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
+  mx.Room? _selectedProfileRoom(String value, {required bool isChannel}) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return null;
+    for (final room in MatrixChatService.instance.rooms) {
+      final roomMatches =
+          room.id == normalized || room.canonicalAlias.trim() == normalized;
+      final kindMatches =
+          isChannel
+              ? MatrixChatService.instance.isChannelRoom(room)
+              : MatrixChatService.instance.isMatrixGroupRoom(room) &&
+                  !MatrixChatService.instance.isChannelRoom(room);
+      if (roomMatches && kindMatches) return room;
+    }
+    return null;
+  }
+
+  Future<void> _openProfileRoomPicker(
+    TextEditingController controller, {
+    required bool isChannel,
+  }) async {
+    final result = await Navigator.push<ProfileRoomPickerResult>(
+      context,
+      MaterialPageRoute(
+        builder:
+            (_) => ProfileRoomPickerScreen(
+              isChannel: isChannel,
+              selectedValue: controller.text,
+            ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      controller.text = result.removed ? '' : (result.value ?? '');
+    });
+  }
+
+  Widget _profileRoomRow(
+    String label,
+    TextEditingController controller, {
+    required bool isChannel,
+  }) {
+    final room = _selectedProfileRoom(controller.text, isChannel: isChannel);
+    final title = room?.getLocalizedDisplayname();
+    final memberCount =
+        room == null ? null : MatrixChatService.instance.groupMemberCount(room);
+    return InkWell(
+      onTap: () => _openProfileRoomPicker(controller, isChannel: isChannel),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            if (room != null) ...[
+              UserAvatar(
+                size: 48,
+                imageUrl: room.avatar?.toString(),
+                name: title,
+              ),
+              const SizedBox(width: 12),
+            ],
+            Expanded(
+              child:
+                  room == null
+                      ? Text(
+                        label,
+                        style: const TextStyle(
+                          color: Color(0xFF6B6E75),
+                          fontSize: 16,
+                        ),
+                      )
+                      : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title ?? label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            '$memberCount ${isChannel ? 'subscribers' : 'members'}',
+                            style: const TextStyle(
+                              color: Color(0xFFB9BBC1),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+            ),
+            const Text(
+              'Add',
+              style: TextStyle(color: Colors.white, fontSize: 16),
+            ),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right, color: Color(0xFF9A9DA4)),
+          ],
+        ),
+      ),
+    );
+  }
+
   String? _cacheBustedAvatarUrl(String? url) {
     final raw = url?.trim() ?? '';
     if (raw.isEmpty) return null;
@@ -516,9 +623,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         ),
                         child: Column(
                           children: [
-                            _inputRow('Channel alias', _channelAliasController),
+                            _profileRoomRow(
+                              'Channel',
+                              _channelAliasController,
+                              isChannel: true,
+                            ),
                             _divider(),
-                            _inputRow('Group alias', _groupAliasController),
+                            _profileRoomRow(
+                              'Group',
+                              _groupAliasController,
+                              isChannel: false,
+                            ),
                           ],
                         ),
                       ),
