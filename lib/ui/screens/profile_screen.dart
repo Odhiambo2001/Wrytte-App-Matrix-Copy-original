@@ -510,38 +510,54 @@ class _ProfileScreenState extends State<ProfileScreen>
     required bool isChannel,
   }) async {
     final local = _profileRoomFromJoinedRooms(reference, isChannel: isChannel);
-    if (local != null) return local;
-    // Suggested rooms may not have a Matrix Room object in the local client.
-    // Reuse their locally saved room profile before making a summary request.
-    try {
-      final chat = ChatService();
-      final cached = await chat.loadSuggestedRoomProfile(reference.trim());
-      if (cached != null) {
-        final cachedMembers = await chat.loadSuggestedPreviewMembers(
-          reference.trim(),
+    // The profile stores only a room ID. A local Room can have partial member
+    // state, so fetch its full joined participant list for an exact count.
+    if (local != null) {
+      try {
+        final client = await MatrixChatService.instance.connect();
+        final summary = await client.getRoomSummary(local.roomId);
+        var count = summary.numJoinedMembers;
+        final room = MatrixChatService.instance.getRoomById(local.roomId);
+        if (room != null && room.membership == mx.Membership.join) {
+          final joinedMembers = await room.requestParticipants(
+            const [mx.Membership.join],
+            true,
+            true,
+          );
+          count = joinedMembers.map((member) => member.id).toSet().length;
+        }
+        final refreshed = MatrixPublicGroup(
+          roomId: local.roomId,
+          name:
+              summary.name?.trim().isNotEmpty == true
+                  ? summary.name!.trim()
+                  : local.name,
+          avatarUrl: summary.avatarUrl?.toString() ?? local.avatarUrl,
+          canonicalAlias: summary.canonicalAlias ?? local.canonicalAlias,
+          topic: summary.topic ?? local.topic,
+          memberCount: count,
+          worldReadable: summary.worldReadable,
+          roomType: summary.roomType ?? local.roomType,
         );
-        final joinedCount = cachedMembers
-            .where((member) => member['membership']?.toString() == 'join')
-            .length;
-        return MatrixPublicGroup(
-          roomId: reference.trim(),
-          name: cached['name']?.toString().trim().isNotEmpty == true
-              ? cached['name'].toString().trim()
-              : reference.trim(),
-          avatarUrl: cached['avatarUrl']?.toString(),
-          canonicalAlias: cached['canonicalAlias']?.toString(),
-          topic: cached['description']?.toString(),
-          memberCount:
-              (cached['memberCount'] as num?)?.toInt() ?? joinedCount,
-          worldReadable: true,
-          roomType: isChannel ? MatrixPublicGroup.channelRoomType : 'group',
+        unawaited(
+          ChatService()
+              .cacheSuggestedRoomProfile(refreshed.roomId, {
+                'name': refreshed.name,
+                'avatarUrl': refreshed.avatarUrl,
+                'canonicalAlias': refreshed.canonicalAlias,
+                'description': refreshed.topic,
+                'memberCount': refreshed.memberCount,
+              })
+              .catchError((_) {}),
         );
+        return refreshed;
+      } catch (error) {
+        apkLog(
+          'Profile.room',
+          'summary refresh failed room_id="${local.roomId}" error="$error"',
+        );
+        return local;
       }
-    } catch (error) {
-      apkLog(
-        'Profile.room',
-        'local suggested-room lookup failed ref="${reference.trim()}" error="$error"',
-      );
     }
     try {
       final client = await MatrixChatService.instance.connect();
@@ -566,12 +582,12 @@ class _ProfileScreenState extends State<ProfileScreen>
       unawaited(
         ChatService()
             .cacheSuggestedRoomProfile(summary.roomId, {
-          'name': summaryName,
-          'avatarUrl': summaryAvatar,
-          'canonicalAlias': summary.canonicalAlias,
-          'description': summaryTopic,
-          'memberCount': summary.numJoinedMembers,
-        })
+              'name': summaryName,
+              'avatarUrl': summaryAvatar,
+              'canonicalAlias': summary.canonicalAlias,
+              'description': summaryTopic,
+              'memberCount': summary.numJoinedMembers,
+            })
             .catchError((_) {}),
       );
       return MatrixPublicGroup(
@@ -589,19 +605,75 @@ class _ProfileScreenState extends State<ProfileScreen>
         'Profile.room',
         'summary lookup failed ref="${reference.trim()}" error="$error"',
       );
-      return null;
+      // If the server is unavailable, use cached room metadata as a fallback.
+      try {
+        final chat = ChatService();
+        final cached = await chat.loadSuggestedRoomProfile(reference.trim());
+        if (cached == null) return null;
+        final cachedMembers = await chat.loadSuggestedPreviewMembers(
+          reference.trim(),
+        );
+        final joinedCount =
+            cachedMembers
+                .where((member) => member['membership']?.toString() == 'join')
+                .length;
+        return MatrixPublicGroup(
+          roomId: reference.trim(),
+          name:
+              cached['name']?.toString().trim().isNotEmpty == true
+                  ? cached['name'].toString().trim()
+                  : reference.trim(),
+          avatarUrl: cached['avatarUrl']?.toString(),
+          canonicalAlias: cached['canonicalAlias']?.toString(),
+          topic: cached['description']?.toString(),
+          memberCount: joinedCount,
+          worldReadable: true,
+          roomType: isChannel ? MatrixPublicGroup.channelRoomType : 'group',
+        );
+      } catch (cacheError) {
+        apkLog(
+          'Profile.room',
+          'cached room lookup failed ref="${reference.trim()}" error="$cacheError"',
+        );
+        return null;
+      }
     }
   }
 
   Future<void> _loadProfileRoomCards(UserProfile profile) async {
     final revision = ++_profileRoomResolveRevision;
+    int? channelMemberCount;
+    int? groupMemberCount;
+    final profileUserId = _profileTargetUserId ?? profile.uid;
+    try {
+      final moduleProfile = await MatrixProfileService.instance.getProfile(
+        profileUserId,
+      );
+      channelMemberCount = int.tryParse(
+        moduleProfile[WrytteProfile.channelMemberCount] ?? '',
+      );
+      groupMemberCount = int.tryParse(
+        moduleProfile[WrytteProfile.groupMemberCount] ?? '',
+      );
+      apkLog(
+        'Profile.room',
+        'Module API room counts user_id="$profileUserId" '
+            'channel=$channelMemberCount group=$groupMemberCount',
+      );
+    } catch (error) {
+      apkLog(
+        'Profile.room',
+        'Module API room-count lookup failed user_id="$profileUserId" '
+            'error="$error"',
+      );
+    }
     final channelRef =
         _canViewProfileField(profile, 'Channel')
             ? profile.channelAlias.trim()
             : '';
     final groupRef =
         _canViewProfileField(profile, 'Group') ? profile.groupAlias.trim() : '';
-    final results = await Future.wait<MatrixPublicGroup?>([
+    final resolvedRooms = await Future.wait<MatrixPublicGroup?>([
       channelRef.isEmpty
           ? Future<MatrixPublicGroup?>.value(null)
           : _resolveProfileRoom(channelRef, isChannel: true),
@@ -609,6 +681,30 @@ class _ProfileScreenState extends State<ProfileScreen>
           ? Future<MatrixPublicGroup?>.value(null)
           : _resolveProfileRoom(groupRef, isChannel: false),
     ]);
+    MatrixPublicGroup? withModuleCount(MatrixPublicGroup? room, int? count) {
+      if (room == null || count == null || count < 0) return room;
+      return MatrixPublicGroup(
+        roomId: room.roomId,
+        name: room.name,
+        avatarUrl: room.avatarUrl,
+        canonicalAlias: room.canonicalAlias,
+        topic: room.topic,
+        memberCount: count,
+        worldReadable: room.worldReadable,
+        avatarVersion: room.avatarVersion,
+        nameVersion: room.nameVersion,
+        descriptionVersion: room.descriptionVersion,
+        linkVersion: room.linkVersion,
+        aliasVersion: room.aliasVersion,
+        link: room.link,
+        roomType: room.roomType,
+      );
+    }
+
+    final results = [
+      withModuleCount(resolvedRooms[0], channelMemberCount),
+      withModuleCount(resolvedRooms[1], groupMemberCount),
+    ];
     if (!mounted || revision != _profileRoomResolveRevision) return;
     setState(() {
       _profileChannel = results[0];
@@ -632,13 +728,14 @@ class _ProfileScreenState extends State<ProfileScreen>
       );
       return;
     }
-    final room = MatrixChatService.instance.getRoomById(group.roomId);
-    final alreadyJoined = room?.membership == mx.Membership.join;
+    var alreadyJoined = false;
     var previewMessages = const <ChatMessage>[];
     var hasMoreRoomEvents = false;
     try {
       final chatService = ChatService();
       await chatService.connect();
+      final room = MatrixChatService.instance.getRoomById(group.roomId);
+      alreadyJoined = room?.membership == mx.Membership.join;
       final page = await chatService.fetchProfileRoomEventPage(
         roomId: group.roomId,
         limit: 15,
@@ -665,6 +762,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 title: group.name,
                 avatarUrl: group.avatarUrl,
                 initialPosts: previewMessages,
+                subscriberCountIsAuthoritative: true,
                 loadRoomEventsOnDemand: true,
                 initialEventsHaveMore: hasMoreRoomEvents,
                 subscriberCount: group.memberCount,
@@ -689,6 +787,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 initialEventsHaveMore: hasMoreRoomEvents,
                 readOnlyUntilJoin: !alreadyJoined,
                 initialMemberCount: group.memberCount,
+                initialMemberCountIsAuthoritative: true,
                 groupAlias: group.roomId,
                 groupDescription: group.topic,
                 conversationKind: ConversationKind.group,
@@ -999,12 +1098,16 @@ class _ProfileScreenState extends State<ProfileScreen>
       if (!mounted) return;
       setState(() => _profileBlockedOverride = !wasBlocked);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('User ${wasBlocked ? 'unblocked' : 'blocked'}.')),
+        SnackBar(
+          content: Text('User ${wasBlocked ? 'unblocked' : 'blocked'}.'),
+        ),
       );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not ${action.toLowerCase()} user: $error')),
+        SnackBar(
+          content: Text('Could not ${action.toLowerCase()} user: $error'),
+        ),
       );
     }
   }
@@ -1999,9 +2102,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         width: double.infinity,
         height: height,
         child: Row(
-          children: [
-            Expanded(child: Container(height: 1, color: color)),
-          ],
+          children: [Expanded(child: Container(height: 1, color: color))],
         ),
       ),
     );

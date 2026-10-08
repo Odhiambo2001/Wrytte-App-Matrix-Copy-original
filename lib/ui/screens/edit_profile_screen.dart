@@ -195,7 +195,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 ),
                 if (hasAvatar)
                   ListTile(
-                    leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                    leading: const Icon(
+                      Icons.delete_outline,
+                      color: Colors.redAccent,
+                    ),
                     title: const Text(
                       'Remove',
                       style: TextStyle(color: Colors.redAccent),
@@ -386,10 +389,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     return null;
   }
 
-  String _profileRoomReferenceForSave(
-    String value, {
-    required bool isChannel,
-  }) {
+  String _profileRoomReferenceForSave(String value, {required bool isChannel}) {
     final normalized = value.trim();
     if (normalized.isEmpty) return '';
     // Convert previously saved aliases to room IDs whenever the room is
@@ -465,7 +465,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                             ),
                           ),
                           Text(
-                            '$memberCount ${isChannel ? 'subscribers' : 'members'}',
+                            '$memberCount ${isChannel ? (memberCount == 1 ? 'subscriber' : 'subscribers') : (memberCount == 1 ? 'member' : 'members')}',
                             style: const TextStyle(
                               color: Color(0xFFB9BBC1),
                               fontSize: 13,
@@ -576,10 +576,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                               color: Colors.white,
                             ),
                           )
-                          : const Text(
-                            'Save',
-                            style: TextStyle(fontSize: 17),
-                          ),
+                          : const Text('Save', style: TextStyle(fontSize: 17)),
                 );
               },
             ),

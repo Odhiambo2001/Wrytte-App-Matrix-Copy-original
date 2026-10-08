@@ -2,11 +2,11 @@ enum WrytteProfileVisibility { everyone, contacts, approvedUsers, nobody }
 
 extension WrytteProfileVisibilityWire on WrytteProfileVisibility {
   String get value => switch (this) {
-        WrytteProfileVisibility.everyone => 'everyone',
-        WrytteProfileVisibility.contacts => 'contacts',
-        WrytteProfileVisibility.approvedUsers => 'approved_users',
-        WrytteProfileVisibility.nobody => 'nobody',
-      };
+    WrytteProfileVisibility.everyone => 'everyone',
+    WrytteProfileVisibility.contacts => 'contacts',
+    WrytteProfileVisibility.approvedUsers => 'approved_users',
+    WrytteProfileVisibility.nobody => 'nobody',
+  };
 }
 
 class WrytteProfile {
@@ -20,6 +20,8 @@ class WrytteProfile {
   // These legacy wire keys now store Matrix room IDs, not room aliases.
   static const channelAlias = 'com.wrytte.channel_alias';
   static const groupAlias = 'com.wrytte.group_alias';
+  static const channelMemberCount = 'com.wrytte.channel_member_count';
+  static const groupMemberCount = 'com.wrytte.group_member_count';
   static const visibility = 'com.wrytte.profile_visibility';
   static const onlineStatus = 'com.wrytte.online_status';
 

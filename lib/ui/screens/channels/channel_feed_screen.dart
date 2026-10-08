@@ -30,6 +30,7 @@ class ChannelFeedScreen extends StatefulWidget {
   final String? localAvatarPath;
   final List<ChatMessage> initialPosts;
   final int subscriberCount;
+  final bool subscriberCountIsAuthoritative;
   final bool readOnlyUntilSubscribe;
   final String? subscribeAlias;
   final bool canPost;
@@ -45,6 +46,7 @@ class ChannelFeedScreen extends StatefulWidget {
     this.localAvatarPath,
     this.initialPosts = const [],
     this.subscriberCount = 0,
+    this.subscriberCountIsAuthoritative = false,
     this.readOnlyUntilSubscribe = false,
     this.subscribeAlias,
     this.canPost = false,
@@ -120,20 +122,20 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     _loadInteractionState();
     _resolveChannelAvatar();
     if (!widget.loadRoomEventsOnDemand) {
-      _postsSubscription = _chat.messagesStreamFor(widget.conversationId).listen((
-      posts,
-    ) {
-      if (!mounted) return;
-      final hadPendingOptimistic = _optimisticMediaPosts.isNotEmpty;
-      final merged = _mergeIncomingPosts(posts);
-      // The stream can briefly emit the locally cached subset while Matrix
-      // history is still being hydrated. Never replace a complete history
-      // with that partial snapshot unless an optimistic post is pending.
-      if (posts.length < _posts.length && !hadPendingOptimistic) {
-        return;
-      }
-      setState(() => _posts = merged);
-      });
+      _postsSubscription = _chat.messagesStreamFor(widget.conversationId).listen(
+        (posts) {
+          if (!mounted) return;
+          final hadPendingOptimistic = _optimisticMediaPosts.isNotEmpty;
+          final merged = _mergeIncomingPosts(posts);
+          // The stream can briefly emit the locally cached subset while Matrix
+          // history is still being hydrated. Never replace a complete history
+          // with that partial snapshot unless an optimistic post is pending.
+          if (posts.length < _posts.length && !hadPendingOptimistic) {
+            return;
+          }
+          setState(() => _posts = merged);
+        },
+      );
     }
     _postsScrollController.addListener(_onPostsScroll);
 
@@ -249,12 +251,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   int _liveSubscriberCount() {
+    if (widget.subscriberCountIsAuthoritative) return widget.subscriberCount;
     try {
       final room = MatrixClientService.instance.client.getRoomById(
         widget.conversationId,
       );
       if (room == null) return _subscriberCount;
-      final joined = room.getParticipants([mx.Membership.join]).length;
+      final joined = MatrixChatService.instance.groupMemberCount(room);
       return joined > 0 ? joined : _subscriberCount;
     } catch (_) {
       return _subscriberCount;

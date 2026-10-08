@@ -70,6 +70,27 @@ class MatrixProfileService {
             ? Map<String, dynamic>.from(decoded['fields'] as Map)
             : <String, dynamic>{}),
       };
+      final roomCounts = decoded['room_counts'];
+      if (roomCounts is Map) {
+        for (final entry
+            in <String, String>{
+              'channel': WrytteProfile.channelMemberCount,
+              'group': WrytteProfile.groupMemberCount,
+            }.entries) {
+          final countRecord = roomCounts[entry.key];
+          final roomField =
+              entry.key == 'channel'
+                  ? WrytteProfile.channelAlias
+                  : WrytteProfile.groupAlias;
+          final expectedRoomId = fields[roomField]?.toString().trim();
+          if (countRecord is Map &&
+              countRecord['joined'] is num &&
+              expectedRoomId != null &&
+              countRecord['room_id']?.toString() == expectedRoomId) {
+            fields[entry.value] = countRecord['joined'];
+          }
+        }
+      }
       if (decoded['visibility'] is Map) {
         fields[WrytteProfile.visibility] = Map<String, dynamic>.from(
           decoded['visibility'] as Map,
@@ -248,18 +269,21 @@ class MatrixProfileService {
     if (avatarUrl.isEmpty) {
       throw ArgumentError.value(avatarUrl, 'mxcUrl', 'Avatar URL is empty.');
     }
-    final body = {'fields': {WrytteProfile.avatarImageUrl: avatarUrl}};
-    final response = create
-        ? await http.post(
-          _profileUri(userId),
-          headers: await _authHeaders(),
-          body: jsonEncode(body),
-        )
-        : await http.patch(
-          _profileUri(userId),
-          headers: await _authHeaders(),
-          body: jsonEncode(body),
-        );
+    final body = {
+      'fields': {WrytteProfile.avatarImageUrl: avatarUrl},
+    };
+    final response =
+        create
+            ? await http.post(
+              _profileUri(userId),
+              headers: await _authHeaders(),
+              body: jsonEncode(body),
+            )
+            : await http.patch(
+              _profileUri(userId),
+              headers: await _authHeaders(),
+              body: jsonEncode(body),
+            );
     _check(response);
     final fields = _fieldsFromResponse(response);
     final savedVersion = int.tryParse(
@@ -279,10 +303,7 @@ class MatrixProfileService {
     String userId, {
     required Map<String, dynamic> fields,
     Map<String, String> visibility = const {},
-  }) => _put(userId, {
-    'fields': fields,
-    'visibility': visibility,
-  });
+  }) => _put(userId, {'fields': fields, 'visibility': visibility});
 
   Future<void> deleteAvatar(String userId) =>
       deleteField(userId, WrytteProfile.avatarImageUrl);
@@ -296,14 +317,17 @@ class MatrixProfileService {
     final client = MatrixClientService.instance.client;
     final matrixUserId = client.userID;
     if (matrixUserId == null || matrixUserId.trim().isEmpty) {
-      throw StateError('Cannot update presence without a logged-in Matrix user.');
+      throw StateError(
+        'Cannot update presence without a logged-in Matrix user.',
+      );
     }
-    String localpart(String value) => value
-        .trim()
-        .replaceFirst(RegExp(r'^@'), '')
-        .split(':')
-        .first
-        .toLowerCase();
+    String localpart(String value) =>
+        value
+            .trim()
+            .replaceFirst(RegExp(r'^@'), '')
+            .split(':')
+            .first
+            .toLowerCase();
     if (localpart(userId) != localpart(matrixUserId)) {
       throw ArgumentError.value(
         userId,
@@ -386,10 +410,7 @@ class MatrixProfileService {
       );
 
   Future<void> setGroupAlias(String userId, String? value) =>
-      _saveProfileRoomFields(
-        userId,
-        fields: {WrytteProfile.groupAlias: value},
-      );
+      _saveProfileRoomFields(userId, fields: {WrytteProfile.groupAlias: value});
 
   /// Uses the Module API lifecycle for the profile's channel/group references:
   /// POST a missing custom field, PATCH an existing value, and DELETE a cleared

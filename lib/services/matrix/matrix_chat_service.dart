@@ -1300,11 +1300,7 @@ class MatrixChatService {
 
     var homeserverReportSubmitted = false;
     try {
-      await room.client.reportEvent(
-        room.id,
-        eventId,
-        reason: cleanReason,
-      );
+      await room.client.reportEvent(room.id, eventId, reason: cleanReason);
       homeserverReportSubmitted = true;
     } catch (error) {
       // Group-admin delivery is the product requirement. Keep it working on
@@ -1378,11 +1374,7 @@ class MatrixChatService {
     }
 
     try {
-      await client.reportEvent(
-        cleanRoomId,
-        cleanEventId,
-        reason: cleanReason,
-      );
+      await client.reportEvent(cleanRoomId, cleanEventId, reason: cleanReason);
       return;
     } catch (error) {
       // Matrix homeservers commonly reject /report for users who can preview a
@@ -1502,14 +1494,25 @@ class MatrixChatService {
   }
 
   int groupMemberCount(Room room) {
-    final ids =
+    // Room membership state can be incomplete when the client uses lazy
+    // loading. Prefer the homeserver's joined-member summary when available;
+    // otherwise count only the unique locally known joined users.
+    final joinedSummaryCount = room.summary.mJoinedMemberCount;
+    if (joinedSummaryCount != null && joinedSummaryCount > 0) {
+      return joinedSummaryCount;
+    }
+    final joinedIds =
         room
-            .getParticipants([Membership.join, Membership.invite])
+            .getParticipants([Membership.join])
             .map((user) => user.id.trim())
             .where((id) => id.isNotEmpty)
             .toSet();
-    if (ids.isNotEmpty) return ids.length;
-    return room.getParticipants().map((user) => user.id).toSet().length;
+    if (joinedIds.isNotEmpty) return joinedIds.length;
+    return room
+        .getParticipants([Membership.join])
+        .map((user) => user.id)
+        .toSet()
+        .length;
   }
 
   String? _displayAlias(String? alias) {

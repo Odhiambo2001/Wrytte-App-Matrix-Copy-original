@@ -175,11 +175,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         'event_received user_id="$changedLocalpart" '
             'matching_conversations=true',
       );
-      final matching = _conversations.where((conversation) {
-        final uid = _profileUidForConversation(conversation);
-        return uid != null &&
-            _matrixLocalpart(uid)?.toLowerCase() == changedLocalpart;
-      }).toList(growable: false);
+      final matching = _conversations
+          .where((conversation) {
+            final uid = _profileUidForConversation(conversation);
+            return uid != null &&
+                _matrixLocalpart(uid)?.toLowerCase() == changedLocalpart;
+          })
+          .toList(growable: false);
       if (matching.isNotEmpty) {
         unawaited(_refreshConversationProfiles(matching));
       }
@@ -1519,9 +1521,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       phone: fallbackPhone,
       forceRefresh: forceRefresh,
     );
-    final matrixProfile = profile?.moduleProfileLoaded == true
-        ? null
-        : await _loadMatrixProfile(profileUid);
+    final matrixProfile =
+        profile?.moduleProfileLoaded == true
+            ? null
+            : await _loadMatrixProfile(profileUid);
     if (profile == null && matrixProfile == null) return conv;
 
     final contactKey = _contactKeyForConversation(conv);
@@ -1577,8 +1580,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
               ownerUserId: _currentUserId,
               wrytteUserId: profileUid,
               phone: profile.phone.isNotEmpty ? profile.phone : phone,
-              avatarUrl:
-                  profile.moduleProfileLoaded ? (avatar ?? '') : avatar,
+              avatarUrl: profile.moduleProfileLoaded ? (avatar ?? '') : avatar,
               bio: profile.bio,
             );
     if (refreshedSavedContact != null) {
@@ -1625,12 +1627,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         avatar: avatar,
         clearAvatar:
             (profile?.moduleProfileLoaded == true && avatar == null) ||
-                (avatar == null &&
-                    ContactAvatarSanitizer.sanitizeAvatarUrl(
-                          conv.otherUserAvatar,
-                        ) ==
-                        null &&
-                    (conv.otherUserAvatar?.trim().isNotEmpty ?? false)),
+            (avatar == null &&
+                ContactAvatarSanitizer.sanitizeAvatarUrl(
+                      conv.otherUserAvatar,
+                    ) ==
+                    null &&
+                (conv.otherUserAvatar?.trim().isNotEmpty ?? false)),
       );
       final identity = ContactIdentity(
         matrixUserId: profileUid,
@@ -1699,9 +1701,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
     if (_matrixProfileCache.containsKey(uid)) return _matrixProfileCache[uid];
     try {
-      final profile = await UserProfileService.instance.getProfileByUid(
-        uid,
-      );
+      final profile = await UserProfileService.instance.getProfileByUid(uid);
       if (profile == null) {
         _matrixProfileCache[uid] = null;
         return null;
@@ -3101,7 +3101,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${channel.memberCount} subscribers',
+                    '${channel.memberCount} ${channel.memberCount == 1 ? 'subscriber' : 'subscribers'}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 14, color: Colors.grey[400]),

@@ -32,13 +32,14 @@ class _ProfileRoomPickerScreenState extends State<ProfileRoomPickerScreen> {
   List<mx.Room> get _ownedRooms {
     final matrix = MatrixChatService.instance;
     return matrix.rooms.where((room) {
-      if (room.membership != mx.Membership.join || !matrix.isGroupOwner(room)) {
-        return false;
-      }
-      return widget.isChannel
-          ? matrix.isChannelRoom(room)
-          : matrix.isMatrixGroupRoom(room) && !matrix.isChannelRoom(room);
-    }).toList()
+        if (room.membership != mx.Membership.join ||
+            !matrix.isGroupOwner(room)) {
+          return false;
+        }
+        return widget.isChannel
+            ? matrix.isChannelRoom(room)
+            : matrix.isMatrixGroupRoom(room) && !matrix.isChannelRoom(room);
+      }).toList()
       ..sort(
         (a, b) => a.getLocalizedDisplayname().toLowerCase().compareTo(
           b.getLocalizedDisplayname().toLowerCase(),
@@ -71,7 +72,9 @@ class _ProfileRoomPickerScreenState extends State<ProfileRoomPickerScreen> {
     final room = MatrixChatService.instance.getRoomById(roomId);
     Navigator.pop(
       context,
-      ProfileRoomPickerResult.selected(room == null ? roomId : _roomValue(room)),
+      ProfileRoomPickerResult.selected(
+        room == null ? roomId : _roomValue(room),
+      ),
     );
   }
 
@@ -92,7 +95,10 @@ class _ProfileRoomPickerScreenState extends State<ProfileRoomPickerScreen> {
           icon: const Icon(Icons.chevron_left, color: Colors.white, size: 32),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text('Select $kind', style: const TextStyle(color: Colors.white)),
+        title: Text(
+          'Select $kind',
+          style: const TextStyle(color: Colors.white),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -148,7 +154,7 @@ class _ProfileRoomPickerScreenState extends State<ProfileRoomPickerScreen> {
         ),
       ),
       subtitle: Text(
-        '$memberCount ${widget.isChannel ? 'subscribers' : 'members'}',
+        '$memberCount ${widget.isChannel ? (memberCount == 1 ? 'subscriber' : 'subscribers') : (memberCount == 1 ? 'member' : 'members')}',
         style: const TextStyle(color: Color(0xFFB9BBC1), fontSize: 15),
       ),
       trailing:
@@ -159,7 +165,10 @@ class _ProfileRoomPickerScreenState extends State<ProfileRoomPickerScreen> {
                       context,
                       const ProfileRoomPickerResult.removed(),
                     ),
-                icon: const Icon(Icons.cancel_outlined, color: Colors.redAccent),
+                icon: const Icon(
+                  Icons.cancel_outlined,
+                  color: Colors.redAccent,
+                ),
                 label: const Text(
                   'Remove',
                   style: TextStyle(color: Colors.redAccent),

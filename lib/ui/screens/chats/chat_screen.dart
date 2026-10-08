@@ -51,6 +51,7 @@ class ChatScreen extends StatefulWidget {
   final List<ChatMessage> initialMessages;
   final bool readOnlyUntilJoin;
   final int? initialMemberCount;
+  final bool initialMemberCountIsAuthoritative;
   final String? groupAlias;
   final String? groupDescription;
   final String conversationKind;
@@ -68,6 +69,7 @@ class ChatScreen extends StatefulWidget {
     this.initialMessages = const [],
     this.readOnlyUntilJoin = false,
     this.initialMemberCount,
+    this.initialMemberCountIsAuthoritative = false,
     this.groupAlias,
     this.groupDescription,
     this.conversationKind = ConversationKind.unknown,
@@ -550,7 +552,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _subscribeToRoomProfileUpdates() {
-    _roomProfileSyncSub = MatrixChatService.instance.syncStream.listen((update) {
+    _roomProfileSyncSub = MatrixChatService.instance.syncStream.listen((
+      update,
+    ) {
       if (!mounted) return;
       _applyPeerPresenceUpdate(update);
       final room = MatrixChatService.instance.getRoomById(
@@ -614,7 +618,7 @@ class _ChatScreenState extends State<ChatScreen> {
       apkLog(
         'Matrix.presence',
         'chat_peer_status user_id="$peerId" '
-        'status="${isOnline ? 'online' : 'offline'}"',
+            'status="${isOnline ? 'online' : 'offline'}"',
       );
     }
   }
@@ -1092,9 +1096,10 @@ class _ChatScreenState extends State<ChatScreen> {
       forceRefresh: forceRefresh,
     );
 
-    final matrixProfile = profile?.moduleProfileLoaded == true
-        ? null
-        : await _loadMatrixProfile(profileUid);
+    final matrixProfile =
+        profile?.moduleProfileLoaded == true
+            ? null
+            : await _loadMatrixProfile(profileUid);
     final saved =
         ownerUserId == null || ownerUserId.isEmpty
             ? null
@@ -1280,9 +1285,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<(String?, String?)?> _loadMatrixProfile(String uid) async {
     try {
-      final profile = await UserProfileService.instance.getProfileByUid(
-        uid,
-      );
+      final profile = await UserProfileService.instance.getProfileByUid(uid);
       if (profile == null) return null;
       if (profile.moduleProfileLoaded) {
         return (
@@ -4058,6 +4061,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   int _groupMemberCount() {
     if (_isDeletedConversation) return 0;
+    if (widget.initialMemberCountIsAuthoritative &&
+        widget.initialMemberCount != null) {
+      return widget.initialMemberCount!;
+    }
     if (_isReadOnlySuggestedGroup &&
         widget.initialMemberCount != null &&
         widget.initialMemberCount! > 0) {
@@ -4066,7 +4073,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final room = MatrixChatService.instance.getRoomById(_activeConversationId);
     final roomCount =
         _groupMembers.isNotEmpty
-            ? _groupMembers.length
+            ? _groupMembers
+                .where((member) => member.membership == mx.Membership.join)
+                .map((member) => member.id)
+                .toSet()
+                .length
             : room == null
             ? 0
             : MatrixChatService.instance.groupMemberCount(room);
@@ -4253,10 +4264,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ? _resolvedConversationId!.trim()
           : widget.conversationId.trim();
 
-  static const List<mx.Membership> _groupMemberships = [
-    mx.Membership.join,
-    mx.Membership.invite,
-  ];
+  static const List<mx.Membership> _groupMemberships = [mx.Membership.join];
 
   Future<void> _loadGroupMemberProfiles(String roomId) async {
     final room = MatrixChatService.instance.getRoomById(roomId);
@@ -4437,8 +4445,7 @@ class _ChatScreenState extends State<ChatScreen> {
           profileName: name,
           avatarUrl: avatar,
           bio: profile.bio,
-          clearAvatar:
-              profile.moduleProfileLoaded && !profile.hasProfileImage,
+          clearAvatar: profile.moduleProfileLoaded && !profile.hasProfileImage,
           clearBio: profile.moduleProfileLoaded,
         );
       }

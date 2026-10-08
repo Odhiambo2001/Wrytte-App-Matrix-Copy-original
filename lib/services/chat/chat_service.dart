@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -117,6 +118,8 @@ class ChatService {
   final Map<String, Future<List<ChatMessage>>> _suggestedPreviewInFlight = {};
   final Map<String, String?> _profileRoomEventTokens = {};
   final Set<String> _profileRoomEventHasMore = {};
+  final Map<String, List<ChatMessage>> _profileRoomCachedMessages = {};
+  final Map<String, int> _profileRoomCachedOffsets = {};
   final Map<String, Future<RoomEventPage>> _profileRoomEventInFlight = {};
   final Map<String, Future<List<ChatMessage>>> _roomHistoryInFlight = {};
   final Map<String, Set<String>> _attachmentCacheExpectedByRoom = {};
@@ -1382,20 +1385,20 @@ class ChatService {
       final bytes = await File(filePath).readAsBytes();
       final matrixFile = switch (attachmentType) {
         'video' => mx.MatrixVideoFile(
-            bytes: bytes,
-            name: p.basename(filePath),
-            mimeType: 'video/mp4',
-          ),
+          bytes: bytes,
+          name: p.basename(filePath),
+          mimeType: 'video/mp4',
+        ),
         'image' => mx.MatrixImageFile(
-            bytes: bytes,
-            name: p.basename(filePath),
-            mimeType: _mediaMimeType(filePath, fallback: 'image/jpeg'),
-          ),
+          bytes: bytes,
+          name: p.basename(filePath),
+          mimeType: _mediaMimeType(filePath, fallback: 'image/jpeg'),
+        ),
         'file' => _WrytteDocumentFile(bytes: bytes, name: p.basename(filePath)),
         _ => mx.MatrixFile.fromMimeType(
-            bytes: bytes,
-            name: p.basename(filePath),
-          ),
+          bytes: bytes,
+          name: p.basename(filePath),
+        ),
       };
       final mediaCaption = caption?.trim() ?? '';
       final extraContent = <String, dynamic>{
@@ -1608,41 +1611,72 @@ class ChatService {
     if (initial) {
       _profileRoomEventTokens.remove(id);
       _profileRoomEventHasMore.remove(id);
-    } else if (!_profileRoomEventHasMore.contains(id)) {
-      return const RoomEventPage(messages: [], hasMore: false);
+      _profileRoomCachedMessages.remove(id);
+      _profileRoomCachedOffsets.remove(id);
+    } else {
+      final cached = _profileRoomCachedMessages[id];
+      final offset = _profileRoomCachedOffsets[id] ?? 0;
+      if (cached != null && offset > 0) {
+        final start = (offset - limit).clamp(0, offset).toInt();
+        final page = cached.sublist(start, offset);
+        _profileRoomCachedOffsets[id] = start;
+        final hasMore = start > 0 || _profileRoomEventTokens[id] != null;
+        if (hasMore) {
+          _profileRoomEventHasMore.add(id);
+        } else {
+          _profileRoomEventHasMore.remove(id);
+        }
+        return RoomEventPage(messages: page, hasMore: hasMore);
+      }
+      if (!_profileRoomEventHasMore.contains(id)) {
+        return const RoomEventPage(messages: [], hasMore: false);
+      }
     }
     final pending = _profileRoomEventInFlight[id];
     if (pending != null) return pending;
-    final request = _withMatrixTokenRetry('fetchProfileRoomEventPage', () async {
-      await _waitForConnection();
-      final client = MatrixClientService.instance.client;
-      final response = await _enqueueMatrixPaginationRequest(
-        () => client.getRoomEvents(
-          id,
-          mx.Direction.b,
-          from: _profileRoomEventTokens[id],
+    final request = _withMatrixTokenRetry(
+      'fetchProfileRoomEventPage',
+      () async {
+        await _waitForConnection();
+        final joinedRoom = MatrixChatService.instance.getRoomById(id);
+        apkLog(
+          'Profile.roomEvents',
+          'room route room_id="$id" found=${joinedRoom != null} '
+              'membership="${joinedRoom?.membership.name ?? 'missing'}" '
+              'created_by_account=${_createdGroupRoomIds.contains(id)} '
+              'current_user="${_currentUserId ?? ''}"',
+        );
+        final client = MatrixClientService.instance.client;
+        return _fetchProfileRoomMessagePage(
+          roomId: id,
+          room:
+              joinedRoom?.membership == mx.Membership.join ? joinedRoom : null,
+          client: client,
           limit: limit,
-        ),
-      );
-      final next = response.end?.trim();
-      final hasMore = next != null && next.isNotEmpty && next != _profileRoomEventTokens[id];
-      _profileRoomEventTokens[id] = hasMore ? next : null;
+          initial: initial,
+        );
+      },
+    ).catchError((Object error, StackTrace stackTrace) async {
+      final cached = await loadCachedMessages(id);
+      if (cached.isEmpty) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      final start = (cached.length - limit).clamp(0, cached.length).toInt();
+      final page = cached.sublist(start);
+      _profileRoomCachedMessages[id] = cached;
+      _profileRoomCachedOffsets[id] = start;
+      final hasMore = start > 0;
       if (hasMore) {
         _profileRoomEventHasMore.add(id);
       } else {
         _profileRoomEventHasMore.remove(id);
       }
-      final messages = response.chunk
-          .map((event) => _publicGroupPreviewMessage(event, roomId: id, client: client))
-          .whereType<ChatMessage>()
-          .toList()
-        ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
       apkLog(
         'Profile.roomEvents',
-        'page room_id="$id" events=${response.chunk.length} '
-            'messages=${messages.length} has_more=$hasMore',
+        'local fallback room_id="$id" messages=${page.length} '
+            'has_more=$hasMore cause="${error.runtimeType}"',
       );
-      return RoomEventPage(messages: messages, hasMore: hasMore);
+      return RoomEventPage(messages: page, hasMore: hasMore);
     });
     _profileRoomEventInFlight[id] = request;
     try {
@@ -1652,6 +1686,143 @@ class ChatService {
         _profileRoomEventInFlight.remove(id);
       }
     }
+  }
+
+  Future<RoomEventPage> _fetchProfileRoomMessagePage({
+    required String roomId,
+    required mx.Room? room,
+    required mx.Client client,
+    required int limit,
+    required bool initial,
+  }) async {
+    final localMessages =
+        _profileRoomCachedMessages[roomId] ?? await loadCachedMessages(roomId);
+    final localById = {
+      for (final message in localMessages) message.id: message,
+    };
+    final messagesById = <String, ChatMessage>{...localById};
+    final hiddenIds =
+        room == null
+            ? const <String>{}
+            : _hiddenEventIdsForRoom(roomId, room: room);
+    final filter = jsonEncode(
+      mx.StateFilter(
+        types: [mx.EventTypes.Message, mx.EventTypes.Encrypted],
+        lazyLoadMembers: true,
+      ).toJson(),
+    );
+    var token = _profileRoomEventTokens[roomId];
+    var hasMore = true;
+    var eventsFetched = 0;
+    var pagesFetched = 0;
+    final maxPages = initial ? 1 : 3;
+
+    // Start at the room's newest messages. Matrix's Timeline pagination can
+    // walk its entire local event store (including state events) before it
+    // reaches the server; a filtered /messages request keeps profile opens
+    // bounded to actual message events.
+    while (pagesFetched < maxPages && messagesById.length < limit && hasMore) {
+      final previousToken = token;
+      final response = await _enqueueMatrixPaginationRequest(
+        () => client.getRoomEvents(
+          roomId,
+          mx.Direction.b,
+          from: previousToken,
+          limit: limit,
+          filter: filter,
+        ),
+      );
+      pagesFetched += 1;
+      eventsFetched += response.chunk.length;
+      final parsed = <ChatMessage>[];
+      for (final matrixEvent in response.chunk) {
+        if (room == null) {
+          final message = _publicGroupPreviewMessage(
+            matrixEvent,
+            roomId: roomId,
+            client: client,
+          );
+          if (message != null) parsed.add(message);
+          continue;
+        }
+        var event = mx.Event.fromMatrixEvent(matrixEvent, room);
+        final encryption = client.encryption;
+        if (event.type == mx.EventTypes.Encrypted &&
+            room.encrypted &&
+            client.encryptionEnabled &&
+            encryption != null) {
+          try {
+            event = await encryption.decryptRoomEvent(event);
+          } catch (error) {
+            apkLog(
+              'Profile.roomEvents',
+              'decrypt failed room_id="$roomId" event_id="${event.eventId}" error="$error"',
+            );
+          }
+        }
+        parsed.addAll(
+          _messagesFromMatrixEvents(
+            [event],
+            localById: localById,
+            hiddenIds: hiddenIds,
+            groupJoinCutoff: _groupJoinCutoffForRoom(room),
+          ),
+        );
+      }
+      for (final message in parsed) {
+        messagesById[message.id] = message;
+      }
+      token = response.end?.trim();
+      hasMore =
+          response.chunk.length >= limit &&
+          token != null &&
+          token.isNotEmpty &&
+          token != previousToken;
+      _profileRoomEventTokens[roomId] = hasMore ? token : null;
+      apkLog(
+        'Profile.roomEvents',
+        'message page room_id="$roomId" page=$pagesFetched '
+            'events=${response.chunk.length} parsed=${parsed.length} '
+            'messages=${messagesById.length} has_more=$hasMore',
+      );
+      if (response.chunk.isEmpty || parsed.isEmpty) break;
+    }
+
+    final messages =
+        messagesById.values.toList()
+          ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final newlyLoaded = messages
+        .where((message) => !localById.containsKey(message.id))
+        .toList(growable: false);
+    if (newlyLoaded.isNotEmpty) {
+      await ChatLocalDb.instance.saveMessages(newlyLoaded);
+      for (final message in newlyLoaded) {
+        _cacheMessage(message, countUnread: false, publish: false);
+      }
+    }
+    _profileRoomCachedMessages[roomId] = messages;
+    final offset =
+        initial
+            ? (messages.length - limit).clamp(0, messages.length).toInt()
+            : 0;
+    _profileRoomCachedOffsets[roomId] = offset;
+    final page =
+        initial ? messages.sublist(offset) : newlyLoaded.take(limit).toList();
+    final moreLocal = offset > 0;
+    final canLoadMore = moreLocal || hasMore;
+    if (canLoadMore) {
+      _profileRoomEventHasMore.add(roomId);
+    } else {
+      _profileRoomEventHasMore.remove(roomId);
+    }
+    apkLog(
+      'Profile.roomEvents',
+      '${room == null ? 'public' : 'joined'} page complete room_id="$roomId" '
+          'events=$eventsFetched messages=${page.length} '
+          'cached=${localMessages.length} pages=$pagesFetched '
+          'has_more=$canLoadMore',
+    );
+    return RoomEventPage(messages: page, hasMore: canLoadMore);
   }
 
   Future<List<ChatMessage>> _enqueueSuggestedPreview(
@@ -1757,9 +1928,8 @@ class ChatService {
           id,
           _suggestedRoomProfileRow(
             latestProfileState,
-            memberCount: memberRows
-                .where((row) => row['membership'] == 'join')
-                .length,
+            memberCount:
+                memberRows.where((row) => row['membership'] == 'join').length,
           ),
         );
         if (messages.isNotEmpty) {
@@ -1957,9 +2127,8 @@ class ChatService {
               id,
               _suggestedRoomProfileRow(
                 profileState,
-                memberCount: rows
-                    .where((row) => row['membership'] == 'join')
-                    .length,
+                memberCount:
+                    rows.where((row) => row['membership'] == 'join').length,
               ),
             );
           }
@@ -3717,13 +3886,15 @@ class ChatService {
     }
     final segments = uri.pathSegments;
     final mediaIndex = segments.indexOf('media');
-    final isLegacyMedia = mediaIndex >= 1 &&
+    final isLegacyMedia =
+        mediaIndex >= 1 &&
         mediaIndex + 4 < segments.length &&
         segments[mediaIndex - 1] == '_matrix' &&
         segments[mediaIndex + 1] == 'v3' &&
         (segments[mediaIndex + 2] == 'download' ||
             segments[mediaIndex + 2] == 'thumbnail');
-    final isAuthenticatedMedia = mediaIndex >= 2 &&
+    final isAuthenticatedMedia =
+        mediaIndex >= 2 &&
         mediaIndex + 3 < segments.length &&
         segments[mediaIndex - 2] == '_matrix' &&
         segments[mediaIndex - 1] == 'client' &&
