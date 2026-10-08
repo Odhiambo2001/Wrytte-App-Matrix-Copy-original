@@ -4,6 +4,7 @@ import 'package:matrix/matrix.dart' as mx;
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui';
 import 'package:wrytte/components/user_avatar.dart';
+import 'package:wrytte/models/chat_models/chat_conversation.dart';
 import 'package:wrytte/models/chat_models/chat_message.dart';
 import 'package:wrytte/models/contact_model.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
@@ -22,7 +23,7 @@ import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
 import 'package:wrytte/ui/screens/channels/channel_feed_screen.dart';
-import 'package:wrytte/ui/screens/group_profile_screen.dart';
+import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
 import 'package:wrytte/ui/widgets/full_screen_video_viewer.dart';
 import 'package:wrytte/ui/widgets/profile_tab_bar_section.dart';
@@ -563,6 +564,23 @@ class _ProfileScreenState extends State<ProfileScreen>
       return;
     }
     final room = MatrixChatService.instance.getRoomById(group.roomId);
+    final alreadyJoined = room?.membership == mx.Membership.join;
+    var previewMessages = const <ChatMessage>[];
+    if (!alreadyJoined) {
+      try {
+        final chatService = ChatService();
+        await chatService.connect();
+        previewMessages = await chatService.fetchPublicGroupPreview(
+          roomId: group.roomId,
+          limit: 40,
+        );
+      } catch (error) {
+        apkLog(
+          'Profile.room',
+          'preview lookup failed room_id="${group.roomId}" error="$error"',
+        );
+      }
+    }
     final currentUserId = await AuthService.instance.getCurrentUserId() ?? '';
     if (!mounted) return;
     if (isChannel) {
@@ -575,9 +593,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                 currentUserId: currentUserId,
                 title: group.name,
                 avatarUrl: group.avatarUrl,
+                initialPosts: previewMessages,
                 subscriberCount: group.memberCount,
-                readOnlyUntilSubscribe: room?.membership != mx.Membership.join,
-                subscribeAlias: group.canonicalAlias ?? reference,
+                readOnlyUntilSubscribe: !alreadyJoined,
+                subscribeAlias: group.roomId,
               ),
         ),
       );
@@ -586,14 +605,19 @@ class _ProfileScreenState extends State<ProfileScreen>
         context,
         MaterialPageRoute(
           builder:
-              (_) => GroupProfileScreen(
-                roomId: group.roomId,
-                groupName: group.name,
+              (_) => ChatScreen(
+                conversationId: group.roomId,
+                receiverId: group.roomId,
+                currentUserId: currentUserId,
+                title: group.name,
                 avatarUrl: group.avatarUrl,
-                alias: group.canonicalAlias ?? reference,
-                initialDescription: group.topic,
+                initialMessages: previewMessages,
+                readOnlyUntilJoin: !alreadyJoined,
                 initialMemberCount: group.memberCount,
-                initiallyJoined: room?.membership == mx.Membership.join,
+                groupAlias: group.roomId,
+                groupDescription: group.topic,
+                conversationKind: ConversationKind.group,
+                initialRoomProfileVersion: group.profileVersionFingerprint,
               ),
         ),
       );
