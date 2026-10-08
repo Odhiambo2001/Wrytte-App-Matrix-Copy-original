@@ -69,6 +69,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   Contact? _savedContact;
   ContactIdentity? _identity;
   bool _profileLoading = true;
+  bool? _profileBlockedOverride;
   List<ChatMessage> _conversationMessages = const [];
   StreamSubscription<UserProfile?>? _profileSub;
   StreamSubscription<String>? _publicProfileUpdatesSub;
@@ -84,6 +85,28 @@ class _ProfileScreenState extends State<ProfileScreen>
     final ownUid = UserProfileService.instance.cachedProfile?.uid;
     if (uid != null && uid != ownUid) return true;
     return widget.conversationId?.trim().isNotEmpty ?? false;
+  }
+
+  String? get _profileTargetUserId =>
+      _validProfileUid(widget.uid) ??
+      _validProfileUid(_identity?.matrixUserId) ??
+      _validProfileUid(_savedContact?.wrytteUserId) ??
+      _validProfileUid(_profile?.uid);
+
+  bool get _showUnsavedProfileActions =>
+      _isOtherUser &&
+      _savedContact == null &&
+      _cleanName(_identity?.savedName).isEmpty;
+
+  bool get _isProfileUserBlocked {
+    if (_profileBlockedOverride != null) return _profileBlockedOverride!;
+    final userId = _profileTargetUserId;
+    if (userId == null) return false;
+    try {
+      return MatrixClientService.instance.client.ignoredUsers.contains(userId);
+    } catch (_) {
+      return false;
+    }
   }
 
   List<String> get _tabs =>
@@ -411,7 +434,10 @@ class _ProfileScreenState extends State<ProfileScreen>
         profile.phone.trim().isNotEmpty ||
         profile.hasProfileImage ||
         profile.localProfileImagePath.trim().isNotEmpty ||
-        profile.bio.trim().isNotEmpty;
+        profile.bio.trim().isNotEmpty ||
+        profile.links.any((link) => link.trim().isNotEmpty) ||
+        profile.channelAlias.trim().isNotEmpty ||
+        profile.groupAlias.trim().isNotEmpty;
   }
 
   String _visibilityKey(String value) =>
@@ -870,6 +896,70 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (mounted) _loadProfile();
   }
 
+  Future<void> _toggleProfileBlock() async {
+    final userId = _profileTargetUserId;
+    if (userId == null) return;
+    final wasBlocked = _isProfileUserBlocked;
+    final action = wasBlocked ? 'Unblock' : 'Block';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: const Color(0xFF23262C),
+            title: Text(
+              '$action user?',
+              style: const TextStyle(color: Colors.white),
+            ),
+            content: Text(
+              wasBlocked
+                  ? 'This user will be able to message you again.'
+                  : 'You will no longer receive messages from this user.',
+              style: const TextStyle(color: Color(0xFFC6C6C6)),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text(action),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final client = MatrixClientService.instance.client;
+      final accountUserId = client.userID;
+      if (accountUserId == null || accountUserId.isEmpty) {
+        throw StateError('Not connected to Matrix.');
+      }
+      final ignoredUsers = Set<String>.from(client.ignoredUsers);
+      if (wasBlocked) {
+        ignoredUsers.remove(userId);
+      } else {
+        ignoredUsers.add(userId);
+      }
+      await client.setAccountData(accountUserId, 'm.ignored_user_list', {
+        'ignored_users': {
+          for (final ignoredUserId in ignoredUsers)
+            ignoredUserId: <String, dynamic>{},
+        },
+      });
+      if (!mounted) return;
+      setState(() => _profileBlockedOverride = !wasBlocked);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('User ${wasBlocked ? 'unblocked' : 'blocked'}.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not ${action.toLowerCase()} user: $error')),
+      );
+    }
+  }
+
   Future<void> _deleteSavedContact() async {
     final contact = _savedContact;
     final ownerUserId = await AuthService.instance.getCurrentUserId();
@@ -1079,6 +1169,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                                 horizontal: 16,
                               ),
                               child: Container(
+                                width: double.infinity,
                                 padding: const EdgeInsets.symmetric(
                                   vertical: 18,
                                 ),
@@ -1102,12 +1193,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                                         (links.isNotEmpty ||
                                             channelRef.isNotEmpty ||
                                             groupRef.isNotEmpty))
-                                      const Padding(
-                                        padding: EdgeInsets.only(left: 20),
-                                        child: Divider(
-                                          height: 24,
-                                          color: Color(0xFF202329),
-                                        ),
+                                      _profileSectionDivider(
+                                        const Color(0xFF202329),
+                                        height: 24,
                                       ),
                                     if (links.isNotEmpty)
                                       Padding(
@@ -1119,12 +1207,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                                     if (links.isNotEmpty &&
                                         (channelRef.isNotEmpty ||
                                             groupRef.isNotEmpty))
-                                      const Padding(
-                                        padding: EdgeInsets.only(left: 20),
-                                        child: Divider(
-                                          height: 24,
-                                          color: Color(0xFF34373E),
-                                        ),
+                                      _profileSectionDivider(
+                                        const Color(0xFF34373E),
+                                        height: 24,
                                       ),
                                     if (channelRef.isNotEmpty)
                                       Padding(
@@ -1140,12 +1225,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                                       ),
                                     if (channelRef.isNotEmpty &&
                                         groupRef.isNotEmpty)
-                                      const Padding(
-                                        padding: EdgeInsets.only(left: 20),
-                                        child: Divider(
-                                          height: 1,
-                                          color: Color(0xFF34373E),
-                                        ),
+                                      _profileSectionDivider(
+                                        const Color(0xFF34373E),
+                                        height: 1,
                                       ),
                                     if (groupRef.isNotEmpty)
                                       Padding(
@@ -1269,10 +1351,12 @@ class _ProfileScreenState extends State<ProfileScreen>
 
                         // ── Edit / action button ─────────────────────────
                         _isOtherUser
-                            ? _glassButton(
-                              icon: Icons.more_vert,
-                              onTap: _showMoreActions,
-                            )
+                            ? _showUnsavedProfileActions
+                                ? _buildUnsavedProfileActions()
+                                : _glassButton(
+                                  icon: Icons.more_vert,
+                                  onTap: _showMoreActions,
+                                )
                             : _glassTextButton(
                               text: "Edit",
                               onTap: () async {
@@ -1321,8 +1405,6 @@ class _ProfileScreenState extends State<ProfileScreen>
   // CHANGE 3: Solid 0xFF23262C, no blur/opacity
 
   Widget _buildQuickActions() {
-    final showAddContact =
-        _savedContact == null && _cleanName(_identity?.savedName).isEmpty;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
@@ -1332,16 +1414,6 @@ class _ProfileScreenState extends State<ProfileScreen>
             child: _actionPill(Icons.call_outlined, 'Calls', onTap: () {}),
           ),
           const SizedBox(width: 10),
-          if (showAddContact) ...[
-            Expanded(
-              child: _actionPill(
-                Icons.person_add_alt_1_outlined,
-                'Add',
-                onTap: _openAddContact,
-              ),
-            ),
-            const SizedBox(width: 10),
-          ],
           Expanded(
             child: _actionPill(Icons.videocam_outlined, 'Video', onTap: () {}),
           ),
@@ -1349,6 +1421,42 @@ class _ProfileScreenState extends State<ProfileScreen>
           Expanded(child: _actionPill(Icons.search, 'Search', onTap: () {})),
           const SizedBox(width: 10),
           Expanded(child: _actionPill(Icons.more_horiz, 'More', onTap: () {})),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUnsavedProfileActions() {
+    return Container(
+      height: 48,
+      decoration: BoxDecoration(
+        color: const Color(0xFF15181D),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFF23262C)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: _isProfileUserBlocked ? 'Unblock user' : 'Block user',
+            onPressed: _toggleProfileBlock,
+            icon: Icon(
+              _isProfileUserBlocked
+                  ? Icons.block_flipped
+                  : Icons.block_outlined,
+              color: Colors.white,
+              size: 25,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Add contact',
+            onPressed: _openAddContact,
+            icon: const Icon(
+              Icons.person_add_alt_1_outlined,
+              color: Colors.white,
+              size: 25,
+            ),
+          ),
         ],
       ),
     );
@@ -1832,6 +1940,21 @@ class _ProfileScreenState extends State<ProfileScreen>
                 ),
               ),
       ],
+    );
+  }
+
+  Widget _profileSectionDivider(Color color, {required double height}) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 20),
+      child: SizedBox(
+        width: double.infinity,
+        height: height,
+        child: Row(
+          children: [
+            Expanded(child: Container(height: 1, color: color)),
+          ],
+        ),
+      ),
     );
   }
 
