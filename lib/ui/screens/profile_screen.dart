@@ -1060,27 +1060,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                               ),
                             ),
 
-                          if (bioText.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 32,
-                              ),
-                              child: Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 18,
-                                  vertical: 12,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF23262C),
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                child: _buildBio(bioText),
-                              ),
-                            ),
-                          ],
-
                           const SizedBox(height: 16),
 
                           // ── Quick actions (other user only) ─────────────────
@@ -1089,9 +1068,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                             const SizedBox(height: 20),
                           ],
 
-                          // ── Links and featured rooms ───────────────────────
+                          // ── Bio, links, and featured rooms ────────────────
                           if (!_profileLoading &&
-                              (links.isNotEmpty ||
+                              (bioText.isNotEmpty ||
+                                  links.isNotEmpty ||
                                   channelRef.isNotEmpty ||
                                   groupRef.isNotEmpty)) ...[
                             Padding(
@@ -1099,42 +1079,85 @@ class _ProfileScreenState extends State<ProfileScreen>
                                 horizontal: 16,
                               ),
                               child: Container(
-                                padding: const EdgeInsets.all(14),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 18,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF23262C),
-                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: const Color(0xFF202329),
+                                  ),
+                                  borderRadius: BorderRadius.circular(30),
                                 ),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    if (links.isNotEmpty) _buildLinks(links),
+                                    if (bioText.isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 20,
+                                        ),
+                                        child: _buildBio(bioText),
+                                      ),
+                                    if (bioText.isNotEmpty &&
+                                        (links.isNotEmpty ||
+                                            channelRef.isNotEmpty ||
+                                            groupRef.isNotEmpty))
+                                      const Padding(
+                                        padding: EdgeInsets.only(left: 20),
+                                        child: Divider(
+                                          height: 24,
+                                          color: Color(0xFF202329),
+                                        ),
+                                      ),
+                                    if (links.isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 20,
+                                        ),
+                                        child: _buildLinks(links),
+                                      ),
                                     if (links.isNotEmpty &&
                                         (channelRef.isNotEmpty ||
                                             groupRef.isNotEmpty))
-                                      const Divider(
-                                        height: 24,
-                                        color: Color(0xFF34373E),
+                                      const Padding(
+                                        padding: EdgeInsets.only(left: 20),
+                                        child: Divider(
+                                          height: 24,
+                                          color: Color(0xFF34373E),
+                                        ),
                                       ),
                                     if (channelRef.isNotEmpty)
-                                      _buildFeaturedRoomRow(
-                                        label: 'Channel',
-                                        reference: channelRef,
-                                        room: _profileChannel,
-                                        isChannel: true,
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 20,
+                                        ),
+                                        child: _buildFeaturedRoomRow(
+                                          label: 'Channel',
+                                          reference: channelRef,
+                                          room: _profileChannel,
+                                          isChannel: true,
+                                        ),
                                       ),
                                     if (channelRef.isNotEmpty &&
                                         groupRef.isNotEmpty)
-                                      const Divider(
-                                        height: 1,
-                                        color: Color(0xFF34373E),
-                                        indent: 54,
+                                      const Padding(
+                                        padding: EdgeInsets.only(left: 20),
+                                        child: Divider(
+                                          height: 1,
+                                          color: Color(0xFF34373E),
+                                        ),
                                       ),
                                     if (groupRef.isNotEmpty)
-                                      _buildFeaturedRoomRow(
-                                        label: 'Group',
-                                        reference: groupRef,
-                                        room: _profileGroup,
-                                        isChannel: false,
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 20,
+                                        ),
+                                        child: _buildFeaturedRoomRow(
+                                          label: 'Group',
+                                          reference: groupRef,
+                                          room: _profileGroup,
+                                          isChannel: false,
+                                        ),
                                       ),
                                   ],
                                 ),
@@ -1674,7 +1697,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (_bioExpanded) {
       return GestureDetector(
         onTap: () => setState(() => _bioExpanded = false),
-        child: Text(bioText, textAlign: TextAlign.center, style: _bioStyle),
+        child: Text(bioText, textAlign: TextAlign.start, style: _bioStyle),
       );
     }
 
@@ -1687,7 +1710,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         )..layout(maxWidth: constraints.maxWidth);
 
         if (!fullPainter.didExceedMaxLines) {
-          return Text(bioText, textAlign: TextAlign.center, style: _bioStyle);
+          return Text(bioText, textAlign: TextAlign.start, style: _bioStyle);
         }
 
         int lo = 0, hi = bioText.length;
@@ -1726,7 +1749,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               ],
             ),
             maxLines: 3,
-            textAlign: TextAlign.center,
+            textAlign: TextAlign.start,
           ),
         );
       },
