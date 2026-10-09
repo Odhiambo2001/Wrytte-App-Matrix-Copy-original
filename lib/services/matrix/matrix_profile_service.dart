@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
-import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
@@ -96,7 +95,6 @@ class MatrixProfileService {
           decoded['visibility'] as Map,
         );
       }
-      if (decoded['presence'] != null) fields['presence'] = decoded['presence'];
       // Name is the Matrix-standard displayname, not the legacy split-name
       // fields returned by the Wrytte Module.
       fields.remove('displayname');
@@ -176,11 +174,6 @@ class MatrixProfileService {
     ).replace(queryParameters: {'field': 'visibility:$field'});
     final response = await http.delete(uri, headers: await _authHeaders());
     _check(response);
-  }
-
-  Future<String?> getPresence(String userId) async {
-    final profile = await getProfile(userId);
-    return profile.presence;
   }
 
   Future<void> updateOwnerProfile({
@@ -309,55 +302,7 @@ class MatrixProfileService {
       deleteField(userId, WrytteProfile.avatarImageUrl);
 
   Future<void> setOnlineVisibility(String userId, String value) =>
-      setVisibility(userId, {WrytteProfile.onlineStatus: value});
-
-  /// Matrix owns online presence because it changes with the live session.
-  /// The Module GET reads this state and applies Wrytte's visibility rules.
-  Future<void> setOnlineStatus(String userId, bool online) async {
-    final client = MatrixClientService.instance.client;
-    final matrixUserId = client.userID;
-    if (matrixUserId == null || matrixUserId.trim().isEmpty) {
-      throw StateError(
-        'Cannot update presence without a logged-in Matrix user.',
-      );
-    }
-    String localpart(String value) =>
-        value
-            .trim()
-            .replaceFirst(RegExp(r'^@'), '')
-            .split(':')
-            .first
-            .toLowerCase();
-    if (localpart(userId) != localpart(matrixUserId)) {
-      throw ArgumentError.value(
-        userId,
-        'userId',
-        'A client can only update its own Matrix presence.',
-      );
-    }
-    final status = online ? 'online' : 'offline';
-    final stopwatch = Stopwatch()..start();
-    debugPrint(
-      '[Matrix.presence] set_request user_id="$matrixUserId" status="$status"',
-    );
-    try {
-      await client.setPresence(
-        matrixUserId,
-        online ? mx.PresenceType.online : mx.PresenceType.offline,
-      );
-      debugPrint(
-        '[Matrix.presence] set_success user_id="$matrixUserId" '
-        'status="$status" duration_ms=${stopwatch.elapsedMilliseconds}',
-      );
-    } catch (error) {
-      debugPrint(
-        '[Matrix.presence] set_failed user_id="$matrixUserId" '
-        'status="$status" duration_ms=${stopwatch.elapsedMilliseconds} '
-        'error="$error"',
-      );
-      rethrow;
-    }
-  }
+      setVisibility(userId, {WrytteProfile.onlineVisibilitySetting: value});
 
   Future<void> setDisplayName(String userId, String? value) async {
     final uri = _matrixProfileFieldUri(userId, 'displayname');

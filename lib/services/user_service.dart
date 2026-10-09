@@ -63,12 +63,6 @@ class UserService {
     } catch (_) {}
   }
 
-  Future<void> setUserOnlineStatus(bool isOnline) async {
-    final uid = await AuthService.instance.getCurrentUserId();
-    if (uid == null || uid.trim().isEmpty) return;
-    await MatrixProfileService.instance.setOnlineStatus(uid, isOnline);
-  }
-
   Future<List<Map<String, dynamic>>> searchUsersByPhone(
     List<String> phoneNumbers,
   ) async {

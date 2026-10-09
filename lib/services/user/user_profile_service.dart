@@ -94,8 +94,7 @@ class UserProfileService {
   void _invalidatePublicProfile(String localpart, String userId) {
     final cachedProfile = cachedPublicProfileByUid(userId);
     if (cachedProfile?.profileImage.isNotEmpty == true) {
-      _publicProfilePreviousAvatarUrls[localpart] =
-          cachedProfile!.profileImage;
+      _publicProfilePreviousAvatarUrls[localpart] = cachedProfile!.profileImage;
     }
     _publicProfileRevisions.update(
       localpart,
@@ -527,7 +526,8 @@ class UserProfileService {
     }
 
     if (!forceRefresh) {
-      final cached = _publicProfileCache[cacheKey] ??
+      final cached =
+          _publicProfileCache[cacheKey] ??
           cachedPublicProfileByUid(requestedUid);
       if (cached != null) {
         return cached;
@@ -705,7 +705,6 @@ class UserProfileService {
       var bio =
           ignoreStoredProfile ? '' : await _storage.read(key: _bioKey) ?? '';
       var moduleProfileLoaded = false;
-      var onlineStatus = '';
       var channelAlias = '';
       var groupAlias = '';
       var visibilitySettings = <String, String>{};
@@ -762,7 +761,6 @@ class UserProfileService {
           // have been deleted or are no longer visible, so clear stale local
           // values instead of carrying them forward.
           bio = _field(remote, 'Bio') ?? '';
-          onlineStatus = _field(remote, 'Presence') ?? '';
           channelAlias = _field(remote, 'ChannelAlias') ?? '';
           groupAlias = _field(remote, 'GroupAlias') ?? '';
           final visibilityJson = _field(remote, 'VisibilitySettings');
@@ -894,7 +892,6 @@ class UserProfileService {
         phone: phone,
         bio: bio,
         profileImage: profileImage,
-        onlineStatus: onlineStatus,
         channelAlias: channelAlias,
         groupAlias: groupAlias,
         visibilitySettings: visibilitySettings,
@@ -1277,7 +1274,6 @@ class UserProfileService {
           wrytteId ?? _trustedPhone(backendPhone, fallbackPhone: fallbackPhone),
       bio: _field(fields, 'Bio') ?? _field(fields, 'bio') ?? '',
       profileImage: _resolveAvatarUrl(avatar),
-      onlineStatus: _field(fields, 'Presence') ?? '',
       channelAlias: _field(fields, 'ChannelAlias') ?? '',
       groupAlias: _field(fields, 'GroupAlias') ?? '',
       visibilitySettings: visibilitySettings,
@@ -1567,12 +1563,6 @@ class UserProfileService {
     copy(WrytteProfile.groupAlias, 'GroupAlias');
     if (raw.containsKey('displayname')) {
       result['DisplayName'] = raw['displayname']?.toString().trim() ?? '';
-    }
-    // The Module's Matrix presence value is authoritative. Keep the custom
-    // field as a compatibility fallback for older Module responses.
-    copy('presence', 'Presence');
-    if (!result.containsKey('Presence')) {
-      copy(WrytteProfile.onlineStatus, 'Presence');
     }
     result['VisibilitySettings'] = jsonEncode(profile.visibilitySettings);
     debugPrint(

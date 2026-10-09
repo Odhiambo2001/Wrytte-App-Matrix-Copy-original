@@ -464,6 +464,11 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _stableHeaderAvatarUrl;
   String? _highlightedMessageId;
   Timer? _highlightTimer;
+  Timer? _typingHeartbeatTimer;
+  Timer? _typingStopTimer;
+  bool _typingAnnounced = false;
+  bool _someoneElseTyping = false;
+  DateTime? _peerLastActiveAt;
 
   // ── debug overlay ──────────────────────────────────────────────────────────
   bool _showDebug = false;
@@ -519,6 +524,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _hasMoreOlder = widget.initialEventsHaveMore;
     _focusNode.addListener(_onInputFocusChanged);
+    _controller.addListener(_onComposerChanged);
     _loadInitial();
     _scrollCtrl.addListener(_onScroll);
   }
@@ -543,6 +549,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _logger.removeListener(_onNewLog);
     _messagesSub?.cancel();
     _highlightTimer?.cancel();
+    _typingHeartbeatTimer?.cancel();
+    _typingStopTimer?.cancel();
+    unawaited(_sendTyping(false));
+    _controller.removeListener(_onComposerChanged);
     _controller.dispose();
     _focusNode.removeListener(_onInputFocusChanged);
     _scrollCtrl.dispose();
@@ -561,6 +571,13 @@ class _ChatScreenState extends State<ChatScreen> {
         _resolvedConversationId ?? widget.conversationId,
       );
       if (room == null) return;
+      final currentUserId = MatrixClientService.instance.userId;
+      final isSomeoneTyping = room.typingUsers.any(
+        (user) => user.id != currentUserId,
+      );
+      if (isSomeoneTyping != _someoneElseTyping) {
+        setState(() => _someoneElseTyping = isSomeoneTyping);
+      }
       if (_pinUpdatesInFlight.isEmpty) {
         final pinned = room.pinnedEventIds.toList();
         final pinnedForMe =
@@ -594,10 +611,15 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     final peerId = _profilePeerId();
     if (peerId == null || peerId.trim().isEmpty) return false;
+    if (!_hasLocalPeerRoom(peerId)) return false;
     final peerLocalpart = _matrixLocalpart(peerId).toLowerCase();
     final client = MatrixClientService.instance.client;
+    // The deprecated map is the local sync cache. fetchCurrentPresence would
+    // make the on-demand presence request this screen intentionally avoids.
+    // ignore: deprecated_member_use
     for (final entry in client.presences.entries) {
       if (_matrixLocalpart(entry.key).toLowerCase() != peerLocalpart) continue;
+      _peerLastActiveAt = entry.value.lastActiveTimestamp;
       return entry.value.presence == mx.PresenceType.online;
     }
     return false;
@@ -607,20 +629,42 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isGroupChat) return;
     final peerId = _profilePeerId();
     if (peerId == null || peerId.trim().isEmpty) return;
+    if (!_hasLocalPeerRoom(peerId)) return;
     final peerLocalpart = _matrixLocalpart(peerId).toLowerCase();
     for (final presence in update.presence ?? const []) {
       if (_matrixLocalpart(presence.senderId).toLowerCase() != peerLocalpart) {
         continue;
       }
       final isOnline = presence.presence.presence == mx.PresenceType.online;
-      if (isOnline == _receiverOnline) continue;
-      setState(() => _receiverOnline = isOnline);
+      final lastActiveAgo = presence.presence.lastActiveAgo;
+      final lastActiveAt =
+          lastActiveAgo == null
+              ? null
+              : DateTime.now().subtract(Duration(milliseconds: lastActiveAgo));
+      if (isOnline == _receiverOnline && lastActiveAt == _peerLastActiveAt) {
+        continue;
+      }
+      setState(() {
+        _receiverOnline = isOnline;
+        _peerLastActiveAt = lastActiveAt;
+      });
       apkLog(
         'Matrix.presence',
         'chat_peer_status user_id="$peerId" '
             'status="${isOnline ? 'online' : 'offline'}"',
       );
     }
+  }
+
+  bool _hasLocalPeerRoom(String peerId) {
+    final room = MatrixChatService.instance.getRoomById(
+      _resolvedConversationId ?? widget.conversationId,
+    );
+    if (room == null || room.membership != mx.Membership.join) return false;
+    final peerLocalpart = _matrixLocalpart(peerId).toLowerCase();
+    return room.getParticipants().any(
+      (member) => _matrixLocalpart(member.id).toLowerCase() == peerLocalpart,
+    );
   }
 
   void _onPublicProfileUpdated(String userId) {
@@ -677,7 +721,74 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onInputFocusChanged() {
+    if (!_focusNode.hasFocus) {
+      _scheduleTypingStop();
+    } else if (_controller.text.trim().isNotEmpty) {
+      _onComposerChanged();
+    }
     if (mounted) setState(() {});
+  }
+
+  void _onComposerChanged() {
+    if (_controller.text.trim().isEmpty || !_focusNode.hasFocus) {
+      _scheduleTypingStop();
+      return;
+    }
+    _typingStopTimer?.cancel();
+    if (!_typingAnnounced) {
+      _typingAnnounced = true;
+      unawaited(_sendTyping(true));
+    }
+    _typingHeartbeatTimer ??= Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => unawaited(_sendTyping(true)),
+    );
+  }
+
+  void _scheduleTypingStop() {
+    _typingHeartbeatTimer?.cancel();
+    _typingHeartbeatTimer = null;
+    if (!_typingAnnounced) return;
+    _typingStopTimer?.cancel();
+    _typingStopTimer = Timer(const Duration(seconds: 2), () {
+      _typingAnnounced = false;
+      unawaited(_sendTyping(false));
+    });
+  }
+
+  Future<void> _sendTyping(bool isTyping) async {
+    final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
+    if (roomId.isEmpty || !MatrixClientService.instance.isInitialized) return;
+    final room = MatrixChatService.instance.getRoomById(roomId);
+    if (room == null || room.membership != mx.Membership.join) return;
+    try {
+      await room.setTyping(isTyping, timeout: isTyping ? 4000 : null);
+    } catch (error) {
+      apkLog(
+        'Matrix.typing',
+        'send failed room_id="$roomId" typing=$isTyping error=$error',
+      );
+    }
+  }
+
+  String _peerPresenceLabel() {
+    if (_receiverOnline) return 'Online';
+    final lastActiveAt = _peerLastActiveAt;
+    if (lastActiveAt == null) return 'Offline';
+    final now = DateTime.now();
+    final localLastActive = lastActiveAt.toLocal();
+    final time = MaterialLocalizations.of(
+      context,
+    ).formatTimeOfDay(TimeOfDay.fromDateTime(localLastActive));
+    if (now.year == localLastActive.year &&
+        now.month == localLastActive.month &&
+        now.day == localLastActive.day) {
+      return 'Last seen today at $time';
+    }
+    final date = MaterialLocalizations.of(
+      context,
+    ).formatShortDate(localLastActive);
+    return 'Last seen $date at $time';
   }
 
   void _onNewLog() {
@@ -3055,6 +3166,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: Column(
                         children: [
                           Expanded(child: _buildMessageList()),
+                          if (_someoneElseTyping) const _TypingIndicator(),
                           if (_replyingTo != null) _buildReplyComposerBanner(),
                           if (_editingMessage != null)
                             _buildEditComposerBanner(),
@@ -3987,9 +4099,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                           child: Text(
                                             isGroupChat
                                                 ? _groupSubtitle()
-                                                : _receiverOnline
-                                                ? 'Online'
-                                                : 'Offline',
+                                                : _peerPresenceLabel(),
                                             style: TextStyle(
                                               color: Colors.white.withValues(
                                                 alpha: 0.5,
@@ -4852,6 +4962,65 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             child: Center(child: child),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TypingIndicator extends StatefulWidget {
+  const _TypingIndicator();
+
+  @override
+  State<_TypingIndicator> createState() => _TypingIndicatorState();
+}
+
+class _TypingIndicatorState extends State<_TypingIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 26,
+      width: double.infinity,
+      child: Padding(
+        padding: const EdgeInsetsDirectional.only(start: 20, bottom: 5),
+        child: Row(
+          children: List<Widget>.generate(3, (index) {
+            final start = index * 0.2;
+            final end = (start + 0.45).clamp(0.0, 1.0);
+            final animation = CurvedAnimation(
+              parent: _controller,
+              curve: Interval(start, end, curve: Curves.easeInOut),
+            );
+            return AnimatedBuilder(
+              animation: animation,
+              builder:
+                  (context, child) => Opacity(
+                    opacity: 0.35 + animation.value * 0.65,
+                    child: child,
+                  ),
+              child: Container(
+                width: 6,
+                height: 6,
+                margin: const EdgeInsetsDirectional.only(end: 4),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF4EA1FF),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            );
+          }),
         ),
       ),
     );

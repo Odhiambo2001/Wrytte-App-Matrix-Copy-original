@@ -5645,7 +5645,6 @@ class ChatService {
     if (currentUser == null || currentUser.isEmpty) return;
 
     final otherReceiptEventIds = _otherUserReceiptEventIds(room, currentUser);
-    final peerOnline = _directPeerOnline(room, currentUser);
     final readIndex = messages.lastIndexWhere(
       (message) => otherReceiptEventIds.contains(message.id),
     );
@@ -5659,12 +5658,10 @@ class ChatService {
         continue;
       }
 
+      // Matrix standardizes read receipts, but has no delivered receipt.
+      // Presence only says the peer is online; it cannot prove delivery.
       final nextStatus =
-          readIndex >= i
-              ? MessageStatus.read
-              : peerOnline
-              ? MessageStatus.delivered
-              : MessageStatus.sent;
+          readIndex >= i ? MessageStatus.read : MessageStatus.sent;
       if (_messageStatusRank(nextStatus) < _messageStatusRank(message.status)) {
         continue;
       }
@@ -5699,14 +5696,6 @@ class ChatService {
     final mainThreadReceipts = room.receiptState.mainThread?.otherUsers;
     if (mainThreadReceipts != null) collect(mainThreadReceipts);
     return eventIds;
-  }
-
-  bool _directPeerOnline(mx.Room room, String currentUser) {
-    final directUserId = room.directChatMatrixID;
-    if (directUserId == null || directUserId == currentUser) return false;
-    // ignore: deprecated_member_use
-    return room.client.presences[directUserId]?.presence ==
-        mx.PresenceType.online;
   }
 
   bool _isOwnMessage(ChatMessage message, String currentMatrixUserId) {

@@ -23,7 +23,7 @@ class WrytteProfile {
   static const channelMemberCount = 'com.wrytte.channel_member_count';
   static const groupMemberCount = 'com.wrytte.group_member_count';
   static const visibility = 'com.wrytte.profile_visibility';
-  static const onlineStatus = 'com.wrytte.online_status';
+  static const onlineVisibilitySetting = 'com.wrytte.online_status';
 
   final String userId;
   final Map<String, dynamic> fields;
@@ -34,7 +34,6 @@ class WrytteProfile {
 
   String? get avatarUrl => fields[avatarImageUrl]?.toString();
   String? get displayName => fields['displayname']?.toString();
-  String? get presence => fields['presence']?.toString();
   String? get firstNameValue => this[firstNameKey];
   String? get lastNameValue => this[lastNameKey];
   String? get phoneNumberValue => this[phoneNumber];
