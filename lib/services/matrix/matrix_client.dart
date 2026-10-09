@@ -84,12 +84,14 @@ class MatrixClientService {
       return;
     }
     final revision = event.content['revision']?.toString().trim() ?? '';
-    final dedupeKey = revision.isNotEmpty
-        ? '$senderId|$revision'
-        : '$senderId|to-device|${event.content.hashCode}';
+    final dedupeKey =
+        revision.isNotEmpty
+            ? '$senderId|$revision'
+            : '$senderId|to-device|${event.content.hashCode}';
     if (_capturedProfileUpdateEventIds.containsKey(dedupeKey)) return;
-    _capturedProfileUpdateEventIds[dedupeKey] =
-        _profileUpdateLocalpart(ownerId);
+    _capturedProfileUpdateEventIds[dedupeKey] = _profileUpdateLocalpart(
+      ownerId,
+    );
     if (_profileUpdateController.hasListener) {
       _profileUpdateController.add(ownerId);
     } else {
@@ -116,7 +118,9 @@ class MatrixClientService {
       if (userId.isEmpty) continue;
       debugPrint(
         '[Matrix.presence] sync_update user_id="$userId" '
-        'status="${presence.presence.presence.name}"',
+        'status="${presence.presence.presence.name}" '
+        'last_active_ago_ms="${presence.presence.lastActiveAgo ?? 'unknown'}" '
+        'currently_active="${presence.presence.currentlyActive ?? 'unknown'}"',
       );
     }
 
@@ -138,11 +142,12 @@ class MatrixClientService {
         }
         final eventId = event.eventId;
         final revision = event.content['revision']?.toString() ?? '';
-        final dedupeKey = revision.isNotEmpty
-            ? '${event.senderId}|$revision'
-            : eventId.isNotEmpty
-            ? eventId
-            : '${event.senderId}|${room.hashCode}|${event.originServerTs.microsecondsSinceEpoch}';
+        final dedupeKey =
+            revision.isNotEmpty
+                ? '${event.senderId}|$revision'
+                : eventId.isNotEmpty
+                ? eventId
+                : '${event.senderId}|${room.hashCode}|${event.originServerTs.microsecondsSinceEpoch}';
         final ownerKey = _profileUpdateLocalpart(ownerId);
         if (_capturedProfileUpdateEventIds[dedupeKey] == ownerKey) continue;
         _capturedProfileUpdateEventIds[dedupeKey] = ownerKey;
@@ -154,7 +159,10 @@ class MatrixClientService {
       }
     }
     if (_capturedProfileUpdateEventIds.length > 2048) {
-      final recent = _capturedProfileUpdateEventIds.entries.toList().reversed.take(1024);
+      final recent = _capturedProfileUpdateEventIds.entries
+          .toList()
+          .reversed
+          .take(1024);
       _capturedProfileUpdateEventIds
         ..clear()
         ..addEntries(recent.toList().reversed);
@@ -203,7 +211,9 @@ class MatrixClientService {
     final value = userId.trim();
     if (value.startsWith('@')) {
       final separator = value.indexOf(':');
-      return (separator > 1 ? value.substring(1, separator) : value.substring(1))
+      return (separator > 1
+              ? value.substring(1, separator)
+              : value.substring(1))
           .toLowerCase();
     }
     return value.toLowerCase();

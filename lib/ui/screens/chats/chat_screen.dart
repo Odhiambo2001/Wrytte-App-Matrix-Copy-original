@@ -468,6 +468,8 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _typingStopTimer;
   bool _typingAnnounced = false;
   bool _someoneElseTyping = false;
+  bool? _lastLoggedTypingState;
+  Set<String> _typingUserIds = {};
   DateTime? _peerLastActiveAt;
 
   // ── debug overlay ──────────────────────────────────────────────────────────
@@ -485,6 +487,17 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _chat.activateConversationRead(widget.conversationId);
     _receiverOnline = _currentPeerPresenceIsOnline();
+    if (!_isGroupChat) {
+      final peerId = _profilePeerId();
+      if (peerId != null && peerId.isNotEmpty) {
+        apkLog(
+          'Matrix.presence',
+          'chat_peer_initial user_id="$peerId" '
+              'status="${_receiverOnline ? 'online' : 'offline'}" '
+              'last_seen_at="${_peerLastActiveAt?.toLocal().toIso8601String() ?? 'unknown'}"',
+        );
+      }
+    }
     _stableHeaderAvatarUrl = _initialStableHeaderAvatarUrl();
     _subscribeToRoomProfileUpdates();
     _subscribeToGroupContactUpdates();
@@ -572,9 +585,23 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (room == null) return;
       final currentUserId = MatrixClientService.instance.userId;
-      final isSomeoneTyping = room.typingUsers.any(
-        (user) => user.id != currentUserId,
-      );
+      final typingUserIds =
+          room.typingUsers
+              .where((user) => user.id != currentUserId)
+              .map((user) => user.id)
+              .toSet();
+      final typingUsersChanged =
+          typingUserIds.length != _typingUserIds.length ||
+          !typingUserIds.containsAll(_typingUserIds);
+      final isSomeoneTyping = typingUserIds.isNotEmpty;
+      if (typingUsersChanged) {
+        _typingUserIds = typingUserIds;
+        apkLog(
+          'Matrix.typing',
+          'received room_id="${room.id}" typing=$isSomeoneTyping '
+              'users="${typingUserIds.join(',')}"',
+        );
+      }
       if (isSomeoneTyping != _someoneElseTyping) {
         setState(() => _someoneElseTyping = isSomeoneTyping);
       }
@@ -637,9 +664,23 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       final isOnline = presence.presence.presence == mx.PresenceType.online;
       final lastActiveAgo = presence.presence.lastActiveAgo;
+      DateTime? cachedLastActiveAt = _peerLastActiveAt;
+      // Some offline presence updates omit last_active_ago. Preserve the most
+      // recent timestamp already in the SDK cache instead of dropping it and
+      // rendering a bare "Offline" label.
+      // ignore: deprecated_member_use
+      for (final entry
+          in MatrixClientService.instance.client.presences.entries) {
+        if (_matrixLocalpart(entry.key).toLowerCase() != peerLocalpart) {
+          continue;
+        }
+        cachedLastActiveAt =
+            entry.value.lastActiveTimestamp ?? cachedLastActiveAt;
+        break;
+      }
       final lastActiveAt =
           lastActiveAgo == null
-              ? null
+              ? cachedLastActiveAt
               : DateTime.now().subtract(Duration(milliseconds: lastActiveAgo));
       if (isOnline == _receiverOnline && lastActiveAt == _peerLastActiveAt) {
         continue;
@@ -651,7 +692,9 @@ class _ChatScreenState extends State<ChatScreen> {
       apkLog(
         'Matrix.presence',
         'chat_peer_status user_id="$peerId" '
-            'status="${isOnline ? 'online' : 'offline'}"',
+            'status="${isOnline ? 'online' : 'offline'}" '
+            'last_seen_at="${lastActiveAt?.toLocal().toIso8601String() ?? 'unknown'}" '
+            'last_active_ago_ms="${lastActiveAgo ?? 'unknown'}"',
       );
     }
   }
@@ -763,6 +806,14 @@ class _ChatScreenState extends State<ChatScreen> {
     if (room == null || room.membership != mx.Membership.join) return;
     try {
       await room.setTyping(isTyping, timeout: isTyping ? 4000 : null);
+      if (_lastLoggedTypingState != isTyping) {
+        _lastLoggedTypingState = isTyping;
+        apkLog(
+          'Matrix.typing',
+          'sent room_id="$roomId" typing=$isTyping '
+              'timeout_ms=${isTyping ? 4000 : 'none'}',
+        );
+      }
     } catch (error) {
       apkLog(
         'Matrix.typing',
