@@ -22,6 +22,7 @@ class MatrixClientService {
   final Set<String> _capturedGroupDeletionKeys = {};
   final Map<String, String> _capturedProfileUpdateEventIds = {};
   final Map<String, String> _observedMatrixDisplayNames = {};
+  final Map<String, DateTime> _lastSeenPresence = {};
   final StreamController<String> _profileUpdateController =
       StreamController<String>.broadcast();
 
@@ -48,6 +49,10 @@ class MatrixClientService {
   bool get isLoggedIn => _client?.isLogged() ?? false;
   String? get userId => _client?.userID;
   String? get accessToken => _client?.accessToken;
+
+  /// Last server-reported activity time received through /sync, retained when
+  /// a later offline presence update omits `last_active_ago`.
+  DateTime? lastSeenAtFor(String userId) => _lastSeenPresence[userId.trim()];
 
   /// Returns deletion notifications captured before [ChatService] finishes
   /// binding its account-scoped local database.
@@ -116,10 +121,19 @@ class MatrixClientService {
     for (final presence in update.presence ?? const []) {
       final userId = presence.senderId.trim();
       if (userId.isEmpty) continue;
+      final lastActiveAgo = presence.presence.lastActiveAgo;
+      if (lastActiveAgo != null && lastActiveAgo >= 0) {
+        final lastSeenAt = DateTime.now().subtract(
+          Duration(milliseconds: lastActiveAgo),
+        );
+        _lastSeenPresence[userId] = lastSeenAt;
+        unawaited(_persistLastSeenPresence(userId, lastSeenAt));
+      }
       debugPrint(
         '[Matrix.presence] sync_update user_id="$userId" '
         'status="${presence.presence.presence.name}" '
-        'last_active_ago_ms="${presence.presence.lastActiveAgo ?? 'unknown'}" '
+        'last_active_ago_ms="${lastActiveAgo ?? 'unknown'}" '
+        'last_seen_at="${_lastSeenPresence[userId]?.toIso8601String() ?? 'unknown'}" '
         'currently_active="${presence.presence.currentlyActive ?? 'unknown'}"',
       );
     }
@@ -166,6 +180,27 @@ class MatrixClientService {
       _capturedProfileUpdateEventIds
         ..clear()
         ..addEntries(recent.toList().reversed);
+    }
+  }
+
+  sqlite.Database? _presenceDatabase;
+
+  Future<void> _persistLastSeenPresence(
+    String userId,
+    DateTime lastSeenAt,
+  ) async {
+    final database = _presenceDatabase;
+    if (database == null || database.isOpen == false) return;
+    try {
+      await database.insert(
+        'wrytte_presence_cache',
+        {'user_id': userId, 'last_seen_ms': lastSeenAt.millisecondsSinceEpoch},
+        conflictAlgorithm: sqlite.ConflictAlgorithm.replace,
+      );
+    } catch (error) {
+      debugPrint(
+        '[Matrix.presence] local last-seen cache write failed: $error',
+      );
     }
   }
 
@@ -296,6 +331,23 @@ class MatrixClientService {
     final dbPath = p.join(storeDir.path, MatrixConfig.localDatabaseFile);
 
     final database = await sqlite.openDatabase(dbPath);
+    await database.execute('''
+      CREATE TABLE IF NOT EXISTS wrytte_presence_cache (
+        user_id TEXT PRIMARY KEY,
+        last_seen_ms INTEGER NOT NULL
+      )
+    ''');
+    _presenceDatabase = database;
+    _lastSeenPresence.clear();
+    final savedPresence = await database.query('wrytte_presence_cache');
+    for (final row in savedPresence) {
+      final userId = row['user_id']?.toString();
+      final timestamp = row['last_seen_ms'];
+      if (userId == null || timestamp is! int) continue;
+      _lastSeenPresence[userId] = DateTime.fromMillisecondsSinceEpoch(
+        timestamp,
+      );
+    }
 
     final client = Client(
       MatrixConfig.appServiceName,
@@ -387,6 +439,7 @@ class MatrixClientService {
     _pendingProfileUpdates.clear();
     _capturedGroupDeletionKeys.clear();
     _capturedProfileUpdateEventIds.clear();
+    _presenceDatabase = null;
     _client = null;
     _initializing = null;
     _storeNamespace = null;

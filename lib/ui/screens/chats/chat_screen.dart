@@ -641,12 +641,20 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!_hasLocalPeerRoom(peerId)) return false;
     final peerLocalpart = _matrixLocalpart(peerId).toLowerCase();
     final client = MatrixClientService.instance.client;
+    _peerLastActiveAt =
+        MatrixClientService.instance.lastSeenAtFor(peerId) ?? _peerLastActiveAt;
     // The deprecated map is the local sync cache. fetchCurrentPresence would
     // make the on-demand presence request this screen intentionally avoids.
     // ignore: deprecated_member_use
     for (final entry in client.presences.entries) {
       if (_matrixLocalpart(entry.key).toLowerCase() != peerLocalpart) continue;
-      _peerLastActiveAt = entry.value.lastActiveTimestamp;
+      // A sparse offline presence event may replace the SDK cache entry while
+      // omitting last_active_ago. Keep the last real timestamp observed from
+      // the server instead of erasing it.
+      _peerLastActiveAt =
+          entry.value.lastActiveTimestamp ??
+          MatrixClientService.instance.lastSeenAtFor(peerId) ??
+          _peerLastActiveAt;
       return entry.value.presence == mx.PresenceType.online;
     }
     return false;
@@ -675,9 +683,12 @@ class _ChatScreenState extends State<ChatScreen> {
           continue;
         }
         cachedLastActiveAt =
-            entry.value.lastActiveTimestamp ?? cachedLastActiveAt;
+            entry.value.lastActiveTimestamp ??
+            MatrixClientService.instance.lastSeenAtFor(peerId) ??
+            cachedLastActiveAt;
         break;
       }
+      cachedLastActiveAt ??= MatrixClientService.instance.lastSeenAtFor(peerId);
       final lastActiveAt =
           lastActiveAgo == null
               ? cachedLastActiveAt
@@ -825,7 +836,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String _peerPresenceLabel() {
     if (_receiverOnline) return 'Online';
     final lastActiveAt = _peerLastActiveAt;
-    if (lastActiveAt == null) return 'Offline';
+    if (lastActiveAt == null) return 'Last seen';
     final now = DateTime.now();
     final localLastActive = lastActiveAt.toLocal();
     final time = MaterialLocalizations.of(
