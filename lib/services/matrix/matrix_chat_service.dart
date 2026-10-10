@@ -1706,6 +1706,26 @@ class MatrixChatService {
     return room.getTimeline(limit: limit, onUpdate: onUpdate);
   }
 
+  Future<void> sendDeliveredToUser({
+    required String userId,
+    required String roomId,
+    required String eventId,
+  }) async {
+    final client = MatrixClientService.instance.client;
+    await client.sendToDevicesOfUserIds(
+      {userId},
+      'Delivered',
+      {'room_id': roomId, 'event_id': eventId, 'status': 'delivered'},
+    );
+  }
+
+  Future<void> markRead(String roomId, {String? eventId}) async {
+    final room = getRoomById(roomId);
+    final readEventId = eventId ?? room?.lastEvent?.eventId;
+    if (room == null || readEventId == null || readEventId.isEmpty) return;
+    await room.setReadMarker(readEventId, mRead: readEventId, public: true);
+  }
+
   Room? _directRoomFor(String matrixUserId, {bool includeInvite = false}) {
     for (final room in MatrixClientService.instance.client.rooms) {
       if (!isVerifiedDirectRoomFor(room.id, matrixUserId)) continue;

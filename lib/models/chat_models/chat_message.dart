@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:matrix/matrix.dart' as mx;
 
-enum MessageStatus { sending, sent, failed }
+enum MessageStatus { sending, sent, delivered, read, failed }
 
 bool _boolFromJson(Object? value) =>
     value == true || value == 1 || value?.toString() == '1';
@@ -12,8 +12,9 @@ MessageStatus _statusFromString(String? value) {
     case "sent":
       return MessageStatus.sent;
     case "delivered":
+      return MessageStatus.delivered;
     case "read":
-      return MessageStatus.sent;
+      return MessageStatus.read;
     case "failed":
       return MessageStatus.failed;
     case "sending":

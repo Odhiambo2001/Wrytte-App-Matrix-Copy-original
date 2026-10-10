@@ -812,7 +812,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _sendTyping(bool isTyping) async {
     final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
-    if (roomId.isEmpty || !MatrixClientService.instance.isInitialized) return;
+    if (roomId.isEmpty) return;
+    _chat.updateLocalTypingState(roomId, isTyping);
+    if (!MatrixClientService.instance.isInitialized) return;
     final room = MatrixChatService.instance.getRoomById(roomId);
     if (room == null || room.membership != mx.Membership.join) return;
     try {
