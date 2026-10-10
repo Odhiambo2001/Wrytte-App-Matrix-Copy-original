@@ -43,8 +43,7 @@ class ChatService {
       'com.wrytte.pinned_events_for_me';
   static const String _mdlAccountDataType = 'com.wrytte.mdl';
   static const String deliveredToDeviceEventType = 'Delivered';
-  static const String voiceListenedEventType =
-      'com.wrytte.voice_message_listened';
+  static const String voiceListenedToDeviceEventType = 'Listened';
   static const String groupDeletedMessageType = 'group_deleted';
   static const String groupDeletedEventKey = 'wrytte.group_deleted';
   static const String groupDeletedAtKey = 'wrytte.deleted_at';
@@ -105,6 +104,8 @@ class ChatService {
   Future<void> _mdlAccountDataWriteQueue = Future.value();
   String? _pendingDeliveredEventId;
   String? _pendingDeliveredRoomId;
+  Map<String, dynamic> _mdlAccountDataContent = <String, dynamic>{};
+  bool _mdlAccountDataLoaded = false;
 
   static const int _matrixHistoryPageSize = MatrixConfig.historyPageSize;
   static const Duration _roomsRefreshMinInterval = Duration(milliseconds: 1200);
@@ -232,8 +233,8 @@ class ChatService {
         );
         throw StateError('Matrix session did not match the current user.');
       }
+      _loadMdlAccountData(client.accountData[_mdlAccountDataType]?.content);
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
-        if (_applyVoiceListenedEvent(event)) return;
         if (_applyLiveRedactionEvent(event)) {
           return;
         }
@@ -250,6 +251,10 @@ class ChatService {
         _cacheMessage(message);
         if (!_isOwnMessage(message, client.userID ?? '')) {
           unawaited(_sendDeliveredToDevice(event, message));
+          if (message.isVoiceNote &&
+              !MatrixChatService.instance.isMatrixGroupRoom(event.room)) {
+            unawaited(_recordVoiceNotListened(message));
+          }
         }
         _refreshMessageStatusesForRoom(event.room);
 
@@ -358,6 +363,10 @@ class ChatService {
   void _handleToDeviceEvent(mx.ToDeviceEvent event) {
     if (event.type == deliveredToDeviceEventType) {
       unawaited(_handleDeliveredToDeviceEvent(event));
+      return;
+    }
+    if (event.type == voiceListenedToDeviceEventType) {
+      unawaited(_handleListenedToDeviceEvent(event));
       return;
     }
     _handleGroupDeletedToDeviceEvent(event);
@@ -503,16 +512,13 @@ class ChatService {
   Future<void> _writePendingMdlAccountData() async {
     final eventId = _pendingDeliveredEventId;
     final roomId = _pendingDeliveredRoomId;
-    final userId = MatrixClientService.instance.userId;
-    if (eventId == null || roomId == null || userId == null) return;
+    if (eventId == null || roomId == null) return;
     if (_typingRoomIds.isNotEmpty) return;
-    final previous = _mdlAccountDataWriteQueue;
-    final write = previous.then((_) async {
+    try {
       if (_typingRoomIds.isNotEmpty) return;
-      await MatrixClientService.instance.client.setAccountData(
-        userId,
-        _mdlAccountDataType,
-        {
+      await _updateMdlAccountData(
+        (current) => {
+          ...current,
           'last_delivered_event_id': eventId,
           'status': 'delivered',
           'room_id': roomId,
@@ -530,12 +536,173 @@ class ChatService {
         'account_data_saved type="MDL" room_id="$roomId" '
             'last_delivered_event_id="$eventId" status="delivered"',
       );
-    });
-    _mdlAccountDataWriteQueue = write.catchError((Object error) {
+    } catch (error) {
       apkLog('Matrix.delivery', 'account data save failed error=$error');
       _retryMdlAccountDataWrite();
+    }
+  }
+
+  void _loadMdlAccountData(Map<String, dynamic>? content) {
+    _mdlAccountDataContent = Map<String, dynamic>.from(content ?? const {});
+    _mdlAccountDataLoaded = true;
+  }
+
+  Future<void> _updateMdlAccountData(
+    Map<String, dynamic> Function(Map<String, dynamic> current) update,
+  ) async {
+    final userId = MatrixClientService.instance.client.userID;
+    if (userId == null || userId.isEmpty) {
+      throw StateError('Matrix user is not logged in');
+    }
+    final previous = _mdlAccountDataWriteQueue;
+    final write = previous.then((_) async {
+      if (!_mdlAccountDataLoaded) {
+        _loadMdlAccountData(
+          MatrixClientService
+              .instance
+              .client
+              .accountData[_mdlAccountDataType]
+              ?.content,
+        );
+      }
+      final next = update(Map<String, dynamic>.from(_mdlAccountDataContent));
+      await MatrixClientService.instance.client.setAccountData(
+        userId,
+        _mdlAccountDataType,
+        next,
+      );
+      _mdlAccountDataContent = next;
+      _mdlAccountDataLoaded = true;
     });
-    await _mdlAccountDataWriteQueue;
+    _mdlAccountDataWriteQueue = write.catchError((Object error) {
+      apkLog('Matrix.MDL', 'account data update failed error=$error');
+    });
+    await write;
+  }
+
+  List<Map<String, dynamic>> _mdlEntries(String key) {
+    final raw = _mdlAccountDataContent[key];
+    if (raw is! Iterable) return <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((entry) => Map<String, dynamic>.from(entry))
+        .toList();
+  }
+
+  Future<void> _recordVoiceNotListened(ChatMessage message) async {
+    final roomId = message.conversationId.trim();
+    final eventId = message.id.trim();
+    if (roomId.isEmpty || eventId.isEmpty) return;
+    if (_mdlEntries('not_listened').any(
+      (entry) => entry['event_id'] == eventId && entry['room_id'] == roomId,
+    )) {
+      return;
+    }
+    try {
+      await _updateMdlAccountData((current) {
+        final entries =
+            (current['not_listened'] is Iterable
+                  ? (current['not_listened'] as Iterable)
+                      .whereType<Map>()
+                      .map((entry) => Map<String, dynamic>.from(entry))
+                      .toList()
+                  : <Map<String, dynamic>>[])
+              ..removeWhere(
+                (entry) =>
+                    entry['event_id'] == eventId && entry['room_id'] == roomId,
+              );
+        entries.add({
+          'event_id': eventId,
+          'room_id': roomId,
+          'status': 'not_listened',
+        });
+        return {...current, 'not_listened': entries};
+      });
+      apkLog(
+        'Matrix.voiceListened',
+        'account_data_saved status="not_listened" room_id="$roomId" event_id="$eventId"',
+      );
+    } catch (error) {
+      apkLog(
+        'Matrix.voiceListened',
+        'not_listened save failed event_id="$eventId" error=$error',
+      );
+    }
+  }
+
+  Future<void> _handleListenedToDeviceEvent(mx.ToDeviceEvent event) async {
+    final roomId = event.content['room_id']?.toString().trim() ?? '';
+    final eventId = event.content['event_id']?.toString().trim() ?? '';
+    final status = event.content['status']?.toString().trim().toLowerCase();
+    final currentUser = MatrixClientService.instance.client.userID;
+    if (roomId.isEmpty ||
+        eventId.isEmpty ||
+        status != 'listened' ||
+        currentUser == null ||
+        event.senderId == currentUser) {
+      return;
+    }
+    final room = _roomById(roomId);
+    final messages = _messagesCache[roomId];
+    final index =
+        messages?.indexWhere((message) => message.id == eventId) ?? -1;
+    if (room == null || (index >= 0 && !messages![index].isVoiceNote)) return;
+    if (index >= 0) _setVoiceListenedLocally(roomId, eventId, true);
+    await _updateMdlAccountData((current) {
+      final entries =
+          (current['listened'] is Iterable
+                ? (current['listened'] as Iterable)
+                    .whereType<Map>()
+                    .map((entry) => Map<String, dynamic>.from(entry))
+                    .toList()
+                : <Map<String, dynamic>>[])
+            ..removeWhere(
+              (entry) =>
+                  entry['event_id'] == eventId && entry['room_id'] == roomId,
+            );
+      entries.add({
+        'event_id': eventId,
+        'room_id': roomId,
+        'status': 'listened',
+      });
+      return {...current, 'listened': entries};
+    });
+    apkLog(
+      'Matrix.voiceListened',
+      'received status="listened" room_id="$roomId" event_id="$eventId" sender="${event.senderId}"',
+    );
+  }
+
+  Future<void> _removeVoiceMdlEntry(String roomId, String eventId) async {
+    final hasEntry = [
+      ..._mdlEntries('not_listened'),
+      ..._mdlEntries('listened'),
+    ].any(
+      (entry) => entry['event_id'] == eventId && entry['room_id'] == roomId,
+    );
+    if (!hasEntry) return;
+    await _updateMdlAccountData((current) {
+      final next = Map<String, dynamic>.from(current);
+      for (final key in const ['not_listened', 'listened']) {
+        final raw = next[key];
+        if (raw is! Iterable) continue;
+        final kept =
+            raw
+                .where(
+                  (entry) =>
+                      entry is! Map ||
+                      entry['event_id'] != eventId ||
+                      entry['room_id'] != roomId,
+                )
+                .toList();
+        if (kept.isEmpty) {
+          next.remove(key);
+        } else {
+          next[key] = kept;
+        }
+      }
+      return next;
+    });
   }
 
   void _handleGroupDeletedToDeviceEvent(mx.ToDeviceEvent event) {
@@ -1171,8 +1338,9 @@ class ChatService {
 
     for (final event in sortedEvents) {
       _applyMatrixEditEventToMap(event, byId);
-      _applyVoiceListenedEventToMap(event, byId);
     }
+
+    _applyMdlVoiceStatusToMessages(byId);
 
     final messages =
         byId.values.where((message) => !_isHiddenForMe(message)).toList()
@@ -1196,19 +1364,29 @@ class ChatService {
     );
   }
 
-  void _applyVoiceListenedEventToMap(
-    mx.Event event,
-    Map<String, ChatMessage> messagesById,
-  ) {
-    if (event.type != voiceListenedEventType) return;
-    final targetId = event.content['voice_event_id']?.toString().trim() ?? '';
-    final original = messagesById[targetId];
-    if (original == null ||
-        !original.isVoiceNote ||
-        _isOwnMessage(original, event.senderId)) {
-      return;
+  void _applyMdlVoiceStatusToMessages(Map<String, ChatMessage> messagesById) {
+    final listened = _mdlEntries('listened');
+    final notListened = _mdlEntries('not_listened');
+    for (final entry in listened) {
+      final id = entry['event_id']?.toString() ?? '';
+      final roomId = entry['room_id']?.toString() ?? '';
+      final message = messagesById[id];
+      if (message != null &&
+          message.conversationId == roomId &&
+          message.isVoiceNote) {
+        messagesById[id] = message.copyWith(isVoiceListened: true);
+      }
     }
-    messagesById[targetId] = original.copyWith(isVoiceListened: true);
+    for (final entry in notListened) {
+      final id = entry['event_id']?.toString() ?? '';
+      final roomId = entry['room_id']?.toString() ?? '';
+      final message = messagesById[id];
+      if (message != null &&
+          message.conversationId == roomId &&
+          message.isVoiceNote) {
+        messagesById[id] = message.copyWith(isVoiceListened: false);
+      }
+    }
   }
 
   Future<T> _withMatrixTokenRetry<T>(
@@ -1272,6 +1450,16 @@ class ChatService {
   }
 
   Future<void> _handleLiveSyncUpdate(mx.SyncUpdate update) async {
+    if (update.accountData?.any((event) => event.type == _mdlAccountDataType) ??
+        false) {
+      _loadMdlAccountData(
+        MatrixClientService
+            .instance
+            .client
+            .accountData[_mdlAccountDataType]
+            ?.content,
+      );
+    }
     _refreshAllMessageStatuses();
     if (!update.hasRoomUpdate) return;
     if (_handlingSync) return;
@@ -2831,51 +3019,28 @@ class ChatService {
       if (listenerId == null || listenerId.isEmpty) return;
       if (_isOwnMessage(message, listenerId)) return;
 
-      _markVoiceListenedLocally(room.id, message.id, listenerId: listenerId);
-      await room.sendEvent(
-        {
-          'voice_event_id': message.id,
-          'listener_user_id': listenerId,
-          'listened_at': DateTime.now().toUtc().toIso8601String(),
-        },
-        type: voiceListenedEventType,
-        displayPendingEvent: false,
+      await MatrixChatService.instance.sendListenedToUser(
+        userId: message.senderId,
+        roomId: room.id,
+        eventId: message.id,
       );
+      _setVoiceListenedLocally(room.id, message.id, true);
+      await _removeVoiceMdlEntry(room.id, message.id);
       apkLog(
         'ChatService.voiceListened',
-        'receipt sent room_id="${room.id}" event_id="${message.id}"',
+        'to_device_sent type="Listened" room_id="${room.id}" event_id="${message.id}"; receiver MDL entry removed',
       );
     });
   }
 
-  bool _applyVoiceListenedEvent(mx.Event event) {
-    if (event.type != voiceListenedEventType) return false;
-    final targetId = event.content['voice_event_id']?.toString().trim() ?? '';
-    if (targetId.isEmpty) return true;
-    _markVoiceListenedLocally(
-      event.room.id,
-      targetId,
-      listenerId: event.senderId,
-    );
-    return true;
-  }
-
-  void _markVoiceListenedLocally(
-    String roomId,
-    String eventId, {
-    required String listenerId,
-  }) {
+  void _setVoiceListenedLocally(String roomId, String eventId, bool listened) {
     final messages = _messagesCache[roomId];
     if (messages == null) return;
     final index = messages.indexWhere((message) => message.id == eventId);
     if (index < 0) return;
     final message = messages[index];
-    if (!message.isVoiceNote ||
-        message.isVoiceListened ||
-        _isOwnMessage(message, listenerId)) {
-      return;
-    }
-    final updated = message.copyWith(isVoiceListened: true);
+    if (!message.isVoiceNote || message.isVoiceListened == listened) return;
+    final updated = message.copyWith(isVoiceListened: listened);
     messages[index] = updated;
     unawaited(ChatLocalDb.instance.saveMessage(updated));
     _messageController.add(updated);
@@ -3065,6 +3230,9 @@ class ChatService {
     }
     final roomId = message.conversationId.trim();
     final eventId = message.id.trim();
+    if (roomId.isNotEmpty && eventId.isNotEmpty && message.isVoiceNote) {
+      unawaited(_removeVoiceMdlEntry(roomId, eventId));
+    }
     if (roomId.isNotEmpty && eventId.isNotEmpty) {
       final hiddenIds = _hiddenEventIdsForRoom(roomId)..add(eventId);
       _hiddenEventIdsByRoom[roomId] = hiddenIds;
@@ -3177,6 +3345,9 @@ class ChatService {
       message.id,
       content: deletedContent,
     );
+    if (message.isVoiceNote) {
+      unawaited(_removeVoiceMdlEntry(message.conversationId, message.id));
+    }
     _emitConversations();
     apkLog(
       'ChatService.redaction',
@@ -3570,6 +3741,8 @@ class ChatService {
     _mdlAccountDataTimer = null;
     _pendingDeliveredEventId = null;
     _pendingDeliveredRoomId = null;
+    _mdlAccountDataContent = <String, dynamic>{};
+    _mdlAccountDataLoaded = false;
     _typingRoomIds.clear();
     _deliveredToDeviceEventIds.clear();
     _lastReadReceiptEventByConversation.clear();
@@ -5689,6 +5862,7 @@ class ChatService {
     if (targetEventId.isEmpty) return true;
 
     final roomId = event.room.id;
+    unawaited(_removeVoiceMdlEntry(roomId, targetEventId));
     final messages = _messagesCache[roomId];
     final index = messages?.indexWhere((m) => m.id == targetEventId) ?? -1;
 
@@ -5759,6 +5933,35 @@ class ChatService {
     final currentUser = MatrixClientService.instance.client.userID;
     if (currentUser == null || currentUser.isEmpty) return;
 
+    final listenedIds =
+        _mdlEntries('listened')
+            .where((entry) => entry['room_id'] == room.id)
+            .map((entry) => entry['event_id']?.toString() ?? '')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+    final notListenedIds =
+        _mdlEntries('not_listened')
+            .where((entry) => entry['room_id'] == room.id)
+            .map((entry) => entry['event_id']?.toString() ?? '')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+    var voiceChanged = false;
+    for (var i = 0; i < messages.length; i++) {
+      final message = messages[i];
+      if (!message.isVoiceNote) continue;
+      final shouldBeListened =
+          listenedIds.contains(message.id)
+              ? true
+              : notListenedIds.contains(message.id)
+              ? false
+              : message.isVoiceListened;
+      if (message.isVoiceListened == shouldBeListened) continue;
+      messages[i] = message.copyWith(isVoiceListened: shouldBeListened);
+      _messageController.add(messages[i]);
+      voiceChanged = true;
+    }
+    if (voiceChanged) unawaited(ChatLocalDb.instance.saveMessages(messages));
+
     final receiptEventIds = <String>{};
     void collectReceipts(Map<String, dynamic> receiptsByUser) {
       for (final entry in receiptsByUser.entries) {
@@ -5775,20 +5978,15 @@ class ChatService {
       (message) => receiptEventIds.contains(message.id),
     );
 
-    final mdl =
-        MatrixClientService
-            .instance
-            .client
-            .accountData[_mdlAccountDataType]
-            ?.content;
-    final persistedRoomId = mdl?['room_id']?.toString();
-    final persistedEventId = mdl?['last_delivered_event_id']?.toString();
+    final mdl = _mdlAccountDataContent;
+    final persistedRoomId = mdl['room_id']?.toString();
+    final persistedEventId = mdl['last_delivered_event_id']?.toString();
     final markerRoomId = _pendingDeliveredRoomId ?? persistedRoomId;
     final deliveredEventId = _pendingDeliveredEventId ?? persistedEventId;
     final deliveredIndex =
         markerRoomId == room.id &&
                 (_pendingDeliveredEventId != null ||
-                    mdl?['status'] == 'delivered')
+                    mdl['status'] == 'delivered')
             ? messages.indexWhere((message) => message.id == deliveredEventId)
             : -1;
 
@@ -5816,10 +6014,10 @@ class ChatService {
       _messageController.add(messages[i]);
       changed = true;
     }
-    if (!changed) return;
-    unawaited(ChatLocalDb.instance.saveMessages(messages));
+    if (!changed && !voiceChanged) return;
+    if (changed) unawaited(ChatLocalDb.instance.saveMessages(messages));
     _emitRoomMessages(room.id);
-    _emitConversations();
+    if (changed) _emitConversations();
   }
 
   bool _isOwnMessage(ChatMessage message, String currentMatrixUserId) {

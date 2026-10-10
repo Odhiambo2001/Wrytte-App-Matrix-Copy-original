@@ -1719,6 +1719,19 @@ class MatrixChatService {
     );
   }
 
+  Future<void> sendListenedToUser({
+    required String userId,
+    required String roomId,
+    required String eventId,
+  }) async {
+    final client = MatrixClientService.instance.client;
+    await client.sendToDevicesOfUserIds(
+      {userId},
+      'Listened',
+      {'room_id': roomId, 'event_id': eventId, 'status': 'listened'},
+    );
+  }
+
   Future<void> markRead(String roomId, {String? eventId}) async {
     final room = getRoomById(roomId);
     final readEventId = eventId ?? room?.lastEvent?.eventId;

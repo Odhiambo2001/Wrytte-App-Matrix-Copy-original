@@ -799,7 +799,10 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _WaveformBars(progress: progress),
+                    _WaveformBars(
+                      progress: progress,
+                      isListened: widget.isListened,
+                    ),
                     const SizedBox(height: 4),
                     // elapsed / total
                     Text(
@@ -836,8 +839,9 @@ class _VoiceNotePlayerState extends State<_VoiceNotePlayer> {
 
 class _WaveformBars extends StatelessWidget {
   final double progress; // 0.0 – 1.0
+  final bool isListened;
 
-  const _WaveformBars({required this.progress});
+  const _WaveformBars({required this.progress, required this.isListened});
 
   static const List<double> _heights = [
     6,
@@ -882,7 +886,12 @@ class _WaveformBars extends StatelessWidget {
             height: _heights[i],
             margin: const EdgeInsets.symmetric(horizontal: 1),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: played ? 0.9 : 0.3),
+              color:
+                  isListened
+                      ? const Color(
+                        0xFF4CAF50,
+                      ).withValues(alpha: played ? 0.9 : 0.45)
+                      : Colors.white.withValues(alpha: played ? 0.9 : 0.3),
               borderRadius: BorderRadius.circular(2),
             ),
           );
