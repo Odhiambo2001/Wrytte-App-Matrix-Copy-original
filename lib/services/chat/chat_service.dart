@@ -137,8 +137,6 @@ class ChatService {
   final Map<String, String> _directCacheCategoryByRoom = {};
   final Map<String, int> _directCachedMessageCountByRoom = {};
   final Map<String, bool> _directHistoryCachedByRoom = {};
-  final Map<String, Future<void>> _markReadInFlight = {};
-  final Map<String, String> _lastReadReceiptEventByConversation = {};
   Future<void> _suggestedPreviewQueue = Future.value();
   Future<void> _matrixPaginationQueue = Future.value();
   DateTime? _lastMatrixPaginationRequestAt;
@@ -197,7 +195,7 @@ class ChatService {
       // Local SQLite is the first-paint source of truth. Hydrate it before
       // restoring or validating Matrix so chats, groups, and channel posts
       // remain visible while the network session is being established.
-      await hydrateLocalConversations(syncReadMarkers: false);
+      await hydrateLocalConversations();
 
       final expectedMatrixUserId = _expectedMatrixUserId(_currentUserId!);
       apkLog(
@@ -228,13 +226,11 @@ class ChatService {
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
         if (_applyVoiceListenedEvent(event)) return;
         if (_applyLiveRedactionEvent(event)) {
-          _refreshMessageStatusesForRoom(event.room);
           return;
         }
 
         if (ChatMessage.matrixEditTargetId(event)?.isNotEmpty == true) {
           _applyMatrixEditEvent(event);
-          _refreshMessageStatusesForRoom(event.room);
           return;
         }
 
@@ -243,6 +239,7 @@ class ChatService {
         if (_isBeforeGroupJoinCutoff(message)) return;
 
         _cacheMessage(message);
+
         if (_isGroupDeletedMatrixEvent(event)) {
           unawaited(
             markGroupDeletedLocally(
@@ -263,8 +260,6 @@ class ChatService {
         unawaited(
           _refreshPeerProfileFromBackendForMessage(message, reason: 'timeline'),
         );
-
-        _refreshMessageStatusesForRoom(event.room);
 
         // Ignore history replay during startup.
         if (_suppressRestoredRoomUnread) {
@@ -555,7 +550,6 @@ class ChatService {
     try {
       await MatrixChatService.instance.ensureSyncedAndAutoJoinInvites();
       _refreshConversationsFromRooms();
-      _refreshAllMessageStatuses();
       final userId = _currentUserId;
       if (userId != null && userId.isNotEmpty) {
         unawaited(ContactService().syncLocalContactsToBackend(userId));
@@ -578,7 +572,6 @@ class ChatService {
 
       // These always need to run after warmup, success or not.
       _refreshConversationsFromRooms();
-      _refreshAllMessageStatuses();
 
       apkLog(
         'ChatService.connect',
@@ -667,7 +660,7 @@ class ChatService {
     await ChatLocalDb.instance.replaceConversations(
       _conversationsMap.values.toList(),
     );
-    await hydrateLocalConversations(syncReadMarkers: false);
+    await hydrateLocalConversations();
     _loginHistoryPrepared = true;
     apkLog(
       'Matrix.loginHydration',
@@ -754,22 +747,9 @@ class ChatService {
           groupJoinCutoff: groupJoinCutoff,
         );
 
-        final latestRestoredAt =
-            messages.isNotEmpty ? messages.last.timestamp : null;
-        final serverReadAt = _serverReadTimeForRoom(room, messages);
-        final restoredReadAt =
-            latestRestoredAt == null
-                ? serverReadAt
-                : serverReadAt == null || latestRestoredAt.isAfter(serverReadAt)
-                ? latestRestoredAt
-                : serverReadAt;
+        final restoredReadAt = _lastReadAtByConversation[room.id];
         if (restoredReadAt != null) {
           _readConversationIds.add(room.id);
-          _lastReadAtByConversation[room.id] = restoredReadAt;
-          await ChatLocalDb.instance.markConversationReadAt(
-            room.id,
-            restoredReadAt,
-          );
         }
 
         for (final message in messages) {
@@ -779,7 +759,6 @@ class ChatService {
         await ChatLocalDb.instance.saveMessages(messages);
         _emitRoomMessages(room.id);
         _emitConversations();
-        _refreshMessageStatusesForRoom(room);
         apkLog(
           'Matrix.history',
           'published room_id="${room.id}" stage="$stage" '
@@ -1096,7 +1075,6 @@ class ChatService {
   }
 
   Future<void> _handleLiveSyncUpdate(mx.SyncUpdate update) async {
-    if (update.hasPresenceUpdate) _refreshAllMessageStatuses();
     if (!update.hasRoomUpdate) return;
     if (_handlingSync) return;
     _handlingSync = true;
@@ -1105,7 +1083,6 @@ class ChatService {
         await MatrixChatService.instance.autoJoinTrustedDirectInvites();
       }
       _refreshConversationsFromRooms();
-      _refreshAllMessageStatuses();
     } finally {
       _handlingSync = false;
     }
@@ -1208,7 +1185,6 @@ class ChatService {
         unawaited(
           _refreshPeerProfileFromBackendForMessage(sent, reason: 'sendMessage'),
         );
-        _refreshMessageStatusesForRoom(room);
         return sent;
       });
     } catch (e) {
@@ -2265,46 +2241,7 @@ class ChatService {
   Future<void> markConversationAsRead(String conversationId) async {
     final id = conversationId.trim();
     if (id.isEmpty) return;
-    final eventId = _latestKnownMessageId(id);
-    final pending = _markReadInFlight[id];
-    if (pending != null) {
-      await pending;
-      await _markConversationReadLocally(id);
-      return;
-    }
-    if (eventId != null && _lastReadReceiptEventByConversation[id] == eventId) {
-      await _markConversationReadLocally(id);
-      return;
-    }
-
-    // Reserve the latest event before sending. Identical timeline snapshots
-    // can then never produce a burst of duplicate Matrix read receipts.
-    if (eventId != null) {
-      _lastReadReceiptEventByConversation[id] = eventId;
-    }
-    final future = _sendReadReceipt(id, eventId);
-    _markReadInFlight[id] = future;
-    try {
-      await future;
-    } finally {
-      if (identical(_markReadInFlight[id], future)) {
-        _markReadInFlight.remove(id);
-      }
-    }
     await _markConversationReadLocally(id);
-  }
-
-  Future<void> _sendReadReceipt(String conversationId, String? eventId) async {
-    try {
-      await _withMatrixTokenRetry('markConversationAsRead', () async {
-        await MatrixChatService.instance.markRead(
-          conversationId,
-          eventId: eventId,
-        );
-      });
-    } catch (e) {
-      debugPrint('[ChatService] markConversationAsRead error: $e');
-    }
   }
 
   Future<void> _markConversationReadLocally(String conversationId) async {
@@ -2444,12 +2381,12 @@ class ChatService {
         receiverId: conversation.otherUserId,
         content: conversation.lastMessage,
         timestamp: conversation.lastMessageTime,
-        status: MessageStatus.read,
+        status: MessageStatus.sent,
       ),
     ];
   }
 
-  Future<void> hydrateLocalConversations({bool syncReadMarkers = true}) async {
+  Future<void> hydrateLocalConversations() async {
     _lastReadAtByConversation
       ..clear()
       ..addAll(await ChatLocalDb.instance.loadConversationReadMarkers());
@@ -2496,9 +2433,6 @@ class ChatService {
       // are downloaded and reflected in the per-room MediaCache summary.
       for (final message in cachedMessages) {
         _prefetchPersistentAttachment(message);
-      }
-      if (syncReadMarkers && conversation.id.startsWith('!')) {
-        await _syncLocalReadMarkerToMatrix(conversation.id);
       }
     }
     await auditDirectChatCacheCoverage();
@@ -2654,23 +2588,6 @@ class ChatService {
     final clean = avatarUrl?.trim() ?? '';
     if (clean.isEmpty || _isKnownGroupAvatar(clean)) return null;
     return clean;
-  }
-
-  Future<void> _syncLocalReadMarkerToMatrix(String conversationId) async {
-    final eventId = _latestKnownMessageId(conversationId);
-    if (eventId == null || eventId.isEmpty) return;
-    try {
-      await MatrixChatService.instance.markRead(
-        conversationId,
-        eventId: eventId,
-      );
-      apkLog(
-        'ChatService.read',
-        'synced local read marker room_id="$conversationId" event_id="$eventId"',
-      );
-    } catch (e) {
-      debugPrint('[ChatService] local read marker sync skipped: $e');
-    }
   }
 
   Future<void> starMessage(ChatMessage message, bool starred) async {
@@ -3223,7 +3140,6 @@ class ChatService {
           reason: 'forwardAttachmentMessage',
         ),
       );
-      _refreshMessageStatusesForRoom(targetRoom);
       return sent;
     });
   }
@@ -3428,8 +3344,6 @@ class ChatService {
     _hiddenEventIdsByRoom.clear();
     _pinnedForMeEventIdsByRoom.clear();
     _pendingPinnedForMeEventIdsByRoom.clear();
-    _markReadInFlight.clear();
-    _lastReadReceiptEventByConversation.clear();
     _dismissedDeletedGroupRoomIds.clear();
     _readConversationIds.clear();
     _activeReadConversationIds.clear();
@@ -3986,33 +3900,6 @@ class ChatService {
     if (_isOwnMessage(lastMessage, currentUser)) return 0;
     if (readAt != null && !lastMessage.timestamp.isAfter(readAt)) return 0;
     return 1;
-  }
-
-  DateTime? _serverReadTimeForRoom(mx.Room room, List<ChatMessage> messages) {
-    if (messages.isEmpty) return null;
-    final eventIds =
-        <String>[
-          room.receiptState.global.latestOwnReceipt?.eventId ?? '',
-          room.receiptState.mainThread?.latestOwnReceipt?.eventId ?? '',
-          room.fullyRead,
-        ].where((eventId) => eventId.isNotEmpty).toList();
-
-    for (final eventId in eventIds) {
-      final index = messages.indexWhere((message) => message.id == eventId);
-      if (index == -1) continue;
-      var readAt = messages[index].timestamp;
-      for (var i = 0; i <= index; i += 1) {
-        final candidate = messages[i].timestamp;
-        if (candidate.isAfter(readAt)) readAt = candidate;
-      }
-      return readAt;
-    }
-
-    final receiptTs = room.receiptState.global.latestOwnReceipt?.ts;
-    if (receiptTs != null && receiptTs > 0) {
-      return DateTime.fromMillisecondsSinceEpoch(receiptTs);
-    }
-    return null;
   }
 
   void _refreshConversationsFromRooms({bool force = false}) {
@@ -5631,73 +5518,6 @@ class ChatService {
     return true;
   }
 
-  void _refreshAllMessageStatuses() {
-    for (final room in MatrixClientService.instance.client.rooms) {
-      _refreshMessageStatusesForRoom(room);
-    }
-  }
-
-  void _refreshMessageStatusesForRoom(mx.Room room) {
-    final messages = _messagesCache[room.id];
-    if (messages == null || messages.isEmpty) return;
-
-    final currentUser = MatrixClientService.instance.client.userID;
-    if (currentUser == null || currentUser.isEmpty) return;
-
-    final otherReceiptEventIds = _otherUserReceiptEventIds(room, currentUser);
-    final readIndex = messages.lastIndexWhere(
-      (message) => otherReceiptEventIds.contains(message.id),
-    );
-
-    var changed = false;
-    for (var i = 0; i < messages.length; i++) {
-      final message = messages[i];
-      if (!_isOwnMessage(message, currentUser)) continue;
-      if (message.status == MessageStatus.failed ||
-          message.status == MessageStatus.sending) {
-        continue;
-      }
-
-      // Matrix standardizes read receipts, but has no delivered receipt.
-      // Presence only says the peer is online; it cannot prove delivery.
-      final nextStatus =
-          readIndex >= i ? MessageStatus.read : MessageStatus.sent;
-      if (_messageStatusRank(nextStatus) < _messageStatusRank(message.status)) {
-        continue;
-      }
-      if (message.status == nextStatus) continue;
-
-      final updated = message.copyWith(status: nextStatus);
-      messages[i] = updated;
-      changed = true;
-      _messageController.add(updated);
-    }
-
-    if (!changed) return;
-    unawaited(ChatLocalDb.instance.saveMessages(messages));
-    _emitRoomMessages(room.id);
-    _emitConversations();
-  }
-
-  Set<String> _otherUserReceiptEventIds(mx.Room room, String currentUser) {
-    final eventIds = <String>{};
-
-    void collect(Map<String, dynamic> receiptsByUser) {
-      for (final entry in receiptsByUser.entries) {
-        if (entry.key == currentUser) continue;
-        final eventId = entry.value.eventId;
-        if (eventId is String && eventId.isNotEmpty) {
-          eventIds.add(eventId);
-        }
-      }
-    }
-
-    collect(room.receiptState.global.otherUsers);
-    final mainThreadReceipts = room.receiptState.mainThread?.otherUsers;
-    if (mainThreadReceipts != null) collect(mainThreadReceipts);
-    return eventIds;
-  }
-
   bool _isOwnMessage(ChatMessage message, String currentMatrixUserId) {
     final sender = message.senderId.trim();
     if (sender == currentMatrixUserId) return true;
@@ -5708,21 +5528,6 @@ class ChatService {
       return sender.substring(1, sender.indexOf(':')) == localUserId;
     }
     return false;
-  }
-
-  int _messageStatusRank(MessageStatus status) {
-    switch (status) {
-      case MessageStatus.failed:
-        return -1;
-      case MessageStatus.sending:
-        return 0;
-      case MessageStatus.sent:
-        return 1;
-      case MessageStatus.delivered:
-        return 2;
-      case MessageStatus.read:
-        return 3;
-    }
   }
 
   Map<String, dynamic> _buildMessageContent(ChatMessage message) {

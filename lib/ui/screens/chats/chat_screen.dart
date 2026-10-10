@@ -4158,19 +4158,23 @@ class _ChatScreenState extends State<ChatScreen> {
                                         height: 14,
                                         child: Align(
                                           alignment: Alignment.centerLeft,
-                                          child: Text(
-                                            isGroupChat
-                                                ? _groupSubtitle()
-                                                : _peerPresenceLabel(),
-                                            style: TextStyle(
-                                              color: Colors.white.withValues(
-                                                alpha: 0.5,
+                                          child: FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            alignment: Alignment.centerLeft,
+                                            child: Text(
+                                              isGroupChat
+                                                  ? _groupSubtitle()
+                                                  : _peerPresenceLabel(),
+                                              style: TextStyle(
+                                                color: Colors.white.withValues(
+                                                  alpha: 0.5,
+                                                ),
+                                                fontSize: 12,
+                                                height: 1.0,
                                               ),
-                                              fontSize: 12,
-                                              height: 1.0,
+                                              maxLines: 1,
+                                              softWrap: false,
                                             ),
-                                            overflow: TextOverflow.ellipsis,
-                                            maxLines: 1,
                                           ),
                                         ),
                                       ),

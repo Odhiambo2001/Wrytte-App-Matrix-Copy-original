@@ -445,7 +445,7 @@ class AuthService {
       // Populate the owner-scoped in-memory timeline before any Matrix network
       // bootstrap. A disposable cache failure must not invalidate an already
       // successful backend login.
-      await ChatService().hydrateLocalConversations(syncReadMarkers: false);
+      await ChatService().hydrateLocalConversations();
     } catch (error, stackTrace) {
       apkLog('Auth.login', 'local chat cache hydration skipped error="$error"');
       debugPrintStack(stackTrace: stackTrace);
@@ -1765,7 +1765,7 @@ class AuthService {
             'SentAt',
           ]) ??
           DateTime.now(),
-      status: senderId == ownerUserId ? MessageStatus.sent : MessageStatus.read,
+      status: MessageStatus.sent,
       attachmentUrl: _nullableExtractString(map, const [
         'attachmentUrl',
         'AttachmentUrl',

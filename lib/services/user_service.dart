@@ -190,14 +190,12 @@ class UserService {
     'lastSeen': 'everyone',
     'profilePhoto': 'everyone',
     'about': 'everyone',
-    'readReceipts': true,
   };
 
   Future<void> updatePrivacySettings({
     String? lastSeen,
     String? profilePhoto,
     String? about,
-    bool? readReceipts,
   }) async {}
 
   Future<void> blockUser(String blockedUserId) async {}

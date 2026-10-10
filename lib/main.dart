@@ -361,7 +361,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
           ownerUserId: userId,
         );
         await ChatService()
-            .hydrateLocalConversations(syncReadMarkers: false)
+            .hydrateLocalConversations()
             .timeout(const Duration(seconds: 2), onTimeout: () {});
         unawaited(_prewarmInitialSavedContactAvatars(savedContacts));
         _initServicesInBackground(userId: userId, nickname: user.username);
