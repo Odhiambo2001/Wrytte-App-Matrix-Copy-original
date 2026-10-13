@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:wrytte/ui/screens/source_chat_preview_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:wrytte/data/repositories/camera_repository_impl.dart';
@@ -186,6 +187,8 @@ class WrytteApp extends StatelessWidget {
         onAnimationCompleted: _startDeferredWarmups,
       ),
       routes: {
+        '/source-chat-preview': (context) =>
+            const ThemeWrapper(child: SourceChatPreviewScreen()),
         '/welcome': (context) => const ThemeWrapper(child: WelcomeView()),
         '/auth': (context) => const ThemeWrapper(child: AuthEntryScreen()),
         '/auth_entry_screen':

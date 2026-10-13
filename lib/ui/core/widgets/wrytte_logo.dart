@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:wrytte/core/theme.dart';
+import 'package:wrytte/ui/core/themes/wrytte_theme.dart';
 
 const double wrytteLogoReferenceExtent = 88;
 
@@ -19,7 +19,10 @@ const double wrytteLogoDotRadius = 6;
 /// This explicit name prevents reduced-motion surfaces from accidentally
 /// substituting the full Wrytte wordmark when the morph animation is skipped.
 class WrytteTtMark extends StatelessWidget {
-  const WrytteTtMark({super.key, this.size = wrytteBrandDisplaySize});
+  const WrytteTtMark({
+    super.key,
+    this.size = wrytteBrandDisplaySize,
+  });
 
   final double size;
 
@@ -28,7 +31,9 @@ class WrytteTtMark extends StatelessWidget {
     return ExcludeSemantics(
       child: SizedBox.square(
         dimension: size,
-        child: const CustomPaint(painter: _WrytteLogoPainter()),
+        child: const CustomPaint(
+          painter: _WrytteLogoPainter(),
+        ),
       ),
     );
   }
@@ -36,7 +41,10 @@ class WrytteTtMark extends StatelessWidget {
 
 /// Backwards-compatible name used by existing auth surfaces.
 class WrytteLogo extends WrytteTtMark {
-  const WrytteLogo({super.key, super.size});
+  const WrytteLogo({
+    super.key,
+    super.size,
+  });
 }
 
 class _WrytteLogoPainter extends CustomPainter {
@@ -47,15 +55,23 @@ class _WrytteLogoPainter extends CustomPainter {
       paintCanonicalWrytteLogo(canvas, size);
 
   @override
-  bool shouldRepaint(covariant _WrytteLogoPainter oldDelegate) => false;
+  bool shouldRepaint(
+    covariant _WrytteLogoPainter oldDelegate,
+  ) =>
+      false;
 }
 
 /// Paints the one canonical TT/red-ball mark.
 ///
 /// The geometry uses the original 88×88 Wrytte coordinate space so the
 /// static logo and startup animation always render the same final mark.
-void paintCanonicalWrytteLogo(Canvas canvas, Size size, {double opacity = 1}) {
-  final safeOpacity = opacity.clamp(0.0, 1.0).toDouble();
+void paintCanonicalWrytteLogo(
+  Canvas canvas,
+  Size size, {
+  double opacity = 1,
+}) {
+  final safeOpacity =
+      opacity.clamp(0.0, 1.0).toDouble();
 
   if (safeOpacity <= 0) {
     return;
@@ -68,12 +84,18 @@ void paintCanonicalWrytteLogo(Canvas canvas, Size size, {double opacity = 1}) {
     size.height / wrytteLogoReferenceExtent,
   );
 
-  paintCanonicalWrytteTt(canvas, opacity: safeOpacity);
+  paintCanonicalWrytteTt(
+    canvas,
+    opacity: safeOpacity,
+  );
 
   canvas.drawCircle(
     wrytteLogoDotCenter,
     wrytteLogoDotRadius,
-    Paint()..color = WrytteColors.destructive.withValues(alpha: safeOpacity),
+    Paint()
+      ..color = WrytteColors.brandCoral.withValues(
+        alpha: safeOpacity,
+      ),
   );
 
   canvas.restore();
@@ -83,37 +105,48 @@ void paintCanonicalWrytteLogo(Canvas canvas, Size size, {double opacity = 1}) {
 ///
 /// SplashLogoAnimation uses this directly so the same pair of `t`s survives
 /// from the initial Wrytte wordmark into the final logo.
-void paintCanonicalWrytteTt(Canvas canvas, {double opacity = 1}) {
-  final safeOpacity = opacity.clamp(0.0, 1.0).toDouble();
+void paintCanonicalWrytteTt(
+  Canvas canvas, {
+  double opacity = 1,
+}) {
+  final safeOpacity =
+      opacity.clamp(0.0, 1.0).toDouble();
 
   if (safeOpacity <= 0) {
     return;
   }
 
-  final letter =
-      Path()
-        ..moveTo(14, 16)
-        ..lineTo(26, 16)
-        ..lineTo(26, 28)
-        ..lineTo(38, 28)
-        ..lineTo(38, 38)
-        ..lineTo(26, 38)
-        ..lineTo(26, 63)
-        ..quadraticBezierTo(26, 72, 34, 72)
-        ..lineTo(38, 71)
-        ..lineTo(39, 81)
-        ..quadraticBezierTo(31, 84, 23, 81)
-        ..quadraticBezierTo(14, 78, 14, 65)
-        ..lineTo(14, 38)
-        ..lineTo(6, 38)
-        ..lineTo(6, 28)
-        ..lineTo(14, 28)
-        ..close();
+  final letter = Path()
+    ..moveTo(14, 16)
+    ..lineTo(26, 16)
+    ..lineTo(26, 28)
+    ..lineTo(38, 28)
+    ..lineTo(38, 38)
+    ..lineTo(26, 38)
+    ..lineTo(26, 63)
+    ..quadraticBezierTo(26, 72, 34, 72)
+    ..lineTo(38, 71)
+    ..lineTo(39, 81)
+    ..quadraticBezierTo(31, 84, 23, 81)
+    ..quadraticBezierTo(14, 78, 14, 65)
+    ..lineTo(14, 38)
+    ..lineTo(6, 38)
+    ..lineTo(6, 28)
+    ..lineTo(14, 28)
+    ..close();
 
-  final paint =
-      Paint()..color = WrytteColors.textPrimary.withValues(alpha: safeOpacity);
+  final paint = Paint()
+    ..color = WrytteColors.textPrimary.withValues(
+      alpha: safeOpacity,
+    );
 
-  canvas.drawPath(letter, paint);
+  canvas.drawPath(
+    letter,
+    paint,
+  );
 
-  canvas.drawPath(letter.shift(const Offset(34, 0)), paint);
+  canvas.drawPath(
+    letter.shift(const Offset(34, 0)),
+    paint,
+  );
 }

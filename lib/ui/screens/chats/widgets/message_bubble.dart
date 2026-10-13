@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -163,8 +164,10 @@ class MessageBubble extends StatelessWidget {
             else if (attachmentType == 'image')
               _ImageMessageBubble(
                 imageUrl: attachmentUrl ?? '',
+                caption: content,
                 timeWidget: timeWidget,
                 isForwarded: isForwarded,
+                isMine: isMine,
               )
             else if (attachmentType == 'file')
               WrytteFileCard(
@@ -401,13 +404,17 @@ class _VideoMessageBubble extends StatelessWidget {
 
 class _ImageMessageBubble extends StatefulWidget {
   final String imageUrl;
+  final String caption;
   final Widget timeWidget;
   final bool isForwarded;
+  final bool isMine;
 
   const _ImageMessageBubble({
     required this.imageUrl,
+    required this.caption,
     required this.timeWidget,
     required this.isForwarded,
+    required this.isMine,
   });
 
   @override
@@ -418,34 +425,67 @@ class _ImageMessageBubbleState extends State<_ImageMessageBubble> {
   @override
   Widget build(BuildContext context) {
     final image = _attachmentImage(widget.imageUrl);
+    final caption = widget.caption.trim();
+    final hasCaption = caption.isNotEmpty &&
+        !const {'photo', 'image', 'attachment', 'photo message'}
+            .contains(caption.toLowerCase());
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.78;
+    final mediaWidth = math.min(420.0, math.max(148.0, maxWidth));
+    final bubbleColor = widget.isMine
+        ? const Color(0xFF4DA3FF)
+        : const Color(0xFF23262C);
     return SizedBox(
-      width: 230,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (widget.isForwarded) const _ForwardedLabel(),
-          GestureDetector(
-            onTap: () => FullScreenImageViewer.open(context, widget.imageUrl),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: AspectRatio(
-                aspectRatio: 4 / 3,
-                child: Container(
-                  color: Colors.black.withValues(alpha: 0.18),
-                  child: image,
+      width: mediaWidth,
+      child: Container(
+        decoration: BoxDecoration(
+          color: bubbleColor,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: Radius.circular(widget.isMine ? 18 : 2),
+            bottomRight: Radius.circular(widget.isMine ? 2 : 18),
+          ),
+        ),
+        padding: EdgeInsets.fromLTRB(8, widget.isForwarded ? 6 : 8, 8, 7),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.isForwarded) const _ForwardedLabel(),
+            GestureDetector(
+              onTap: () => FullScreenImageViewer.open(context, widget.imageUrl),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: AspectRatio(
+                  aspectRatio: 4 / 3,
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.18),
+                    child: image,
+                  ),
                 ),
               ),
             ),
-          ),
-          Align(
-            alignment: Alignment.bottomRight,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: widget.timeWidget,
+            if (hasCaption)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+                child: Text(
+                  caption,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    height: 1.28,
+                  ),
+                ),
+              ),
+            Align(
+              alignment: Alignment.bottomRight,
+              child: Padding(
+                padding: EdgeInsets.only(top: hasCaption ? 4 : 3),
+                child: widget.timeWidget,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
