@@ -15,6 +15,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   livekit_client
   pdfx
   permission_handler_windows
+  pro_video_editor
   url_launcher_windows
 )
 
