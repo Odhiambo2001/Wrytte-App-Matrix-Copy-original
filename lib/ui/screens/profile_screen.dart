@@ -1483,15 +1483,17 @@ class _ProfileScreenState extends State<ProfileScreen>
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: Row(
                       children: [
-                        // ── Back button ──────────────────────────────────
+                        // ── Back / Add-story button ──────────────────────
+                        // Own profile (embedded): small circle with white
+                        // outline + white +  (matches reference image 2)
                         widget.embeddedInHome && !_isOtherUser
-                            ? _buildAddStoryButton()
+                            ? _buildTopAddButton()
                             : widget.embeddedInHome
-                                ? const SizedBox(width: 44)
-                            : _glassButton(
-                              icon: Icons.arrow_back_ios,
-                              onTap: () => Navigator.pop(context),
-                            ),
+                                ? const SizedBox(width: 36)
+                                : _glassButton(
+                                    icon: Icons.arrow_back_ios,
+                                    onTap: () => Navigator.pop(context),
+                                  ),
 
                         // ── Title — only shown for own profile, truly centered ─
                         Expanded(
@@ -1673,6 +1675,27 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  /// Top-left + button for own profile (embedded in Home).
+  /// Matches reference: smaller white outlined circle + plus
+  /// (Icons.add_circle_outline). Thin stroke can look partially
+  /// solid / partially dotted in screenshots.
+  Widget _buildTopAddButton() {
+    return GestureDetector(
+      onTap: _openStoryCamera,
+      child: const SizedBox(
+        width: 36,
+        height: 36,
+        child: Center(
+          child: Icon(
+            Icons.add_circle_outline,
+            color: Colors.white,
+            size: 26,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildAddStoryButton() {
     return Container(
       width: 92,
@@ -1691,10 +1714,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Widget _buildAddStoriesButton() {
-    return FractionallySizedBox(
-      widthFactor: 0.62,
+    // Matches reference: wider pill, moderate height (~50), readable text.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 48),
       child: SizedBox(
-        height: 64,
+        width: double.infinity,
+        height: 50,
         child: FilledButton(
           onPressed: _openStoryCamera,
           style: FilledButton.styleFrom(
@@ -1702,7 +1727,10 @@ class _ProfileScreenState extends State<ProfileScreen>
             foregroundColor: Colors.white,
             elevation: 0,
             shape: const StadiumBorder(),
-            textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.w400),
+            textStyle: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w500,
+            ),
           ),
           child: const Text('Add Stories'),
         ),
@@ -2240,7 +2268,8 @@ class _ProfileScreenState extends State<ProfileScreen>
             border: Border.all(color: const Color(0xFF23262C)),
           ),
           child: IconButton(
-            icon: Icon(icon, color: Colors.white, size: 16),
+            // Slightly larger so the + matches the reference cleanly
+            icon: Icon(icon, color: Colors.white, size: 20),
             onPressed: onTap,
           ),
         ),
