@@ -1009,14 +1009,35 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _launchLink(String url) async {
     final raw = url.trim();
-    final uri = Uri.parse(
+    if (raw.isEmpty) return;
+    final uri = Uri.tryParse(
       raw.startsWith('http://') || raw.startsWith('https://')
           ? raw
           : 'https://$raw',
     );
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not open $raw'),
+          backgroundColor: const Color(0xFF23262C),
+        ),
+      );
+      return;
+    }
+    try {
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (launched || !mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not open $raw'),
+          backgroundColor: const Color(0xFF23262C),
+        ),
+      );
+    } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -2090,6 +2111,14 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   // ── Links ──────────────────────────────────────────────────────────────────
 
+  String _displayProfileLink(String value) {
+    var display = value.trim();
+    display = display.replaceFirst(RegExp(r'^https?://', caseSensitive: false), '');
+    display = display.replaceFirst(RegExp(r'^www\.', caseSensitive: false), '');
+    if (display.length <= 33) return display;
+    return '${display.substring(0, 30)}...';
+  }
+
   Widget _buildLinks(List<String> links) {
     final firstLink = links[0];
     final hasMore = links.length > 1;
@@ -2106,7 +2135,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  firstLink,
+                  _displayProfileLink(firstLink),
                   style: const TextStyle(
                     color: Color(0xFF4DA3FF),
                     fontSize: 14,
@@ -2149,7 +2178,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            link,
+                            _displayProfileLink(link),
                             style: const TextStyle(
                               color: Color(0xFF4DA3FF),
                               fontSize: 14,

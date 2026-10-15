@@ -1,5 +1,7 @@
 import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/components/user_avatar.dart';
@@ -25,8 +27,7 @@ class EditProfileScreen extends StatefulWidget {
 class _EditProfileScreenState extends State<EditProfileScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  final TextEditingController _firstNameController = TextEditingController();
-  final TextEditingController _lastNameController = TextEditingController();
+  final TextEditingController _nameController = TextEditingController();
   final TextEditingController _bioController = TextEditingController();
   final TextEditingController _linkController = TextEditingController();
   final TextEditingController _channelAliasController = TextEditingController();
@@ -35,10 +36,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool _isLoading = false;
   bool _isSaving = false;
   bool _isLoggingOut = false;
+  bool _showDiscardConfirmation = false;
 
-  bool get _hasName =>
-      _firstNameController.text.trim().isNotEmpty ||
-      _lastNameController.text.trim().isNotEmpty;
+  String _originalName = '';
+  String _originalBio = '';
+  String _originalLink = '';
+  String _originalChannel = '';
+  String _originalGroup = '';
+  String? _originalImageUrl;
+  String? _originalLocalImagePath;
+
+  bool get _hasName => _nameController.text.trim().isNotEmpty;
 
   File? _pickedImageFile;
   final ImagePicker _picker = ImagePicker();
@@ -47,6 +55,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   String? _currentImageUrl;
   String? _currentLocalImagePath;
   int _avatarCacheRevision = 0;
+
+  // ── Card style: outlines only ─────────────────────────────────────────────
+  static const Color _bg = Color(0xFF08090B);
+  static const Color _cardBg = Color(0x00000000); // transparent
+  static const Color _cardBorder = Color(0xFF23262C);
+  static const Color _accent = Color(0xFF249FF0);
+  static const Color _hint = Color(0xFF6B6E75);
+  static const Color _muted = Color(0xFFB9BBC1);
+  static const Color _discardRed = Color(0xFFFF5C52);
 
   @override
   void initState() {
@@ -82,10 +99,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   void _applyProfile(UserProfile profile) {
-    final nameParts = profile.name.trim().split(RegExp(r'\s+'));
-    _firstNameController.text = nameParts.isNotEmpty ? nameParts[0] : '';
-    _lastNameController.text =
-        nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
+    final display = profile.displayName.trim().isNotEmpty
+        ? profile.displayName.trim()
+        : profile.name.trim();
+    _nameController.text = display;
     _bioController.text = profile.bio;
     _linkController.text = profile.links.isNotEmpty ? profile.links[0] : '';
     _channelAliasController.text = profile.channelAlias;
@@ -98,6 +115,24 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (_currentImageUrl != null) {
       _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
     }
+    _originalName = _nameController.text;
+    _originalBio = _bioController.text;
+    _originalLink = _linkController.text;
+    _originalChannel = _channelAliasController.text;
+    _originalGroup = _groupAliasController.text;
+    _originalImageUrl = _currentImageUrl;
+    _originalLocalImagePath = _currentLocalImagePath;
+  }
+
+  bool get _hasUnsavedChanges {
+    return _nameController.text != _originalName ||
+        _bioController.text != _originalBio ||
+        _linkController.text != _originalLink ||
+        _channelAliasController.text != _originalChannel ||
+        _groupAliasController.text != _originalGroup ||
+        _pickedImageFile != null ||
+        _currentImageUrl != _originalImageUrl ||
+        _currentLocalImagePath != _originalLocalImagePath;
   }
 
   String _formatProfileNumber(String value, {String accountId = ''}) {
@@ -128,7 +163,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     try {
       final picked = await _picker.pickImage(source: source, imageQuality: 85);
       if (picked == null) return;
-      setState(() => _pickedImageFile = File(picked.path));
+      setState(() {
+        _pickedImageFile = File(picked.path);
+        _showDiscardConfirmation = false;
+      });
     } catch (_) {
       _showSnack('Could not select photo.', isError: true);
     }
@@ -235,12 +273,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           debugPrint('[EditProfile] Avatar upload queued: $e');
         }
       }
-      final firstName = _firstNameController.text.trim();
-      final lastName = _lastNameController.text.trim();
-      final fullName = [
-        firstName,
-        lastName,
-      ].where((s) => s.isNotEmpty).join(' ');
+
+      final fullName = _nameController.text.trim();
+      final nameParts = fullName.split(RegExp(r'\s+'));
+      final firstName = nameParts.isNotEmpty ? nameParts[0] : '';
+      final lastName =
+          nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
+
       final bio = _bioController.text.trim();
       final link = _linkController.text.trim();
       final existingLinks = List<String>.from(_profile?.links ?? []);
@@ -305,9 +344,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
-  // ===========================================================================
-  //  LOGOUT
-  // ===========================================================================
   Future<void> _logout() async {
     if (_isLoggingOut) return;
     setState(() => _isLoggingOut = true);
@@ -330,12 +366,100 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
+  /// Logout confirmation dialog matching reference image 1:
+  /// wider container, single-line title, longer/shorter-height buttons.
+  Future<void> _confirmLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (context) {
+        final screenW = MediaQuery.of(context).size.width;
+        // Wider dialog like reference (~78% of screen width)
+        final dialogW = screenW * 0.78;
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: (screenW - dialogW) / 2,
+          ),
+          child: Container(
+            width: dialogW,
+            padding: const EdgeInsets.fromLTRB(20, 28, 20, 22),
+            decoration: BoxDecoration(
+              color: const Color(0xFF171A20),
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: _cardBorder, width: 1),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Are you sure you want to log out ?',
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.visible,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                _logoutDialogButton(
+                  'Log out',
+                  const Color(0xFFFF5C52),
+                  () => Navigator.pop(context, true),
+                ),
+                const SizedBox(height: 12),
+                _logoutDialogButton(
+                  'Cancel',
+                  Colors.white,
+                  () => Navigator.pop(context, false),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (confirmed == true && mounted) await _logout();
+  }
+
+  /// Full-width stadium buttons matching reference (longer, height ~48).
+  Widget _logoutDialogButton(
+    String label,
+    Color textColor,
+    VoidCallback onTap,
+  ) {
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: TextButton(
+        onPressed: onTap,
+        style: TextButton.styleFrom(
+          backgroundColor: const Color(0xFF23262C),
+          foregroundColor: textColor,
+          elevation: 0,
+          shape: const StadiumBorder(),
+          padding: EdgeInsets.zero,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: textColor,
+            fontSize: 16,
+            fontWeight: FontWeight.w400,
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showSnack(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor:
-            isError ? const Color(0xFFE05252) : const Color(0xFF4DA3FF),
+        backgroundColor: isError ? const Color(0xFFE05252) : _accent,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -350,25 +474,52 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     indent: 16,
   );
 
+  Widget _outlinedCard({
+    required Widget child,
+    double radius = 24,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: _cardBorder, width: 1),
+      ),
+      child: child,
+    );
+  }
+
   Widget _inputRow(
     String hint,
     TextEditingController ctrl, {
     int maxLines = 1,
+    int? maxLength,
+    bool singleLineLink = false,
   }) {
     return TextFormField(
       controller: ctrl,
       maxLines: maxLines,
+      maxLength: maxLength,
+      inputFormatters:
+          singleLineLink
+              ? [FilteringTextInputFormatter.deny(RegExp(r'\s'))]
+              : null,
       style: const TextStyle(color: Colors.white, fontSize: 16),
+      onChanged: (_) {
+        if (_showDiscardConfirmation) {
+          setState(() => _showDiscardConfirmation = false);
+        }
+      },
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(color: Color(0xFF6B6E75), fontSize: 16),
+        hintStyle: const TextStyle(color: _hint, fontSize: 16),
         border: InputBorder.none,
         enabledBorder: InputBorder.none,
         focusedBorder: InputBorder.none,
         contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16,
+          horizontal: 18,
           vertical: 16,
         ),
+        counterText: '',
       ),
     );
   }
@@ -392,8 +543,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   String _profileRoomReferenceForSave(String value, {required bool isChannel}) {
     final normalized = value.trim();
     if (normalized.isEmpty) return '';
-    // Convert previously saved aliases to room IDs whenever the room is
-    // available locally. The existing custom profile field names stay stable.
     return _selectedProfileRoom(normalized, isChannel: isChannel)?.id.trim() ??
         normalized;
   }
@@ -415,6 +564,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (result == null || !mounted) return;
     setState(() {
       controller.text = result.removed ? '' : (result.value ?? '');
+      _showDiscardConfirmation = false;
     });
   }
 
@@ -424,62 +574,37 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     required bool isChannel,
   }) {
     final room = _selectedProfileRoom(controller.text, isChannel: isChannel);
-    final title = room?.getLocalizedDisplayname();
-    final memberCount =
-        room == null ? null : MatrixChatService.instance.groupMemberCount(room);
+    final title = room?.getLocalizedDisplayname()?.trim();
+    final displayLabel =
+        (title != null && title.isNotEmpty) ? title : label;
+
     return InkWell(
       onTap: () => _openProfileRoomPicker(controller, isChannel: isChannel),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         child: Row(
           children: [
-            if (room != null) ...[
-              UserAvatar(
-                size: 48,
-                imageUrl: room.avatar?.toString(),
-                name: title,
-              ),
-              const SizedBox(width: 12),
-            ],
             Expanded(
-              child:
-                  room == null
-                      ? Text(
-                        label,
-                        style: const TextStyle(
-                          color: Color(0xFF6B6E75),
-                          fontSize: 16,
-                        ),
-                      )
-                      : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title ?? label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          Text(
-                            '$memberCount ${isChannel ? (memberCount == 1 ? 'subscriber' : 'subscribers') : (memberCount == 1 ? 'member' : 'members')}',
-                            style: const TextStyle(
-                              color: Color(0xFFB9BBC1),
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
+              child: Text(
+                displayLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                ),
+              ),
             ),
             const Text(
               'Add',
               style: TextStyle(color: Colors.white, fontSize: 16),
             ),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right, color: Color(0xFF9A9DA4)),
+            const SizedBox(width: 4),
+            const Icon(
+              Icons.chevron_right,
+              color: Color(0xFF9A9DA4),
+              size: 20,
+            ),
           ],
         ),
       ),
@@ -497,266 +622,321 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     return uri.replace(queryParameters: params).toString();
   }
 
-  // ── BUILD ──────────────────────────────────────────────────────────────────
+  Widget _closeButton() {
+    return GestureDetector(
+      onTap: () {
+        if (!_hasUnsavedChanges) {
+          Navigator.pop(context);
+          return;
+        }
+        setState(() => _showDiscardConfirmation = true);
+      },
+      child: ClipOval(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _cardBorder.withValues(alpha: 0.55),
+              border: Border.all(color: _cardBorder, width: 1),
+            ),
+            child: const Icon(Icons.close, color: Colors.white, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _discardChangesButton() {
+    return GestureDetector(
+      onTap: () => Navigator.pop(context),
+      child: Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1D24).withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: _cardBorder, width: 1),
+        ),
+        alignment: Alignment.center,
+        child: const Text(
+          'Discard changes',
+          style: TextStyle(
+            color: _discardRed,
+            fontSize: 15,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _saveButton() {
+    return AnimatedBuilder(
+      animation: _nameController,
+      builder: (context, _) {
+        final canSave = _hasName && !_isSaving;
+        return GestureDetector(
+          onTap: canSave ? _save : null,
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: canSave ? _accent : const Color(0xFF3A3D44),
+            ),
+            child: Center(
+              child: _isSaving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.check, color: Colors.white, size: 22),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    const bg = Color(0xFF08090B);
-    const cardBg = Color(0xFF23262C);
-    const accent = Color(0xFF4DA3FF);
+    final statusBar = MediaQuery.of(context).padding.top;
+    final accountLabel =
+        WrytteId.forDisplay(_profile?.phone ?? '') != null
+            ? 'Wrytte ID'
+            : 'Phone number';
 
-    Widget avatarWidget =
-        _pickedImageFile != null
-            ? GestureDetector(
-              onTap: _showImageOptions,
-              child: ClipOval(
-                child: Image.file(
-                  _pickedImageFile!,
-                  width: 100,
-                  height: 100,
-                  fit: BoxFit.cover,
-                ),
+    const topBarBlock = 40.0 + 16.0;
+    const avatarTopGap = 12.0;
+    const avatarSize = 100.0;
+    final discardTop = statusBar + topBarBlock + avatarTopGap + 4;
+
+    Widget avatarWidget = _pickedImageFile != null
+        ? GestureDetector(
+            onTap: _showImageOptions,
+            child: ClipOval(
+              child: Image.file(
+                _pickedImageFile!,
+                width: avatarSize,
+                height: avatarSize,
+                fit: BoxFit.cover,
               ),
-            )
-            : GestureDetector(
-              onTap: _showImageOptions,
-              child: UserAvatar(
-                size: 100,
-                imageUrl: _cacheBustedAvatarUrl(_currentImageUrl),
-                localImagePath: _currentLocalImagePath,
-                name: _profile?.displayName,
-              ),
-            );
+            ),
+          )
+        : GestureDetector(
+            onTap: _showImageOptions,
+            child: UserAvatar(
+              size: avatarSize,
+              imageUrl: _cacheBustedAvatarUrl(_currentImageUrl),
+              localImagePath: _currentLocalImagePath,
+              name: _profile?.displayName,
+            ),
+          );
 
     return Scaffold(
-      backgroundColor: bg,
-      appBar: AppBar(
-        backgroundColor: bg,
-        elevation: 0,
-        automaticallyImplyLeading: false,
-        titleSpacing: 0,
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: const Text(
-                'Cancel',
-                style: TextStyle(color: Colors.white, fontSize: 17),
-              ),
-            ),
-            AnimatedBuilder(
-              animation: Listenable.merge([
-                _firstNameController,
-                _lastNameController,
-              ]),
-              builder: (context, _) {
-                final canSave = _hasName && !_isSaving;
-                return TextButton(
-                  onPressed: canSave ? _save : null,
-                  style: TextButton.styleFrom(
-                    foregroundColor:
-                        canSave ? Colors.white : const Color(0xFF666970),
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child:
-                      _isSaving
-                          ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                          : const Text('Save', style: TextStyle(fontSize: 17)),
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-      body:
+      backgroundColor: _bg,
+      body: Stack(
+        children: [
           _isLoading
               ? const Center(
-                child: CircularProgressIndicator(
-                  color: Color(0xFF4DA3FF),
-                  strokeWidth: 2,
-                ),
-              )
-              : SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      const SizedBox(height: 20),
-                      avatarWidget,
-                      const SizedBox(height: 10),
-                      GestureDetector(
-                        onTap: _showImageOptions,
-                        child: const Text(
-                          'Set new photo',
-                          style: TextStyle(color: accent, fontSize: 16),
-                        ),
-                      ),
-                      const SizedBox(height: 28),
-
-                      // Name
-                      Container(
-                        decoration: BoxDecoration(
-                          color: cardBg,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Column(
-                          children: [
-                            _inputRow('First name', _firstNameController),
-                            _divider(),
-                            _inputRow('Last name', _lastNameController),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-
-                      // Bio
-                      Container(
-                        decoration: BoxDecoration(
-                          color: cardBg,
-                          borderRadius: BorderRadius.circular(25),
-                        ),
-                        child: _inputRow('Bio', _bioController),
-                      ),
-                      const SizedBox(height: 12),
-
-                      // Link
-                      Container(
-                        decoration: BoxDecoration(
-                          color: cardBg,
-                          borderRadius: BorderRadius.circular(25),
-                        ),
-                        child: _inputRow('Link', _linkController),
-                      ),
-                      const SizedBox(height: 12),
-
-                      Container(
-                        decoration: BoxDecoration(
-                          color: cardBg,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Column(
-                          children: [
-                            _profileRoomRow(
-                              'Channel',
-                              _channelAliasController,
-                              isChannel: true,
-                            ),
-                            _divider(),
-                            _profileRoomRow(
-                              'Group',
-                              _groupAliasController,
-                              isChannel: false,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-
-                      // Account info
-                      Container(
-                        decoration: BoxDecoration(
-                          color: cardBg,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Column(
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 14,
-                              ),
-                              child: Row(
-                                children: [
-                                  const Text(
-                                    'Change number',
-                                    style: TextStyle(
-                                      color: Color(0xFF6B6E75),
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  const Spacer(),
-                                  Text(
-                                    _formattedAccountNumber(),
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  const Icon(
-                                    Icons.chevron_right,
-                                    color: Color(0xFF6B6E75),
-                                    size: 20,
-                                  ),
-                                ],
-                              ),
-                            ),
-                            _divider(),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 28),
-
-                      // ── LOG OUT BUTTON ────────────────────────────────────
-                      GestureDetector(
-                        onTap: _isLoggingOut ? null : _logout,
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          decoration: BoxDecoration(
-                            color: cardBg,
-                            borderRadius: BorderRadius.circular(25),
-                          ),
-                          child: Center(
-                            child:
-                                _isLoggingOut
-                                    ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Color(0xFFE05252),
-                                      ),
-                                    )
-                                    : const Text(
-                                      'Log out',
-                                      style: TextStyle(
-                                        color: Color(0xFFE05252),
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 40),
-                    ],
+                  child: CircularProgressIndicator(
+                    color: _accent,
+                    strokeWidth: 2,
                   ),
+                )
+              : Column(
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.only(
+                        top: statusBar + 8,
+                        left: 16,
+                        right: 16,
+                        bottom: 8,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          _closeButton(),
+                          _saveButton(),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const SizedBox(height: avatarTopGap),
+                              avatarWidget,
+                              const SizedBox(height: 12),
+                              GestureDetector(
+                                onTap: _showImageOptions,
+                                child: const Text(
+                                  'Edit Photo',
+                                  style: TextStyle(
+                                    color: _accent,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 28),
+                              _outlinedCard(
+                                child: _inputRow(
+                                  'Name',
+                                  _nameController,
+                                  maxLength: 35,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              _outlinedCard(
+                                child: _inputRow(
+                                  'Bio',
+                                  _bioController,
+                                  maxLength: 110,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              _outlinedCard(
+                                child: _inputRow(
+                                  'Link',
+                                  _linkController,
+                                  singleLineLink: true,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              _outlinedCard(
+                                radius: 20,
+                                child: Column(
+                                  children: [
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 14,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Text(
+                                            accountLabel,
+                                            style: const TextStyle(
+                                              color: _hint,
+                                              fontSize: 16,
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          Text(
+                                            _formattedAccountNumber(),
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 16,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Icon(
+                                            Icons.chevron_right,
+                                            color: Color(0xFF9A9DA4),
+                                            size: 20,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    _divider(),
+                                    _profileRoomRow(
+                                      'Channel',
+                                      _channelAliasController,
+                                      isChannel: true,
+                                    ),
+                                    _divider(),
+                                    _profileRoomRow(
+                                      'Group',
+                                      _groupAliasController,
+                                      isChannel: false,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              _outlinedCard(
+                                child: InkWell(
+                                  onTap: null,
+                                  borderRadius: BorderRadius.circular(24),
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 16),
+                                    child: Center(
+                                      child: Text(
+                                        '+ Add Account',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              _outlinedCard(
+                                child: InkWell(
+                                  onTap: _isLoggingOut ? null : _confirmLogout,
+                                  borderRadius: BorderRadius.circular(24),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 16,
+                                    ),
+                                    child: Center(
+                                      child: _isLoggingOut
+                                          ? const SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: Color(0xFFE05252),
+                                              ),
+                                            )
+                                          : const Text(
+                                              'Log out',
+                                              style: TextStyle(
+                                                color: Color(0xFFE05252),
+                                                fontSize: 16,
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 40),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
+
+          if (_showDiscardConfirmation)
+            Positioned(
+              top: discardTop,
+              left: 16,
+              child: _discardChangesButton(),
+            ),
+        ],
+      ),
     );
   }
 
   @override
   void dispose() {
-    _firstNameController.dispose();
-    _lastNameController.dispose();
+    _nameController.dispose();
     _bioController.dispose();
     _linkController.dispose();
     _channelAliasController.dispose();
