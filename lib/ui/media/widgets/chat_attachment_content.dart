@@ -1,8 +1,6 @@
-import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:wrytte/domain/models/attachment_contact.dart';
 import 'package:wrytte/domain/models/picked_attachment_file.dart';
 import 'package:wrytte/domain/models/poll_attachment_draft.dart';
@@ -228,7 +226,7 @@ class _ContactAttachmentContentState extends State<ContactAttachmentContent> {
   }
 }
 
-class LocationAttachmentContent extends StatefulWidget {
+class LocationAttachmentContent extends StatelessWidget {
   const LocationAttachmentContent({
     super.key,
     required this.scrollController,
@@ -239,126 +237,61 @@ class LocationAttachmentContent extends StatefulWidget {
   final ValueChanged<String> onChoose;
 
   @override
-  State<LocationAttachmentContent> createState() =>
-      _LocationAttachmentContentState();
-}
-
-class _LocationAttachmentContentState extends State<LocationAttachmentContent>
-    with WidgetsBindingObserver {
-  bool _serviceEnabled = true;
-  LocationPermission _permission = LocationPermission.denied;
-  Position? _position;
-  bool _checking = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    unawaited(_refreshLocationState());
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      unawaited(_refreshLocationState());
-    }
-  }
-
-  Future<void> _refreshLocationState() async {
-    if (mounted) setState(() => _checking = true);
-    try {
-      final enabled = await Geolocator.isLocationServiceEnabled();
-      var permission = await Geolocator.checkPermission();
-      Position? position;
-      String? error;
-      if (enabled &&
-          permission != LocationPermission.denied &&
-          permission != LocationPermission.deniedForever) {
-        try {
-          position = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.medium,
-            ),
-          );
-        } catch (_) {
-          error = 'Unable to find your current location.';
-        }
-      }
-      if (!mounted) return;
-      setState(() {
-        _serviceEnabled = enabled;
-        _permission = permission;
-        _position = position;
-        _error = error;
-        _checking = false;
-      });
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _checking = false;
-          _error = 'Location is unavailable on this device.';
-        });
-      }
-    }
-  }
-
-  Future<void> _requestLocation() async {
-    if (!_serviceEnabled) {
-      await Geolocator.openLocationSettings();
-      return;
-    }
-    if (_permission == LocationPermission.denied) {
-      await Geolocator.requestPermission();
-      await _refreshLocationState();
-    } else if (_permission == LocationPermission.deniedForever) {
-      await Geolocator.openAppSettings();
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final locationOff = !_serviceEnabled;
-    final permissionOff = _permission == LocationPermission.deniedForever;
     return CustomScrollView(
-      controller: widget.scrollController,
+      controller: scrollController,
       slivers: [
         SliverPadding(
-          padding: _contentPadding,
+          padding: const EdgeInsets.fromLTRB(0, 0, 0, 112),
           sliver: SliverList.list(
             children: [
-              _LocationMapPanel(
-                checking: _checking,
-                locationOff: locationOff,
-                permissionOff: permissionOff,
-                position: _position,
-                error: _error,
-                onOpenSettings: _requestLocation,
-              ),
-              const SizedBox(height: 14),
-              _LocationActionRow(
-                title: 'Send Selected Location',
-                subtitle: _position == null
-                    ? 'Finding your location...'
-                    : 'Use your current location',
-                onTap: _position == null
-                    ? _requestLocation
-                    : () => widget.onChoose(
-                        'Location: ${_position!.latitude}, ${_position!.longitude}',
+              const _LocationMapUnavailable(),
+              const SizedBox(height: 28),
+              InkWell(
+                onTap: () => onChoose('Current location'),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 36),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 39,
+                        backgroundColor: Color(0xFF4D8DFF),
+                        child: Icon(Icons.location_on_rounded, color: Colors.white, size: 35),
                       ),
+                      SizedBox(width: 24),
+                      Expanded(                                 // ← this is the only important change
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Send Selected Location',
+                              style: TextStyle(fontSize: 23, fontWeight: FontWeight.w600),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            SizedBox(height: 3),
+                            Text(
+                              'Finding your location...',
+                              style: TextStyle(fontSize: 18, color: Color(0xFF9D9EA5)),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              const SizedBox(height: 20),
-              const _SectionLabel('OR CHOOSE A PLACE'),
-              const SizedBox(height: 24),
-              Text(
-                'Tap anywhere on the map to find places around that point.',
-                style: TextStyle(color: Colors.white.withValues(alpha: .62), fontSize: 16),
+              const SizedBox(height: 32),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 36),
+                child: Text('OR CHOOSE A PLACE', style: TextStyle(color: Color(0xFF8C8D94), fontSize: 16, letterSpacing: .5)),
+              ),
+              const SizedBox(height: 48),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 36),
+                child: Text('Tap anywhere on the map to find places around\nthat point.', style: TextStyle(color: Color(0xFF8C8D94), fontSize: 20, height: 1.4)),
               ),
             ],
           ),
@@ -368,179 +301,80 @@ class _LocationAttachmentContentState extends State<LocationAttachmentContent>
   }
 }
 
-class _LocationActionRow extends StatelessWidget {
-  const _LocationActionRow({
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
 
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(18),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              color: const Color(0xFF4D96FF),
-              borderRadius: BorderRadius.circular(22),
-            ),
-            child: const Icon(
-              Icons.location_on_rounded,
-              color: Colors.white,
-              size: 39,
-            ),
-          ),
-          const SizedBox(width: 20),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    color: Color(0xFF9A9DA5),
-                    fontSize: 16,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Colors.white.withValues(alpha: .38),
-                width: 2,
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _LocationMapPanel extends StatelessWidget {
-  const _LocationMapPanel({
-    required this.checking,
-    required this.locationOff,
-    required this.permissionOff,
-    required this.position,
-    required this.error,
-    required this.onOpenSettings,
-  });
-
-  final bool checking;
-  final bool locationOff;
-  final bool permissionOff;
-  final Position? position;
-  final String? error;
-  final VoidCallback onOpenSettings;
+class _LocationMapUnavailable extends StatelessWidget {
+  const _LocationMapUnavailable();
 
   @override
   Widget build(BuildContext context) {
-    final unavailable = locationOff || permissionOff;
-    return Container(
-      height: 500,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        color: const Color(0xFF20242B),
-      ),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          CustomPaint(painter: _MapPatternPainter()),
-          if (checking)
-            const Center(child: CircularProgressIndicator())
-          else if (unavailable)
-            Container(
-              color: const Color(0xCC20242B),
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    permissionOff
-                        ? Icons.location_disabled_rounded
-                        : Icons.location_off_rounded,
-                    color: Colors.white70,
-                    size: 52,
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
-                    permissionOff
-                        ? 'Location permission is off'
-                        : 'Location is turned off',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 21,
-                      fontWeight: FontWeight.w600,
+    return SizedBox(
+      height: 555,
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        child: DecoratedBox(
+          decoration: const BoxDecoration(color: Color(0xFF202329)),
+          child: Stack(
+            children: [
+              CustomPaint(size: Size.infinite, painter: _MapPatternPainter()),
+              Positioned.fill(child: ColoredBox(color: Colors.black54)),
+              Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 18),
+                  child: Container(
+                    width: 102,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF8F949A),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    permissionOff
-                        ? 'Allow location access to share where you are.'
-                        : 'Turn on device location to share where you are.',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white60, fontSize: 15),
+                ),
+              ),
+              const Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: EdgeInsets.only(top: 52),
+                  child: Text(
+                    'Location',
+                    style: TextStyle(fontSize: 34, fontWeight: FontWeight.w700),
                   ),
-                  const SizedBox(height: 16),
-                  TextButton(
-                    onPressed: onOpenSettings,
-                    child: Text(
-                      permissionOff
-                          ? 'Open app location settings'
-                          : 'Open location settings',
+                ),
+              ),
+              Positioned.fill(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: const [
+                    Icon(Icons.location_off_rounded, size: 58, color: Color(0xFFCACBD0)),
+                    SizedBox(height: 30),
+                    Text(
+                      'Location is turned off',
+                      style: TextStyle(fontSize: 28, fontWeight: FontWeight.w600),
                     ),
-                  ),
-                ],
+                    SizedBox(height: 12),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 48),
+                      child: Text(
+                        'Turn on device location to share where you\nare.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 20,
+                          color: Color(0xFF9C9EA5),
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 56),
+                    Text(
+                      'Open location settings',
+                      style: TextStyle(fontSize: 22, color: Color(0xFF4D8DFF)),
+                    ),
+                  ],
+                ),
               ),
-            )
-          else
-            Center(
-              child: Icon(
-                position == null
-                    ? Icons.location_searching_rounded
-                    : Icons.location_on_rounded,
-                color: WrytteColors.primary,
-                size: 48,
-              ),
-            ),
-          if (error != null && !unavailable)
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 14,
-              child: Text(
-                error!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70),
-              ),
-            ),
-        ],
+            ],
+          ),
+        ),
       ),
     );
   }

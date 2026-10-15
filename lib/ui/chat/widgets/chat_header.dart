@@ -13,12 +13,14 @@ class ChatHeader extends StatelessWidget {
     required this.onBack,
     required this.onCallPressed,
     this.onProfilePressed,
+    this.avatarBuilder,
   });
 
   final ChatScreenConfig config;
   final VoidCallback onBack;
   final VoidCallback onCallPressed;
   final VoidCallback? onProfilePressed;
+  final Widget Function(double size)? avatarBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -57,15 +59,16 @@ class ChatHeader extends StatelessWidget {
                         ),
                         child: Row(
                           children: [
-                            ClipOval(
-                              child: Image.asset(
-                                config.avatarAsset,
-                                width: metrics.controlSize,
-                                height: metrics.controlSize,
-                                fit: BoxFit.cover,
-                                gaplessPlayback: true,
-                              ),
-                            ),
+                            avatarBuilder?.call(metrics.controlSize) ??
+                                ClipOval(
+                                  child: Image.asset(
+                                    config.avatarAsset,
+                                    width: metrics.controlSize,
+                                    height: metrics.controlSize,
+                                    fit: BoxFit.cover,
+                                    gaplessPlayback: true,
+                                  ),
+                                ),
                             SizedBox(width: 10 * metrics.scale),
                             Expanded(
                               child: MediaQuery.withClampedTextScaling(

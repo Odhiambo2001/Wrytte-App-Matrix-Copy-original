@@ -41,6 +41,8 @@ import 'package:wrytte/data/services/camera_capabilities_service.dart';
 import 'package:wrytte/data/services/camera_session_manager.dart';
 import 'package:wrytte/data/services/device_camera_service.dart';
 import 'package:wrytte/ui/chat/widgets/chat_composer.dart';
+import 'package:wrytte/ui/chat/models/chat_screen_config.dart';
+import 'package:wrytte/ui/chat/widgets/chat_header.dart';
 import 'package:wrytte/domain/repositories/audio_recording_repository.dart';
 import 'package:wrytte/domain/repositories/camera_repository.dart';
 import 'package:wrytte/domain/repositories/media_library_repository.dart';
@@ -4305,6 +4307,35 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── APP BAR ───────────────────────────────────────────────────────────────
 
   Widget _buildAppBar(double statusBarH) {
+    return ChatHeader(
+      config: ChatScreenConfig(
+        id: widget.conversationId,
+        title: _resolvedHeaderName,
+        subtitle: _peerPresenceLabel(),
+        kind: _isGroupChat
+            ? ChatConversationKind.group
+            : ChatConversationKind.direct,
+        callsAvailable: !_isDeletedConversation,
+      ),
+      onBack: () => Navigator.pop(context),
+      onCallPressed: () => _startCall(CallType.voice),
+      avatarBuilder: (size) => UserAvatar(
+        size: size,
+        imageUrl: _safePersonHeaderAvatar(
+          _receiverProfile?.hasProfileImage == true
+              ? _receiverProfile!.profileImage
+              : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
+        ),
+        localImagePath: _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
+            ? _receiverProfile!.localProfileImagePath.trim()
+            : null,
+        name: _resolvedHeaderName,
+        isDeleted: _isDeletedConversation,
+      ),
+    );
+  }
+
+  Widget _buildLegacyAppBar(double statusBarH) {
     final isGroupChat = _isGroupChat;
     final displayName = _resolvedHeaderName;
     final avatarUrl =
@@ -4959,13 +4990,32 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool _isMine(ChatMessage message) {
-    final current = widget.currentUserId.trim();
     final sender = message.senderId.trim();
-    if (sender == current) return true;
-    if (sender.startsWith('@') && sender.contains(':')) {
-      return sender.substring(1, sender.indexOf(':')) == current;
+    if (sender.isEmpty) return false;
+
+    final receiver = widget.receiverId.trim();
+    if (receiver.isNotEmpty &&
+        (sender.toLowerCase() == receiver.toLowerCase() ||
+            _matrixLocalpart(sender).toLowerCase() ==
+                _matrixLocalpart(receiver).toLowerCase())) {
+      return false;
     }
-    return false;
+
+    // Match the Downloads message model's explicit ownership semantics. The
+    // legacy screen can receive either the account identifier supplied by the
+    // route or the canonical Matrix user ID from the active client, so compare
+    // both forms by Matrix local-part as well as exact ID.
+    final currentIds = <String>{
+      widget.currentUserId.trim(),
+      MatrixClientService.instance.userId?.trim() ?? '',
+    }..removeWhere((value) => value.isEmpty);
+
+    return currentIds.any(
+      (current) =>
+          sender.toLowerCase() == current.toLowerCase() ||
+          _matrixLocalpart(sender).toLowerCase() ==
+              _matrixLocalpart(current).toLowerCase(),
+    );
   }
 
   String? _replySenderDisplayName(ChatMessage message) {
