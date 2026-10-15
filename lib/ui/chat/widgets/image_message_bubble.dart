@@ -677,55 +677,10 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
         // ---------------------------------------------------------------------
 
-        final double maximumCaptionBubbleWidth = math
-
-            .min(
-
-              availableBodyWidth,
-
-              math.min(
-
-                _maximumBubbleWidth,
-
-                screenSize.width * _captionWidthFactor,
-
-              ),
-
-            )
-
-            .toDouble();
-
-        final double metadataWidth = _measureMediaMetadataWidth(context);
-
-        final double captionDrivenWidth = _hasCaption
-
-            ? _measureCaptionBubbleWidth(
-
-                context,
-
-                _caption!,
-
-                metadataWidth,
-
-                maximumCaptionBubbleWidth,
-
-              )
-
-            : 0.0;
-
-        // Caption is allowed to widen the bubble.
-
-        //
-
-        // IMPORTANT:
-
-        // This does NOT stretch the actual image.
-
-        final double bubbleBodyWidth = _hasCaption
-
-            ? math.max(imageWidth, captionDrivenWidth).toDouble()
-
-            : imageWidth;
+        // Keep the media surface aligned to the image width. The caption
+        // wraps inside that same surface instead of widening it and creating
+        // blurred side-fill panels around portrait images.
+        final double bubbleBodyWidth = imageWidth;
 
         final double bubbleSurfaceWidth = bubbleBodyWidth + tailExtent;
 

@@ -259,25 +259,13 @@ class LocationAttachmentContent extends StatelessWidget {
                         child: Icon(Icons.location_on_rounded, color: Colors.white, size: 35),
                       ),
                       SizedBox(width: 24),
-                      Expanded(                                 // ← this is the only important change
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Send Selected Location',
-                              style: TextStyle(fontSize: 23, fontWeight: FontWeight.w600),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            SizedBox(height: 3),
-                            Text(
-                              'Finding your location...',
-                              style: TextStyle(fontSize: 18, color: Color(0xFF9D9EA5)),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Send Selected Location', style: TextStyle(fontSize: 23, fontWeight: FontWeight.w600)),
+                          SizedBox(height: 3),
+                          Text('Finding your location...', style: TextStyle(fontSize: 18, color: Color(0xFF9D9EA5))),
+                        ],
                       ),
                     ],
                   ),
@@ -301,7 +289,6 @@ class LocationAttachmentContent extends StatelessWidget {
   }
 }
 
-
 class _LocationMapUnavailable extends StatelessWidget {
   const _LocationMapUnavailable();
 
@@ -309,71 +296,41 @@ class _LocationMapUnavailable extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 555,
-      child: ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        child: DecoratedBox(
-          decoration: const BoxDecoration(color: Color(0xFF202329)),
-          child: Stack(
-            children: [
-              CustomPaint(size: Size.infinite, painter: _MapPatternPainter()),
-              Positioned.fill(child: ColoredBox(color: Colors.black54)),
-              Align(
-                alignment: Alignment.topCenter,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 18),
-                  child: Container(
-                    width: 102,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF8F949A),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                ),
+      child: DecoratedBox(
+        decoration: const BoxDecoration(color: Color(0xFF202329)),
+        child: Stack(
+          children: [
+            CustomPaint(size: Size.infinite, painter: _MapPatternPainter()),
+            Positioned.fill(child: ColoredBox(color: Colors.black54)),
+            Align(
+              alignment: Alignment.topCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 18),
+                child: Container(width: 102, height: 6, decoration: BoxDecoration(color: const Color(0xFF8F949A), borderRadius: BorderRadius.circular(8))),
               ),
-              const Align(
-                alignment: Alignment.topCenter,
-                child: Padding(
-                  padding: EdgeInsets.only(top: 52),
-                  child: Text(
-                    'Location',
-                    style: TextStyle(fontSize: 34, fontWeight: FontWeight.w700),
-                  ),
-                ),
+            ),
+            const Align(
+              alignment: Alignment.topCenter,
+              child: Padding(
+                padding: EdgeInsets.only(top: 52),
+                child: Text('Location', style: TextStyle(fontSize: 34, fontWeight: FontWeight.w700)),
               ),
-              Positioned.fill(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: const [
-                    Icon(Icons.location_off_rounded, size: 58, color: Color(0xFFCACBD0)),
-                    SizedBox(height: 30),
-                    Text(
-                      'Location is turned off',
-                      style: TextStyle(fontSize: 28, fontWeight: FontWeight.w600),
-                    ),
-                    SizedBox(height: 12),
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 48),
-                      child: Text(
-                        'Turn on device location to share where you\nare.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 20,
-                          color: Color(0xFF9C9EA5),
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: 56),
-                    Text(
-                      'Open location settings',
-                      style: TextStyle(fontSize: 22, color: Color(0xFF4D8DFF)),
-                    ),
-                  ],
-                ),
+            ),
+            Positioned.fill(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: const [
+                  Icon(Icons.location_off_rounded, size: 58, color: Color(0xFFCACBD0)),
+                  SizedBox(height: 30),
+                  Text('Location is turned off', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w600)),
+                  SizedBox(height: 12),
+                  Padding(padding: EdgeInsets.symmetric(horizontal: 48), child: Text('Turn on device location to share where you\nare.', textAlign: TextAlign.center, style: TextStyle(fontSize: 20, color: Color(0xFF9C9EA5), height: 1.4))),
+                  SizedBox(height: 56),
+                  Text('Open location settings', style: TextStyle(fontSize: 22, color: Color(0xFF4D8DFF))),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -988,3 +945,4 @@ class _MapPatternPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
+

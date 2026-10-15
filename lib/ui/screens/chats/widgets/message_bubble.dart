@@ -60,7 +60,7 @@ class MessageBubble extends StatelessWidget {
 
   static const Color _blue = Color(0xFF4DA3FF);
   static const Color _incoming = Color(0xFF23262C);
-  static const Color _readGreen = Color(0xFF4CAF50);
+  static const Color _readBlue = Color(0xFF2978FF);
 
   const MessageBubble({
     super.key,
@@ -309,7 +309,7 @@ class MessageBubble extends StatelessWidget {
           color: Colors.white.withValues(alpha: 0.65),
         );
       case MessageStatus.read:
-        return const Icon(Icons.done_all, size: 14, color: _readGreen);
+        return const Icon(Icons.done_all, size: 14, color: _readBlue);
       case MessageStatus.failed:
         return const Icon(
           Icons.error_outline,
