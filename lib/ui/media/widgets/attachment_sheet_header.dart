@@ -23,6 +23,8 @@ class AttachmentSheetHeader extends StatelessWidget {
     required this.onVerticalDragCancel,
     this.selectedCount = 0,
     this.onMorePressed,
+    this.showSearch = false,
+    this.onSearchPressed,
   });
 
   final String albumName;
@@ -54,6 +56,8 @@ class AttachmentSheetHeader extends StatelessWidget {
   /// If no action has been connected yet, the button still keeps the old
   /// interaction/haptic instead of doing something unexpected.
   final VoidCallback? onMorePressed;
+  final bool showSearch;
+  final VoidCallback? onSearchPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -655,6 +659,8 @@ class AttachmentSheetHeader extends StatelessWidget {
 
                           onMorePressed:
                               onMorePressed,
+                          showSearch: showSearch,
+                          onSearchPressed: onSearchPressed,
                         ),
                       ),
                     ],
@@ -679,12 +685,16 @@ class _SelectionHeaderActions
     required this.selectedCount,
     required this.scale,
     required this.onMorePressed,
+    this.showSearch = false,
+    this.onSearchPressed,
   });
 
   final int selectedCount;
   final double scale;
 
   final VoidCallback? onMorePressed;
+  final bool showSearch;
+  final VoidCallback? onSearchPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -692,6 +702,14 @@ class _SelectionHeaderActions
         MediaQuery.disableAnimationsOf(
       context,
     );
+
+    if (showSearch) {
+      return _HeaderCircleButton(
+        icon: Icons.search_rounded,
+        scale: scale,
+        onPressed: onSearchPressed,
+      );
+    }
 
     return AnimatedSwitcher(
       duration:
@@ -957,6 +975,33 @@ class _SelectionHeaderActions
 // =============================================================================
 // CLOSE
 // =============================================================================
+
+class _HeaderCircleButton extends StatelessWidget {
+  const _HeaderCircleButton({
+    required this.icon,
+    required this.scale,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final double scale;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: const Color(0xFF17191E).withValues(alpha: .88),
+    shape: const CircleBorder(),
+    child: InkWell(
+      onTap: onPressed,
+      customBorder: const CircleBorder(),
+      child: SizedBox(
+        width: 42 * scale,
+        height: 42 * scale,
+        child: Icon(icon, color: Colors.white, size: 25 * scale),
+      ),
+    ),
+  );
+}
 
 class _CloseButton
     extends StatelessWidget {

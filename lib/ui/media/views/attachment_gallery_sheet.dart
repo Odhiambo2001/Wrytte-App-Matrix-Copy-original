@@ -996,6 +996,14 @@ class _AttachmentGallerySheetState extends State<_AttachmentGallerySheet>
                                               ? _toggleAlbumMenu
                                               : null,
 
+                                          showSearch:
+                                              _tab == ChatAttachmentTab.location,
+
+                                          onSearchPressed:
+                                              _tab == ChatAttachmentTab.location
+                                              ? () {}
+                                              : null,
+
                                           onVerticalDragStart:
                                               _handleHeaderDragStart,
 

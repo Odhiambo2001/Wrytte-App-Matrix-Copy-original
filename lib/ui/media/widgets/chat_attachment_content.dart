@@ -342,8 +342,7 @@ class _LocationAttachmentContentState extends State<LocationAttachmentContent>
                 onOpenSettings: _requestLocation,
               ),
               const SizedBox(height: 14),
-              _ActionRow(
-                icon: Icons.location_on_rounded,
+              _LocationActionRow(
                 title: 'Send Selected Location',
                 subtitle: _position == null
                     ? 'Finding your location...'
@@ -369,6 +368,78 @@ class _LocationAttachmentContentState extends State<LocationAttachmentContent>
   }
 }
 
+class _LocationActionRow extends StatelessWidget {
+  const _LocationActionRow({
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(18),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: const Color(0xFF4D96FF),
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: const Icon(
+              Icons.location_on_rounded,
+              color: Colors.white,
+              size: 39,
+            ),
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: Color(0xFF9A9DA5),
+                    fontSize: 16,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white.withValues(alpha: .38),
+                width: 2,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _LocationMapPanel extends StatelessWidget {
   const _LocationMapPanel({
     required this.checking,
@@ -390,7 +461,7 @@ class _LocationMapPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final unavailable = locationOff || permissionOff;
     return Container(
-      height: 300,
+      height: 500,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
