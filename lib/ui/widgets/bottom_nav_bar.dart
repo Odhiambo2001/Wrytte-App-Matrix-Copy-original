@@ -43,8 +43,6 @@ class _BottomNavBarState extends State<BottomNavBar> {
             : UserProfileService.instance.cachedProfile);
     _profile = _isDisplayReadyProfile(initial) ? initial : null;
 
-    // Subscribe to profile changes; the service validates that cached data
-    // belongs to the currently signed-in account before emitting it.
     _profileSub = UserProfileService.instance
         .getCurrentUserProfileStream(
           backendFirst: widget.fetchProfileFromBackend,
@@ -63,10 +61,6 @@ class _BottomNavBarState extends State<BottomNavBar> {
     if (widget.initialProfile == oldWidget.initialProfile) return;
     final initial =
         widget.initialProfile ?? UserProfileService.instance.cachedProfile;
-    // The profile stream is authoritative after this widget has received a
-    // profile. HomeScreen's one-time startup preload can finish late and pass
-    // an older same-account profile through initialProfile; never let it
-    // overwrite a newer live avatar from the stream.
     final currentUid = _profile?.uid.trim().toLowerCase();
     final initialUid = initial?.uid.trim().toLowerCase();
     final isDifferentAccount =
@@ -87,7 +81,6 @@ class _BottomNavBarState extends State<BottomNavBar> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // Background gradient — fills the entire nav bar region
         Positioned.fill(
           child: Container(
             decoration: BoxDecoration(
@@ -160,10 +153,9 @@ class _BottomNavBarState extends State<BottomNavBar> {
                               'assets/svg/coin_icon.png',
                               height: 26,
                               width: 26,
-                              color:
-                                  widget.currentIndex == 0
-                                      ? Colors.white
-                                      : const Color(0xFF7A7A7A),
+                              color: widget.currentIndex == 0
+                                  ? Colors.white
+                                  : const Color(0xFF7A7A7A),
                               colorBlendMode: BlendMode.srcIn,
                             ),
                           ),
@@ -210,8 +202,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                       child: Text(
                                         widget.totalUnreadCount > 99
                                             ? '99+'
-                                            : widget.totalUnreadCount
-                                                .toString(),
+                                            : widget.totalUnreadCount.toString(),
                                         style: const TextStyle(
                                           color: Colors.white,
                                           fontSize: 9,
@@ -235,10 +226,9 @@ class _BottomNavBarState extends State<BottomNavBar> {
                               'assets/svg/posts_icon.png',
                               height: 26,
                               width: 26,
-                              color:
-                                  widget.currentIndex == 2
-                                      ? Colors.white
-                                      : const Color(0xFF7A7A7A),
+                              color: widget.currentIndex == 2
+                                  ? Colors.white
+                                  : const Color(0xFF7A7A7A),
                               colorBlendMode: BlendMode.srcIn,
                             ),
                           ),
@@ -254,33 +244,30 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                   ? Icons.call
                                   : Icons.call_outlined,
                               size: 26,
-                              color:
-                                  widget.currentIndex == 3
-                                      ? Colors.white
-                                      : const Color(0xFF7A7A7A),
+                              color: widget.currentIndex == 3
+                                  ? Colors.white
+                                  : const Color(0xFF7A7A7A),
                             ),
                           ),
                           label: 'Calls',
                         ),
 
-                        /// Profile — real profile avatar
+                        /// Profile
                         BottomNavigationBarItem(
                           icon: _NavIcon(
                             isActive: widget.currentIndex == 4,
                             isAvatar: true,
                             child: UserAvatar(
-                              size: 30,
-                              imageUrl:
-                                  _profile?.hasProfileImage == true
-                                      ? _profile!.profileImage
-                                      : null,
+                              size: 28,
+                              imageUrl: _profile?.hasProfileImage == true
+                                  ? _profile!.profileImage
+                                  : null,
                               localImagePath: _profile?.localProfileImagePath,
                               name: _profileNameForAvatar(),
-                              cacheIdentity:
-                                  _profile == null
-                                      ? null
-                                      : 'account:${_profile!.uid.trim().toLowerCase()}'
-                                          '|avatar:v${_profile!.avatarVersion}',
+                              cacheIdentity: _profile == null
+                                  ? null
+                                  : 'account:${_profile!.uid.trim().toLowerCase()}'
+                                      '|avatar:v${_profile!.avatarVersion}',
                             ),
                           ),
                           label: 'Profile',
@@ -349,24 +336,32 @@ class _NavIcon extends StatelessWidget {
     }
 
     if (isAvatar) {
-      final avatar = Container(
-        padding: const EdgeInsets.all(1.5),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: isActive ? Colors.white : const Color(0xFF7A7A7A),
-            width: 1.5,
-          ),
-        ),
-        child: child,
-      );
+      // Matches reference image exactly:
+      // • Active   → white outline + #23262C switcher
+      // • Inactive → grey outline + transparent
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
         decoration: BoxDecoration(
           color: isActive ? const Color(0xFF23262C) : Colors.transparent,
           borderRadius: BorderRadius.circular(24),
         ),
-        child: avatar,
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color:
+                  isActive
+                      ? const Color(0xFFFFFFFF)
+                      : const Color(0xFF7A7A7A),
+              width: isActive ? 2.0 : 1.5,
+            ),
+          ),
+          child: ClipOval(
+            child: child,
+          ),
+        ),
       );
     }
 

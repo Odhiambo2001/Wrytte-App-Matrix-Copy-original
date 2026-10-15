@@ -31,6 +31,13 @@ import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
 import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'package:wrytte/ui/widgets/wrytte_persistent_image.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
+import 'package:wrytte/data/repositories/camera_repository_impl.dart';
+import 'package:wrytte/data/services/camera_capabilities_service.dart';
+import 'package:wrytte/data/services/camera_session_manager.dart';
+import 'package:wrytte/data/services/device_camera_service.dart';
+import 'package:wrytte/domain/models/camera_session_config.dart';
+import 'package:wrytte/domain/repositories/camera_repository.dart';
+import 'package:wrytte/ui/camera/views/wrytte_camera_route.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
@@ -1477,8 +1484,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                     child: Row(
                       children: [
                         // ── Back button ──────────────────────────────────
-                        widget.embeddedInHome
-                            ? const SizedBox(width: 44)
+                        widget.embeddedInHome && !_isOtherUser
+                            ? _buildAddStoryButton()
+                            : widget.embeddedInHome
+                                ? const SizedBox(width: 44)
                             : _glassButton(
                               icon: Icons.arrow_back_ios,
                               onTap: () => Navigator.pop(context),
@@ -1659,28 +1668,63 @@ class _ProfileScreenState extends State<ProfileScreen>
           style: TextStyle(color: Colors.white, fontSize: 11),
         ),
         const SizedBox(height: 6),
-        Center(
-          child: FilledButton(
-            onPressed: () {},
-            style: FilledButton.styleFrom(
-              minimumSize: const Size(48, 48),
-              backgroundColor: const Color(0xFF4DA3FF),
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              textStyle: const TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            child: const Text("Add storie", style: TextStyle(fontSize: 15)),
-          ),
-        ),
+        _buildAddStoriesButton(),
       ],
     );
+  }
+
+  Widget _buildAddStoryButton() {
+    return Container(
+      width: 92,
+      height: 92,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: const Color(0xFF15181D),
+        border: Border.all(color: const Color(0xFF23262C), width: 2),
+      ),
+      child: IconButton(
+        tooltip: 'Add story',
+        onPressed: _openStoryCamera,
+        icon: const Icon(Icons.add_a_photo_outlined, color: Colors.white, size: 42),
+      ),
+    );
+  }
+
+  Widget _buildAddStoriesButton() {
+    return FractionallySizedBox(
+      widthFactor: 0.62,
+      child: SizedBox(
+        height: 64,
+        child: FilledButton(
+          onPressed: _openStoryCamera,
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF249FF0),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            shape: const StadiumBorder(),
+            textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.w400),
+          ),
+          child: const Text('Add Stories'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openStoryCamera() async {
+    final camera = CameraRepositoryImpl(
+      DeviceCameraService(),
+      const CameraCapabilitiesService(),
+      CameraSessionManager(),
+    );
+    try {
+      await showWrytteCamera(
+        context,
+        repository: camera,
+        config: const CameraSessionConfig.chatAttachment(),
+      );
+    } finally {
+      await camera.close();
+    }
   }
 
   Widget _buildSavedTab() {
