@@ -453,7 +453,9 @@ class _AttachmentGallerySheetState extends State<_AttachmentGallerySheet>
     final model = context.read<AttachmentGalleryViewModel>();
 
     final result = switch (_tab) {
-      ChatAttachmentTab.gallery => model.hasSelection ? model.result : null,
+      ChatAttachmentTab.gallery => model.hasSelection
+          ? model.result.withCaption(_captionController.text)
+          : null,
 
       ChatAttachmentTab.file =>
         _selectedFilePaths.isEmpty

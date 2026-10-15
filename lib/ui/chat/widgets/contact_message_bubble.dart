@@ -1063,7 +1063,7 @@ class _ContactAvatar
 
     return Image.asset(
 
-      'assets/images/default_pic.jpg',
+      'assets/images/default_avatar.jpg',
 
       fit: BoxFit.cover,
 
@@ -1119,7 +1119,7 @@ class _ContactActions
 
         message.isMine
 
-        ? 'View profile'
+                          ? 'Add contact'
 
         : 'Add contact';
 

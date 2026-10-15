@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:wrytte/domain/models/attachment_contact.dart';
 import 'package:wrytte/domain/models/picked_attachment_file.dart';
 import 'package:wrytte/domain/models/poll_attachment_draft.dart';
@@ -226,7 +228,7 @@ class _ContactAttachmentContentState extends State<ContactAttachmentContent> {
   }
 }
 
-class LocationAttachmentContent extends StatelessWidget {
+class LocationAttachmentContent extends StatefulWidget {
   const LocationAttachmentContent({
     super.key,
     required this.scrollController,
@@ -237,66 +239,238 @@ class LocationAttachmentContent extends StatelessWidget {
   final ValueChanged<String> onChoose;
 
   @override
+  State<LocationAttachmentContent> createState() =>
+      _LocationAttachmentContentState();
+}
+
+class _LocationAttachmentContentState extends State<LocationAttachmentContent>
+    with WidgetsBindingObserver {
+  bool _serviceEnabled = true;
+  LocationPermission _permission = LocationPermission.denied;
+  Position? _position;
+  bool _checking = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_refreshLocationState());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshLocationState());
+    }
+  }
+
+  Future<void> _refreshLocationState() async {
+    if (mounted) setState(() => _checking = true);
+    try {
+      final enabled = await Geolocator.isLocationServiceEnabled();
+      var permission = await Geolocator.checkPermission();
+      Position? position;
+      String? error;
+      if (enabled &&
+          permission != LocationPermission.denied &&
+          permission != LocationPermission.deniedForever) {
+        try {
+          position = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+            ),
+          );
+        } catch (_) {
+          error = 'Unable to find your current location.';
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _serviceEnabled = enabled;
+        _permission = permission;
+        _position = position;
+        _error = error;
+        _checking = false;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _checking = false;
+          _error = 'Location is unavailable on this device.';
+        });
+      }
+    }
+  }
+
+  Future<void> _requestLocation() async {
+    if (!_serviceEnabled) {
+      await Geolocator.openLocationSettings();
+      return;
+    }
+    if (_permission == LocationPermission.denied) {
+      await Geolocator.requestPermission();
+      await _refreshLocationState();
+    } else if (_permission == LocationPermission.deniedForever) {
+      await Geolocator.openAppSettings();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final locationOff = !_serviceEnabled;
+    final permissionOff = _permission == LocationPermission.deniedForever;
     return CustomScrollView(
-      controller: scrollController,
+      controller: widget.scrollController,
       slivers: [
         SliverPadding(
           padding: _contentPadding,
           sliver: SliverList.list(
             children: [
-              Container(
-                height: 190,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF162734), Color(0xFF102019)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CustomPaint(
-                      size: const Size(double.infinity, 190),
-                      painter: _MapPatternPainter(),
-                    ),
-                    const Icon(
-                      Icons.location_on_rounded,
-                      color: WrytteColors.primary,
-                      size: 48,
-                    ),
-                    PositionedDirectional(
-                      end: 12,
-                      bottom: 12,
-                      child: Chip(
-                        avatar: const Icon(Icons.map_outlined, size: 17),
-                        label: const Text('Map coming later'),
-                        side: BorderSide.none,
-                        backgroundColor: Colors.black.withValues(alpha: .45),
-                      ),
-                    ),
-                  ],
-                ),
+              _LocationMapPanel(
+                checking: _checking,
+                locationOff: locationOff,
+                permissionOff: permissionOff,
+                position: _position,
+                error: _error,
+                onOpenSettings: _requestLocation,
               ),
               const SizedBox(height: 14),
               _ActionRow(
-                icon: Icons.my_location_rounded,
-                title: 'Send current location',
-                subtitle: 'Share your position once',
-                onTap: () => onChoose('Current location'),
+                icon: Icons.location_on_rounded,
+                title: 'Send Selected Location',
+                subtitle: _position == null
+                    ? 'Finding your location...'
+                    : 'Use your current location',
+                onTap: _position == null
+                    ? _requestLocation
+                    : () => widget.onChoose(
+                        'Location: ${_position!.latitude}, ${_position!.longitude}',
+                      ),
               ),
-              _ActionRow(
-                icon: Icons.location_searching_rounded,
-                title: 'Share live location',
-                subtitle: 'Live maps will be connected in a later step',
-                onTap: () => onChoose('Live location'),
+              const SizedBox(height: 20),
+              const _SectionLabel('OR CHOOSE A PLACE'),
+              const SizedBox(height: 24),
+              Text(
+                'Tap anywhere on the map to find places around that point.',
+                style: TextStyle(color: Colors.white.withValues(alpha: .62), fontSize: 16),
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+class _LocationMapPanel extends StatelessWidget {
+  const _LocationMapPanel({
+    required this.checking,
+    required this.locationOff,
+    required this.permissionOff,
+    required this.position,
+    required this.error,
+    required this.onOpenSettings,
+  });
+
+  final bool checking;
+  final bool locationOff;
+  final bool permissionOff;
+  final Position? position;
+  final String? error;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final unavailable = locationOff || permissionOff;
+    return Container(
+      height: 300,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        color: const Color(0xFF20242B),
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          CustomPaint(painter: _MapPatternPainter()),
+          if (checking)
+            const Center(child: CircularProgressIndicator())
+          else if (unavailable)
+            Container(
+              color: const Color(0xCC20242B),
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    permissionOff
+                        ? Icons.location_disabled_rounded
+                        : Icons.location_off_rounded,
+                    color: Colors.white70,
+                    size: 52,
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    permissionOff
+                        ? 'Location permission is off'
+                        : 'Location is turned off',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 21,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    permissionOff
+                        ? 'Allow location access to share where you are.'
+                        : 'Turn on device location to share where you are.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white60, fontSize: 15),
+                  ),
+                  const SizedBox(height: 16),
+                  TextButton(
+                    onPressed: onOpenSettings,
+                    child: Text(
+                      permissionOff
+                          ? 'Open app location settings'
+                          : 'Open location settings',
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            Center(
+              child: Icon(
+                position == null
+                    ? Icons.location_searching_rounded
+                    : Icons.location_on_rounded,
+                color: WrytteColors.primary,
+                size: 48,
+              ),
+            ),
+          if (error != null && !unavailable)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 14,
+              child: Text(
+                error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

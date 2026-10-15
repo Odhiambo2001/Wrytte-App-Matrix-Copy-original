@@ -63,7 +63,12 @@ class AttachmentLocalStore {
     required String fileName,
     required bool allowPartial,
   }) {
-    final key = '${source.trim()}|initial|$allowPartial';
+    // A complete initial download and an explicit complete download must
+    // share the same in-flight future. Otherwise the cache prefetcher and the
+    // image bubble can both request the same Matrix media at the same time.
+    final key = allowPartial
+        ? '${source.trim()}|initial|partial'
+        : '${source.trim()}|complete';
     return _inFlight.putIfAbsent(key, () async {
       try {
         return await _ensure(

@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:matrix/matrix.dart' as mx;
@@ -34,6 +35,32 @@ import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/calls/livekit_call_screen.dart';
 import 'package:wrytte/ui/screens/chats/video_message_recorder_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
+
+import 'package:wrytte/data/repositories/camera_repository_impl.dart';
+import 'package:wrytte/data/services/camera_capabilities_service.dart';
+import 'package:wrytte/data/services/camera_session_manager.dart';
+import 'package:wrytte/data/services/device_camera_service.dart';
+import 'package:wrytte/ui/chat/widgets/chat_composer.dart';
+import 'package:wrytte/domain/repositories/audio_recording_repository.dart';
+import 'package:wrytte/domain/repositories/camera_repository.dart';
+import 'package:wrytte/domain/repositories/media_library_repository.dart';
+import 'package:wrytte/domain/repositories/attachment_picker_repository.dart';
+import 'package:wrytte/data/repositories/media_library_repository_impl.dart';
+import 'package:wrytte/data/repositories/attachment_picker_repository_impl.dart';
+import 'package:wrytte/data/services/device_media_library_service.dart';
+import 'package:wrytte/data/services/device_attachment_picker_service.dart';
+import 'package:wrytte/domain/models/attachment_gallery_config.dart';
+import 'package:wrytte/domain/models/attachment_gallery_result.dart';
+import 'package:wrytte/domain/models/camera_session_config.dart';
+import 'package:wrytte/ui/camera/widgets/attachment_camera_preview.dart';
+import 'package:wrytte/ui/camera/views/wrytte_camera_route.dart';
+import 'package:wrytte/ui/media/views/attachment_gallery_sheet.dart';
+import 'package:wrytte/ui/screens/chats/widgets/source_composer_audio_repository.dart';
+import 'package:wrytte/ui/chat/view_models/chat_view_model.dart'; // ChatRecordMode
+import 'package:wrytte/ui/chat/widgets/chat_layout_metrics.dart';
+import 'package:wrytte/domain/models/voice_recording_result.dart';
+import 'package:wrytte/domain/models/camera_capture_result.dart';
+
 import 'package:wrytte/ui/screens/chats/widgets/message_input.dart';
 import 'package:wrytte/ui/widgets/pinned_events_strip.dart';
 import 'package:wrytte/ui/screens/group_profile_screen.dart';
@@ -41,6 +68,10 @@ import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
+
+import 'package:wrytte/ui/chat/models/chat_message_presentation.dart';
+import 'package:wrytte/ui/chat/widgets/image_message_bubble.dart';
+import 'package:wrytte/ui/chat/widgets/contact_message_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
   final String conversationId;
@@ -480,6 +511,136 @@ class _ChatScreenState extends State<ChatScreen> {
   static const double _kHeaderPillH = 48.0;
   static const double _kInputPillH = 40.0;
 
+
+  ChatRecordMode _recordMode = ChatRecordMode.audio;
+
+  void _toggleRecordMode() {
+    setState(() {
+      _recordMode = _recordMode == ChatRecordMode.audio
+          ? ChatRecordMode.video
+          : ChatRecordMode.audio;
+    });
+  }
+
+  Future<void> _openAttachments() async {
+    if (_isDeletedConversation) return;
+    // ChatScreen owns the composer providers below its build subtree, so the
+    // State's context cannot read them here. Create the attachment repositories
+    // at the point where the attachment route is opened instead.
+    final media = MediaLibraryRepositoryImpl(DeviceMediaLibraryService());
+    final camera = CameraRepositoryImpl(
+      DeviceCameraService(),
+      const CameraCapabilitiesService(),
+      CameraSessionManager(),
+    );
+    final picker = AttachmentPickerRepositoryImpl(
+      DeviceAttachmentPickerService(),
+    );
+    final cameraOpen = ValueNotifier<bool>(false);
+    final resultFuture = showWrytteAttachmentGallery(
+      context,
+      config: const AttachmentGalleryConfig(
+        purpose: AttachmentPurpose.chat,
+        maxSelectionCount: 30,
+      ),
+      repository: media,
+      pickerRepository: picker,
+      cameraPreviewBuilder: (_) => AttachmentCameraPreview(
+        repository: camera,
+        fullScreenCameraOpen: cameraOpen,
+      ),
+      onCameraRequested: (origin, latestAsset) async {
+        cameraOpen.value = true;
+        try {
+          return await showWrytteCamera(
+            context,
+            repository: camera,
+            config: const CameraSessionConfig.chatAttachment(),
+            origin: origin,
+            returnToGallery: true,
+            keepSessionAliveOnExit: true,
+          );
+        } finally {
+          cameraOpen.value = false;
+        }
+      },
+    );
+    unawaited(camera.open(const CameraSessionConfig.chatAttachment()));
+    AttachmentGalleryResult? result;
+    try {
+      result = await resultFuture;
+    } finally {
+      await camera.close();
+      cameraOpen.dispose();
+    }
+    if (!mounted || result == null) return;
+    await _handleAttachmentGalleryResult(result, media);
+  }
+
+  Future<void> _handleAttachmentGalleryResult(
+    AttachmentGalleryResult result,
+    MediaLibraryRepository media,
+  ) async {
+    if (result.locationLabel case final location?) {
+      final text = location.trim();
+      if (text.isNotEmpty) {
+        final previousText = _controller.text;
+        _controller.text = text;
+        try {
+          await _send();
+        } finally {
+          if (mounted && _controller.text.isEmpty) {
+            _controller.text = previousText;
+          }
+        }
+      }
+    }
+    if (result.preparedFilePath case final path?) {
+      await _sendPickedAttachment(path, 'image', caption: result.caption);
+    }
+    for (final asset in result.assets) {
+      final path = await media.loadFilePath(asset.id);
+      if (path != null) {
+        await _sendPickedAttachment(path, asset.kind.name, caption: result.caption);
+      }
+    }
+    for (final file in result.files) {
+      await _sendPickedAttachment(file.path, 'file', caption: result.caption);
+    }
+    for (final contact in result.contacts) {
+      await _sendContactAttachment(
+        name: contact.displayName,
+        phone: contact.phoneNumber,
+      );
+    }
+    if (result.cameraCapture case final capture?) {
+      await _sendPickedAttachment(
+        capture.path,
+        capture.type == CameraMediaType.video ? 'video' : 'image',
+        caption: result.caption,
+      );
+    }
+  }
+
+  Future<void> _sendContactAttachment({
+    required String name,
+    required String phone,
+  }) async {
+    final cleanName = name.trim().isEmpty ? 'Contact' : name.trim();
+    final cleanPhone = phone.trim();
+    if (cleanPhone.isEmpty) return;
+
+    final previousText = _controller.text;
+    _controller.text = '[wrytte-contact]\n$cleanName\n$cleanPhone';
+    try {
+      await _send();
+    } finally {
+      if (mounted && _controller.text.isEmpty) {
+        _controller.text = previousText;
+      }
+    }
+  }
+
   // ─── LIFECYCLE ─────────────────────────────────────────────────────────────
 
   @override
@@ -658,6 +819,30 @@ class _ChatScreenState extends State<ChatScreen> {
       return entry.value.presence == mx.PresenceType.online;
     }
     return false;
+  }
+
+  Future<void> _refreshPeerPresence() async {
+    if (_isGroupChat || !MatrixClientService.instance.isInitialized) return;
+    final peerId = _profilePeerId();
+    if (peerId == null || peerId.trim().isEmpty) return;
+    try {
+      final presence = await MatrixClientService.instance.client
+          .fetchCurrentPresence(peerId);
+      if (!mounted) return;
+      setState(() {
+        _receiverOnline = presence.presence == mx.PresenceType.online;
+        _peerLastActiveAt =
+            presence.lastActiveTimestamp ?? _peerLastActiveAt;
+      });
+      apkLog(
+        'Matrix.presence',
+        'chat_peer_fetched user_id="$peerId" '
+            'status="${_receiverOnline ? 'online' : 'offline'}" '
+            'last_seen_at="${_peerLastActiveAt?.toLocal().toIso8601String() ?? 'unknown'}"',
+      );
+    } catch (error) {
+      apkLog('Matrix.presence', 'fetch failed user_id="$peerId" error=$error');
+    }
   }
 
   void _applyPeerPresenceUpdate(mx.SyncUpdate update) {
@@ -839,16 +1024,10 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_receiverOnline) return 'Online';
     final lastActiveAt = _peerLastActiveAt;
     if (lastActiveAt == null) return 'Last seen';
-    final now = DateTime.now();
     final localLastActive = lastActiveAt.toLocal();
     final time = MaterialLocalizations.of(
       context,
     ).formatTimeOfDay(TimeOfDay.fromDateTime(localLastActive));
-    if (now.year == localLastActive.year &&
-        now.month == localLastActive.month &&
-        now.day == localLastActive.day) {
-      return 'Last seen today at $time';
-    }
     final date = MaterialLocalizations.of(
       context,
     ).formatShortDate(localLastActive);
@@ -1069,6 +1248,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final realConvId = await _resolveConversationId();
     _chat.activateConversationRead(realConvId);
+    await _refreshPeerPresence();
     _pinnedEventIds = _chat.pinnedEventIdsForRoom(realConvId);
     _pinnedForMeEventIds =
         _isGroupChat
@@ -2011,7 +2191,11 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _sendPickedAttachment(String filePath, String type) async {
+  Future<void> _sendPickedAttachment(
+    String filePath,
+    String type, {
+    String? caption,
+  }) async {
     if (_isSelfConversation) {
       _logSelfConversationBlocked('send attachment');
       _showSelfConversationError();
@@ -2063,7 +2247,9 @@ class _ChatScreenState extends State<ChatScreen> {
       conversationId: realConvId,
       senderId: widget.currentUserId,
       receiverId: normalisedReceiverId,
-      content: _attachmentLabelForType(type),
+      content: caption?.trim().isNotEmpty == true
+          ? caption!.trim()
+          : _attachmentLabelForType(type),
       timestamp: DateTime.now(),
       status: MessageStatus.sending,
       attachmentUrl: filePath,
@@ -2079,6 +2265,7 @@ class _ChatScreenState extends State<ChatScreen> {
         filePath: filePath,
         attachmentType: type,
         conversationId: realConvId,
+        caption: caption,
       );
       await _saveCanonicalSentMessage(sent);
       if (mounted) {
@@ -3231,26 +3418,87 @@ class _ChatScreenState extends State<ChatScreen> {
                         children: [
                           Expanded(child: _buildMessageList()),
                           if (_someoneElseTyping) const _TypingIndicator(),
-                          if (_replyingTo != null) _buildReplyComposerBanner(),
-                          if (_editingMessage != null)
-                            _buildEditComposerBanner(),
+
+
                           if (_isReadOnlySuggestedGroup)
                             _buildJoinGroupBottomBar()
                           else if (_isDeletedConversation)
                             _buildDeletedGroupBottomBar()
                           else if (!_isDeletedConversation)
-                            MessageInputField(
-                              controller: _controller,
-                              focusNode: _focusNode,
-                              isSending: _isSending,
-                              onSend: _send,
-                              inputPillHeight: _kInputPillH,
-                              onVoiceMessage: _sendVoiceNote,
-                              onVideoMessage: _recordAndSendVideoMessage,
-                              onCameraAttachment: _pickCameraAttachment,
-                              onGalleryAttachment: _pickGalleryAttachment,
-                              onFileAttachment: _pickFileAttachment,
-                            ),
+                            MultiProvider(
+                              providers: [
+                                Provider<AudioRecordingRepository>(
+                                  create: (_) => SourceComposerAudioRepository(),
+                                ),
+                                Provider<CameraRepository>(
+                                  create: (_) => CameraRepositoryImpl(
+                                    DeviceCameraService(),
+                                    const CameraCapabilitiesService(),
+                                    CameraSessionManager(),
+                                  ),
+                                  dispose: (_, repository) =>
+                                      unawaited(repository.close()),
+                                ),
+                                Provider<MediaLibraryRepository>(
+                                  create: (_) => MediaLibraryRepositoryImpl(
+                                    DeviceMediaLibraryService(),
+                                  ),
+                                ),
+                                Provider<AttachmentPickerRepository>(
+                                  create: (_) => AttachmentPickerRepositoryImpl(
+                                    DeviceAttachmentPickerService(),
+                                  ),
+                                ),
+                              ],
+                              child: ChatComposer(
+                                controller: _controller,
+                                focusNode: _focusNode,
+                                recordMode: _recordMode,
+                                onSend: (text) => unawaited(_send()),
+                                onToggleRecordMode: _toggleRecordMode,
+                                onAttachmentPressed: _openAttachments,
+                                onExpressPressed: () {},
+                                replySender: _replyingTo == null
+                                    ? null
+                                    : (_isMine(_replyingTo!) ? 'You' : widget.title),
+                                replyPreview: _replyingTo == null
+                                    ? null
+                                    : _replyPreviewForMessage(_replyingTo!),
+                                onCancelReply: _replyingTo == null
+                                    ? null
+                                    : () => setState(() => _replyingTo = null),
+                                isEditing: _editingMessage != null,
+                                editingMediaSource: null,
+                                editingMediaType: null,
+                                onCancelEdit: _editingMessage == null
+                                    ? null
+                                    : () {
+                                        setState(() => _editingMessage = null);
+                                        _controller.clear();
+                                      },
+                                onVoiceRecorded: (recording) {
+                                  unawaited(_sendVoiceNote(
+                                    recording.path,
+                                    recording.trimRange.duration.inSeconds.clamp(1, 3600),
+                                  ));
+                                },
+                                onRoundVideoRecorded: (recording) {
+                                  unawaited(_sendVideoNote(
+                                    recording.path,
+                                    (recording.duration ?? const Duration(seconds: 1))
+                                        .inSeconds
+                                        .clamp(1, 60),
+                                  ));
+                                },
+                                onRecordingFailure: (msg) {
+                                  if (!mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(msg)),
+                                  );
+                                },
+                                onRecordingActiveChanged: (_) {},
+                              ),
+                            )
                         ],
                       ),
                     ),
@@ -3569,9 +3817,17 @@ class _ChatScreenState extends State<ChatScreen> {
                             previousChronological.timestamp,
                             msg.timestamp,
                           );
+
                       final showTail =
-                          previousChronological == null ||
-                          _isMine(previousChronological) != isMine;
+                          nextChronological == null ||
+                          _isMine(nextChronological) != isMine ||
+                          !_isSameDay(
+                            nextChronological.timestamp,
+                            msg.timestamp,
+                          );
+
+
+
                       final showGroupAvatar =
                           !_isGroupChat ||
                           isMine ||
@@ -3606,6 +3862,16 @@ class _ChatScreenState extends State<ChatScreen> {
                               effectiveAttachmentType: effectiveAttachmentType,
                             ),
                           ),
+                          if (nextChronological != null &&
+                              _isSameDay(
+                                nextChronological.timestamp,
+                                msg.timestamp,
+                              ))
+                            SizedBox(
+                              height: _isMine(nextChronological) == isMine
+                                  ? 2
+                                  : 7,
+                            ),
                           if (msg.id == _pinActivityAnchorEventId &&
                               _latestPinActivityNotice != null)
                             _buildPinActivityNotice(_latestPinActivityNotice!),
@@ -3821,39 +4087,85 @@ class _ChatScreenState extends State<ChatScreen> {
     final displayedContent = _stripMatrixReplyFallbackForDisplay(
       rawDisplayedContent,
     );
-    final bubble = MessageBubble(
-      content: displayedContent,
-      time: _formatTime(msg.timestamp),
-      isMine: isMine,
-      senderName: senderName,
-      showAdminLabel: senderIsAdmin,
-      showTail: showTail,
-      status: isMine ? msg.status : null,
-      isVoiceNote: msg.isVoiceNote,
-      isVoiceListened: msg.isVoiceListened,
-      onVoiceListened:
-          !_isGroupChat && !isMine
-              ? () => unawaited(_chat.markVoiceMessageListened(msg))
-              : null,
-      isVideoNote: effectiveAttachmentType == 'video',
-      voiceDuration: msg.voiceDuration,
-      audioUrl: msg.attachmentUrl,
-      attachmentType: effectiveAttachmentType,
-      attachmentUrl: msg.attachmentUrl,
-      isForwarded: msg.isForwarded,
-      isStarred: msg.isStarred,
-      isPinned: _visiblePinnedEventIds.contains(msg.id),
-      isHighlighted: _highlightedMessageId == msg.id,
-      isDeleted: msg.isDeleted,
-      isEdited: msg.isEdited,
-      replyPreview: _replyPreviewDisplayText(msg.replyPreview),
-      replySender: _replySenderDisplayName(msg),
-      animateOnMount: true,
-      maxWidth:
-          _isGroupChat && !isMine
-              ? MediaQuery.sizeOf(context).width - 94
-              : null,
-    );
+
+    final Widget bubble;
+
+    final contactParts = displayedContent.split('\n');
+    final isContactMessage = contactParts.length >= 3 &&
+        contactParts.first.trim() == '[wrytte-contact]';
+
+    if (isContactMessage) {
+      final contactPresentation = ChatMessagePresentation(
+        id: msg.id,
+        kind: ChatMessageKind.contact,
+        isMine: isMine,
+        timeLabel: _formatTime(msg.timestamp),
+        contactName: contactParts[1].trim().isEmpty
+            ? 'Contact'
+            : contactParts[1].trim(),
+        contactPhone: contactParts.sublist(2).join('\n').trim(),
+        deliveryState: _mapDeliveryState(isMine ? msg.status : null),
+      );
+      bubble = ContactMessageBubble(
+        message: contactPresentation,
+        showTail: showTail,
+      );
+    } else
+
+
+        if (effectiveAttachmentType == 'image') {
+          final presentation = ChatMessagePresentation(
+            id: msg.id,
+            kind: ChatMessageKind.image,
+            isMine: isMine,
+            timeLabel: _formatTime(msg.timestamp),
+            text: _imageCaption(displayedContent),   // ← use helper
+            assetPath: msg.attachmentUrl,            // raw URL is fine
+            senderName: senderName,
+            deliveryState: _mapDeliveryState(isMine ? msg.status : null),
+            edited: msg.isEdited,
+            pinned: _visiblePinnedEventIds.contains(msg.id),
+          );
+
+          bubble = ImageMessageBubble(
+            message: presentation,
+            showTail: true,
+          );
+        } else {
+          bubble = MessageBubble(
+            content: displayedContent,
+            time: _formatTime(msg.timestamp),
+            isMine: isMine,
+            senderName: senderName,
+            showAdminLabel: senderIsAdmin,
+            showTail: showTail,
+            status: isMine ? msg.status : null,
+            isVoiceNote: msg.isVoiceNote,
+            isVoiceListened: msg.isVoiceListened,
+            onVoiceListened:
+                !_isGroupChat && !isMine
+                    ? () => unawaited(_chat.markVoiceMessageListened(msg))
+                    : null,
+            isVideoNote: effectiveAttachmentType == 'video',
+            voiceDuration: msg.voiceDuration,
+            audioUrl: msg.attachmentUrl,
+            attachmentType: effectiveAttachmentType,
+            attachmentUrl: msg.attachmentUrl,
+            isForwarded: msg.isForwarded,
+            isStarred: msg.isStarred,
+            isPinned: _visiblePinnedEventIds.contains(msg.id),
+            isHighlighted: _highlightedMessageId == msg.id,
+            isDeleted: msg.isDeleted,
+            isEdited: msg.isEdited,
+            replyPreview: _replyPreviewDisplayText(msg.replyPreview),
+            replySender: _replySenderDisplayName(msg),
+            animateOnMount: true,
+            maxWidth:
+                _isGroupChat && !isMine
+                    ? MediaQuery.sizeOf(context).width - 94
+                    : null,
+          );
+        }
 
     if (!_isGroupChat || isMine) return bubble;
 
@@ -4822,6 +5134,42 @@ class _ChatScreenState extends State<ChatScreen> {
     final period = dt.hour >= 12 ? 'PM' : 'AM';
     return '$h:$m $period';
   }
+
+  ChatDeliveryState _mapDeliveryState(MessageStatus? status) {
+    return switch (status) {
+      MessageStatus.sending => ChatDeliveryState.pending,
+      MessageStatus.sent => ChatDeliveryState.sent,
+      MessageStatus.delivered => ChatDeliveryState.delivered,
+      MessageStatus.read => ChatDeliveryState.read,
+      MessageStatus.failed => ChatDeliveryState.failed,
+      null => ChatDeliveryState.delivered,
+    };
+  }
+
+  /// Do not show filenames / generic labels as captions.
+  String? _imageCaption(String displayedContent) {
+    final value = displayedContent.trim();
+    if (value.isEmpty) return null;
+
+    final lower = value.toLowerCase();
+    if (const {'photo', 'image', 'attachment', 'photo message'}
+        .contains(lower)) {
+      return null;
+    }
+    if (RegExp(
+      r'\.(png|jpe?g|gif|webp|bmp|heic|heif)$',
+      caseSensitive: false,
+    ).hasMatch(value)) {
+      return null;
+    }
+    return value;
+  }
+
+
+
+
+
+
 
   Widget _buildReplyComposerBanner() {
     final message = _replyingTo!;

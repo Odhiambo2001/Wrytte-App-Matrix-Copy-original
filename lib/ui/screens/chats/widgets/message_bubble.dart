@@ -17,6 +17,7 @@ import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
 import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'package:wrytte/ui/widgets/wrytte_persistent_image.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
+import 'package:wrytte/ui/core/themes/wrytte_theme.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MessageBubble
@@ -268,6 +269,7 @@ class MessageBubble extends StatelessWidget {
             'Edited ',
             style: TextStyle(
               color: Colors.white.withValues(alpha: isMine ? 0.65 : 0.45),
+              fontFamily: WrytteTypography.primaryFontFamily,
               fontSize: 11,
               height: 1,
             ),
@@ -276,6 +278,7 @@ class MessageBubble extends StatelessWidget {
           time,
           style: TextStyle(
             color: Colors.white.withValues(alpha: isMine ? 0.65 : 0.45),
+            fontFamily: WrytteTypography.primaryFontFamily,
             fontSize: 11,
             height: 1,
           ),
@@ -472,6 +475,7 @@ class _ImageMessageBubbleState extends State<_ImageMessageBubble> {
                   caption,
                   style: const TextStyle(
                     color: Colors.white,
+                      fontFamily: WrytteTypography.primaryFontFamily,
                     fontSize: 16,
                     height: 1.28,
                   ),
@@ -1109,8 +1113,10 @@ class _LinkedMessageTextState extends State<_LinkedMessageText> {
 
     final baseStyle = TextStyle(
       color: Colors.white.withValues(alpha: widget.isDeleted ? 0.65 : 1),
-      fontSize: 15,
-      height: 1.35,
+      fontFamily: WrytteTypography.primaryFontFamily,
+      fontSize: 16,
+      fontWeight: FontWeight.w400,
+      height: 1.28,
       fontStyle: widget.isDeleted ? FontStyle.italic : FontStyle.normal,
     );
 

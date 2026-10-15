@@ -5,7 +5,7 @@ import 'package:wrytte/domain/models/picked_attachment_file.dart';
 import 'package:wrytte/domain/models/poll_attachment_draft.dart';
 
 class AttachmentGalleryResult {
-  const AttachmentGalleryResult(this.assets)
+  const AttachmentGalleryResult(this.assets, {this.caption})
     : cameraCapture = null,
       preparedFilePath = null,
       files = const [],
@@ -13,7 +13,7 @@ class AttachmentGalleryResult {
       locationLabel = null,
       poll = null;
 
-  const AttachmentGalleryResult.camera(this.cameraCapture)
+  const AttachmentGalleryResult.camera(this.cameraCapture, {this.caption})
     : assets = const <MediaAsset>[],
       preparedFilePath = null,
       files = const [],
@@ -21,7 +21,7 @@ class AttachmentGalleryResult {
       locationLabel = null,
       poll = null;
 
-  const AttachmentGalleryResult.prepared(this.preparedFilePath)
+  const AttachmentGalleryResult.prepared(this.preparedFilePath, {this.caption})
     : assets = const <MediaAsset>[],
       cameraCapture = null,
       files = const [],
@@ -29,7 +29,7 @@ class AttachmentGalleryResult {
       locationLabel = null,
       poll = null;
 
-  const AttachmentGalleryResult.files(this.files)
+  const AttachmentGalleryResult.files(this.files, {this.caption})
     : assets = const [],
       cameraCapture = null,
       preparedFilePath = null,
@@ -37,7 +37,7 @@ class AttachmentGalleryResult {
       locationLabel = null,
       poll = null;
 
-  const AttachmentGalleryResult.contacts(this.contacts)
+  const AttachmentGalleryResult.contacts(this.contacts, {this.caption})
     : assets = const [],
       cameraCapture = null,
       preparedFilePath = null,
@@ -45,7 +45,7 @@ class AttachmentGalleryResult {
       locationLabel = null,
       poll = null;
 
-  const AttachmentGalleryResult.location(this.locationLabel)
+  const AttachmentGalleryResult.location(this.locationLabel, {this.caption})
     : assets = const [],
       cameraCapture = null,
       preparedFilePath = null,
@@ -53,7 +53,7 @@ class AttachmentGalleryResult {
       contacts = const [],
       poll = null;
 
-  const AttachmentGalleryResult.poll(this.poll)
+  const AttachmentGalleryResult.poll(this.poll, {this.caption})
     : assets = const [],
       cameraCapture = null,
       preparedFilePath = null,
@@ -68,6 +68,15 @@ class AttachmentGalleryResult {
   final List<AttachmentContact> contacts;
   final String? locationLabel;
   final PollAttachmentDraft? poll;
+  final String? caption;
 
   MediaAsset? get firstOrNull => assets.isEmpty ? null : assets.first;
+
+  AttachmentGalleryResult withCaption(String value) {
+    final caption = value.trim();
+    return AttachmentGalleryResult(
+      assets,
+      caption: caption.isEmpty ? null : caption,
+    );
+  }
 }

@@ -38,6 +38,7 @@ dependencies:
   clipboard: ^2.0.2
   flutter_contacts: ^1.1.9+2
   permission_handler: ^12.0.1
+  geolocator: ^13.0.2
   pro_image_editor: ^14.3.0
   provider: ^6.1.5+1
   phone_numbers_parser: ^9.0.24
@@ -193,6 +194,7 @@ flutter:
     - assets/svg/gif_icon.svg
     - assets/svg/reply.svg
     - assets/svg/forward.svg
+    - assets/svg/
 
   fonts:
     - family: Inter
