@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:matrix/matrix.dart' as mx;
 import 'package:url_launcher/url_launcher.dart';
 
@@ -1025,15 +1026,36 @@ class _ChatScreenState extends State<ChatScreen> {
   String _peerPresenceLabel() {
     if (_receiverOnline) return 'Online';
     final lastActiveAt = _peerLastActiveAt;
-    if (lastActiveAt == null) return 'Last seen';
+    // Do not display a generic fallback when Matrix has not supplied a
+    // timestamp. Every offline label below is based on a real last-seen time.
+    if (lastActiveAt == null) return '';
     final localLastActive = lastActiveAt.toLocal();
-    final time = MaterialLocalizations.of(
-      context,
-    ).formatTimeOfDay(TimeOfDay.fromDateTime(localLastActive));
-    final date = MaterialLocalizations.of(
-      context,
-    ).formatShortDate(localLastActive);
-    return 'Last seen $date at $time';
+    final now = DateTime.now();
+    final elapsed = now.difference(localLastActive);
+    final time = DateFormat('HH:mm').format(localLastActive);
+
+    if (elapsed.inMinutes >= 1 && elapsed.inMinutes < 60) {
+      final minutes = elapsed.inMinutes;
+      return 'Last seen $minutes ${minutes == 1 ? 'min' : 'mins'} ago';
+    }
+
+    final today = DateTime(now.year, now.month, now.day);
+    final activityDay = DateTime(
+      localLastActive.year,
+      localLastActive.month,
+      localLastActive.day,
+    );
+    final dayDifference = today.difference(activityDay).inDays;
+
+    if (dayDifference == 0) return 'Last seen Today at $time';
+    if (dayDifference == 1) return 'Last seen Yesterday at $time';
+    if (dayDifference > 1 && dayDifference < 7) {
+      return 'Last seen ${DateFormat('EEE').format(localLastActive)} at $time';
+    }
+    if (localLastActive.year == now.year) {
+      return 'Last seen ${DateFormat('MMM d').format(localLastActive)} at $time';
+    }
+    return 'Last seen ${DateFormat('MM/dd/yy').format(localLastActive)}';
   }
 
   void _onNewLog() {

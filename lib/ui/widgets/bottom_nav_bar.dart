@@ -269,7 +269,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
                             isActive: widget.currentIndex == 4,
                             isAvatar: true,
                             child: UserAvatar(
-                              size: 28,
+                              size: 30,
                               imageUrl:
                                   _profile?.hasProfileImage == true
                                       ? _profile!.profileImage
@@ -283,7 +283,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                           '|avatar:v${_profile!.avatarVersion}',
                             ),
                           ),
-                          label: _profileTabLabel(),
+                          label: 'Profile',
                         ),
                       ],
                     ),
@@ -300,12 +300,6 @@ class _BottomNavBarState extends State<BottomNavBar> {
   String? _profileNameForAvatar() {
     final name = _profileDisplayName();
     return name.isEmpty ? null : name;
-  }
-
-  String _profileTabLabel() {
-    final name = _profileDisplayName();
-    if (name.isEmpty) return 'Profile';
-    return name.split(RegExp(r'\s+')).first;
   }
 
   String _profileDisplayName() {
@@ -355,9 +349,24 @@ class _NavIcon extends StatelessWidget {
     }
 
     if (isAvatar) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+      final avatar = Container(
+        padding: const EdgeInsets.all(1.5),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: isActive ? Colors.white : const Color(0xFF7A7A7A),
+            width: 1.5,
+          ),
+        ),
         child: child,
+      );
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+        decoration: BoxDecoration(
+          color: isActive ? const Color(0xFF23262C) : Colors.transparent,
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: avatar,
       );
     }
 
