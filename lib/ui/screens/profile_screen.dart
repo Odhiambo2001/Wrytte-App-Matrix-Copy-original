@@ -1731,7 +1731,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         tooltip: 'Add story',
         onPressed: _openStoryCamera,
         icon: SvgPicture.asset(
-          'assets/images/Status icon.svg',
+          'assets/images/status_icon.svg',
           width: 42,
           height: 42,
         ),
