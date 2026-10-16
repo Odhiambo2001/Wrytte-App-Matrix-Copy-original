@@ -1719,22 +1719,17 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Widget _buildAddStoryButton() {
-    return Container(
+    return GestureDetector(
+      onTap: _openStoryCamera,
+      child: SizedBox(
       width: 92,
       height: 92,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: const Color(0xFF15181D),
-        border: Border.all(color: const Color(0xFF23262C), width: 2),
-      ),
-      child: IconButton(
-        tooltip: 'Add story',
-        onPressed: _openStoryCamera,
-        icon: SvgPicture.asset(
+      child: SvgPicture.asset(
           'assets/images/status_icon.svg',
-          width: 42,
-          height: 42,
-        ),
+          width: 92,
+          height: 92,
+          fit: BoxFit.contain,
+      ),
       ),
     );
   }
