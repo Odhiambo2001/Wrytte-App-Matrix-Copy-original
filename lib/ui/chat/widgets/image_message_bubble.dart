@@ -541,7 +541,9 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
       onShowInChat: () => Navigator.of(context, rootNavigator: true).maybePop(),
 
-      allowDelete: actionHandler != null,
+      // Only the sender may delete the media. Other viewers retain all
+      // viewer actions, but must not see the delete control.
+      allowDelete: actionHandler != null && widget.message.isMine,
 
     );
 
