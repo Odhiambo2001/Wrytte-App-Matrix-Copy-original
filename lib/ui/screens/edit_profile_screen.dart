@@ -1,8 +1,9 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
@@ -11,6 +12,16 @@ import 'package:wrytte/services/face/biometric_prewarm_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/welcome_view.dart';
 import 'package:wrytte/ui/screens/profile_room_picker_screen.dart';
+import 'package:wrytte/domain/models/attachment_gallery_config.dart';
+import 'package:wrytte/domain/models/attachment_gallery_result.dart';
+import 'package:wrytte/domain/models/camera_session_config.dart';
+import 'package:wrytte/domain/repositories/camera_repository.dart';
+import 'package:wrytte/domain/repositories/media_library_repository.dart';
+import 'package:wrytte/ui/camera/views/wrytte_camera_route.dart';
+import 'package:wrytte/ui/camera/widgets/attachment_camera_preview.dart';
+import 'package:wrytte/ui/core/models/expanding_surface_origin.dart';
+import 'package:wrytte/ui/media/views/attachment_gallery_sheet.dart';
+import 'package:wrytte/ui/media/views/profile_photo_crop_view.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
@@ -49,7 +60,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool get _hasName => _nameController.text.trim().isNotEmpty;
 
   File? _pickedImageFile;
-  final ImagePicker _picker = ImagePicker();
+  final _fullScreenCameraOpen = ValueNotifier<bool>(false);
 
   UserProfile? _profile;
   String? _currentImageUrl;
@@ -159,17 +170,60 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     return _formatProfileNumber(profile.phone, accountId: profile.uid);
   }
 
-  Future<void> _pickImage(ImageSource source) async {
+  Future<void> _chooseProfilePhoto() async {
+    final media = context.read<MediaLibraryRepository>();
+    final camera = context.read<CameraRepository>();
+    const cameraConfig = CameraSessionConfig.profilePhoto();
+    final future = showWrytteAttachmentGallery(
+      context,
+      config: const AttachmentGalleryConfig.profilePhoto(),
+      repository: media,
+      cameraPreviewBuilder: (_) => AttachmentCameraPreview(
+        repository: camera,
+        fullScreenCameraOpen: _fullScreenCameraOpen,
+      ),
+      onMediaRequested: (asset, origin) async {
+        final path = await media.loadFilePath(asset.id);
+        if (!mounted || path == null) return null;
+        final cropped = await showWrytteProfilePhotoCrop(
+          context,
+          sourcePath: path,
+          sourcePixelSize: Size(asset.width.toDouble(), asset.height.toDouble()),
+          origin: origin,
+        );
+        return cropped == null ? null : AttachmentGalleryResult.prepared(cropped);
+      },
+      onCameraRequested: (origin, _) async {
+        if (!mounted) return null;
+        _fullScreenCameraOpen.value = true;
+        try {
+          return await showWrytteCamera(
+            context,
+            repository: camera,
+            config: cameraConfig,
+            origin: origin,
+            returnToGallery: true,
+            keepSessionAliveOnExit: true,
+          );
+        } finally {
+          _fullScreenCameraOpen.value = false;
+        }
+      },
+    );
+    unawaited(camera.open(cameraConfig));
+    AttachmentGalleryResult? result;
     try {
-      final picked = await _picker.pickImage(source: source, imageQuality: 85);
-      if (picked == null) return;
-      setState(() {
-        _pickedImageFile = File(picked.path);
-        _showDiscardConfirmation = false;
-      });
-    } catch (_) {
-      _showSnack('Could not select photo.', isError: true);
+      result = await future;
+    } finally {
+      await camera.close();
     }
+    if (!mounted) return;
+    final path = result?.preparedFilePath ?? result?.cameraCapture?.path;
+    if (path == null) return;
+    setState(() {
+      _pickedImageFile = File(path);
+      _showDiscardConfirmation = false;
+    });
   }
 
   bool get _hasAvatarToRemove =>
@@ -217,7 +271,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   ),
                   onTap: () {
                     Navigator.pop(context);
-                    _pickImage(ImageSource.gallery);
+                    _chooseProfilePhoto();
                   },
                 ),
                 ListTile(
@@ -228,7 +282,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   ),
                   onTap: () {
                     Navigator.pop(context);
-                    _pickImage(ImageSource.camera);
+                    _chooseProfilePhoto();
                   },
                 ),
                 if (hasAvatar)
@@ -936,6 +990,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   @override
   void dispose() {
+    _fullScreenCameraOpen.dispose();
     _nameController.dispose();
     _bioController.dispose();
     _linkController.dispose();
