@@ -2131,7 +2131,12 @@ class _ProfileScreenState extends State<ProfileScreen>
           onTap: () => _launchLink(firstLink),
           child: Row(
             children: [
-              const Icon(Icons.link, color: Color(0xFF4DA3FF), size: 16),
+              Image.asset(
+                'assets/images/link_icon.jpeg',
+                width: 18,
+                height: 18,
+                fit: BoxFit.contain,
+              ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -2170,10 +2175,11 @@ class _ProfileScreenState extends State<ProfileScreen>
                     onTap: () => _launchLink(link),
                     child: Row(
                       children: [
-                        const Icon(
-                          Icons.link,
-                          color: Color(0xFF4DA3FF),
-                          size: 16,
+                        Image.asset(
+                          'assets/images/link_icon.jpeg',
+                          width: 18,
+                          height: 18,
+                          fit: BoxFit.contain,
                         ),
                         const SizedBox(width: 6),
                         Expanded(
