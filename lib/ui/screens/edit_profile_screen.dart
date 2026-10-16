@@ -27,6 +27,7 @@ import 'package:wrytte/ui/camera/widgets/attachment_camera_preview.dart';
 import 'package:wrytte/ui/core/models/expanding_surface_origin.dart';
 import 'package:wrytte/ui/media/views/attachment_gallery_sheet.dart';
 import 'package:wrytte/ui/media/views/profile_photo_crop_view.dart';
+import 'package:wrytte/ui/media/views/full_screen_image_view.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
@@ -42,6 +43,7 @@ class EditProfileScreen extends StatefulWidget {
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _profilePhotoKey = GlobalKey();
 
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _bioController = TextEditingController();
@@ -268,6 +270,31 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     // Keep the existing picker/camera/crop logic, but do not expose an
     // intermediate Gallery/Camera/Remove action sheet.
     unawaited(_chooseProfilePhoto());
+  }
+
+  Future<void> _viewProfilePhoto() async {
+    final path = _pickedImageFile?.path ?? _currentLocalImagePath;
+    if (path == null || !await File(path).exists() || !mounted) return;
+    final result = await showWrytteImageViewer(
+      context,
+      image: FileImage(File(path)),
+      imageAspectRatio: 1,
+      origin: ExpandingSurfaceOrigin.fromKey(
+        _profilePhotoKey,
+        borderRadius: BorderRadius.circular(1000),
+      ),
+      onShare: () => _showSnack('Profile photo sharing will be available here.'),
+      allowDelete: true,
+      showHeaderLabel: false,
+      enableVerticalDragDismiss: true,
+    );
+    if (result == FullScreenImageResult.deleteRequested && mounted) {
+      if (_pickedImageFile != null) {
+        setState(() => _pickedImageFile = null);
+      } else {
+        await _removeAvatar();
+      }
+    }
   }
 
   Future<void> _save() async {
@@ -738,7 +765,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     Widget avatarWidget = _pickedImageFile != null
         ? GestureDetector(
-            onTap: _showImageOptions,
+            key: _profilePhotoKey,
+            onTap: _viewProfilePhoto,
             child: ClipOval(
               child: Image.file(
                 _pickedImageFile!,
@@ -749,7 +777,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             ),
           )
         : GestureDetector(
-            onTap: _showImageOptions,
+            key: _profilePhotoKey,
+            onTap: _hasAvatarToRemove ? _viewProfilePhoto : _chooseProfilePhoto,
             child: UserAvatar(
               size: avatarSize,
               imageUrl: _cacheBustedAvatarUrl(_currentImageUrl),
