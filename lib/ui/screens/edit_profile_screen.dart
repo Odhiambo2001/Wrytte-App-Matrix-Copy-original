@@ -3,7 +3,6 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
 import 'package:matrix/matrix.dart' as mx;
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/user_models/user_profile_service.dart';
@@ -17,6 +16,12 @@ import 'package:wrytte/domain/models/attachment_gallery_result.dart';
 import 'package:wrytte/domain/models/camera_session_config.dart';
 import 'package:wrytte/domain/repositories/camera_repository.dart';
 import 'package:wrytte/domain/repositories/media_library_repository.dart';
+import 'package:wrytte/data/repositories/camera_repository_impl.dart';
+import 'package:wrytte/data/repositories/media_library_repository_impl.dart';
+import 'package:wrytte/data/services/camera_capabilities_service.dart';
+import 'package:wrytte/data/services/camera_session_manager.dart';
+import 'package:wrytte/data/services/device_camera_service.dart';
+import 'package:wrytte/data/services/device_media_library_service.dart';
 import 'package:wrytte/ui/camera/views/wrytte_camera_route.dart';
 import 'package:wrytte/ui/camera/widgets/attachment_camera_preview.dart';
 import 'package:wrytte/ui/core/models/expanding_surface_origin.dart';
@@ -171,8 +176,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   Future<void> _chooseProfilePhoto() async {
-    final media = context.read<MediaLibraryRepository>();
-    final camera = context.read<CameraRepository>();
+    // EditProfileScreen is also opened from routes that do not carry the
+    // signup providers. Create the same repositories used by profile setup.
+    final media = MediaLibraryRepositoryImpl(DeviceMediaLibraryService());
+    final camera = CameraRepositoryImpl(
+      DeviceCameraService(),
+      const CameraCapabilitiesService(),
+      CameraSessionManager(),
+    );
     const cameraConfig = CameraSessionConfig.profilePhoto();
     final future = showWrytteAttachmentGallery(
       context,
