@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:matrix/matrix.dart' as mx;
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui';
@@ -1729,7 +1730,11 @@ class _ProfileScreenState extends State<ProfileScreen>
       child: IconButton(
         tooltip: 'Add story',
         onPressed: _openStoryCamera,
-        icon: const Icon(Icons.add_a_photo_outlined, color: Colors.white, size: 42),
+        icon: SvgPicture.asset(
+          'assets/images/Status icon.svg',
+          width: 42,
+          height: 42,
+        ),
       ),
     );
   }
