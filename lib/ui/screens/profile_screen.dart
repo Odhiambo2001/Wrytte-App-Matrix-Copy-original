@@ -85,6 +85,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   MatrixPublicGroup? _profileChannel;
   MatrixPublicGroup? _profileGroup;
   int _profileRoomResolveRevision = 0;
+  bool _statusIconBuildLogged = false;
 
   late final TabController _tabController;
 
@@ -1719,8 +1720,22 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Widget _buildAddStoryButton() {
+    if (!_statusIconBuildLogged) {
+      _statusIconBuildLogged = true;
+      apkLog(
+        'Profile.status_icon',
+        'build asset="assets/images/status_icon.svg" '
+            'wrapper="none" size="92x92"',
+      );
+    }
     return GestureDetector(
-      onTap: _openStoryCamera,
+      onTap: () {
+        apkLog(
+          'Profile.status_icon',
+          'tap asset="assets/images/status_icon.svg" action="open_camera"',
+        );
+        unawaited(_openStoryCamera());
+      },
       child: SizedBox(
       width: 92,
       height: 92,
