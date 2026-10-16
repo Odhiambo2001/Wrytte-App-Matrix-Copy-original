@@ -265,56 +265,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   void _showImageOptions() {
-    final hasAvatar = _hasAvatarToRemove;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF23262C),
-      builder:
-          (_) => SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.photo, color: Colors.white),
-                  title: const Text(
-                    'Gallery',
-                    style: TextStyle(color: Colors.white),
-                  ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _chooseProfilePhoto();
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.camera_alt, color: Colors.white),
-                  title: const Text(
-                    'Camera',
-                    style: TextStyle(color: Colors.white),
-                  ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _chooseProfilePhoto();
-                  },
-                ),
-                if (hasAvatar)
-                  ListTile(
-                    leading: const Icon(
-                      Icons.delete_outline,
-                      color: Colors.redAccent,
-                    ),
-                    title: const Text(
-                      'Remove',
-                      style: TextStyle(color: Colors.redAccent),
-                    ),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _removeAvatar();
-                    },
-                  ),
-              ],
-            ),
-          ),
-    );
+    // Keep the existing picker/camera/crop logic, but do not expose an
+    // intermediate Gallery/Camera/Remove action sheet.
+    unawaited(_chooseProfilePhoto());
   }
 
   Future<void> _save() async {
