@@ -36,7 +36,7 @@ import 'package:wrytte/domain/repositories/camera_repository.dart';
 import 'package:wrytte/domain/repositories/media_library_repository.dart';
 
 import 'package:wrytte/routing/app_routes.dart';
-import 'package:wrytte/ui/profile/models/profile_screen_data.dart';
+import 'package:wrytte/ui/screens/profile_screen.dart';
 
 import 'package:wrytte/ui/camera/views/wrytte_camera_route.dart';
 
@@ -3319,18 +3319,28 @@ class _ChatViewState extends State<ChatView>
 
                                           onCallPressed: _toggleCallMenu,
 
-                                          onProfilePressed: () => context.push(
-                                            AppRoutes.profile,
-                                            extra: ProfileScreenData(
-                                              name: model.config.title,
-                                              identifier: '+250 791 568 677',
-                                              avatarAsset:
-                                                  model.config.avatarAsset,
-                                              isOwnProfile: false,
-                                              bio:
-                                                  'Private calls, messaging, and communication.',
-                                            ),
-                                          ),
+                                          onProfilePressed: () {
+                                            debugPrint(
+                                              '[ChatViewHeader] profile tap: '
+                                              'conversationId="${model.config.id}" '
+                                              'title="${model.config.title}" '
+                                              'avatar="${model.config.avatarAsset}"',
+                                            );
+                                            Navigator.of(context).push(
+                                                MaterialPageRoute<void>(
+                                                  builder: (_) => ProfileScreen(
+                                                    conversationId:
+                                                        model.config.id,
+                                                    savedNameHint:
+                                                        model.config.title,
+                                                    initialProfileName:
+                                                        model.config.title,
+                                                    initialAvatarUrl:
+                                                        model.config.avatarAsset,
+                                                  ),
+                                                ),
+                                              );
+                                          },
                                         ),
                                 ),
                               ),

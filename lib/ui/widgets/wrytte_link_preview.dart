@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -202,7 +203,25 @@ class _WrytteLinkPreviewState extends State<WrytteLinkPreview> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.link_rounded, color: Colors.white70, size: 32),
+          ColorFiltered(
+            colorFilter: const ColorFilter.matrix([
+              0, 0, 0, 0, 255,
+              0, 0, 0, 0, 255,
+              0, 0, 0, 0, 255,
+              1, 0, 0, 0, 0,
+            ]),
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: Transform.scale(
+                scaleX: -1,
+                child: SvgPicture.asset(
+                  'assets/images/link_icon.svg',
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+          ),
           const SizedBox(height: 5),
           Text(metadata.domain, style: const TextStyle(color: Colors.white70)),
         ],
@@ -304,10 +323,28 @@ class _WrytteLinkPreviewState extends State<WrytteLinkPreview> {
   }
 
   Widget _compactPlaceholder() {
-    return const ColoredBox(
+    return ColoredBox(
       color: Color(0xFF11161C),
       child: Center(
-        child: Icon(Icons.link_rounded, color: Colors.white70, size: 34),
+        child: ColorFiltered(
+          colorFilter: const ColorFilter.matrix([
+            0, 0, 0, 0, 255,
+            0, 0, 0, 0, 255,
+            0, 0, 0, 0, 255,
+            1, 0, 0, 0, 0,
+          ]),
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: Transform.scale(
+              scaleX: -1,
+              child: SvgPicture.asset(
+                'assets/images/link_icon.svg',
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

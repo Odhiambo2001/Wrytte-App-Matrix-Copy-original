@@ -90,6 +90,8 @@ Future<AttachmentGalleryResult?> showWrytteAttachmentGallery(
   AttachmentCameraPreviewBuilder? cameraPreviewBuilder,
 
   AttachmentPickerRepository? pickerRepository,
+
+  Future<void> Function()? onRemovePhoto,
 }) {
   final disableAnimations = MediaQuery.disableAnimationsOf(context);
 
@@ -136,6 +138,8 @@ Future<AttachmentGalleryResult?> showWrytteAttachmentGallery(
         cameraPreviewBuilder: cameraPreviewBuilder,
 
         pickerRepository: pickerRepository,
+
+        onRemovePhoto: onRemovePhoto,
       ),
     ),
   );
@@ -154,6 +158,8 @@ class _AttachmentGallerySheet extends StatefulWidget {
     this.cameraPreviewBuilder,
 
     this.pickerRepository,
+
+    this.onRemovePhoto,
   });
 
   final MediaLibraryRepository repository;
@@ -167,6 +173,8 @@ class _AttachmentGallerySheet extends StatefulWidget {
   final AttachmentCameraPreviewBuilder? cameraPreviewBuilder;
 
   final AttachmentPickerRepository? pickerRepository;
+
+  final Future<void> Function()? onRemovePhoto;
 
   @override
   State<_AttachmentGallerySheet> createState() =>
@@ -1065,6 +1073,48 @@ class _AttachmentGallerySheetState extends State<_AttachmentGallerySheet>
                                           ),
                                   );
                                 },
+                              ),
+                            ),
+
+                          if (widget.config.purpose ==
+                                  AttachmentPurpose.profilePhoto &&
+                              widget.onRemovePhoto != null)
+                            PositionedDirectional(
+                              start: 0,
+                              end: 0,
+                              bottom: 0,
+                              child: SafeArea(
+                                top: false,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(bottom: 16),
+                                  child: Center(
+                                    child: GestureDetector(
+                                      onTap: () async {
+                                        _dismissSheet();
+                                        await widget.onRemovePhoto!.call();
+                                      },
+                                      child: Container(
+                                        width: 150,
+                                        height: 40,
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF1C1C1E)
+                                              .withValues(alpha: .70),
+                                          borderRadius:
+                                              BorderRadius.circular(22),
+                                        ),
+                                        child: const Text(
+                                          'Remove photo',
+                                          style: TextStyle(
+                                            color: Color(0xFFFF4D4D),
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
 

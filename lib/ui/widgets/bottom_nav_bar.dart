@@ -29,6 +29,9 @@ class BottomNavBar extends StatefulWidget {
 }
 
 class _BottomNavBarState extends State<BottomNavBar> {
+  static const Color _activeColor = Colors.white;
+  static const Color _inactiveColor = Color(0xFF7A7A7A);
+
   UserProfile? _profile;
   StreamSubscription<UserProfile?>? _profileSub;
 
@@ -79,6 +82,8 @@ class _BottomNavBarState extends State<BottomNavBar> {
 
   @override
   Widget build(BuildContext context) {
+    final current = widget.currentIndex;
+
     return Stack(
       children: [
         Positioned.fill(
@@ -95,19 +100,20 @@ class _BottomNavBarState extends State<BottomNavBar> {
             ),
           ),
         ),
-
         SafeArea(
           top: false,
           child: Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 16),
+            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(33),
+              borderRadius: BorderRadius.circular(999),
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                 child: Container(
+                  height: 64,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
                   decoration: BoxDecoration(
                     color: const Color(0xFF23262C).withValues(alpha: 0.30),
-                    borderRadius: BorderRadius.circular(30),
+                    borderRadius: BorderRadius.circular(999),
                     border: Border.all(
                       color: const Color(0xFF23262C),
                       width: 1.0,
@@ -120,145 +126,120 @@ class _BottomNavBarState extends State<BottomNavBar> {
                       ),
                     ],
                   ),
-                  child: Theme(
-                    data: Theme.of(context).copyWith(
-                      splashColor: Colors.transparent,
-                      highlightColor: Colors.transparent,
-                    ),
-                    child: BottomNavigationBar(
-                      type: BottomNavigationBarType.fixed,
-                      backgroundColor: Colors.transparent,
-                      elevation: 0,
-                      currentIndex: widget.currentIndex,
-                      onTap: widget.onTap,
-                      selectedItemColor: Colors.white,
-                      unselectedItemColor: const Color(0xFF7A7A7A),
-                      iconSize: 26,
-                      selectedLabelStyle: const TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      unselectedLabelStyle: const TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: 11,
-                        fontWeight: FontWeight.w400,
-                      ),
-                      items: [
-                        /// Shops
-                        BottomNavigationBarItem(
-                          icon: _NavIcon(
-                            isActive: widget.currentIndex == 0,
-                            child: Image.asset(
-                              'assets/svg/coin_icon.png',
-                              height: 26,
-                              width: 26,
-                              color: widget.currentIndex == 0
-                                  ? Colors.white
-                                  : const Color(0xFF7A7A7A),
-                              colorBlendMode: BlendMode.srcIn,
-                            ),
-                          ),
-                          label: 'Shops',
+                  child: Row(
+                    children: [
+                      /// Shops
+                      _NavItem(
+                        isActive: current == 0,
+                        onTap: () => widget.onTap(0),
+                        label: 'Shops',
+                        icon: Image.asset(
+                          'assets/svg/coin_icon.png',
+                          height: 24,
+                          width: 24,
+                          color: current == 0 ? _activeColor : _inactiveColor,
+                          colorBlendMode: BlendMode.srcIn,
                         ),
+                      ),
 
-                        /// Chats
-                        BottomNavigationBarItem(
-                          icon: _NavIcon(
-                            isActive: widget.currentIndex == 1,
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                SvgPicture.asset(
-                                  widget.currentIndex == 1
-                                      ? 'assets/svg/chat_filled.svg'
-                                      : 'assets/svg/chat_icon.svg',
-                                  height: 26,
-                                  width: 26,
-                                  colorFilter: ColorFilter.mode(
-                                    widget.currentIndex == 1
-                                        ? Colors.white
-                                        : const Color(0xFF7A7A7A),
-                                    BlendMode.srcIn,
+                      /// Chats
+                      _NavItem(
+                        isActive: current == 1,
+                        onTap: () => widget.onTap(1),
+                        label: 'Chats',
+                        icon: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            SvgPicture.asset(
+                              current == 1
+                                  ? 'assets/svg/chat_filled.svg'
+                                  : 'assets/svg/chat_icon.svg',
+                              height: 24,
+                              width: 24,
+                              colorFilter: ColorFilter.mode(
+                                current == 1 ? _activeColor : _inactiveColor,
+                                BlendMode.srcIn,
+                              ),
+                            ),
+                            if (widget.totalUnreadCount > 0)
+                              Positioned(
+                                top: -4,
+                                right: -4,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 1,
+                                  ),
+                                  constraints: const BoxConstraints(
+                                    minWidth: 16,
+                                    minHeight: 16,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    widget.totalUnreadCount > 99
+                                        ? '99+'
+                                        : widget.totalUnreadCount.toString(),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    textAlign: TextAlign.center,
                                   ),
                                 ),
-                                if (widget.totalUnreadCount > 0)
-                                  Positioned(
-                                    top: -4,
-                                    right: -4,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 4,
-                                        vertical: 1,
-                                      ),
-                                      constraints: const BoxConstraints(
-                                        minWidth: 16,
-                                        minHeight: 16,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue,
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        widget.totalUnreadCount > 99
-                                            ? '99+'
-                                            : widget.totalUnreadCount.toString(),
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                        textAlign: TextAlign.center,
-                                      ),
-                                    ),
-                                  ),
-                              ],
+                              ),
+                          ],
+                        ),
+                      ),
+
+                      /// Posts
+                      _NavItem(
+                        isActive: current == 2,
+                        onTap: () => widget.onTap(2),
+                        label: 'Posts',
+                        icon: Image.asset(
+                          'assets/svg/posts_icon.png',
+                          height: 24,
+                          width: 24,
+                          color: current == 2 ? _activeColor : _inactiveColor,
+                          colorBlendMode: BlendMode.srcIn,
+                        ),
+                      ),
+
+                      /// Calls
+                      _NavItem(
+                        isActive: current == 3,
+                        onTap: () => widget.onTap(3),
+                        label: 'Calls',
+                        icon: Icon(
+                          current == 3 ? Icons.call : Icons.call_outlined,
+                          size: 24,
+                          color: current == 3 ? _activeColor : _inactiveColor,
+                        ),
+                      ),
+
+                      /// Profile
+                      _NavItem(
+                        isActive: current == 4,
+                        onTap: () => widget.onTap(4),
+                        label: 'Profile',
+                        labelVerticalOffset: -2,
+                        icon: Container(
+                          width: 26,
+                          height: 26,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.white,
+                              width: 0.75,
                             ),
                           ),
-                          label: 'Chats',
-                        ),
-
-                        /// Posts
-                        BottomNavigationBarItem(
-                          icon: _NavIcon(
-                            isActive: widget.currentIndex == 2,
-                            child: Image.asset(
-                              'assets/svg/posts_icon.png',
-                              height: 26,
-                              width: 26,
-                              color: widget.currentIndex == 2
-                                  ? Colors.white
-                                  : const Color(0xFF7A7A7A),
-                              colorBlendMode: BlendMode.srcIn,
-                            ),
-                          ),
-                          label: 'Posts',
-                        ),
-
-                        /// Calls
-                        BottomNavigationBarItem(
-                          icon: _NavIcon(
-                            isActive: widget.currentIndex == 3,
-                            child: Icon(
-                              widget.currentIndex == 3
-                                  ? Icons.call
-                                  : Icons.call_outlined,
-                              size: 26,
-                              color: widget.currentIndex == 3
-                                  ? Colors.white
-                                  : const Color(0xFF7A7A7A),
-                            ),
-                          ),
-                          label: 'Calls',
-                        ),
-
-                        /// Profile
-                        BottomNavigationBarItem(
-                          icon: _NavIcon(
-                            isActive: widget.currentIndex == 4,
-                            isAvatar: true,
+                          child: ClipOval(
                             child: UserAvatar(
-                              size: 28,
+                              size: 26,
                               imageUrl: _profile?.hasProfileImage == true
                                   ? _profile!.profileImage
                                   : null,
@@ -270,10 +251,9 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                       '|avatar:v${_profile!.avatarVersion}',
                             ),
                           ),
-                          label: 'Profile',
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -311,63 +291,104 @@ class _BottomNavBarState extends State<BottomNavBar> {
   }
 }
 
-class _NavIcon extends StatelessWidget {
-  final Widget child;
-  final bool isActive;
-  final bool isAvatar;
 
-  const _NavIcon({
-    required this.child,
+/// One tab. Takes an equal share of the row width (Expanded).
+/// The active pill is switcher_icon.svg, stretched behind the icon + label.
+/// The content decides the pill's size; the SVG is then enlarged past that
+/// area by the "bleed" values to cover any empty margin inside the SVG file.
+class _NavItem extends StatelessWidget {
+  // Content area the pill must cover.
+  static const double _contentHorizontalMargin = 2;
+  static const double _contentVerticalPadding = 6;
+
+  // How far the SVG extends beyond the content area on each side.
+  // Raise these until the visible pill covers the avatar and "Profile".
+  static const double _svgBleedX = 7;
+  static const double _svgBleedY = 15;
+
+  final Widget icon;
+  final String label;
+  final bool isActive;
+  final VoidCallback onTap;
+  final double labelVerticalOffset;
+
+  const _NavItem({
+    required this.icon,
+    required this.label,
     required this.isActive,
-    this.isAvatar = false,
+    required this.onTap,
+    this.labelVerticalOffset = 0,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (isActive && !isAvatar) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: child,
-      );
-    }
-
-    if (isAvatar) {
-      // Matches reference image exactly:
-      // • Active   → white outline + #23262C switcher
-      // • Inactive → grey outline + transparent
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-        decoration: BoxDecoration(
-          color: isActive ? const Color(0xFF23262C) : Colors.transparent,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Container(
-          width: 32,
-          height: 32,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(
-              color:
-                  isActive
-                      ? const Color(0xFFFFFFFF)
-                      : const Color(0xFF7A7A7A),
-              width: isActive ? 2.0 : 1.5,
+    return Expanded(
+      child: Semantics(
+        button: true,
+        selected: isActive,
+        label: label,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: Center(
+            child: Container(
+              width: double.infinity,
+              margin: const EdgeInsets.symmetric(
+                horizontal: _contentHorizontalMargin,
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  if (isActive)
+                    Positioned(
+                      left: -_svgBleedX,
+                      right: -_svgBleedX,
+                      top: -_svgBleedY,
+                      bottom: -_svgBleedY,
+                      child: SvgPicture.asset(
+                        'assets/images/switcher_icon.svg',
+                        fit: BoxFit.fill,
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: _contentVerticalPadding,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        icon,
+                        const SizedBox(height: 2),
+                        Transform.translate(
+                          offset: Offset(0, labelVerticalOffset),
+                          child: Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.clip,
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 10,
+                              fontWeight:
+                                  isActive ? FontWeight.w600 : FontWeight.w400,
+                              color: isActive
+                                  ? Colors.white
+                                  : const Color(0xFF7A7A7A),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          child: ClipOval(
-            child: child,
-          ),
         ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: child,
+      ),
     );
   }
 }
+
+

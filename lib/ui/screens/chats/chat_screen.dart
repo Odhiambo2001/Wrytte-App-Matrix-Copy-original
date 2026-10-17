@@ -4341,6 +4341,38 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       onBack: () => Navigator.pop(context),
       onCallPressed: () => _startCall(CallType.voice),
+
+      onProfilePressed: () {
+        debugPrint(
+          '[ChatHeader] profile tap: conversationId="${widget.conversationId}" '
+          'receiverId="${widget.receiverId}" '
+          'profileUid="${_receiverProfile?.uid}" '
+          'matrixId="${_receiverIdentity?.matrixUserId}" '
+          'name="$_resolvedHeaderName"',
+        );
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ProfileScreen(
+              // Prefer loaded profile/identity, but always fall back to the
+              // route receiver so the profile is never opened without a user id.
+              uid: _receiverProfile?.uid ??
+                  _receiverIdentity?.matrixUserId ??
+                  widget.receiverId,
+              conversationId: widget.conversationId,
+              savedNameHint: _resolvedHeaderName,
+              initialAvatarUrl: _safePersonHeaderAvatar(
+                _receiverProfile?.hasProfileImage == true
+                    ? _receiverProfile!.profileImage
+                    : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
+              ),
+              initialProfileName: _resolvedHeaderName,
+            ),
+          ),
+        );
+      },
+
+
+
       avatarBuilder: (size) => UserAvatar(
         size: size,
         imageUrl: _safePersonHeaderAvatar(

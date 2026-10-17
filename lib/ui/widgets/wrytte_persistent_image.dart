@@ -24,6 +24,7 @@ class WryttePersistentImage extends StatefulWidget {
 class _WryttePersistentImageState extends State<WryttePersistentImage> {
   static final Map<String, Future<File>> _copies = {};
   late Future<File> _copy;
+  bool _retriedAfterDecodeFailure = false;
 
   @override
   void initState() {
@@ -34,7 +35,21 @@ class _WryttePersistentImageState extends State<WryttePersistentImage> {
   @override
   void didUpdateWidget(covariant WryttePersistentImage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.source != widget.source) _copy = _resolve(widget.source);
+    if (oldWidget.source != widget.source) {
+      _retriedAfterDecodeFailure = false;
+      _copy = _resolve(widget.source);
+    }
+  }
+
+  Future<void> _retryAfterDecodeFailure() async {
+    if (_retriedAfterDecodeFailure) return;
+    _retriedAfterDecodeFailure = true;
+    await AttachmentLocalStore.instance.deleteLocalCopy(
+      source: widget.source,
+      fileName: 'photo.jpg',
+    );
+    if (!mounted) return;
+    setState(() => _copy = _resolve(widget.source));
   }
 
   Future<File> _resolve(String source) {
@@ -54,7 +69,18 @@ class _WryttePersistentImageState extends State<WryttePersistentImage> {
       future: _copy,
       builder: (context, snapshot) {
         if (snapshot.hasData) {
-          return Image.file(snapshot.data!, fit: widget.fit);
+          return Image.file(
+            snapshot.data!,
+            fit: widget.fit,
+            errorBuilder: (context, error, stackTrace) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _retryAfterDecodeFailure();
+              });
+              return const Center(
+                child: Icon(Icons.image_outlined, color: Colors.white54),
+              );
+            },
+          );
         }
         if (snapshot.hasError) {
           return widget.errorWidget ??

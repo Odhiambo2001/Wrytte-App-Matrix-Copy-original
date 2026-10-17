@@ -1,9 +1,11 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 
 /// Shared glass tab bar used on profile screens.
 /// [tabs] is a list of tab labels — supports any number of tabs.
-/// Width auto-sizes: ≤2 tabs uses 60% screen width (centred),
+/// Width auto-sizes: ≤2 tabs uses a wider centred pill (~220–230 px)
+/// that matches the near-oval look in the screenshot,
 /// ≥3 tabs stretches full width with horizontal padding.
 class ProfileTabBarSection extends StatelessWidget {
   final TabController controller;
@@ -19,38 +21,40 @@ class ProfileTabBarSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final double screenWidth = MediaQuery.of(context).size.width;
 
-    // For 2 tabs centre at 60% width; for 3+ stretch full width
+    // Wider centred pill for 1–2 tabs → produces the near-oval shape
+    // seen in the screenshot (comes out further left/right).
     final bool centred = tabs.length <= 2;
-    final double containerWidth = centred ? screenWidth * 0.6 : screenWidth;
-    final EdgeInsets padding =
-        centred
-            ? const EdgeInsets.symmetric(vertical: 6)
-            : const EdgeInsets.symmetric(horizontal: 16, vertical: 6);
+    final double containerWidth = centred
+        ? math.min(230.0, screenWidth * 0.58)
+        : screenWidth;
+
+    final EdgeInsets padding = centred
+        ? const EdgeInsets.symmetric(vertical: 6)
+        : const EdgeInsets.symmetric(horizontal: 16, vertical: 6);
 
     Widget tabBar = ClipRRect(
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(999),
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
-          height: 44,
+          height: 40,
           decoration: BoxDecoration(
             color: const Color(0xFF23262C).withValues(alpha: 0.30),
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(999),
             border: Border.all(color: const Color(0xFF23262C), width: 1.0),
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
           child: TabBar(
             controller: controller,
-            isScrollable: false, // always false — fills available width evenly
+            isScrollable: false,
             padding: EdgeInsets.zero,
             labelPadding: EdgeInsets.zero,
-            tabAlignment:
-                TabAlignment.fill, // evenly distributed, no trailing space
+            tabAlignment: TabAlignment.fill,
             indicator: const _InsetTabIndicator(
               color: Color(0xFF23262C),
-              radius: 18,
+              radius: 16,
               verticalInset: 0,
-              horizontalInset: 2,
+              horizontalInset: 1.5,
             ),
             indicatorSize: TabBarIndicatorSize.tab,
             dividerColor: Colors.transparent,
@@ -73,10 +77,9 @@ class ProfileTabBarSection extends StatelessWidget {
     return Container(
       color: Colors.transparent,
       padding: padding,
-      child:
-          centred
-              ? Center(child: SizedBox(width: containerWidth, child: tabBar))
-              : tabBar,
+      child: centred
+          ? Center(child: SizedBox(width: containerWidth, child: tabBar))
+          : tabBar,
     );
   }
 }

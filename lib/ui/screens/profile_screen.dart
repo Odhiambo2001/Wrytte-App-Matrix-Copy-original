@@ -126,7 +126,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     super.initState();
     _seededSavedName = _cleanName(
       widget.savedNameHint,
-    ); // ← add, runs before first build
+    );
     _tabController = TabController(length: _tabs.length, vsync: this);
     _seedProfileForFirstPaint();
     if (_profile != null) unawaited(_loadProfileRoomCards(_profile!));
@@ -177,7 +177,13 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _loadProfile({bool forceRefresh = false}) async {
     var uid = _validProfileUid(widget.uid);
+    debugPrint(
+      '[ProfileScreen] load start: widgetUid="${widget.uid}" '
+      'conversationId="${widget.conversationId}" '
+      'initialName="${widget.initialProfileName}"',
+    );
     uid ??= await _resolveProfileUidFromConversation();
+    debugPrint('[ProfileScreen] resolved uid: "$uid"');
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     var identity =
         uid != null && ownerUserId != null && ownerUserId.isNotEmpty
@@ -223,6 +229,11 @@ class _ProfileScreenState extends State<ProfileScreen>
             : await UserProfileService.instance.getCurrentUserProfile(
               forceRefresh: forceRefresh,
             );
+    debugPrint(
+      '[ProfileScreen] lookup result: found=${profile != null} '
+      'uid="${profile?.uid}" name="${profile?.displayName ?? profile?.name}" '
+      'hasImage=${profile?.hasProfileImage}',
+    );
 
     if (!mounted) return;
     setState(() {
@@ -319,7 +330,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       if (resolvedSaved.isNotEmpty) {
         _seededSavedName = resolvedSaved;
       } else if (savedContact == null && _seededSavedName != null) {
-        // Contact was deleted meanwhile — drop the hint so the public name shows.
         _seededSavedName = null;
       }
     });
@@ -402,8 +412,6 @@ class _ProfileScreenState extends State<ProfileScreen>
           conversationId,
           profileUid,
         )) {
-      // An individual's tabs are strictly DM-scoped. Reject a group room even
-      // if a caller accidentally supplies one in the future.
       if (mounted) setState(() => _conversationMessages = const []);
       return;
     }
@@ -519,8 +527,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     required bool isChannel,
   }) async {
     final local = _profileRoomFromJoinedRooms(reference, isChannel: isChannel);
-    // The profile stores only a room ID. A local Room can have partial member
-    // state, so fetch its full joined participant list for an exact count.
     if (local != null) {
       try {
         final client = await MatrixChatService.instance.connect();
@@ -614,7 +620,6 @@ class _ProfileScreenState extends State<ProfileScreen>
         'Profile.room',
         'summary lookup failed ref="${reference.trim()}" error="$error"',
       );
-      // If the server is unavailable, use cached room metadata as a fallback.
       try {
         final chat = ChatService();
         final cached = await chat.loadSuggestedRoomProfile(reference.trim());
@@ -937,16 +942,13 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   String _profileDisplayName() {
     if (_isOtherUser) {
-      // Seeded from the caller (chat header) — present on the very first frame.
       if (_seededSavedName != null && _seededSavedName!.isNotEmpty) {
         return WrytteId.forDisplay(_seededSavedName!) ?? _seededSavedName!;
       }
-      // Saved contact resolved during load.
       final savedName = _cleanName(_savedContact?.formattedName);
       if (savedName.isNotEmpty) {
         return WrytteId.forDisplay(savedName) ?? savedName;
       }
-      // Identity cache saved name.
       final savedIdentityName = _cleanName(_identity?.savedName);
       if (savedIdentityName.isNotEmpty) {
         return WrytteId.forDisplay(savedIdentityName) ?? savedIdentityName;
@@ -966,8 +968,6 @@ class _ProfileScreenState extends State<ProfileScreen>
   String? _profileAvatarUrl() {
     final profile = _profile;
     if (profile?.hasProfileImage == true) return profile!.profileImage;
-    // A successful Module API response is authoritative. If it says there is
-    // no avatar, don't fall back to the stale URL passed when this screen opened.
     if (profile?.moduleProfileLoaded == true) return null;
     final initial = widget.initialAvatarUrl?.trim() ?? '';
     return initial.isEmpty ? null : initial;
@@ -1289,19 +1289,28 @@ class _ProfileScreenState extends State<ProfileScreen>
                     SliverToBoxAdapter(
                       child: Column(
                         children: [
-                          SizedBox(height: topBarHeight + 20),
+                          // Reduced top spacing so avatar/name/phone sit higher
+                          SizedBox(height: topBarHeight - 18),
 
                           // ── Avatar ──────────────────────────────────────────
-                          _profileLoading && !hasProfile && !hasInitialAvatar
-                              ? _buildAvatarShimmer(100)
-                              : UserAvatar(
-                                size: 100,
-                                imageUrl: _profileAvatarUrl(),
-                                localImagePath: _profile?.localProfileImagePath,
-                                cacheIdentity:
-                                    'user:${(widget.uid ?? _profile?.uid ?? '').trim().toLowerCase()}',
-                                name: displayName,
-                              ),
+                          SizedBox(
+                            width: 100,
+                            height: 100,
+                            child:
+                                _profileLoading &&
+                                        !hasProfile &&
+                                        !hasInitialAvatar
+                                    ? _buildAvatarShimmer(100)
+                                    : UserAvatar(
+                                      size: 100,
+                                      imageUrl: _profileAvatarUrl(),
+                                      localImagePath:
+                                          _profile?.localProfileImagePath,
+                                      cacheIdentity:
+                                          'user:${(widget.uid ?? _profile?.uid ?? '').trim().toLowerCase()}',
+                                      name: displayName,
+                                    ),
+                          ),
 
                           const SizedBox(height: 12),
 
@@ -1348,21 +1357,28 @@ class _ProfileScreenState extends State<ProfileScreen>
                                   groupRef.isNotEmpty)) ...[
                             Padding(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
+                                horizontal: 6,
                               ),
-                              child: Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 18,
-                                ),
-                                decoration: BoxDecoration(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(60),
+                                child: BackdropFilter(
+                                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                                  child: Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.symmetric(vertical: 29),
+                                    decoration: BoxDecoration(
+                                  color: const Color(0xFF08090B),
                                   border: Border.all(
-                                    color: const Color(0xFF202329),
+                                    color: Colors.white.withValues(alpha: 0.03),
+                                    width: 1,
                                   ),
-                                  borderRadius: BorderRadius.circular(30),
+                                  borderRadius: BorderRadius.circular(60),
                                 ),
+
+
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
                                     if (bioText.isNotEmpty)
                                       Padding(
@@ -1371,18 +1387,13 @@ class _ProfileScreenState extends State<ProfileScreen>
                                         ),
                                         child: _buildBio(bioText),
                                       ),
-                                    if (bioText.isNotEmpty &&
-                                        (links.isNotEmpty ||
-                                            channelRef.isNotEmpty ||
-                                            groupRef.isNotEmpty))
-                                      _profileSectionDivider(
-                                        const Color(0xFF202329),
-                                        height: 24,
-                                      ),
+                                    // NO divider between bio and links
                                     if (links.isNotEmpty)
                                       Padding(
-                                        padding: const EdgeInsets.symmetric(
+                                        padding: EdgeInsets.symmetric(
                                           horizontal: 20,
+                                        ).copyWith(
+                                          top: bioText.isNotEmpty ? 4 : 0,
                                         ),
                                         child: _buildLinks(links),
                                       ),
@@ -1390,7 +1401,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                                         (channelRef.isNotEmpty ||
                                             groupRef.isNotEmpty))
                                       _profileSectionDivider(
-                                        const Color(0xFF34373E),
+                                        Colors.white.withValues(alpha: 0.03),
                                         height: 24,
                                       ),
                                     if (channelRef.isNotEmpty)
@@ -1408,7 +1419,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                                     if (channelRef.isNotEmpty &&
                                         groupRef.isNotEmpty)
                                       _profileSectionDivider(
-                                        const Color(0xFF34373E),
+                                        Colors.white.withValues(alpha: 0.03),
                                         height: 1,
                                       ),
                                     if (groupRef.isNotEmpty)
@@ -1425,6 +1436,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                                       ),
                                   ],
                                 ),
+                                  ),
+                                ),
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -1436,7 +1449,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                       ),
                     ),
 
-                    // ── Sticky tab bar — pins just below the top app bar ──────
+                    // ── Sticky tab bar ───────────────────────────────────────
                     SliverPersistentHeader(
                       pinned: true,
                       delegate: _StickyTabBarDelegate(
@@ -1506,9 +1519,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: Row(
                       children: [
-                        // ── Back / Add-story button ──────────────────────
-                        // Own profile (embedded): small circle with white
-                        // outline + white +  (matches reference image 2)
                         widget.embeddedInHome && !_isOtherUser
                             ? _buildTopAddButton()
                             : widget.embeddedInHome
@@ -1518,24 +1528,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                                     onTap: () => Navigator.pop(context),
                                   ),
 
-                        // ── Title — only shown for own profile, truly centered ─
                         Expanded(
-                          child:
-                              _isOtherUser
-                                  ? const SizedBox.shrink()
-                                  : const Center(
-                                    child: Text(
-                                      "Profile",
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
+                          child: const SizedBox.shrink(),
                         ),
 
-                        // ── Edit / action button ─────────────────────────
                         _isOtherUser
                             ? _showUnsavedProfileActions
                                 ? _buildUnsavedProfileActions()
@@ -1587,12 +1583,11 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
-  // ── Quick actions — solid background, no glass ────────────────────────────
-  // CHANGE 3: Solid 0xFF23262C, no blur/opacity
+  // ── Quick actions ──────────────────────────────────────────────────────────
 
   Widget _buildQuickActions() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -1653,7 +1648,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       onTap: onTap,
       child: Container(
         decoration: BoxDecoration(
-          // CHANGE 3: Solid color, no transparency, no BackdropFilter
           color: const Color(0xFF23262C),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: const Color(0xFF23262C), width: 1.0),
@@ -1682,9 +1676,9 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildPostsTab() {
     return ListView(
-      padding: const EdgeInsets.only(top: 40, bottom: 120),
-      // CHANGE 4: Bouncing physics so empty tabs have iOS-style spring bounce
-      // without scrolling the header content away
+      // Keep the empty-state content low in the available profile area,
+      // matching the reference spacing below the Posts/Saved tab bar.
+      padding: const EdgeInsets.only(top: 220, bottom: 120),
       physics: const BouncingScrollPhysics(),
       children: [
         const Text(
@@ -1698,21 +1692,29 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
-  /// Top-left + button for own profile (embedded in Home).
-  /// Matches reference: smaller white outlined circle + plus
-  /// (Icons.add_circle_outline). Thin stroke can look partially
-  /// solid / partially dotted in screenshots.
   Widget _buildTopAddButton() {
     return GestureDetector(
       onTap: _openStoryCamera,
-      child: const SizedBox(
-        width: 36,
-        height: 36,
-        child: Center(
-          child: Icon(
-            Icons.add_circle_outline,
-            color: Colors.white,
-            size: 26,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            width: 38,
+            height: 46,
+            decoration: BoxDecoration(
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFF23262C)),
+            ),
+            child: Center(
+              child: SvgPicture.asset(
+                'assets/images/status_icon.svg',
+                width: 26,
+                height: 26,
+                fit: BoxFit.contain,
+              ),
+            ),
           ),
         ),
       ),
@@ -1737,38 +1739,59 @@ class _ProfileScreenState extends State<ProfileScreen>
         unawaited(_openStoryCamera());
       },
       child: SizedBox(
-      width: 92,
-      height: 92,
-      child: SvgPicture.asset(
+        width: 92,
+        height: 92,
+        child: SvgPicture.asset(
           'assets/images/status_icon.svg',
           width: 92,
           height: 92,
           fit: BoxFit.contain,
-      ),
+        ),
       ),
     );
   }
 
   Widget _buildAddStoriesButton() {
-    // Matches reference: wider pill, moderate height (~50), readable text.
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 48),
+    final screenWidth = MediaQuery.of(context).size.width;
+    return Center(
       child: SizedBox(
-        width: double.infinity,
-        height: 50,
-        child: FilledButton(
-          onPressed: _openStoryCamera,
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF249FF0),
-            foregroundColor: Colors.white,
-            elevation: 0,
-            shape: const StadiumBorder(),
-            textStyle: const TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w500,
+        width: screenWidth * 0.6,
+        height: 56,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Container(
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF249FF0),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: const Color(0xFF249FF0),
+                width: 1,
+              ),
+            ),
+            child: SizedBox.expand(
+              child: FilledButton(
+                onPressed: _openStoryCamera,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF249FF0),
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  side: const BorderSide(
+                    color: Color(0xFF249FF0),
+                    width: 1,
+                  ),
+                  padding: EdgeInsets.zero,
+                  shape: const StadiumBorder(),
+                  textStyle: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                child: const Text('Add Stories'),
+              ),
             ),
           ),
-          child: const Text('Add Stories'),
         ),
       ),
     );
@@ -1792,8 +1815,6 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Widget _buildSavedTab() {
-    // CHANGE 4: Wrap in a scrollable with bouncing physics so it feels iOS-native
-    // but won't fully scroll the header away when there's no data
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
       slivers: [
@@ -1809,11 +1830,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       ],
     );
   }
-
-  // ── Other user empty tab states ────────────────────────────────────────────
-  // CHANGE 4: Each empty tab is a CustomScrollView with SliverFillRemaining
-  // so it fills the space without allowing full header scroll-away,
-  // but retains the iOS bounce animation on over-scroll.
 
   Widget _buildEmptyTab(IconData icon, String label) {
     return CustomScrollView(
@@ -2146,18 +2162,24 @@ class _ProfileScreenState extends State<ProfileScreen>
           onTap: () => _launchLink(firstLink),
           child: Row(
             children: [
-              Image.asset(
-                'assets/images/link_icon.jpeg',
-                width: 18,
-                height: 18,
-                fit: BoxFit.contain,
+
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: Transform.scale(
+                  scaleX: -1,
+                  child: SvgPicture.asset(
+                    'assets/images/link_icon.svg',
+                    fit: BoxFit.contain,
+                  ),
+                ),
               ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
                   _displayProfileLink(firstLink),
                   style: const TextStyle(
-                    color: Color(0xFF4DA3FF),
+                    color: Colors.white,
                     fontSize: 14,
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -2171,7 +2193,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                   child: Text(
                     '$remainingCount more',
                     style: const TextStyle(
-                      color: Color(0xFF4DA3FF),
+                      color: Colors.white,
                       fontSize: 13,
                     ),
                   ),
@@ -2190,18 +2212,31 @@ class _ProfileScreenState extends State<ProfileScreen>
                     onTap: () => _launchLink(link),
                     child: Row(
                       children: [
-                        Image.asset(
-                          'assets/images/link_icon.jpeg',
-                          width: 18,
-                          height: 18,
-                          fit: BoxFit.contain,
+                        ColorFiltered(
+                          colorFilter: const ColorFilter.matrix([
+                            0, 0, 0, 0, 255,
+                            0, 0, 0, 0, 255,
+                            0, 0, 0, 0, 255,
+                            1, 0, 0, 0, 0,
+                          ]),
+                          child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: Transform.scale(
+                              scaleX: -1,
+                              child: SvgPicture.asset(
+                                'assets/images/link_icon.svg',
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                          ),
                         ),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
                             _displayProfileLink(link),
                             style: const TextStyle(
-                              color: Color(0xFF4DA3FF),
+                              color: Colors.white,
                               fontSize: 14,
                             ),
                             overflow: TextOverflow.ellipsis,
@@ -2238,7 +2273,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   }) {
     final title =
         room?.name.trim().isNotEmpty == true
-            ? room!.name.trim()
+            ? room?.name.trim() ?? label
             : reference.startsWith('!')
             ? label
             : reference;
@@ -2318,7 +2353,6 @@ class _ProfileScreenState extends State<ProfileScreen>
             border: Border.all(color: const Color(0xFF23262C)),
           ),
           child: IconButton(
-            // Slightly larger so the + matches the reference cleanly
             icon: Icon(icon, color: Colors.white, size: 20),
             onPressed: onTap,
           ),
@@ -2345,7 +2379,10 @@ class _ProfileScreenState extends State<ProfileScreen>
             child: Center(
               child: Text(
                 text,
-                style: const TextStyle(color: Color(0xFF4DA3FF), fontSize: 16),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                ),
               ),
             ),
           ),
@@ -2356,19 +2393,14 @@ class _ProfileScreenState extends State<ProfileScreen>
 }
 
 // ── Sticky tab bar delegate ────────────────────────────────────────────────────
-// CHANGE 5: topOffset is accepted but the delegate pins at its natural sliver
-// position (just after the header slivers), which means the tab bar sticks
-// right below where the header ends — and stays there on scroll.
 
 class _StickyTabBarDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
-  // topOffset kept for reference / future use but pinning is handled by
-  // SliverPersistentHeader(pinned: true) in the NestedScrollView header.
   final double topOffset;
 
   const _StickyTabBarDelegate({required this.child, this.topOffset = 0});
 
-  static const double _height = 56.0;
+  static const double _height = 52.0;
 
   @override
   double get minExtent => _height;
@@ -2381,7 +2413,7 @@ class _StickyTabBarDelegate extends SliverPersistentHeaderDelegate {
     BuildContext context,
     double shrinkOffset,
     bool overlapsContent,
-  ) => child;
+  ) => SizedBox(height: _height, child: child);
 
   @override
   bool shouldRebuild(_StickyTabBarDelegate old) =>

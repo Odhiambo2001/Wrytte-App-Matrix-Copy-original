@@ -72,6 +72,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   UserProfile? _profile;
   String? _currentImageUrl;
   String? _currentLocalImagePath;
+  bool _avatarRemovalPending = false;
   int _avatarCacheRevision = 0;
 
   // ── Card style: outlines only ─────────────────────────────────────────────
@@ -130,6 +131,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         profile.localProfileImagePath.trim().isNotEmpty
             ? profile.localProfileImagePath
             : null;
+    _avatarRemovalPending = false;
     if (_currentImageUrl != null) {
       _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
     }
@@ -222,6 +224,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           _fullScreenCameraOpen.value = false;
         }
       },
+      onRemovePhoto: _hasAvatarToRemove ? _removeAvatar : null,
     );
     unawaited(camera.open(cameraConfig));
     AttachmentGalleryResult? result;
@@ -235,40 +238,30 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (path == null) return;
     setState(() {
       _pickedImageFile = File(path);
+      _avatarRemovalPending = false;
       _showDiscardConfirmation = false;
     });
   }
 
   bool get _hasAvatarToRemove =>
+      !_avatarRemovalPending &&
       _currentImageUrl?.trim().isNotEmpty == true ||
-      _currentLocalImagePath?.trim().isNotEmpty == true ||
-      _profile?.hasProfileImage == true;
+      (!_avatarRemovalPending &&
+          (_currentLocalImagePath?.trim().isNotEmpty == true ||
+              _profile?.hasProfileImage == true));
 
   Future<void> _removeAvatar() async {
     if (_isSaving) return;
-    setState(() => _isSaving = true);
-    try {
-      await UserProfileService.instance.deleteProfileImage();
-      if (!mounted) return;
-      setState(() {
-        _pickedImageFile = null;
-        _currentImageUrl = null;
-        _currentLocalImagePath = null;
-        _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
-        _profile = UserProfileService.instance.cachedProfile ?? _profile;
-        _isSaving = false;
-      });
-      _showSnack('Profile photo removed.');
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isSaving = false);
-      _showSnack(e.toString(), isError: true);
-    }
+    setState(() {
+      _pickedImageFile = null;
+      _currentImageUrl = null;
+      _currentLocalImagePath = null;
+      _avatarRemovalPending = true;
+      _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
+    });
   }
 
   void _showImageOptions() {
-    // Keep the existing picker/camera/crop logic, but do not expose an
-    // intermediate Gallery/Camera/Remove action sheet.
     unawaited(_chooseProfilePhoto());
   }
 
@@ -306,7 +299,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
     setState(() => _isSaving = true);
     try {
-      String? newImageUrl = _currentImageUrl;
+      final avatarWasRemoved = _avatarRemovalPending;
+      String? newImageUrl = avatarWasRemoved ? null : _currentImageUrl;
       var avatarUploadPending = false;
       if (_pickedImageFile != null) {
         try {
@@ -317,6 +311,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           avatarUploadPending = true;
           debugPrint('[EditProfile] Avatar upload queued: $e');
         }
+      }
+
+      if (avatarWasRemoved) {
+        await UserProfileService.instance.deleteProfileImage();
       }
 
       final fullName = _nameController.text.trim();
@@ -368,6 +366,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             refreshedProfile?.localProfileImagePath.trim().isNotEmpty == true
                 ? refreshedProfile!.localProfileImagePath
                 : _currentLocalImagePath;
+        _avatarRemovalPending = false;
         if (_currentImageUrl != null) {
           _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
         }
@@ -562,7 +561,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         focusedBorder: InputBorder.none,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 18,
-          vertical: 16,
+          vertical: 12,
         ),
         counterText: '',
       ),
@@ -845,7 +844,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   maxLength: 35,
                                 ),
                               ),
-                              const SizedBox(height: 12),
+                              const SizedBox(height: 18),
                               _outlinedCard(
                                 child: _inputRow(
                                   'Bio',
@@ -853,7 +852,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   maxLength: 110,
                                 ),
                               ),
-                              const SizedBox(height: 12),
+                              const SizedBox(height: 18),
                               _outlinedCard(
                                 child: _inputRow(
                                   'Link',
@@ -861,9 +860,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   singleLineLink: true,
                                 ),
                               ),
-                              const SizedBox(height: 12),
+                              const SizedBox(height: 18),
                               _outlinedCard(
-                                radius: 20,
+                                radius: 40,
                                 child: Column(
                                   children: [
                                     Padding(
@@ -912,13 +911,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(height: 12),
+                              const SizedBox(height: 18),
                               _outlinedCard(
                                 child: InkWell(
                                   onTap: null,
                                   borderRadius: BorderRadius.circular(24),
                                   child: const Padding(
-                                    padding: EdgeInsets.symmetric(vertical: 16),
+                                    padding: EdgeInsets.symmetric(vertical: 12),
                                     child: Center(
                                       child: Text(
                                         '+ Add Account',
@@ -931,14 +930,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   ),
                                 ),
                               ),
-                              const SizedBox(height: 12),
+                              const SizedBox(height: 18),
                               _outlinedCard(
                                 child: InkWell(
                                   onTap: _isLoggingOut ? null : _confirmLogout,
                                   borderRadius: BorderRadius.circular(24),
                                   child: Padding(
                                     padding: const EdgeInsets.symmetric(
-                                      vertical: 16,
+                                      vertical: 12,
                                     ),
                                     child: Center(
                                       child: _isLoggingOut
