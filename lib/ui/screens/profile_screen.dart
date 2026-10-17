@@ -1535,8 +1535,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                         _isOtherUser
                             ? _showUnsavedProfileActions
                                 ? _buildUnsavedProfileActions()
-                                : _glassButton(
-                                  icon: Icons.more_vert,
+                                : _glassTextButton(
+                                  text: 'Edit',
                                   onTap: _showMoreActions,
                                 )
                             : _glassTextButton(
@@ -1609,36 +1609,16 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildUnsavedProfileActions() {
     return Container(
-      height: 48,
+      width: 70,
+      height: 44,
       decoration: BoxDecoration(
-        color: const Color(0xFF15181D),
+        color: const Color(0xFF08090B),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: const Color(0xFF23262C)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            tooltip: _isProfileUserBlocked ? 'Unblock user' : 'Block user',
-            onPressed: _toggleProfileBlock,
-            icon: Icon(
-              _isProfileUserBlocked
-                  ? Icons.block_flipped
-                  : Icons.block_outlined,
-              color: Colors.white,
-              size: 25,
-            ),
-          ),
-          IconButton(
-            tooltip: 'Add contact',
-            onPressed: _openAddContact,
-            icon: const Icon(
-              Icons.person_add_alt_1_outlined,
-              color: Colors.white,
-              size: 25,
-            ),
-          ),
-        ],
+        children: const [],
       ),
     );
   }
@@ -1646,29 +1626,32 @@ class _ProfileScreenState extends State<ProfileScreen>
   Widget _actionPill(IconData icon, String label, {VoidCallback? onTap}) {
     return GestureDetector(
       onTap: onTap,
+
       child: Container(
-        decoration: BoxDecoration(
+      height: 56,
+      decoration: BoxDecoration(
+        color: const Color(0xFF08090B),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(
           color: const Color(0xFF23262C),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFF23262C), width: 1.0),
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: Colors.white, size: 24),
-            const SizedBox(height: 5),
-            Text(
-              label,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.75),
-                fontSize: 12,
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-          ],
+          width: 1,
         ),
       ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: Colors.white, size: 24),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.75),
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    ),
     );
   }
 

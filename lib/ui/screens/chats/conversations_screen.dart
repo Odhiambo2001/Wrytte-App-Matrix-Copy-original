@@ -1556,14 +1556,15 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       rejectPlaceholderVersion: profile?.moduleProfileLoaded != true,
     );
     final matrixAvatar = _safeDirectAvatarUrl(matrixProfile?.$2);
+    // Prefer the canonical profile/cache avatar whenever available. Contact
+    // and room values may be stale and caused the old avatar to render first
+    // before the profile refresh replaced it.
     final avatar =
-        profile?.moduleProfileLoaded == true
-            ? profileAvatar
-            : contactAvatar ??
-                profileAvatar ??
-                matrixAvatar ??
-                existingAvatar ??
-                identityAvatar;
+        profileAvatar ??
+        contactAvatar ??
+        matrixAvatar ??
+        existingAvatar ??
+        identityAvatar;
     if ((avatar ?? '').trim().isNotEmpty &&
         avatar?.trim() != conv.otherUserAvatar?.trim()) {
       unawaited(

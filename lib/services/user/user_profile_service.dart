@@ -1279,16 +1279,17 @@ class UserProfileService {
       visibilitySettings: visibilitySettings,
       avatarVersion: _avatarVersionFromFields(fields),
       moduleProfileLoaded: true,
-      links:
-          [
-                _field(fields, 'Link'),
-                _field(fields, 'link'),
-                _field(fields, 'Website'),
-                _field(fields, 'website'),
-              ]
-              .whereType<String>()
-              .where((link) => link.trim().isNotEmpty)
-              .toList(),
+      links: [
+        _field(fields, 'Link'),
+        _field(fields, 'link'),
+        _field(fields, 'Website'),
+        _field(fields, 'website'),
+      ]
+          .whereType<String>()
+          .map((link) => link.trim())
+          .where((link) => link.isNotEmpty)
+          .toSet()
+          .toList(),
     );
   }
 
