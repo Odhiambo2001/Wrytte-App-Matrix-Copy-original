@@ -164,6 +164,8 @@ flutter:
     - assets/images/link_icon.svg
     - assets/images/switcher_icon.svg
     - assets/images/status_icon.svg
+    - assets/images/Add to contact.svg
+    - assets/images/Block user.svg
     - assets/images/video image1.jpg
     - assets/images/video image2.jpg
     - assets/images/video image3.jpg

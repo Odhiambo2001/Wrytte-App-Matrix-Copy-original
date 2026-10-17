@@ -1608,17 +1608,34 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Widget _buildUnsavedProfileActions() {
-    return Container(
-      width: 70,
-      height: 44,
-      decoration: BoxDecoration(
-        color: const Color(0xFF08090B),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFF23262C)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: const [],
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          width: 70,
+          height: 44,
+          decoration: BoxDecoration(
+            color: const Color(0xFF08090B).withValues(alpha: 0.30),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: const Color(0xFF23262C)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              SvgPicture.asset(
+                'assets/images/Block user.svg',
+                width: 25,
+                height: 25,
+              ),
+              SvgPicture.asset(
+                'assets/images/Add to contact.svg',
+                width: 25,
+                height: 25,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2331,13 +2348,19 @@ class _ProfileScreenState extends State<ProfileScreen>
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            color: const Color(0xFF23262C).withValues(alpha: 0.30),
+            color: const Color(0xFF08090B).withValues(alpha: 0.30),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: const Color(0xFF23262C)),
           ),
-          child: IconButton(
-            icon: Icon(icon, color: Colors.white, size: 20),
-            onPressed: onTap,
+          child: Center(
+            child: GestureDetector(
+              onTap: onTap,
+              child: Icon(
+                icon,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
           ),
         ),
       ),
