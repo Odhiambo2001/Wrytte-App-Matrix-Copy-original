@@ -1362,17 +1362,24 @@ class _ProfileScreenState extends State<ProfileScreen>
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(60),
                                 child: BackdropFilter(
-                                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                                  filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                                   child: Container(
                                     width: double.infinity,
                                     padding: const EdgeInsets.symmetric(vertical: 29),
                                     decoration: BoxDecoration(
                                   color: const Color(0xFF08090B),
                                   border: Border.all(
-                                    color: Colors.white.withValues(alpha: 0.03),
+                                    color: const Color(0xFF23262C),
                                     width: 1,
                                   ),
                                   borderRadius: BorderRadius.circular(60),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.25),
+                                      blurRadius: 30,
+                                      offset: const Offset(0, 10),
+                                    ),
+                                  ],
                                 ),
 
 
@@ -1401,7 +1408,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                                         (channelRef.isNotEmpty ||
                                             groupRef.isNotEmpty))
                                       _profileSectionDivider(
-                                        Colors.white.withValues(alpha: 0.03),
+                                        const Color(0xFF23262C),
                                         height: 24,
                                       ),
                                     if (channelRef.isNotEmpty)
@@ -1419,7 +1426,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                                     if (channelRef.isNotEmpty &&
                                         groupRef.isNotEmpty)
                                       _profileSectionDivider(
-                                        Colors.white.withValues(alpha: 0.03),
+                                        const Color(0xFF23262C),
                                         height: 1,
                                       ),
                                     if (groupRef.isNotEmpty)
@@ -1524,7 +1531,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                             : widget.embeddedInHome
                                 ? const SizedBox(width: 36)
                                 : _glassButton(
-                                    icon: Icons.arrow_back_ios,
+                                    icon: Icons.arrow_back_ios_new,
                                     onTap: () => Navigator.pop(context),
                                   ),
 
@@ -1587,21 +1594,48 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildQuickActions() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Expanded(
-            child: _actionPill(Icons.call_outlined, 'Calls', onTap: () {}),
+            child: _actionPill(
+              null,
+              'Call',
+              iconAsset: 'assets/images/Phone new.svg',
+              iconSize: 24,
+              onTap: () {},
+            ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Expanded(
-            child: _actionPill(Icons.videocam_outlined, 'Video', onTap: () {}),
+            child: _actionPill(
+              null,
+              'Video',
+              iconAsset: 'assets/images/Video call new.svg',
+              iconSize: 28,
+              onTap: () {},
+            ),
           ),
-          const SizedBox(width: 10),
-          Expanded(child: _actionPill(Icons.search, 'Search', onTap: () {})),
-          const SizedBox(width: 10),
-          Expanded(child: _actionPill(Icons.more_horiz, 'More', onTap: () {})),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _actionPill(
+              null,
+              'Search',
+              iconAsset: 'assets/images/Search icon new.svg',
+              iconSize: 24,
+              onTap: () {},
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _actionPill(
+              Icons.more_horiz,
+              'More',
+              iconSize: 24,
+              onTap: () {},
+            ),
+          ),
         ],
       ),
     );
@@ -1613,25 +1647,33 @@ class _ProfileScreenState extends State<ProfileScreen>
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
-          width: 70,
+          width: 84,
           height: 44,
           decoration: BoxDecoration(
-            color: const Color(0xFF08090B).withValues(alpha: 0.30),
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: const Color(0xFF23262C)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 30,
+                offset: const Offset(0, 10),
+              ),
+            ],
           ),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               SvgPicture.asset(
                 'assets/images/Block user.svg',
-                width: 25,
-                height: 25,
+                width: 24,
+                height: 24,
               ),
+              const SizedBox(width: 20),
               SvgPicture.asset(
                 'assets/images/Add to contact.svg',
-                width: 25,
-                height: 25,
+                width: 24,
+                height: 24,
               ),
             ],
           ),
@@ -1640,25 +1682,59 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
-  Widget _actionPill(IconData icon, String label, {VoidCallback? onTap}) {
+  Widget _actionPill(
+    IconData? icon,
+    String label, {
+    String? iconAsset,
+    double iconSize = 36,
+    VoidCallback? onTap,
+  }) {
     return GestureDetector(
       onTap: onTap,
 
-      child: Container(
-      height: 56,
-      decoration: BoxDecoration(
-        color: const Color(0xFF08090B),
+      child: ClipRRect(
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(
-          color: const Color(0xFF23262C),
-          width: 1,
-        ),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: Colors.white, size: 24),
-          const SizedBox(height: 4),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            height: 56,
+            decoration: BoxDecoration(
+              color: const Color(0xFF08090B),
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: const Color(0xFF23262C),
+                width: 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  blurRadius: 30,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+
+          SizedBox(
+            height: 30,
+            child: Center(
+              child:
+                  iconAsset != null
+                      ? SvgPicture.asset(
+                          iconAsset,
+                          width: iconSize,
+                          height: iconSize,
+                        )
+                      : Icon(
+                          icon,
+                          color: Colors.white,
+                          size: iconSize,
+                        ),
+            ),
+          ),
+          const SizedBox(height: 1),
           Text(
             label,
             style: TextStyle(
@@ -1666,9 +1742,11 @@ class _ProfileScreenState extends State<ProfileScreen>
               fontSize: 12,
             ),
           ),
-        ],
+              ],
+            ),
+          ),
+        ),
       ),
-    ),
     );
   }
 
@@ -2348,9 +2426,16 @@ class _ProfileScreenState extends State<ProfileScreen>
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            color: const Color(0xFF08090B).withValues(alpha: 0.30),
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: const Color(0xFF23262C)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 30,
+                offset: const Offset(0, 10),
+              ),
+            ],
           ),
           child: Center(
             child: GestureDetector(

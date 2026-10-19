@@ -675,18 +675,24 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         }
         setState(() => _showDiscardConfirmation = true);
       },
-      child: ClipOval(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(40 / 2),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _cardBorder.withValues(alpha: 0.55),
-              border: Border.all(color: _cardBorder, width: 1),
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
+              borderRadius: BorderRadius.circular(40 / 2),
+              border: Border.all(
+                color: const Color(0xFF23262C),
+                width: 1.0,
+              ),
             ),
-            child: const Icon(Icons.close, color: Colors.white, size: 20),
+            child: const Center(
+              child: Icon(Icons.close, color: Colors.white, size: 20),
+            ),
           ),
         ),
       ),
