@@ -92,7 +92,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   late final TabController _tabController;
 
   bool get _isOtherUser {
-    final uid = _validProfileUid(widget.uid);
+    final uid = _profileTargetUserId;
     final ownUid = UserProfileService.instance.cachedProfile?.uid;
     if (uid != null && uid != ownUid) return true;
     return widget.conversationId?.trim().isNotEmpty ?? false;
@@ -1080,13 +1080,155 @@ class _ProfileScreenState extends State<ProfileScreen>
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       clipBehavior: Clip.antiAlias,
-      builder: (_) => _ProfileAddContactSheet(
-        initialName: _profileDisplayName(),
-        phone: phone.isNotEmpty ? phone : (uid ?? ''),
+      builder: (sheetContext) => AnimatedPadding(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
+        ),
+        child: FractionallySizedBox(
+          heightFactor: 0.70,
+          child: _ProfileAddContactSheet(
+            initialName: _profileDisplayName(),
+            phone: phone.isNotEmpty ? phone : (uid ?? ''),
+          ),
+        ),
       ),
     );
     debugPrint('[ProfileScreen] Add-contact bottom sheet closed');
     if (mounted) _loadProfile();
+  }
+
+  Future<void> _openProfileEditSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: false,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.60),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      builder: (sheetContext) => AnimatedPadding(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
+        ),
+        child: FractionallySizedBox(
+          heightFactor: 0.82,
+          child: _ProfileAddContactSheet(
+            initialName: _profileDisplayName(),
+            phone: _profilePhone(),
+            showDeleteContact: _isOtherUser && _savedContact != null,
+            onDeleteContact: _confirmDeleteSavedContact,
+          ),
+        ),
+      ),
+    );
+    if (mounted) unawaited(_loadProfile());
+  }
+
+  Future<void> _confirmDeleteSavedContact() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (dialogContext) {
+        final screenW = MediaQuery.of(dialogContext).size.width;
+        final dialogW = screenW * 0.78;
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: (screenW - dialogW) / 2,
+          ),
+          child: Container(
+            width: dialogW,
+            padding: const EdgeInsets.fromLTRB(20, 28, 20, 22),
+            decoration: BoxDecoration(
+              color: const Color(0xFF171A20),
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: const Color(0xFF3A3D44), width: 1),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Are you sure you want to delete the contact?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white, fontSize: 16),
+                ),
+                const SizedBox(height: 24),
+                _profileConfirmButton(
+                  dialogContext,
+                  'Delete',
+                  const Color(0xFFFF5C52),
+                  true,
+                ),
+                const SizedBox(height: 12),
+                _profileConfirmButton(
+                  dialogContext,
+                  'Cancel',
+                  Colors.white,
+                  false,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (confirmed == true) await _deleteSavedContact();
+  }
+
+  Widget _profileConfirmButton(
+    BuildContext dialogContext,
+    String label,
+    Color color,
+    bool confirmed,
+  ) {
+    return GestureDetector(
+      onTap: () => Navigator.pop(dialogContext, confirmed),
+      child: Container(
+        width: double.infinity,
+        height: 56,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: const Color(0xFF23262C),
+          borderRadius: BorderRadius.circular(28),
+        ),
+        child: Text(label, style: TextStyle(color: color, fontSize: 17)),
+      ),
+    );
+  }
+
+  Future<void> _deleteSavedContact() async {
+    final contact = _savedContact;
+    final ownerUserId = await AuthService.instance.getCurrentUserId();
+    final uid = _profileTargetUserId;
+    if (contact == null || ownerUserId == null || ownerUserId.isEmpty || uid == null) {
+      return;
+    }
+
+    await ContactLocalDb.removeContact(contact, ownerUserId: ownerUserId);
+    unawaited(
+      ContactService()
+          .removeContactFromBackend(ownerUserId: ownerUserId, contact: contact)
+          .catchError(
+            (e) => debugPrint('[ProfileScreen] backend contact remove failed: $e'),
+          ),
+    );
+    await ContactIdentityCache.instance.clearSavedName(
+      ownerUserId: ownerUserId,
+      matrixUserId: uid,
+    );
+    await ChatService().applyUnsavedContact(contact);
+    ContactService.invalidateMatrixContactsCache();
+    ContactService().invalidateCache();
+
+    if (!mounted) return;
+    setState(() => _savedContact = null);
+    Navigator.of(context).pop();
   }
 
   Future<void> _toggleProfileBlock() async {
@@ -1155,87 +1297,6 @@ class _ProfileScreenState extends State<ProfileScreen>
         ),
       );
     }
-  }
-
-  Future<void> _deleteSavedContact() async {
-    final contact = _savedContact;
-    final ownerUserId = await AuthService.instance.getCurrentUserId();
-    final uid = _validProfileUid(widget.uid);
-    if (contact == null ||
-        ownerUserId == null ||
-        ownerUserId.isEmpty ||
-        uid == null) {
-      return;
-    }
-
-    await ContactLocalDb.removeContact(contact, ownerUserId: ownerUserId);
-    unawaited(
-      ContactService()
-          .removeContactFromBackend(ownerUserId: ownerUserId, contact: contact)
-          .catchError(
-            (e) =>
-                debugPrint('[ProfileScreen] backend contact remove failed: $e'),
-          ),
-    );
-    await ContactIdentityCache.instance.clearSavedName(
-      ownerUserId: ownerUserId,
-      matrixUserId: uid,
-    );
-    await ChatService().applyUnsavedContact(contact);
-    ContactService.invalidateMatrixContactsCache();
-    ContactService().invalidateCache();
-
-    final identity = await ContactIdentityCache.instance.findByMatrixId(
-      ownerUserId: ownerUserId,
-      matrixUserId: uid,
-    );
-    if (!mounted) return;
-    setState(() {
-      _savedContact = null;
-      _identity = identity;
-    });
-  }
-
-  Future<void> _showMoreActions() async {
-    final isSaved = _savedContact != null;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF1C1F25),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder:
-          (context) => SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (isSaved)
-                  ListTile(
-                    leading: const Icon(
-                      Icons.person_remove_outlined,
-                      color: Color(0xFFFF6B6B),
-                    ),
-                    title: const Text(
-                      'Delete contact',
-                      style: TextStyle(color: Color(0xFFFF6B6B)),
-                    ),
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await _deleteSavedContact();
-                    },
-                  ),
-                ListTile(
-                  leading: const Icon(Icons.close, color: Colors.white70),
-                  title: const Text(
-                    'Cancel',
-                    style: TextStyle(color: Colors.white),
-                  ),
-                  onTap: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-          ),
-    );
   }
 
   static const TextStyle _bioStyle = TextStyle(
@@ -1559,7 +1620,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                                 ? _buildUnsavedProfileActions()
                                 : _glassTextButton(
                                   text: 'Edit',
-                                  onTap: _showMoreActions,
+                                  onTap: _openProfileEditSheet,
                                 )
                             : _glassTextButton(
                               text: "Edit",
@@ -2507,10 +2568,17 @@ class _ProfileScreenState extends State<ProfileScreen>
 }
 
 class _ProfileAddContactSheet extends StatefulWidget {
-  const _ProfileAddContactSheet({required this.initialName, required this.phone});
+  const _ProfileAddContactSheet({
+    required this.initialName,
+    required this.phone,
+    this.showDeleteContact = false,
+    this.onDeleteContact,
+  });
 
   final String initialName;
   final String phone;
+  final bool showDeleteContact;
+  final VoidCallback? onDeleteContact;
 
   @override
   State<_ProfileAddContactSheet> createState() =>
@@ -2542,7 +2610,7 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
         child: SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(
             16,
-            38,
+            30,
             16,
             MediaQuery.viewInsetsOf(context).bottom + 24,
           ),
@@ -2555,25 +2623,35 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                     icon: Icons.close,
                     onTap: () => Navigator.pop(context),
                   ),
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context, true),
-                    child: Container(
-                      width: 56,
-                      height: 56,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF2196F3),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.check,
-                        color: Colors.white,
-                        size: 36,
-                      ),
-                    ),
+                  AnimatedBuilder(
+                    animation: _nameController,
+                    builder: (context, _) {
+                      final hasName = _nameController.text.trim().isNotEmpty;
+                      return GestureDetector(
+                        onTap: hasName
+                            ? () => Navigator.pop(context, true)
+                            : null,
+                        child: Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: hasName
+                                ? const Color(0xFF249FF0)
+                                : const Color(0xFF3A3D44),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.check,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
-              const SizedBox(height: 48),
+              const SizedBox(height: 24),
               _sheetField(
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
@@ -2599,7 +2677,7 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                   ],
                 ),
               ),
-              const SizedBox(height: 46),
+              const SizedBox(height: 24),
               _sheetField(
                 child: Row(
                   children: [
@@ -2616,7 +2694,7 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                   ],
                 ),
               ),
-              const SizedBox(height: 30),
+              const SizedBox(height: 5),
               Row(
                 children: [
                   const Expanded(
@@ -2631,6 +2709,28 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                   ),
                 ],
               ),
+              if (widget.showDeleteContact) ...[
+                const SizedBox(height: 30),
+                GestureDetector(
+                  onTap: widget.onDeleteContact,
+                  child: Container(
+                    width: double.infinity,
+                    height: 48,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: const Color(0xFF23262C)),
+                    ),
+                    child: const Text(
+                      'Delete contact',
+                      style: TextStyle(
+                        color: Color(0xFFFF6B6B),
+                        fontSize: 17,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
