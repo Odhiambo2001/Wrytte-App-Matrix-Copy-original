@@ -16,6 +16,7 @@ import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/auth/widgets/wrytte_id_checkmark.dart';
+import 'package:wrytte/ui/auth/widgets/sync_contacts_switch.dart';
 import 'package:wrytte/ui/screens/Country%20id%20picker%20page.dart';
 import 'package:wrytte/ui/screens/profile_screen.dart';
 import 'package:wrytte/utils/countries_id.dart';
@@ -1952,20 +1953,25 @@ class _NewContactPageState extends State<NewContactPage> {
 
               // ── Sync to phone card ─────────────────────────────
               _Card(
-                child: SwitchListTile(
-                  dense: true,
-                  visualDensity: VisualDensity.compact,
-                  contentPadding: const EdgeInsets.symmetric(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 4,
                   ),
-                  title: const Text(
-                    'Sync contact to phone',
-                    style: TextStyle(color: Colors.white, fontSize: 15),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Sync contact to phone',
+                          style: TextStyle(color: Colors.white, fontSize: 15),
+                        ),
+                      ),
+                      SyncContactsSwitch(
+                        value: _syncToPhone,
+                        onChanged: (v) => setState(() => _syncToPhone = v),
+                      ),
+                    ],
                   ),
-                  value: _syncToPhone,
-                  activeThumbColor: _kBlue,
-                  onChanged: (v) => setState(() => _syncToPhone = v),
                 ),
               ),
 

@@ -23,6 +23,8 @@ import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/new_contact_screen.dart';
+import 'package:wrytte/ui/auth/widgets/sync_contacts_switch.dart';
+import 'package:wrytte/ui/auth/widgets/wrytte_id_checkmark.dart';
 import 'package:wrytte/ui/screens/channels/channel_feed_screen.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
@@ -1051,26 +1053,39 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _openAddContact() async {
-    final uid =
-        _validProfileUid(widget.uid) ??
-        _validProfileUid(_identity?.matrixUserId) ??
-        _validProfileUid(_savedContact?.wrytteUserId);
+    debugPrint('[ProfileScreen] Add to contact tapped');
+    final uid = _profileTargetUserId;
     final phone = _profilePhone();
-    if (uid == null && phone.isEmpty) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder:
-            (_) => NewContactPage(
-              token: '',
-              initialIdentifier: phone.isNotEmpty ? phone : uid,
-              initialWrytteUserId: uid == null ? null : _toMatrixUserId(uid),
-              initialName: _profileDisplayName(),
-              initialBio: _profileBio(),
-              readOnlyIdentifier: true,
-            ),
+    debugPrint(
+      '[ProfileScreen] Add contact data: '
+      'widgetUid="${widget.uid}" '
+      'profileUid="$uid" '
+      'phone="$phone" '
+      'identityUid="${_identity?.matrixUserId}"',
+    );
+    if (uid == null && phone.isEmpty) {
+      debugPrint(
+        '[ProfileScreen] Add contact stopped: no profile identifier found',
+      );
+      return;
+    }
+    debugPrint('[ProfileScreen] Opening add-contact bottom sheet');
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: false,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.60),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      builder: (_) => _ProfileAddContactSheet(
+        initialName: _profileDisplayName(),
+        phone: phone.isNotEmpty ? phone : (uid ?? ''),
       ),
     );
+    debugPrint('[ProfileScreen] Add-contact bottom sheet closed');
     if (mounted) _loadProfile();
   }
 
@@ -1670,10 +1685,18 @@ class _ProfileScreenState extends State<ProfileScreen>
                 height: 24,
               ),
               const SizedBox(width: 20),
-              SvgPicture.asset(
-                'assets/images/Add to contact.svg',
-                width: 24,
-                height: 24,
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  debugPrint('[ProfileScreen] Add to contact icon tapped');
+                  _openAddContact();
+                },
+                child: SvgPicture.asset(
+                  'assets/images/Add to contact.svg',
+                  width: 24,
+                  height: 24,
+                  semanticsLabel: 'Add to contact',
+                ),
               ),
             ],
           ),
@@ -2481,6 +2504,166 @@ class _ProfileScreenState extends State<ProfileScreen>
       ),
     );
   }
+}
+
+class _ProfileAddContactSheet extends StatefulWidget {
+  const _ProfileAddContactSheet({required this.initialName, required this.phone});
+
+  final String initialName;
+  final String phone;
+
+  @override
+  State<_ProfileAddContactSheet> createState() =>
+      _ProfileAddContactSheetState();
+}
+
+class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
+  late final TextEditingController _nameController;
+  bool _syncToPhone = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF08090B),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            38,
+            16,
+            MediaQuery.viewInsetsOf(context).bottom + 24,
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _sheetCircleButton(
+                    icon: Icons.close,
+                    onTap: () => Navigator.pop(context),
+                  ),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context, true),
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF2196F3),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.check,
+                        color: Colors.white,
+                        size: 36,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 48),
+              _sheetField(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _nameController,
+                        autofocus: true,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                        ),
+                        textAlignVertical: TextAlignVertical.center,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          hintText: 'Name',
+                          hintStyle: TextStyle(color: Colors.white70),
+                          isCollapsed: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 46),
+              _sheetField(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.phone,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ),
+                    const WrytteIdCheckmark(),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 30),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Sync contact to phone',
+                      style: TextStyle(color: Colors.white, fontSize: 17),
+                    ),
+                  ),
+                  SyncContactsSwitch(
+                    value: _syncToPhone,
+                    onChanged: (value) => setState(() => _syncToPhone = value),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sheetField({required Widget child}) => Container(
+    height: 48,
+    padding: const EdgeInsets.symmetric(horizontal: 18),
+    decoration: BoxDecoration(
+      color: const Color(0xFF101116),
+      borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: const Color(0xFF23262C)),
+    ),
+    child: child,
+  );
+
+  Widget _sheetCircleButton({
+    required IconData icon,
+    required VoidCallback onTap,
+  }) => GestureDetector(
+    onTap: onTap,
+    child: Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: const Color(0xFF23262C)),
+      ),
+      child: Icon(icon, color: Colors.white, size: 20),
+    ),
+  );
 }
 
 // ── Sticky tab bar delegate ────────────────────────────────────────────────────
