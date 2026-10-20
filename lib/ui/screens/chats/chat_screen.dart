@@ -4360,6 +4360,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   widget.receiverId,
               conversationId: widget.conversationId,
               savedNameHint: _resolvedHeaderName,
+              contactStatus:
+                  (_receiverIdentity?.savedName ?? '').trim().isNotEmpty
+                      == true
+                      ? ProfileContactStatus.saved
+                      : ProfileContactStatus.unsaved,
               initialAvatarUrl: _safePersonHeaderAvatar(
                 _receiverProfile?.hasProfileImage == true
                     ? _receiverProfile!.profileImage
@@ -4474,6 +4479,13 @@ class _ChatScreenState extends State<ChatScreen> {
                                         _resolvedConversationId ??
                                         widget.conversationId,
                                     savedNameHint: _resolvedHeaderName,
+                                    contactStatus:
+                                        (_receiverIdentity?.savedName ?? '')
+                                            .trim()
+                                            .isNotEmpty
+                                    == true
+                                            ? ProfileContactStatus.saved
+                                            : ProfileContactStatus.unsaved,
                                     initialAvatarUrl: avatarUrl,
                                   ),
                             ),

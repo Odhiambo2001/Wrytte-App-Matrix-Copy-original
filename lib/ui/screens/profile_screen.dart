@@ -46,6 +46,8 @@ import 'package:wrytte/utils/apk_debug_logger.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 import 'edit_profile_screen.dart';
 
+enum ProfileContactStatus { saved, unsaved }
+
 class ProfileScreen extends StatefulWidget {
   /// When null — shows the current logged-in user's own profile.
   /// When provided — shows another user's profile (read-only).
@@ -54,6 +56,7 @@ class ProfileScreen extends StatefulWidget {
   final String? savedNameHint;
   final String? initialAvatarUrl;
   final String? initialProfileName;
+  final ProfileContactStatus? contactStatus;
   final bool embeddedInHome;
 
   const ProfileScreen({
@@ -63,6 +66,7 @@ class ProfileScreen extends StatefulWidget {
     this.savedNameHint,
     this.initialAvatarUrl,
     this.initialProfileName,
+    this.contactStatus,
     this.embeddedInHome = false,
   });
 
@@ -106,8 +110,15 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   bool get _showUnsavedProfileActions =>
       _isOtherUser &&
+      widget.contactStatus != ProfileContactStatus.saved &&
+      (widget.contactStatus == ProfileContactStatus.unsaved ||
+          !_hasSavedContactHint) &&
       _savedContact == null &&
       _cleanName(_identity?.savedName).isEmpty;
+
+  bool get _hasSavedContactHint =>
+      widget.contactStatus == ProfileContactStatus.saved ||
+      _cleanName(widget.savedNameHint).isNotEmpty;
 
   bool get _isProfileUserBlocked {
     if (_profileBlockedOverride != null) return _profileBlockedOverride!;
@@ -335,6 +346,13 @@ class _ProfileScreenState extends State<ProfileScreen>
         _seededSavedName = null;
       }
     });
+    debugPrint(
+      '[ProfileActions] profile loaded: '
+      'other=$_isOtherUser '
+      'savedContact=${_savedContact != null} '
+      'savedName="${_cleanName(_identity?.savedName)}" '
+      'action=${_showUnsavedProfileActions ? 'Block/Add' : 'Edit'}',
+    );
     final resolvedAvatar = _profileAvatarUrl();
     await AvatarPreloadService.warm(
       resolvedAvatar,
@@ -436,7 +454,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       final cached = UserProfileService.instance.cachedPublicProfileByUid(uid);
       if (cached != null && _hasRenderableProfile(cached)) {
         _profile = cached;
-        _profileLoading = false;
         return;
       }
       return;
@@ -1117,7 +1134,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
         ),
         child: FractionallySizedBox(
-          heightFactor: 0.82,
+          heightFactor: 0.70,
           child: _ProfileAddContactSheet(
             initialName: _profileDisplayName(),
             phone: _profilePhone(),
@@ -1321,6 +1338,15 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   @override
   Widget build(BuildContext context) {
+    debugPrint(
+      '[ProfileActions] build: loading=$_profileLoading '
+      'other=$_isOtherUser saved=${_savedContact != null} '
+      'rendered=${_profileLoading &&
+              !_hasSavedContactHint &&
+              widget.contactStatus != ProfileContactStatus.unsaved
+          ? 'none'
+          : (_showUnsavedProfileActions ? 'Block/Add' : 'Edit')}',
+    );
     final theme = Theme.of(context);
     final double statusBarHeight = MediaQuery.of(context).padding.top;
     final double topBarHeight = statusBarHeight + kToolbarHeight;
@@ -1615,13 +1641,18 @@ class _ProfileScreenState extends State<ProfileScreen>
                           child: const SizedBox.shrink(),
                         ),
 
-                        _isOtherUser
+                        _isOtherUser &&
+                                _profileLoading &&
+                                widget.contactStatus == null &&
+                                !_hasSavedContactHint
+                            ? const SizedBox(width: 84, height: 44)
+                            : _isOtherUser
                             ? _showUnsavedProfileActions
                                 ? _buildUnsavedProfileActions()
                                 : _glassTextButton(
-                                  text: 'Edit',
-                                  onTap: _openProfileEditSheet,
-                                )
+                                    text: 'Edit',
+                                    onTap: _openProfileEditSheet,
+                                  )
                             : _glassTextButton(
                               text: "Edit",
                               onTap: () async {
@@ -2710,7 +2741,7 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                 ],
               ),
               if (widget.showDeleteContact) ...[
-                const SizedBox(height: 30),
+                const SizedBox(height: 5),
                 GestureDetector(
                   onTap: widget.onDeleteContact,
                   child: Container(

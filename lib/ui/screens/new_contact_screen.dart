@@ -1501,6 +1501,7 @@ class _NewContactPageState extends State<NewContactPage> {
                 uid: userId,
                 conversationId: conversationId,
                 savedNameHint: contact.formattedName,
+                contactStatus: ProfileContactStatus.saved,
                 initialAvatarUrl: contact.avatarUrl,
               ),
         ),
