@@ -1868,9 +1868,31 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
     if (ChatService.isGroupDeletedPreview(conv.lastMessage)) return true;
     if (conv.deletedAt != null && conv.id.startsWith('!')) return true;
-    if (_cachedRoomCategories.containsKey(conv.id)) return true;
+    final cachedCategory = _cachedRoomCategories[conv.id];
+    if (cachedCategory == 'group_owned' ||
+        cachedCategory == 'group_joined' ||
+        cachedCategory == 'group_suggested') {
+      return true;
+    }
+    if (cachedCategory == 'channel_owned' ||
+        cachedCategory == 'channel_subscribed' ||
+        cachedCategory == 'channel_suggested') {
+      return true;
+    }
     if (conv.hasExplicitKind) {
-      return conv.isGroupKind || conv.isChannelKind;
+      if (conv.isGroupKind || conv.isChannelKind) return true;
+
+      // A stale local row can have been stamped as a DM before Matrix room
+      // classification completed. Never let that cached DM stamp override an
+      // authoritative group room.
+      if (conv.isDirectKind && MatrixClientService.instance.isInitialized) {
+        final room = MatrixChatService.instance.getRoomById(conv.id);
+        if (room != null &&
+            MatrixChatService.instance.isMatrixGroupRoom(room)) {
+          return true;
+        }
+      }
+      return false;
     }
     if (_chat.isCreatedGroupRoom(conv.id)) return true;
 
@@ -2650,6 +2672,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         final isGroup = _isGroupConversation(conv);
         final isChannel = _isChannelConversation(conv);
         final chatReceiverId = isGroup ? conv.id : conv.otherUserId;
+        final liveRoom = MatrixChatService.instance.getRoomById(conv.id);
+        apkLog(
+          'GroupRouting',
+          'conversation_open room_id="${conv.id}" title="${name}" '
+              'stored_kind="${conv.conversationKind}" last_type="${conv.lastMessageType}" '
+              'other_user="${conv.otherUserId}" cached_category="${_cachedRoomCategories[conv.id] ?? ''}" '
+              'room_found=${liveRoom != null} room_is_direct=${liveRoom?.isDirectChat ?? 'null'} '
+              'room_is_group=${liveRoom == null ? 'null' : MatrixChatService.instance.isMatrixGroupRoom(liveRoom)} '
+              'resolved_group=$isGroup resolved_channel=$isChannel',
+        );
         if (!isGroup) {
           await AvatarPreloadService.warm(
             avatar,

@@ -674,6 +674,17 @@ class _ChatScreenState extends State<ChatScreen> {
           'receiverId="${widget.receiverId}"  '
           'currentUserId="${widget.currentUserId}"',
     );
+    final routingRoom = MatrixChatService.instance.getRoomById(
+      widget.conversationId,
+    );
+    apkLog(
+      'GroupRouting',
+      'chat_init room_id="${widget.conversationId}" title="${widget.title}" '
+          'kind="${widget.conversationKind}" receiver_id="${widget.receiverId}" '
+          'room_found=${routingRoom != null} room_is_direct=${routingRoom?.isDirectChat ?? 'null'} '
+          'room_is_group=${routingRoom == null ? 'null' : MatrixChatService.instance.isMatrixGroupRoom(routingRoom)} '
+          'resolved_group=$_isGroupChat',
+    );
     if (!_isGroupChat) {
       apkLog(
         'Identity.display',
@@ -4337,12 +4348,22 @@ class _ChatScreenState extends State<ChatScreen> {
         kind: _isGroupChat
             ? ChatConversationKind.group
             : ChatConversationKind.direct,
-        callsAvailable: !_isDeletedConversation,
+        callsAvailable: !_isGroupChat && !_isDeletedConversation,
       ),
       onBack: () => Navigator.pop(context),
-      onCallPressed: () => _startCall(CallType.voice),
+      onCallPressed: () {
+        if (_isGroupChat) {
+          unawaited(_showGroupOptions());
+        } else {
+          _startCall(CallType.voice);
+        }
+      },
 
       onProfilePressed: () {
+        if (_isGroupChat) {
+          unawaited(_openGroupProfileFromHeader());
+          return;
+        }
         debugPrint(
           '[ChatHeader] profile tap: conversationId="${widget.conversationId}" '
           'receiverId="${widget.receiverId}" '
@@ -4394,6 +4415,33 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _openGroupProfileFromHeader() async {
+    if (_isDeletedConversation) return;
+    final roomId = _resolvedConversationId ?? widget.conversationId;
+    apkLog(
+      'GroupRouting',
+      'profile_route=GroupProfileScreen room_id="$roomId" source=ChatHeader',
+    );
+    final groupResult = await Navigator.push<Object?>(
+      context,
+      MaterialPageRoute(
+        builder:
+            (_) => GroupProfileScreen(
+              roomId: roomId,
+              groupName: _resolvedHeaderName,
+              avatarUrl: _stableHeaderAvatarUrl,
+              alias: widget.groupAlias,
+              initialDescription: widget.groupDescription,
+              initialMemberCount: widget.initialMemberCount,
+              initiallyJoined: !_isReadOnlySuggestedGroup,
+            ),
+      ),
+    );
+    if (groupResult is GroupExitRequest && mounted) {
+      Navigator.pop(context, groupResult);
+    }
+  }
+
   Widget _buildLegacyAppBar(double statusBarH) {
     final isGroupChat = _isGroupChat;
     final displayName = _resolvedHeaderName;
@@ -4443,6 +4491,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         onTap: () async {
                           if (isGroupChat) {
                             if (_isDeletedConversation) return;
+                            apkLog(
+                              'GroupRouting',
+                              'profile_route=GroupProfileScreen room_id="${_resolvedConversationId ?? widget.conversationId}"',
+                            );
                             final groupResult = await Navigator.push<Object?>(
                               context,
                               MaterialPageRoute(
@@ -4468,6 +4520,12 @@ class _ChatScreenState extends State<ChatScreen> {
                             }
                             return;
                           }
+                          apkLog(
+                            'GroupRouting',
+                            'profile_route=ProfileScreen room_id="${widget.conversationId}" '
+                                'receiver_id="${widget.receiverId}" resolved_group=$isGroupChat '
+                                'kind="${widget.conversationKind}"',
+                          );
                           final profileUid = _profilePeerId();
                           await Navigator.push(
                             context,
@@ -4712,7 +4770,17 @@ class _ChatScreenState extends State<ChatScreen> {
     if (kind == ConversationKind.group || kind == ConversationKind.channel) {
       return true;
     }
-    if (kind == ConversationKind.direct) return false;
+    if (kind == ConversationKind.direct) {
+      // Local conversation caches may contain an old `direct` stamp for a
+      // Matrix group. The room itself is authoritative for this distinction.
+      final room = MatrixChatService.instance.getRoomById(
+        widget.conversationId,
+      );
+      if (room != null && MatrixChatService.instance.isMatrixGroupRoom(room)) {
+        return true;
+      }
+      return false;
+    }
     return widget.readOnlyUntilJoin ||
         _isKnownGroupConversationId(widget.receiverId) ||
         _isKnownGroupConversationId(widget.conversationId) ||

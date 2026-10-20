@@ -77,6 +77,12 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     super.initState();
     final room = MatrixChatService.instance.getRoomById(widget.roomId);
     _joined = widget.initiallyJoined || room?.membership == mx.Membership.join;
+    apkLog(
+      'GroupProfile',
+      'init room_id="${widget.roomId}" title="${widget.groupName}" '
+          'room_found=${room != null} room_is_group=${room == null ? 'null' : MatrixChatService.instance.isMatrixGroupRoom(room)} '
+          'tabs=Members,Media,Files,Feed,Links actions=AddMembers,VoiceChat,Leave,EditDelete',
+    );
     _subscribeToProfileUpdates();
     unawaited(_initialiseMemberProfiles());
   }
@@ -97,6 +103,12 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     final isDeleted = ChatService().isConversationDeleted(widget.roomId);
     final memberCount = _memberCount;
     final top = MediaQuery.of(context).padding.top;
+    apkLog(
+      'GroupProfile',
+      'build room_id="${widget.roomId}" title="$title" '
+          'tab_count=5 has_members=${_members.isNotEmpty} joined=$_joined '
+          'deleted=$isDeleted',
+    );
 
     return Scaffold(
       // The edit screen can still be dismissing its keyboard while this route
