@@ -2632,7 +2632,18 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
-            color: const Color(0xFF23262C).withValues(alpha: 0.30),
+            decoration: const BoxDecoration(
+              color: Color(0x4D23262C),
+              borderRadius: BorderRadius.vertical(
+                top: Radius.circular(28),
+              ),
+              border: Border(
+                top: BorderSide(
+                  color: Color(0xFF23262C),
+                  width: 1,
+                ),
+              ),
+            ),
             child: SafeArea(
               top: false,
               child: SingleChildScrollView(
