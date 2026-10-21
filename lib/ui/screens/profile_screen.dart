@@ -2639,18 +2639,24 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFF08090B),
-      child: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            30,
-            16,
-            MediaQuery.viewInsetsOf(context).bottom + 24,
-          ),
-          child: Column(
-            children: [
+      color: Colors.transparent,
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
+            child: SafeArea(
+              top: false,
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  30,
+                  16,
+                  MediaQuery.viewInsetsOf(context).bottom + 24,
+                ),
+                child: Column(
+                  children: [
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -2773,7 +2779,10 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                   ),
                 ),
               ],
-            ],
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ),
