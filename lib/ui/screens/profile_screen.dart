@@ -2748,20 +2748,26 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                 const SizedBox(height: 5),
                 GestureDetector(
                   onTap: widget.onDeleteContact,
-                  child: Container(
-                    width: double.infinity,
-                    height: 48,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: const Color(0x00000000),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: const Color(0xFF23262C)),
-                    ),
-                    child: const Text(
-                      'Delete contact',
-                      style: TextStyle(
-                        color: Color(0xFFFF6B6B),
-                        fontSize: 17,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                      child: Container(
+                        width: double.infinity,
+                        height: 48,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF23262C).withValues(alpha: 0.30),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: const Color(0xFF23262C)),
+                        ),
+                        child: const Text(
+                          'Delete contact',
+                          style: TextStyle(
+                            color: Color(0xFFFF6B6B),
+                            fontSize: 17,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -2774,15 +2780,21 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
     );
   }
 
-  Widget _sheetField({required Widget child}) => Container(
-    height: 48,
-    padding: const EdgeInsets.symmetric(horizontal: 18),
-    decoration: BoxDecoration(
-      color: const Color(0x00000000),
-      borderRadius: BorderRadius.circular(24),
-      border: Border.all(color: const Color(0xFF23262C)),
+  Widget _sheetField({required Widget child}) => ClipRRect(
+    borderRadius: BorderRadius.circular(24),
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+      child: Container(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF23262C).withValues(alpha: 0.30),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: const Color(0xFF23262C)),
+        ),
+        child: child,
+      ),
     ),
-    child: child,
   );
 
   Widget _sheetCircleButton({
@@ -2790,14 +2802,21 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
     required VoidCallback onTap,
   }) => GestureDetector(
     onTap: onTap,
-    child: Container(
-      width: 36,
-      height: 36,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: const Color(0xFF23262C)),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0xFF23262C)),
+          ),
+          child: Icon(icon, color: Colors.white, size: 20),
+        ),
       ),
-      child: Icon(icon, color: Colors.white, size: 20),
     ),
   );
 }
