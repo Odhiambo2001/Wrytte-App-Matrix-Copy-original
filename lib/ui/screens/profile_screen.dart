@@ -110,6 +110,19 @@ class _ProfileScreenState extends State<ProfileScreen>
       _validProfileUid(_savedContact?.wrytteUserId) ??
       _validProfileUid(_profile?.uid);
 
+  bool _isBlockedByBbb(String? userId, {String? roomId}) {
+    final target = userId == null ? '' : _matrixLocalpart(userId).toLowerCase();
+    if (target.isEmpty) return false;
+    final room = roomId?.trim() ?? '';
+    return BlockStateService.instance.bbb.any((entry) {
+      final blockedBy = _matrixLocalpart(
+        entry['blocked_by']?.toString() ?? '',
+      ).toLowerCase();
+      final entryRoom = entry['room_id']?.toString().trim() ?? '';
+      return blockedBy == target && (room.isEmpty || entryRoom == room);
+    });
+  }
+
   bool get _showUnsavedProfileActions =>
       _isOtherUser &&
       widget.contactStatus != ProfileContactStatus.saved &&
@@ -126,11 +139,10 @@ class _ProfileScreenState extends State<ProfileScreen>
     final userId = _profileTargetUserId;
     if (userId == null) return false;
     try {
-      return BlockStateService.instance.isRoomBlocked(
+      return BlockStateService.instance.isBlocklisted(
             widget.conversationId ?? '',
             peerId: userId,
-          ) ||
-          MatrixClientService.instance.client.ignoredUsers.contains(userId);
+          );
     } catch (_) {
       return false;
     }
@@ -146,12 +158,9 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (_isOtherUser) {
       final hintedUserId = _validProfileUid(widget.uid);
       if (hintedUserId != null) {
-        _redactedByBlock = BlockStateService.instance.bbb.any(
-          (entry) =>
-              entry['blocked_by']?.toString().trim() == hintedUserId &&
-              (widget.conversationId == null ||
-                  entry['room_id']?.toString().trim() ==
-                      widget.conversationId!.trim()),
+        _redactedByBlock = _isBlockedByBbb(
+          hintedUserId,
+          roomId: widget.conversationId,
         );
       }
     }
@@ -209,10 +218,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   void _onBlockStateChanged() {
     final uid = _profileTargetUserId;
-    final redacted = uid != null &&
-        BlockStateService.instance.bbb.any(
-          (entry) => entry['blocked_by']?.toString().trim() == uid,
-        );
+    final redacted = _isBlockedByBbb(uid);
     if (mounted) {
       setState(() {
         _redactedByBlock = redacted;
@@ -250,9 +256,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (uid != null && _isOtherUser) {
       final blockState = BlockStateService.instance;
       await blockState.load();
-      _redactedByBlock = blockState.bbb.any(
-        (entry) => entry['blocked_by']?.toString().trim() == uid,
-      );
+      _redactedByBlock = _isBlockedByBbb(uid);
     }
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     var identity =
@@ -1444,7 +1448,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                           const SizedBox(height: 16),
 
                           // ── Quick actions (other user only) ─────────────────
-                          if (_isOtherUser && !_redactedByBlock) ...[
+                          if (_isOtherUser) ...[
                             _buildQuickActions(),
                             const SizedBox(height: 20),
                           ],
@@ -1557,7 +1561,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                     ),
 
                     // ── Sticky tab bar ───────────────────────────────────────
-                    if (!_redactedByBlock)
                     SliverPersistentHeader(
                       pinned: true,
                       delegate: _StickyTabBarDelegate(
@@ -1576,15 +1579,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 controller: _tabController,
                 physics: const BouncingScrollPhysics(),
                 children:
-                    _redactedByBlock
-                        ? List<Widget>.generate(
-                          4,
-                          (_) => _buildEmptyTab(
-                            Icons.lock_outline,
-                            'Profile unavailable',
-                          ),
-                        )
-                        : _isOtherUser
+                    _isOtherUser
                         ? [
                           _buildMediaTab(),
                           _buildFilesTab(),
@@ -1792,12 +1787,12 @@ class _ProfileScreenState extends State<ProfileScreen>
                   'assets/images/Block user.svg',
                   width: 24,
                   height: 24,
-                  colorFilter: _isProfileUserBlocked
-                      ? const ColorFilter.mode(
-                          Color(0xFFFF5C52),
-                          BlendMode.srcIn,
-                        )
-                      : null,
+                  colorFilter: ColorFilter.mode(
+                    _isProfileUserBlocked
+                        ? const Color(0xFFFF5C52)
+                        : Colors.white,
+                    BlendMode.srcIn,
+                  ),
                 ),
               ),
               const SizedBox(width: 20),
@@ -1812,6 +1807,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                   width: 24,
                   height: 24,
                   semanticsLabel: 'Add to contact',
+                  colorFilter: const ColorFilter.mode(
+                    Colors.white,
+                    BlendMode.srcIn,
+                  ),
                 ),
               ),
             ],
@@ -1841,8 +1840,8 @@ class _ProfileScreenState extends State<ProfileScreen>
             height: 24,
             colorFilter: ColorFilter.mode(
               _isProfileUserBlocked
-                  ? const Color(0xFFFF5C52)
-                  : Colors.white,
+                  ? Colors.white
+                  : const Color(0xFFFF5C52),
               BlendMode.srcIn,
             ),
           ),

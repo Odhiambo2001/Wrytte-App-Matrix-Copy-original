@@ -1479,13 +1479,23 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _restoreBlockedMessages(String roomId) async {
     final state = BlockStateService.instance;
     await state.load();
-    final entries = state.blockedMessages.where(
-      (entry) => entry['room_id']?.toString() == roomId,
-    );
+    final entries = state.blockedMessages
+        .where((entry) => entry['room_id']?.toString() == roomId)
+        .toList()
+      ..sort((a, b) {
+        final aSequence = int.tryParse('${a['sequence'] ?? ''}') ?? 0;
+        final bSequence = int.tryParse('${b['sequence'] ?? ''}') ?? 0;
+        if (aSequence != bSequence) return aSequence.compareTo(bSequence);
+        final aTime = DateTime.tryParse('${a['time'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = DateTime.tryParse('${b['time'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return aTime.compareTo(bTime);
+      });
     if (entries.isEmpty) return;
     final restored = <ChatMessage>[];
     for (final entry in entries) {
-      final id = entry['event_id']?.toString().trim() ?? '';
+      final id = (entry['blocked_message_id'] ?? entry['event_id'])
+          ?.toString()
+          .trim() ?? '';
       final text = entry['text']?.toString() ?? '';
       final time = DateTime.tryParse(entry['time']?.toString() ?? '') ?? DateTime.now();
       if (id.isEmpty || text.isEmpty || _messages.any((message) => message.id == id)) {
@@ -3570,9 +3580,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           if (_someoneElseTyping) const _TypingIndicator(),
 
 
-                          if (_isBlockedDirectConversation)
-                            _buildBlockedConversationBar()
-                          else if (_isReadOnlySuggestedGroup)
+                          if (_isReadOnlySuggestedGroup)
                             _buildJoinGroupBottomBar()
                           else if (_isDeletedConversation)
                             _buildDeletedGroupBottomBar()
@@ -3688,53 +3696,6 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
     );
-  }
-
-  bool get _isBlockedDirectConversation {
-    if (_isGroupChat) return false;
-    final peerId = _profilePeerId();
-    if (peerId == null || peerId.trim().isEmpty) return false;
-    try {
-      final roomId = _resolvedConversationId ?? widget.conversationId;
-      final state = BlockStateService.instance;
-      return state.isRoomBlocked(roomId, peerId: peerId) ||
-          MatrixClientService.instance.client.ignoredUsers.contains(peerId);
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Widget _buildBlockedConversationBar() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
-      child: GestureDetector(
-        onTap: _unblockConversationPeer,
-        child: Container(
-          height: 56,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: const Color(0xFF08090B),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: const Color(0xFF23262C)),
-          ),
-          child: const Text(
-            'Unblock',
-            style: TextStyle(color: Colors.white, fontSize: 17),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _unblockConversationPeer() async {
-    final peerId = _profilePeerId();
-    final roomId = _resolvedConversationId ?? widget.conversationId;
-    if (peerId == null || peerId.trim().isEmpty || roomId.trim().isEmpty) return;
-    await BlockStateService.instance.removeBlock(
-      userId: peerId,
-      roomId: roomId,
-    );
-    if (mounted) setState(() {});
   }
 
   // ─── DEBUG OVERLAY ─────────────────────────────────────────────────────────
@@ -4565,14 +4526,24 @@ class _ChatScreenState extends State<ChatScreen> {
 
       avatarBuilder: (size) => UserAvatar(
         size: size,
-        imageUrl: _safePersonHeaderAvatar(
-          _receiverProfile?.hasProfileImage == true
-              ? _receiverProfile!.profileImage
-              : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
-        ),
-        localImagePath: _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
-            ? _receiverProfile!.localProfileImagePath.trim()
-            : null,
+        imageUrl: BlockStateService.instance.isBlockedByBbb(
+                  _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
+                  roomId: _resolvedConversationId ?? widget.conversationId,
+                )
+            ? null
+            : _safePersonHeaderAvatar(
+                _receiverProfile?.hasProfileImage == true
+                    ? _receiverProfile!.profileImage
+                    : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
+              ),
+        localImagePath: BlockStateService.instance.isBlockedByBbb(
+                  _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
+                  roomId: _resolvedConversationId ?? widget.conversationId,
+                )
+            ? null
+            : _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
+                ? _receiverProfile!.localProfileImagePath.trim()
+                : null,
         name: _resolvedHeaderName,
         isDeleted: _isDeletedConversation,
       ),
@@ -4609,16 +4580,23 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildLegacyAppBar(double statusBarH) {
     final isGroupChat = _isGroupChat;
     final displayName = _resolvedHeaderName;
+    final blockedByPeer = !isGroupChat &&
+        BlockStateService.instance.isBlockedByBbb(
+          _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
+          roomId: _resolvedConversationId ?? widget.conversationId,
+        );
     final avatarUrl =
         isGroupChat
             ? _stableHeaderAvatarUrl
+            : blockedByPeer
+            ? null
             : _safePersonHeaderAvatar(
               _receiverProfile?.hasProfileImage == true
                   ? _receiverProfile!.profileImage
                   : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
             );
     final localAvatarPath =
-        isGroupChat
+        isGroupChat || blockedByPeer
             ? null
             : _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
             ? _receiverProfile!.localProfileImagePath.trim()

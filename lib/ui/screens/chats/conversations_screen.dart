@@ -26,6 +26,7 @@ import 'package:wrytte/services/contacts/user_search_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/services/matrix/block_state_service.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
@@ -145,6 +146,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // mapping used by older cached conversations. _initialize first loads the
     // persisted identity cache and Profile 2 contacts, then publishes rows.
     _scrollCtrl.addListener(_onScroll);
+    BlockStateService.instance.revision.addListener(_onBlockStateChanged);
     _profileUpdatesSub = UserProfileService.instance.publicProfileUpdateStream
         .listen(_onPublicProfileUpdated);
     Future.microtask(_initialize);
@@ -186,6 +188,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         unawaited(_refreshConversationProfiles(matching));
       }
     }
+  }
+
+  void _onBlockStateChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _refreshConversationProfiles(
@@ -238,6 +244,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     _connectivitySub?.cancel();
     _contactsChangedSub?.cancel();
     _profileUpdatesSub?.cancel();
+    BlockStateService.instance.revision.removeListener(_onBlockStateChanged);
     _conversationBatchTimer?.cancel();
     _groupExitTimer?.cancel();
     _scrollCtrl.removeListener(_onScroll);
@@ -1556,15 +1563,20 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       rejectPlaceholderVersion: profile?.moduleProfileLoaded != true,
     );
     final matrixAvatar = _safeDirectAvatarUrl(matrixProfile?.$2);
+    final blockedByPeer = BlockStateService.instance.isBlockedByBbb(
+      profileUid,
+      roomId: conv.id,
+    );
     // Prefer the canonical profile/cache avatar whenever available. Contact
     // and room values may be stale and caused the old avatar to render first
     // before the profile refresh replaced it.
-    final avatar =
-        profileAvatar ??
-        contactAvatar ??
-        matrixAvatar ??
-        existingAvatar ??
-        identityAvatar;
+    final avatar = blockedByPeer
+        ? null
+        : profileAvatar ??
+            contactAvatar ??
+            matrixAvatar ??
+            existingAvatar ??
+            identityAvatar;
     if ((avatar ?? '').trim().isNotEmpty &&
         avatar?.trim() != conv.otherUserAvatar?.trim()) {
       unawaited(
@@ -1984,6 +1996,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       return storedAvatar.isEmpty ? null : storedAvatar;
     }
 
+    final peerId = _profileUidForConversation(conv);
+    if (peerId != null &&
+        BlockStateService.instance.isBlockedByBbb(
+          peerId,
+        )) {
+      return null;
+    }
+
     final contactKey = _contactKeyForConversation(conv);
     final contactAvatar = _safeDirectAvatarUrl(
       contactKey == null ? null : _contactAvatarCache[contactKey],
@@ -2088,6 +2108,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final uid = _profileUidForConversation(conv);
     if (uid == null) return null;
+    if (BlockStateService.instance.isBlockedByBbb(uid)) {
+      return null;
+    }
     final cached = UserProfileService.instance.cachedPublicProfileByUid(
       uid,
       phone: fallbackPhone,

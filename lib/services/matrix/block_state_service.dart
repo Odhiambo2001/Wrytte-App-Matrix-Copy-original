@@ -47,7 +47,9 @@ class BlockStateService {
         false) {
       unawaited(load());
     }
-    for (final entry in update.rooms?.join?.entries ?? const <String, mx.JoinedRoomUpdate>{}) {
+    for (final entry in
+        update.rooms?.join?.entries ??
+        const <String, mx.JoinedRoomUpdate>{}.entries) {
       final roomId = entry.key;
       for (final event in entry.value.timeline?.events ?? const <mx.MatrixEvent>[]) {
         if (event.type == blockedEventType) {
@@ -79,6 +81,35 @@ class BlockStateService {
           return entry['room_id']?.toString() == room ||
               (peer != null && entry['blocked_by']?.toString() == peer);
         });
+  }
+
+  bool isBlocklisted(String roomId, {String? peerId}) {
+    final room = roomId.trim();
+    final peer = peerId?.trim();
+    return _entries(_blocklist).any((entry) {
+      return (room.isNotEmpty && entry['room_id']?.toString() == room) ||
+          (peer != null && peer.isNotEmpty && entry['user_id']?.toString() == peer);
+    });
+  }
+
+  bool isBlockedByBbb(String userId, {String? roomId}) {
+    final peer = userId.trim();
+    final room = roomId?.trim() ?? '';
+    if (peer.isEmpty) return false;
+    String localpart(String value) {
+      final normalized = value.trim().toLowerCase();
+      final withoutAt = normalized.startsWith('@')
+          ? normalized.substring(1)
+          : normalized;
+      final separator = withoutAt.indexOf(':');
+      return separator == -1 ? withoutAt : withoutAt.substring(0, separator);
+    }
+    final target = localpart(peer);
+    return _entries(_bbb).any((entry) {
+      final blockedBy = localpart(entry['blocked_by']?.toString() ?? '');
+      final entryRoom = entry['room_id']?.toString().trim() ?? '';
+      return blockedBy == target && (room.isEmpty || entryRoom == room);
+    });
   }
 
   bool isBlockedBy(String userId, {String? roomId}) => isRoomBlocked(
@@ -141,12 +172,20 @@ class BlockStateService {
     required DateTime time,
   }) async {
     await _update(blockedMessagesType, _blockedMessages, (entries) {
+      final nextSequence = entries.fold<int>(0, (max, entry) {
+        final value = entry['sequence'];
+        final sequence = value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+        return sequence > max ? sequence : max;
+      }) + 1;
       entries.add({
         'room_id': roomId,
         'event_id': eventId,
+        'blocked_message_id': 'blocked_$nextSequence',
         'text': text,
         'time': time.toUtc().toIso8601String(),
+        'sequence': nextSequence,
         'status': 'sent',
+        'recovery_status': 'pending',
       });
     });
   }
