@@ -3455,7 +3455,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           if (_someoneElseTyping) const _TypingIndicator(),
 
 
-                          if (_isReadOnlySuggestedGroup)
+                          if (_isBlockedDirectConversation)
+                            _buildBlockedConversationBar()
+                          else if (_isReadOnlySuggestedGroup)
                             _buildJoinGroupBottomBar()
                           else if (_isDeletedConversation)
                             _buildDeletedGroupBottomBar()
@@ -3571,6 +3573,59 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
     );
+  }
+
+  bool get _isBlockedDirectConversation {
+    if (_isGroupChat) return false;
+    final peerId = _profilePeerId();
+    if (peerId == null || peerId.trim().isEmpty) return false;
+    try {
+      return MatrixClientService.instance.client.ignoredUsers.contains(peerId);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Widget _buildBlockedConversationBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
+      child: GestureDetector(
+        onTap: _unblockConversationPeer,
+        child: Container(
+          height: 56,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xFF08090B),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: const Color(0xFF23262C)),
+          ),
+          child: const Text(
+            'Unblock',
+            style: TextStyle(color: Colors.white, fontSize: 17),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _unblockConversationPeer() async {
+    final peerId = _profilePeerId();
+    final accountUserId = MatrixClientService.instance.client.userID;
+    if (peerId == null || accountUserId == null) return;
+    final ignoredUsers = Set<String>.from(
+      MatrixClientService.instance.client.ignoredUsers,
+    )..remove(peerId);
+    await MatrixClientService.instance.client.setAccountData(
+      accountUserId,
+      'm.ignored_user_list',
+      {
+        'ignored_users': {
+          for (final ignoredUserId in ignoredUsers)
+            ignoredUserId: <String, dynamic>{},
+        },
+      },
+    );
+    if (mounted) setState(() {});
   }
 
   // ─── DEBUG OVERLAY ─────────────────────────────────────────────────────────

@@ -83,7 +83,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   Contact? _savedContact;
   ContactIdentity? _identity;
   bool _profileLoading = true;
-  bool? _profileBlockedOverride;
+  bool _showBlockUserCard = false;
   List<ChatMessage> _conversationMessages = const [];
   StreamSubscription<UserProfile?>? _profileSub;
   StreamSubscription<String>? _publicProfileUpdatesSub;
@@ -121,7 +121,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       _cleanName(widget.savedNameHint).isNotEmpty;
 
   bool get _isProfileUserBlocked {
-    if (_profileBlockedOverride != null) return _profileBlockedOverride!;
     final userId = _profileTargetUserId;
     if (userId == null) return false;
     try {
@@ -1252,74 +1251,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     Navigator.of(context).pop();
   }
 
-  Future<void> _toggleProfileBlock() async {
-    final userId = _profileTargetUserId;
-    if (userId == null) return;
-    final wasBlocked = _isProfileUserBlocked;
-    final action = wasBlocked ? 'Unblock' : 'Block';
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder:
-          (dialogContext) => AlertDialog(
-            backgroundColor: const Color(0xFF23262C),
-            title: Text(
-              '$action user?',
-              style: const TextStyle(color: Colors.white),
-            ),
-            content: Text(
-              wasBlocked
-                  ? 'This user will be able to message you again.'
-                  : 'You will no longer receive messages from this user.',
-              style: const TextStyle(color: Color(0xFFC6C6C6)),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                child: Text(action),
-              ),
-            ],
-          ),
-    );
-    if (confirmed != true || !mounted) return;
-    try {
-      final client = MatrixClientService.instance.client;
-      final accountUserId = client.userID;
-      if (accountUserId == null || accountUserId.isEmpty) {
-        throw StateError('Not connected to Matrix.');
-      }
-      final ignoredUsers = Set<String>.from(client.ignoredUsers);
-      if (wasBlocked) {
-        ignoredUsers.remove(userId);
-      } else {
-        ignoredUsers.add(userId);
-      }
-      await client.setAccountData(accountUserId, 'm.ignored_user_list', {
-        'ignored_users': {
-          for (final ignoredUserId in ignoredUsers)
-            ignoredUserId: <String, dynamic>{},
-        },
-      });
-      if (!mounted) return;
-      setState(() => _profileBlockedOverride = !wasBlocked);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('User ${wasBlocked ? 'unblocked' : 'blocked'}.'),
-        ),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not ${action.toLowerCase()} user: $error'),
-        ),
-      );
-    }
-  }
-
   static const TextStyle _bioStyle = TextStyle(
     color: Color(0xFFC6C6C6),
     fontSize: 14,
@@ -1619,6 +1550,13 @@ class _ProfileScreenState extends State<ProfileScreen>
               ),
             ),
 
+            if (_showBlockUserCard)
+              Positioned(
+                top: topBarHeight + 5,
+                right: 50,
+                child: _buildBlockUserCard(),
+              ),
+
             // ── Top bar ───────────────────────────────────────────────────
             Positioned(
               top: 0,
@@ -1775,10 +1713,20 @@ class _ProfileScreenState extends State<ProfileScreen>
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              SvgPicture.asset(
-                'assets/images/Block user.svg',
-                width: 24,
-                height: 24,
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _showBlockUserCard = true),
+                child: SvgPicture.asset(
+                  'assets/images/Block user.svg',
+                  width: 24,
+                  height: 24,
+                  colorFilter: _isProfileUserBlocked
+                      ? const ColorFilter.mode(
+                          Color(0xFFFF5C52),
+                          BlendMode.srcIn,
+                        )
+                      : null,
+                ),
               ),
               const SizedBox(width: 20),
               GestureDetector(
@@ -1797,6 +1745,45 @@ class _ProfileScreenState extends State<ProfileScreen>
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildBlockUserCard() {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1D24).withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF23262C), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SvgPicture.asset(
+            'assets/images/Block user.svg',
+            width: 24,
+            height: 24,
+            colorFilter: ColorFilter.mode(
+              _isProfileUserBlocked
+                  ? const Color(0xFFFF5C52)
+                  : Colors.white,
+              BlendMode.srcIn,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _isProfileUserBlocked ? 'Unblock user' : 'Block user',
+            style: TextStyle(
+              color: _isProfileUserBlocked
+                  ? Colors.white
+                  : const Color(0xFFFF5C52),
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
       ),
     );
   }
