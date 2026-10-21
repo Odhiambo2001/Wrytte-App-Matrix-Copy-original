@@ -2084,8 +2084,9 @@ class _Card extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: _kCard,
+        color: const Color(0x00000000),
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF23262C)),
       ),
       child: child,
     );

@@ -1104,7 +1104,9 @@ class _ProfileScreenState extends State<ProfileScreen>
           bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
         ),
         child: FractionallySizedBox(
-          heightFactor: 0.70,
+          heightFactor: MediaQuery.viewInsetsOf(sheetContext).bottom > 0
+              ? 0.70
+              : 0.82,
           child: _ProfileAddContactSheet(
             initialName: _profileDisplayName(),
             phone: phone.isNotEmpty ? phone : (uid ?? ''),
@@ -1134,7 +1136,9 @@ class _ProfileScreenState extends State<ProfileScreen>
           bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
         ),
         child: FractionallySizedBox(
-          heightFactor: 0.70,
+          heightFactor: MediaQuery.viewInsetsOf(sheetContext).bottom > 0
+              ? 0.70
+              : 0.82,
           child: _ProfileAddContactSheet(
             initialName: _profileDisplayName(),
             phone: _profilePhone(),
@@ -2749,6 +2753,7 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                     height: 48,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
+                      color: const Color(0x00000000),
                       borderRadius: BorderRadius.circular(24),
                       border: Border.all(color: const Color(0xFF23262C)),
                     ),
@@ -2773,7 +2778,7 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
     height: 48,
     padding: const EdgeInsets.symmetric(horizontal: 18),
     decoration: BoxDecoration(
-      color: const Color(0xFF101116),
+      color: const Color(0x00000000),
       borderRadius: BorderRadius.circular(24),
       border: Border.all(color: const Color(0xFF23262C)),
     ),
