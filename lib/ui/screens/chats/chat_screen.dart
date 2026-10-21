@@ -30,6 +30,7 @@ import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrixrtc_livekit_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/services/matrix/block_state_service.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
@@ -649,6 +650,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    BlockStateService.instance.revision.addListener(_onBlockStateChanged);
     _chat.activateConversationRead(widget.conversationId);
     _receiverOnline = _currentPeerPresenceIsOnline();
     if (!_isGroupChat) {
@@ -725,6 +727,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    BlockStateService.instance.revision.removeListener(_onBlockStateChanged);
     _chat.deactivateConversationRead(widget.conversationId);
     _roomProfileSyncSub?.cancel();
     _groupContactsChangedSub?.cancel();
@@ -747,6 +750,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _debugScrollCtrl.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _onBlockStateChanged() {
+    if (mounted) setState(() {});
   }
 
   void _subscribeToRoomProfileUpdates() {
@@ -1283,6 +1290,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final realConvId = await _resolveConversationId();
     _chat.activateConversationRead(realConvId);
+    await _restoreBlockedMessages(realConvId);
     await _refreshPeerPresence();
     _pinnedEventIds = _chat.pinnedEventIdsForRoom(realConvId);
     _pinnedForMeEventIds =
@@ -1466,6 +1474,37 @@ class _ChatScreenState extends State<ChatScreen> {
       'ChatScreen._loadInitial',
       'migrated local conversation "${widget.conversationId}" -> "$roomId"',
     );
+  }
+
+  Future<void> _restoreBlockedMessages(String roomId) async {
+    final state = BlockStateService.instance;
+    await state.load();
+    final entries = state.blockedMessages.where(
+      (entry) => entry['room_id']?.toString() == roomId,
+    );
+    if (entries.isEmpty) return;
+    final restored = <ChatMessage>[];
+    for (final entry in entries) {
+      final id = entry['event_id']?.toString().trim() ?? '';
+      final text = entry['text']?.toString() ?? '';
+      final time = DateTime.tryParse(entry['time']?.toString() ?? '') ?? DateTime.now();
+      if (id.isEmpty || text.isEmpty || _messages.any((message) => message.id == id)) {
+        continue;
+      }
+      restored.add(ChatMessage(
+        id: id,
+        conversationId: roomId,
+        senderId: widget.currentUserId,
+        receiverId: _normaliseId(widget.receiverId),
+        content: text,
+        timestamp: time,
+        status: MessageStatus.sent,
+      ));
+    }
+    if (restored.isNotEmpty && mounted) {
+      setState(() => _messages.addAll(restored));
+      await Future.wait(restored.map(_saveLocalMessage));
+    }
   }
 
   Future<void> _loadReceiverProfile({
@@ -1859,6 +1898,31 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
+    final roomId = _resolvedConversationId ?? widget.conversationId;
+    final blockState = BlockStateService.instance;
+    await blockState.load();
+    if (blockState.isRoomBlocked(roomId, peerId: _profilePeerId())) {
+      final blocked = ChatMessage(
+        id: 'blocked_${DateTime.now().microsecondsSinceEpoch}',
+        conversationId: roomId,
+        senderId: widget.currentUserId,
+        receiverId: _normaliseId(widget.receiverId),
+        content: text,
+        timestamp: DateTime.now(),
+        status: MessageStatus.sent,
+      );
+      await blockState.recordBlockedMessage(
+        roomId: roomId,
+        eventId: blocked.id,
+        text: text,
+        time: blocked.timestamp,
+      );
+      await _saveLocalMessage(blocked);
+      if (mounted) setState(() => _messages.add(blocked));
+      _controller.clear();
+      return;
+    }
+
     _controller.clear();
     final reply = _replyingTo;
     setState(() {
@@ -1942,6 +2006,17 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() => _editingMessage = null);
       return;
     }
+    if (await _isBlockedConversation()) {
+      await BlockStateService.instance.recordBlockedMessage(
+        roomId: message.conversationId,
+        eventId: 'blocked_edit_${DateTime.now().microsecondsSinceEpoch}',
+        text: text.trim(),
+        time: DateTime.now(),
+      );
+      _controller.clear();
+      if (mounted) setState(() => _editingMessage = null);
+      return;
+    }
     if (_isSending) return;
 
     _controller.clear();
@@ -1999,6 +2074,43 @@ class _ChatScreenState extends State<ChatScreen> {
     await _saveLocalMessage(message);
   }
 
+  Future<bool> _isBlockedConversation() async {
+    if (_isGroupChat) return false;
+    final state = BlockStateService.instance;
+    await state.load();
+    return state.isRoomBlocked(
+      _resolvedConversationId ?? widget.conversationId,
+      peerId: _profilePeerId(),
+    );
+  }
+
+  Future<bool> _storeBlockedOutgoingMessage(String text) async {
+    if (!await _isBlockedConversation()) return false;
+    final roomId = _resolvedConversationId ?? widget.conversationId;
+    final time = DateTime.now();
+    final message = ChatMessage(
+      id: 'blocked_${time.microsecondsSinceEpoch}',
+      conversationId: roomId,
+      senderId: widget.currentUserId,
+      receiverId: _normaliseId(widget.receiverId),
+      content: text,
+      timestamp: time,
+      status: MessageStatus.sent,
+    );
+    await BlockStateService.instance.recordBlockedMessage(
+      roomId: roomId,
+      eventId: message.id,
+      text: text,
+      time: time,
+    );
+    await _saveLocalMessage(message);
+    if (mounted) {
+      setState(() => _messages.add(message));
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    }
+    return true;
+  }
+
   Future<void> _sendVoiceNote(String filePath, int durationSeconds) async {
     if (_isSelfConversation) {
       _logSelfConversationBlocked('send voice note');
@@ -2006,6 +2118,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     if (_isDeletedConversation) return;
+    if (await _storeBlockedOutgoingMessage('Voice message')) return;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final realConvId = await _resolveMatrixConversationIdForSend();
@@ -2083,6 +2196,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     if (_isDeletedConversation) return;
+    if (await _storeBlockedOutgoingMessage('Video message')) return;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final realConvId = await _resolveMatrixConversationIdForSend();
@@ -2237,6 +2351,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     if (_isDeletedConversation) return;
+    if (await _storeBlockedOutgoingMessage(_attachmentLabelForType(type))) return;
     if (!await File(filePath).exists()) return;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
@@ -3580,7 +3695,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final peerId = _profilePeerId();
     if (peerId == null || peerId.trim().isEmpty) return false;
     try {
-      return MatrixClientService.instance.client.ignoredUsers.contains(peerId);
+      final roomId = _resolvedConversationId ?? widget.conversationId;
+      final state = BlockStateService.instance;
+      return state.isRoomBlocked(roomId, peerId: peerId) ||
+          MatrixClientService.instance.client.ignoredUsers.contains(peerId);
     } catch (_) {
       return false;
     }
@@ -3610,20 +3728,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _unblockConversationPeer() async {
     final peerId = _profilePeerId();
-    final accountUserId = MatrixClientService.instance.client.userID;
-    if (peerId == null || accountUserId == null) return;
-    final ignoredUsers = Set<String>.from(
-      MatrixClientService.instance.client.ignoredUsers,
-    )..remove(peerId);
-    await MatrixClientService.instance.client.setAccountData(
-      accountUserId,
-      'm.ignored_user_list',
-      {
-        'ignored_users': {
-          for (final ignoredUserId in ignoredUsers)
-            ignoredUserId: <String, dynamic>{},
-        },
-      },
+    final roomId = _resolvedConversationId ?? widget.conversationId;
+    if (peerId == null || peerId.trim().isEmpty || roomId.trim().isEmpty) return;
+    await BlockStateService.instance.removeBlock(
+      userId: peerId,
+      roomId: roomId,
     );
     if (mounted) setState(() {});
   }

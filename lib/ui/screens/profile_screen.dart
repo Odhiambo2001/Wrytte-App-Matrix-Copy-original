@@ -19,6 +19,7 @@ import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/matrix/matrix_profile_service.dart';
+import 'package:wrytte/services/matrix/block_state_service.dart';
 import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
@@ -84,6 +85,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   ContactIdentity? _identity;
   bool _profileLoading = true;
   bool _showBlockUserCard = false;
+  bool _redactedByBlock = false;
   List<ChatMessage> _conversationMessages = const [];
   StreamSubscription<UserProfile?>? _profileSub;
   StreamSubscription<String>? _publicProfileUpdatesSub;
@@ -124,7 +126,11 @@ class _ProfileScreenState extends State<ProfileScreen>
     final userId = _profileTargetUserId;
     if (userId == null) return false;
     try {
-      return MatrixClientService.instance.client.ignoredUsers.contains(userId);
+      return BlockStateService.instance.isRoomBlocked(
+            widget.conversationId ?? '',
+            peerId: userId,
+          ) ||
+          MatrixClientService.instance.client.ignoredUsers.contains(userId);
     } catch (_) {
       return false;
     }
@@ -136,6 +142,19 @@ class _ProfileScreenState extends State<ProfileScreen>
   @override
   void initState() {
     super.initState();
+    BlockStateService.instance.revision.addListener(_onBlockStateChanged);
+    if (_isOtherUser) {
+      final hintedUserId = _validProfileUid(widget.uid);
+      if (hintedUserId != null) {
+        _redactedByBlock = BlockStateService.instance.bbb.any(
+          (entry) =>
+              entry['blocked_by']?.toString().trim() == hintedUserId &&
+              (widget.conversationId == null ||
+                  entry['room_id']?.toString().trim() ==
+                      widget.conversationId!.trim()),
+        );
+      }
+    }
     _seededSavedName = _cleanName(
       widget.savedNameHint,
     );
@@ -181,10 +200,42 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   @override
   void dispose() {
+    BlockStateService.instance.revision.removeListener(_onBlockStateChanged);
     _profileSub?.cancel();
     _publicProfileUpdatesSub?.cancel();
     _tabController.dispose();
     super.dispose();
+  }
+
+  void _onBlockStateChanged() {
+    final uid = _profileTargetUserId;
+    final redacted = uid != null &&
+        BlockStateService.instance.bbb.any(
+          (entry) => entry['blocked_by']?.toString().trim() == uid,
+        );
+    if (mounted) {
+      setState(() {
+        _redactedByBlock = redacted;
+      });
+    }
+    if (!redacted && _isOtherUser && uid != null) {
+      unawaited(_refreshProfileAfterUnblock(uid));
+    }
+  }
+
+  Future<void> _refreshProfileAfterUnblock(String uid) async {
+    try {
+      final refreshed = await UserProfileService.instance.getProfileByUid(
+        uid,
+        phone: _profilePhone(),
+        forceRefresh: true,
+      );
+      if (mounted && refreshed != null) {
+        setState(() => _profile = refreshed);
+      }
+    } catch (error) {
+      debugPrint('[ProfileScreen] unblock profile refresh failed: $error');
+    }
   }
 
   Future<void> _loadProfile({bool forceRefresh = false}) async {
@@ -196,6 +247,13 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
     uid ??= await _resolveProfileUidFromConversation();
     debugPrint('[ProfileScreen] resolved uid: "$uid"');
+    if (uid != null && _isOtherUser) {
+      final blockState = BlockStateService.instance;
+      await blockState.load();
+      _redactedByBlock = blockState.bbb.any(
+        (entry) => entry['blocked_by']?.toString().trim() == uid,
+      );
+    }
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     var identity =
         uid != null && ownerUserId != null && ownerUserId.isNotEmpty
@@ -984,6 +1042,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String? _profileAvatarUrl() {
+    if (_redactedByBlock) return null;
     final profile = _profile;
     if (profile?.hasProfileImage == true) return profile!.profileImage;
     if (profile?.moduleProfileLoaded == true) return null;
@@ -1257,6 +1316,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   );
 
   bool get _hasCard {
+    if (_redactedByBlock) return false;
     final bio = _profileBio();
     final links = _profile?.links ?? [];
     return bio.isNotEmpty ||
@@ -1268,6 +1328,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String _profileBio() {
+    if (_redactedByBlock) return '';
     return _profile?.bio.trim() ?? '';
   }
 
@@ -1297,13 +1358,13 @@ class _ProfileScreenState extends State<ProfileScreen>
             : _profileDisplayName();
     final String phone = _profileLoading && !hasProfile ? '' : _profilePhone();
     final String bioText = _profileBio();
-    final List<String> links = _profile?.links ?? [];
+    final List<String> links = _redactedByBlock ? const [] : (_profile?.links ?? []);
     final channelRef =
-        _canViewProfileField(_profile, 'Channel')
+        !_redactedByBlock && _canViewProfileField(_profile, 'Channel')
             ? _profile?.channelAlias.trim() ?? ''
             : '';
     final groupRef =
-        _canViewProfileField(_profile, 'Group')
+        !_redactedByBlock && _canViewProfileField(_profile, 'Group')
             ? _profile?.groupAlias.trim() ?? ''
             : '';
 
@@ -1342,7 +1403,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                                       size: 100,
                                       imageUrl: _profileAvatarUrl(),
                                       localImagePath:
-                                          _profile?.localProfileImagePath,
+                                          _redactedByBlock
+                                              ? null
+                                              : _profile?.localProfileImagePath,
                                       cacheIdentity:
                                           'user:${(widget.uid ?? _profile?.uid ?? '').trim().toLowerCase()}',
                                       name: displayName,
@@ -1381,7 +1444,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                           const SizedBox(height: 16),
 
                           // ── Quick actions (other user only) ─────────────────
-                          if (_isOtherUser) ...[
+                          if (_isOtherUser && !_redactedByBlock) ...[
                             _buildQuickActions(),
                             const SizedBox(height: 20),
                           ],
@@ -1494,6 +1557,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                     ),
 
                     // ── Sticky tab bar ───────────────────────────────────────
+                    if (!_redactedByBlock)
                     SliverPersistentHeader(
                       pinned: true,
                       delegate: _StickyTabBarDelegate(
@@ -1512,7 +1576,15 @@ class _ProfileScreenState extends State<ProfileScreen>
                 controller: _tabController,
                 physics: const BouncingScrollPhysics(),
                 children:
-                    _isOtherUser
+                    _redactedByBlock
+                        ? List<Widget>.generate(
+                          4,
+                          (_) => _buildEmptyTab(
+                            Icons.lock_outline,
+                            'Profile unavailable',
+                          ),
+                        )
+                        : _isOtherUser
                         ? [
                           _buildMediaTab(),
                           _buildFilesTab(),
@@ -1750,17 +1822,19 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Widget _buildBlockUserCard() {
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1D24).withValues(alpha: 0.92),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF23262C), width: 1),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+    return GestureDetector(
+      onTap: _isProfileUserBlocked ? _unblockProfileUser : _blockProfileUser,
+      child: Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1D24).withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: const Color(0xFF23262C), width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
           SvgPicture.asset(
             'assets/images/Block user.svg',
             width: 24,
@@ -1783,9 +1857,26 @@ class _ProfileScreenState extends State<ProfileScreen>
               fontWeight: FontWeight.w500,
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
+  }
+
+  Future<void> _blockProfileUser() async {
+    final userId = _profileTargetUserId;
+    final roomId = widget.conversationId?.trim() ?? '';
+    if (userId == null || roomId.isEmpty) return;
+    await BlockStateService.instance.addBlock(userId: userId, roomId: roomId);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _unblockProfileUser() async {
+    final userId = _profileTargetUserId;
+    final roomId = widget.conversationId?.trim() ?? '';
+    if (userId == null || roomId.isEmpty) return;
+    await BlockStateService.instance.removeBlock(userId: userId, roomId: roomId);
+    if (mounted) setState(() {});
   }
 
   Widget _actionPill(

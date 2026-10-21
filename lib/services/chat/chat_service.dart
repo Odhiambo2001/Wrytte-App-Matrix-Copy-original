@@ -20,6 +20,7 @@ import 'package:wrytte/services/matrix/matrix_auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/services/matrix/block_state_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
@@ -323,8 +324,10 @@ class ChatService {
         _handleToDeviceEvent(cachedToDeviceEvent);
       }
       _syncSub ??= client.onSync.stream.listen((update) {
+        BlockStateService.instance.handleSyncUpdate(update);
         unawaited(_handleLiveSyncUpdate(update));
       });
+      unawaited(BlockStateService.instance.load());
 
       _isConnected = true;
       _connectionController.add(true);
@@ -1543,6 +1546,13 @@ class ChatService {
           );
         }
         final isGroupRoom = MatrixChatService.instance.isMatrixGroupRoom(room);
+        if (await _conversationIsBlocked(room: room, peerId: message.receiverId)) {
+          return _recordBlockedServiceMessage(
+            room: room,
+            peerId: message.receiverId,
+            text: message.content,
+          );
+        }
         if (!message.receiverId.trim().startsWith('!')) {
           await MatrixChatService.instance.ensurePeerInvited(
             roomId: room.id,
@@ -1601,6 +1611,14 @@ class ChatService {
         );
       }
       final isGroupRoom = MatrixChatService.instance.isMatrixGroupRoom(room);
+      if (await _conversationIsBlocked(room: room, peerId: receiverID)) {
+        await _recordBlockedServiceMessage(
+          room: room,
+          peerId: receiverID,
+          text: 'Voice message',
+        );
+        return;
+      }
       await FileUploadLimits.validatePath(
         filePath,
         maxBytes: FileUploadLimits.voiceMessageMaxBytes,
@@ -1664,6 +1682,14 @@ class ChatService {
         );
       }
       final isGroupRoom = MatrixChatService.instance.isMatrixGroupRoom(room);
+      if (await _conversationIsBlocked(room: room, peerId: receiverID)) {
+        await _recordBlockedServiceMessage(
+          room: room,
+          peerId: receiverID,
+          text: 'Video message',
+        );
+        return;
+      }
       await FileUploadLimits.validatePath(
         filePath,
         maxBytes: FileUploadLimits.videoMessageMaxBytes,
@@ -1726,6 +1752,16 @@ class ChatService {
       if (room == null) {
         throw StateError(
           'Unknown Matrix room: ${conversationId ?? receiverID}',
+        );
+      }
+      if (await _conversationIsBlocked(room: room, peerId: receiverID)) {
+        return _recordBlockedServiceMessage(
+          room: room,
+          peerId: receiverID,
+          text: caption?.trim().isNotEmpty == true
+              ? caption!.trim()
+              : attachmentType,
+          attachmentType: attachmentType,
         );
       }
       if (!receiverID.trim().startsWith('!')) {
@@ -3206,6 +3242,14 @@ class ChatService {
       if (room == null) {
         throw StateError('Unknown Matrix room: ${message.conversationId}');
       }
+      if (await _conversationIsBlocked(room: room, peerId: message.receiverId)) {
+        final blocked = await _recordBlockedServiceMessage(
+          room: room,
+          peerId: message.receiverId,
+          text: text,
+        );
+        return blocked.copyWith(content: text, isEdited: true);
+      }
       await room.sendEvent(
         _buildMessageContent(message.copyWith(content: text)),
         editEventId: message.id,
@@ -3379,6 +3423,14 @@ class ChatService {
     if (room == null) {
       throw StateError('Existing forward room is not loaded: $existingRoomId');
     }
+    if (await _conversationIsBlocked(room: room, peerId: receiverId)) {
+      return _recordBlockedServiceMessage(
+        room: room,
+        peerId: receiverId,
+        text: original.content,
+        attachmentType: original.attachmentType,
+      );
+    }
     await _validateOwnedGroupForwardTarget(
       original: original,
       targetRoom: room,
@@ -3462,6 +3514,17 @@ class ChatService {
   }) async {
     return _withMatrixTokenRetry('forwardAttachmentMessage', () async {
       await _waitForConnection();
+      if (await _conversationIsBlocked(
+        room: targetRoom,
+        peerId: receiverId,
+      )) {
+        return _recordBlockedServiceMessage(
+          room: targetRoom,
+          peerId: receiverId,
+          text: original.content,
+          attachmentType: attachmentType,
+        );
+      }
       await MatrixChatService.instance.ensurePeerInvited(
         roomId: targetRoom.id,
         matrixUserId: _toMatrixUserId(receiverId),
@@ -3777,6 +3840,45 @@ class ChatService {
       'Conversation ${message.conversationId} is not loaded. '
       'Call getMatrixConversationId(receiverId) before sending.',
     );
+  }
+
+  Future<bool> _conversationIsBlocked({
+    required mx.Room room,
+    required String peerId,
+  }) async {
+    if (MatrixChatService.instance.isMatrixGroupRoom(room)) return false;
+    final state = BlockStateService.instance;
+    await state.load();
+    return state.isRoomBlocked(room.id, peerId: peerId);
+  }
+
+  Future<ChatMessage> _recordBlockedServiceMessage({
+    required mx.Room room,
+    required String peerId,
+    required String text,
+    String? attachmentType,
+  }) async {
+    final now = DateTime.now();
+    final message = ChatMessage(
+      id: 'blocked_${now.microsecondsSinceEpoch}',
+      conversationId: room.id,
+      senderId: MatrixClientService.instance.client.userID ?? _currentUserId ?? '',
+      receiverId: _toMatrixUserId(peerId),
+      content: text,
+      timestamp: now,
+      status: MessageStatus.sent,
+      attachmentType: attachmentType,
+    );
+    await BlockStateService.instance.recordBlockedMessage(
+      roomId: room.id,
+      eventId: message.id,
+      text: text,
+      time: now,
+    );
+    _cacheMessage(message);
+    await ChatLocalDb.instance.saveMessage(message);
+    _messageController.add(message);
+    return message;
   }
 
   Future<mx.Room> _directRoom(String otherUserId) async => MatrixChatService
