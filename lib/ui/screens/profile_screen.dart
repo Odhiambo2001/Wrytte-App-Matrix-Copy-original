@@ -1824,11 +1824,15 @@ class _ProfileScreenState extends State<ProfileScreen>
     ];
     return Material(
       color: Colors.transparent,
-      child: Container(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(38),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
         width: 200,
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFF15171B).withValues(alpha: 0.97),
+          color: const Color(0xFF23262C).withValues(alpha: 0.30),
           borderRadius: BorderRadius.circular(38),
           border: Border.all(color: const Color(0xFF292C32)),
           boxShadow: [
@@ -1885,7 +1889,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                 ),
               ),
           ],
+          ),
         ),
+      ),
       ),
     );
   }
@@ -1894,11 +1900,15 @@ class _ProfileScreenState extends State<ProfileScreen>
     const options = ['8 hours', '1 day', '7 days', 'Always'];
     return Material(
       color: Colors.transparent,
-      child: Container(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(38),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
         width: 200,
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFF15171B).withValues(alpha: 0.97),
+          color: const Color(0xFF23262C).withValues(alpha: 0.30),
           borderRadius: BorderRadius.circular(38),
           border: Border.all(color: const Color(0xFF292C32)),
           boxShadow: [
@@ -1969,7 +1979,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                 ),
               ),
           ],
+          ),
         ),
+      ),
       ),
     );
   }
