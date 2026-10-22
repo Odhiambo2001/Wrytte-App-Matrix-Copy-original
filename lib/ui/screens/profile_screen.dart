@@ -2031,7 +2031,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 ),
                 _clearChatConfirmationRow(
                   child: Text(
-                    'Do you want to clear all messages with\n${_profileDisplayName()}?',
+                    'Do you want to clear all messages with ${_profileDisplayName()}?',
                     style: const TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ),
