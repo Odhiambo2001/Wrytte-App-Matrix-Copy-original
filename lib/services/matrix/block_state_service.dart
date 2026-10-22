@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart' as mx;
@@ -26,6 +27,7 @@ class BlockStateService {
   Map<String, dynamic> _bbb = <String, dynamic>{};
   Map<String, dynamic> _blockedMessages = <String, dynamic>{};
   Future<void> _writeQueue = Future<void>.value();
+  Future<void>? _eventBackfill;
 
   mx.Client get _client => MatrixClientService.instance.client;
 
@@ -38,8 +40,76 @@ class BlockStateService {
       _bbb = _content(bbbType);
       _blockedMessages = _content(blockedMessagesType);
       revision.value++;
+      await _backfillBlockEvents();
     } catch (error) {
       debugPrint('[BlockState] load failed error=$error');
+    }
+  }
+
+  Future<void> _backfillBlockEvents() {
+    final existing = _eventBackfill;
+    if (existing != null) return existing;
+    final request = _backfillBlockEventsInternal();
+    _eventBackfill = request;
+    return request.whenComplete(() => _eventBackfill = null);
+  }
+
+  Future<void> _backfillBlockEventsInternal() async {
+    final userId = _client.userID;
+    if (userId == null || userId.isEmpty) return;
+
+    final filter = jsonEncode(
+      mx.StateFilter(
+        types: [blockedEventType, unblockedEventType],
+        lazyLoadMembers: true,
+      ).toJson(),
+    );
+
+    for (final room in List<mx.Room>.from(_client.rooms)) {
+      try {
+        final response = await _client.getRoomEvents(
+          room.id,
+          mx.Direction.b,
+          limit: 100,
+          filter: filter,
+        );
+        // /messages is returned newest-first. Replay oldest-to-newest so a
+        // later unblock cannot be overwritten by an older block event.
+        for (final matrixEvent in response.chunk.reversed) {
+          final type = matrixEvent.type;
+          if (type != blockedEventType && type != unblockedEventType) continue;
+          final content = Map<String, dynamic>.from(matrixEvent.content);
+          final eventRoom = content['room_id']?.toString() ?? room.id;
+          final blockedBy = content['blocked_by']?.toString() ??
+              matrixEvent.senderId;
+          if (blockedBy.isEmpty) continue;
+          debugPrint(
+            '[BlockState] backfill event type="$type" receiver="$userId" '
+            'sender="$blockedBy" room="$eventRoom" content=$content',
+          );
+          if (type == blockedEventType) {
+            final blockedUser = content['blocked_user_id']?.toString();
+            if (blockedUser != null &&
+                blockedUser.isNotEmpty &&
+                blockedUser != userId) {
+              continue;
+            }
+            await recordBlockedBy({
+              'blocked_by': blockedBy,
+              'blocked_user_id': userId,
+              'room_id': eventRoom,
+              'blocked_at': content['timestamp']?.toString() ??
+                  DateTime.now().toUtc().toIso8601String(),
+            });
+          } else {
+            await removeBlockedBy(blockedBy: blockedBy, roomId: eventRoom);
+          }
+        }
+      } catch (error) {
+        debugPrint(
+          '[BlockState] backfill failed room="${room.id}" error=$error',
+        );
+      }
     }
   }
 
@@ -162,6 +232,17 @@ class BlockStateService {
   }
 
   Future<void> removeBlock({required String userId, required String roomId}) async {
+    final exists = _entries(_blocklist).any(
+      (entry) => entry['user_id']?.toString() == userId ||
+          entry['room_id']?.toString() == roomId,
+    );
+    if (!exists) {
+      debugPrint(
+        '[BlockState] unblock ignored: no matching BLOCKLIST entry '
+        'user="$userId" room="$roomId"',
+      );
+      return;
+    }
     await _update(blocklistType, _blocklist, (entries) {
       entries.removeWhere((e) => e['user_id'] == userId || e['room_id'] == roomId);
     });

@@ -2105,7 +2105,12 @@ class ChatService {
             : _hiddenEventIdsForRoom(roomId, room: room);
     final filter = jsonEncode(
       mx.StateFilter(
-        types: [mx.EventTypes.Message, mx.EventTypes.Encrypted],
+        types: [
+          mx.EventTypes.Message,
+          mx.EventTypes.Encrypted,
+          BlockStateService.blockedEventType,
+          BlockStateService.unblockedEventType,
+        ],
         lazyLoadMembers: true,
       ).toJson(),
     );

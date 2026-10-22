@@ -94,6 +94,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   MatrixPublicGroup? _profileGroup;
   int _profileRoomResolveRevision = 0;
   bool _statusIconBuildLogged = false;
+  bool _blockActionInFlight = false;
 
   late final TabController _tabController;
 
@@ -1863,19 +1864,31 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _blockProfileUser() async {
+    if (_blockActionInFlight) return;
+    _blockActionInFlight = true;
+    try {
     final userId = _profileTargetUserId;
     final roomId = widget.conversationId?.trim() ?? '';
     if (userId == null || roomId.isEmpty) return;
     await BlockStateService.instance.addBlock(userId: userId, roomId: roomId);
     if (mounted) setState(() {});
+    } finally {
+      _blockActionInFlight = false;
+    }
   }
 
   Future<void> _unblockProfileUser() async {
+    if (_blockActionInFlight) return;
+    _blockActionInFlight = true;
+    try {
     final userId = _profileTargetUserId;
     final roomId = widget.conversationId?.trim() ?? '';
     if (userId == null || roomId.isEmpty) return;
     await BlockStateService.instance.removeBlock(userId: userId, roomId: roomId);
     if (mounted) setState(() {});
+    } finally {
+      _blockActionInFlight = false;
+    }
   }
 
   Widget _actionPill(
