@@ -115,7 +115,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     final target = userId == null ? '' : _matrixLocalpart(userId).toLowerCase();
     if (target.isEmpty) return false;
     return BlockStateService.instance.isRedactedByBbb(
-      userId,
+      userId!,
       roomId: roomId,
     );
   }
