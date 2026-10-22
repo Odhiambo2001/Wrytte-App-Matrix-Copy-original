@@ -85,6 +85,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   ContactIdentity? _identity;
   bool _profileLoading = true;
   bool _showBlockUserCard = false;
+  bool _showMoreOptions = false;
+  final LayerLink _moreOptionsLayerLink = LayerLink();
   bool _redactedByBlock = false;
   List<ChatMessage> _conversationMessages = const [];
   StreamSubscription<UserProfile?>? _profileSub;
@@ -1655,6 +1657,14 @@ class _ProfileScreenState extends State<ProfileScreen>
                 child: _buildBlockUserCard(),
               ),
 
+            if (_showMoreOptions)
+              CompositedTransformFollower(
+                link: _moreOptionsLayerLink,
+                showWhenUnlinked: false,
+                offset: const Offset(-266, 66),
+                child: _buildMoreOptionsCard(),
+              ),
+
             // ── Top bar ───────────────────────────────────────────────────
             Positioned(
               top: 0,
@@ -1742,9 +1752,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   Widget _buildQuickActions() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
           Expanded(
             child: _actionPill(
               null,
@@ -1776,14 +1789,77 @@ class _ProfileScreenState extends State<ProfileScreen>
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: _actionPill(
-              Icons.more_horiz,
-              'More',
-              iconSize: 24,
-              onTap: () {},
+            child: CompositedTransformTarget(
+              link: _moreOptionsLayerLink,
+              child: _actionPill(
+                Icons.more_horiz,
+                'More',
+                iconSize: 24,
+                onTap: () => setState(() => _showMoreOptions = !_showMoreOptions),
+              ),
             ),
           ),
+            ],
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMoreOptionsCard() {
+    final options = <String>[
+      'Mute',
+      'Share contact',
+      'Auto delete',
+      'Clear chat',
+      if (widget.contactStatus == ProfileContactStatus.saved ||
+          _savedContact != null)
+        'Block user',
+    ];
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 350,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF15171B).withValues(alpha: 0.97),
+          borderRadius: BorderRadius.circular(38),
+          border: Border.all(color: const Color(0xFF292C32)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 24,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final option in options)
+              InkWell(
+                onTap: () {},
+                child: SizedBox(
+                  height: 58,
+                  width: double.infinity,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 42),
+                      child: Text(
+                        option,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
