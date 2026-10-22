@@ -1563,7 +1563,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       rejectPlaceholderVersion: profile?.moduleProfileLoaded != true,
     );
     final matrixAvatar = _safeDirectAvatarUrl(matrixProfile?.$2);
-    final blockedByPeer = BlockStateService.instance.isRedactedByBbb(
+    final blockedByPeer = BlockStateService.instance.isRedactedForViewer(
       profileUid,
       roomId: conv.id,
     ) || UserProfileService.instance.isPublicProfileRefreshing(profileUid);
@@ -1998,10 +1998,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     final peerId = _profileUidForConversation(conv);
     final blockedByPeer = peerId != null &&
-        BlockStateService.instance.isRedactedByBbb(
+        BlockStateService.instance.isRedactedForViewer(
           peerId,
           roomId: conv.id,
-        ) || UserProfileService.instance.isPublicProfileRefreshing(peerId);
+        ) || UserProfileService.instance.isPublicProfileRefreshing(peerId ?? '');
     debugPrint(
       '[ConversationAvatar] room="${conv.id}" peer="${peerId ?? ''}" '
       'bbb_match=$blockedByPeer stored_avatar="${conv.otherUserAvatar ?? ''}" '
@@ -2134,7 +2134,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final uid = _profileUidForConversation(conv);
     if (uid == null) return null;
-    final blockedByPeer = BlockStateService.instance.isRedactedByBbb(uid);
+    final blockedByPeer = BlockStateService.instance.isRedactedForViewer(
+      uid,
+      roomId: conv.id,
+    );
     if (blockedByPeer) {
       debugPrint(
         '[ConversationAvatar] LOCAL_PATH_SUPPRESSED room="${conv.id}" peer="$uid"',

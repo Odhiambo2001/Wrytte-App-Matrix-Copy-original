@@ -4526,7 +4526,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
       avatarBuilder: (size) => UserAvatar(
         size: size,
-        imageUrl: BlockStateService.instance.isRedactedByBbb(
+        imageUrl: BlockStateService.instance.isRedactedForViewer(
                   _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                   roomId: _resolvedConversationId ?? widget.conversationId,
                 ) || UserProfileService.instance.isPublicProfileRefreshing(
@@ -4538,7 +4538,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ? _receiverProfile!.profileImage
                     : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
               ),
-        localImagePath: BlockStateService.instance.isRedactedByBbb(
+        localImagePath: BlockStateService.instance.isRedactedForViewer(
                   _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                   roomId: _resolvedConversationId ?? widget.conversationId,
                 ) || UserProfileService.instance.isPublicProfileRefreshing(

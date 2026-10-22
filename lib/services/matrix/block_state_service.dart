@@ -255,6 +255,13 @@ class BlockStateService {
     return !_ready || isBlockedByBbb(userId, roomId: roomId);
   }
 
+  /// Privacy-safe decision for every profile surface. This covers both
+  /// directions: the viewer's BLOCKLIST and the viewer's BBB state.
+  /// Unknown state fails closed until account data/event backfill is ready.
+  bool isRedactedForViewer(String userId, {String? roomId}) {
+    return !_ready || isRoomBlocked(roomId ?? '', peerId: userId);
+  }
+
   bool isBlockedBy(String userId, {String? roomId}) => isRoomBlocked(
     roomId ?? '',
     peerId: userId,
