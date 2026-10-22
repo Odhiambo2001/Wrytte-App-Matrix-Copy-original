@@ -88,6 +88,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _showBlockUserCard = false;
   bool _showMoreOptions = false;
   bool _showMuteOptions = false;
+  bool _roomMuted = false;
   final LayerLink _moreOptionsLayerLink = LayerLink();
   bool _redactedByBlock = false;
   List<ChatMessage> _conversationMessages = const [];
@@ -195,6 +196,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
     _loadProfile();
     _loadConversationMessages();
+    unawaited(_loadMuteState());
     if (_isOtherUser) {
       _publicProfileUpdatesSub = UserProfileService
           .instance
@@ -1812,7 +1814,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildMoreOptionsCard() {
     final options = <String>[
-      'Mute',
+      _roomMuted ? 'Unmute' : 'Mute',
       'Share contact',
       'Auto delete',
       'Clear chat',
@@ -1844,6 +1846,8 @@ class _ProfileScreenState extends State<ProfileScreen>
               InkWell(
                 onTap: option == 'Mute'
                     ? () => setState(() => _showMuteOptions = true)
+                    : option == 'Unmute'
+                    ? _unmuteRoom
                     : () {},
                 child: SizedBox(
                   height: 58,
@@ -1970,6 +1974,13 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Future<void> _loadMuteState() async {
+    final roomId = widget.conversationId?.trim() ?? '';
+    if (roomId.isEmpty) return;
+    final muted = await MuteRoomsService.instance.isMuted(roomId);
+    if (mounted) setState(() => _roomMuted = muted);
+  }
+
   Future<void> _applyMuteOption(String option) async {
     final roomId = widget.conversationId?.trim() ?? '';
     if (roomId.isEmpty) return;
@@ -1987,7 +1998,19 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
     if (!mounted) return;
     setState(() {
+      _roomMuted = true;
       _showMuteOptions = false;
+      _showMoreOptions = false;
+    });
+  }
+
+  Future<void> _unmuteRoom() async {
+    final roomId = widget.conversationId?.trim() ?? '';
+    if (roomId.isEmpty) return;
+    await MuteRoomsService.instance.unmute(roomId);
+    if (!mounted) return;
+    setState(() {
+      _roomMuted = false;
       _showMoreOptions = false;
     });
   }
@@ -1996,6 +2019,8 @@ class _ProfileScreenState extends State<ProfileScreen>
     switch (option) {
       case 'Mute':
         return 'assets/images/Bell new icon slash .svg';
+      case 'Unmute':
+        return 'assets/images/Bell new icon .svg';
       case 'Share contact':
         return 'assets/images/Share icon.svg';
       case 'Auto delete':
