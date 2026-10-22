@@ -20,12 +20,17 @@ class BlockStateService {
   static const unblockedEventType = 'com.wrytte.user.unblocked';
 
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
+  final StreamController<({String blockedBy, String roomId})> _unblockController =
+      StreamController<({String blockedBy, String roomId})>.broadcast();
   Map<String, dynamic> _blocklist = <String, dynamic>{};
   Map<String, dynamic> _bbb = <String, dynamic>{};
   Map<String, dynamic> _blockedMessages = <String, dynamic>{};
   Future<void> _writeQueue = Future<void>.value();
 
   mx.Client get _client => MatrixClientService.instance.client;
+
+  Stream<({String blockedBy, String roomId})> get unblockStream =>
+      _unblockController.stream;
 
   Future<void> load() async {
     try {
@@ -163,6 +168,7 @@ class BlockStateService {
       entries.removeWhere((e) =>
           e['blocked_by'] == blockedBy && e['room_id'] == roomId);
     });
+    _unblockController.add((blockedBy: blockedBy, roomId: roomId));
   }
 
   Future<void> recordBlockedMessage({

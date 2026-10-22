@@ -31,6 +31,8 @@ BIO_FIELD = "com.wrytte.bio"
 ONLINE_VISIBILITY_FIELD = "com.wrytte.online_status"
 CONTACTS_ACCOUNT_DATA_TYPE = "com.wrytte.contacts"
 BLOCKLIST_ACCOUNT_DATA_TYPE = "com.wrytte.blocklist"
+BBB_ACCOUNT_DATA_TYPE = "com.wrytte.bbb"
+BLOCKED_MESSAGES_ACCOUNT_DATA_TYPE = "com.wrytte.blockedmsg"
 PROFILE_UPDATED_EVENT = "com.wrytte.profile.updated"
 VISIBILITY_FIELDS = ALLOWED_FIELDS - {AVATAR_VERSION_FIELD}
 
@@ -171,6 +173,41 @@ class ProfileRoot(Resource):
         )
 
 
+class RecoveryResource(Resource):
+    isLeaf = True
+
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+
+    def render_POST(self, request):
+        async def run():
+            try:
+                requester = await self.module.api.get_user_by_req(request)
+                raw = request.content.read()
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+                result = await self.module.recover_blocked_messages(
+                    requester.user.to_string(),
+                    payload,
+                )
+                body = json.dumps(result).encode("utf-8")
+                request.setResponseCode(200)
+                request.setHeader(b"Content-Type", b"application/json")
+                request.write(body)
+            except ProfileError as error:
+                request.setResponseCode(error.status)
+                request.write(json.dumps({"error": str(error)}).encode("utf-8"))
+            except Exception as error:
+                logger.exception("Blocked-message recovery failed")
+                request.setResponseCode(500)
+                request.write(json.dumps({"error": str(error)}).encode("utf-8"))
+            finally:
+                request.finish()
+
+        run_in_background(run)
+        return NOT_DONE_YET
+
+
 class WrytteProfileModule:
     def __init__(self, config, api: ModuleApi):
         self.api = api
@@ -191,6 +228,10 @@ class WrytteProfileModule:
         )
 
         api.register_web_resource(path, ProfileRoot(self))
+        api.register_web_resource(
+            "/_synapse/client/wrytte/blocked-messages/recover",
+            RecoveryResource(self),
+        )
         # Wrytte presence visibility replaces Synapse's default shared-room
         # fan-out. The callbacks below return only users allowed by the owner's
         # visibility setting.
@@ -222,6 +263,123 @@ class WrytteProfileModule:
         # which leaks request contexts into reactor timers.
         threadpool = self.api._hs.get_reactor().getThreadPool()
         return await self.api.defer_to_threadpool(threadpool, execute)
+
+    async def recover_blocked_messages(self, requester_id, payload):
+        if not isinstance(payload, dict):
+            raise ProfileError("Request body must be a JSON object.", 400)
+        room_id = str(payload.get("room_id") or "").strip()
+        messages = payload.get("messages")
+        if not room_id or not isinstance(messages, list):
+            raise ProfileError("room_id and messages are required.", 400)
+
+        store = self.api._hs.get_datastores().main
+        bbb = await store.get_global_account_data_by_type_for_user(
+            requester_id, BBB_ACCOUNT_DATA_TYPE
+        )
+        bbb_entries = bbb.get("entries", []) if isinstance(bbb, dict) else []
+        if any(
+            isinstance(entry, dict)
+            and str(entry.get("room_id") or "").strip() == room_id
+            for entry in bbb_entries
+        ):
+            raise ProfileError("The conversation is still blocked.", 403)
+
+        blocked_data = await store.get_global_account_data_by_type_for_user(
+            requester_id, BLOCKED_MESSAGES_ACCOUNT_DATA_TYPE
+        )
+        blocked_entries = (
+            blocked_data.get("entries", [])
+            if isinstance(blocked_data, dict)
+            else []
+        )
+        stored_by_id = {
+            str(entry.get("blocked_message_id") or entry.get("event_id") or "").strip(): entry
+            for entry in blocked_entries
+            if isinstance(entry, dict)
+        }
+
+        valid = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            blocked_id = str(
+                message.get("blocked_message_id") or message.get("event_id") or ""
+            ).strip()
+            text = str(message.get("text") or "")
+            if not blocked_id or not text:
+                continue
+            sequence = int(message.get("sequence") or 0)
+            timestamp = str(message.get("time") or "")
+            stored = stored_by_id.get(blocked_id)
+            if (
+                not isinstance(stored, dict)
+                or str(stored.get("room_id") or "").strip() != room_id
+                or str(stored.get("text") or "") != text
+                or str(stored.get("time") or "") != timestamp
+            ):
+                raise ProfileError(
+                    "Blocked message does not belong to the authenticated user.",
+                    403,
+                )
+            valid.append((sequence, timestamp, blocked_id, text))
+        valid.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        recovered = []
+        for sequence, timestamp, blocked_id, text in valid:
+            claimed = await self._claim_recovery(
+                requester_id, room_id, blocked_id, sequence, timestamp, text
+            )
+            if not claimed:
+                continue
+            result = await self.api.create_and_send_event_into_room(
+                {
+                    "type": "m.room.message",
+                    "room_id": room_id,
+                    "sender": requester_id,
+                    "content": {"msgtype": "m.text", "body": text},
+                }
+            )
+            recovered.append({
+                "blocked_message_id": blocked_id,
+                "event_id": result,
+                "status": "recovered",
+            })
+        return {"room_id": room_id, "messages": recovered}
+
+    async def _claim_recovery(
+        self, sender, room_id, blocked_id, sequence, timestamp, text
+    ):
+        def claim(connection):
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS wrytte_recovered_messages (
+                        sender TEXT NOT NULL,
+                        room_id TEXT NOT NULL,
+                        blocked_message_id TEXT NOT NULL,
+                        sequence BIGINT NOT NULL,
+                        sent_time TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        PRIMARY KEY (sender, room_id, blocked_message_id)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO wrytte_recovered_messages
+                        (sender, room_id, blocked_message_id, sequence, sent_time, body)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (sender, room_id, blocked_message_id) DO NOTHING
+                    RETURNING blocked_message_id
+                    """,
+                    (sender, room_id, blocked_id, sequence, timestamp, text),
+                )
+                inserted = cursor.fetchone() is not None
+            connection.commit()
+            return inserted
+
+        return await self._db(claim)
 
     def _require_owner(self, requester_id, target_user_id):
         if requester_id != target_user_id:

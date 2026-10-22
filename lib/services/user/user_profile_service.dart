@@ -14,6 +14,7 @@ import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_profile_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/block_state_service.dart';
 import 'package:wrytte/services/file_upload_limits.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
@@ -30,6 +31,9 @@ class UserProfileService {
         in MatrixClientService.instance.takePendingProfileUpdates()) {
       _handlePublicProfileUpdated(userId);
     }
+    BlockStateService.instance.unblockStream.listen((event) {
+      unawaited(_refreshProfileAfterUnblock(event.blockedBy));
+    });
   }
   static final UserProfileService instance = UserProfileService._();
 
@@ -112,6 +116,24 @@ class UserProfileService {
     debugPrint(
       '[UserProfileService] invalidated public profile user_id="$userId"',
     );
+  }
+
+  Future<void> _refreshProfileAfterUnblock(String userId) async {
+    final normalized = userId.trim();
+    if (normalized.isEmpty) return;
+    try {
+      _handlePublicProfileUpdated(normalized);
+      await getProfileByUid(normalized, forceRefresh: true);
+      _publicProfileUpdateController.add(normalized);
+      debugPrint(
+        '[UserProfileService] unblock profile refresh completed user_id="$normalized"',
+      );
+    } catch (error) {
+      debugPrint(
+        '[UserProfileService] unblock profile refresh failed '
+        'user_id="$normalized" error=$error',
+      );
+    }
   }
 
   Future<void> _refreshOwnerProfileIfChanged(String userId) async {
