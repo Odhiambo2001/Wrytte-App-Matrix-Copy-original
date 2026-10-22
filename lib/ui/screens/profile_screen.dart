@@ -95,6 +95,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   int _profileRoomResolveRevision = 0;
   bool _statusIconBuildLogged = false;
   bool _blockActionInFlight = false;
+  bool _profileUnblockRefreshInFlight = false;
 
   late final TabController _tabController;
 
@@ -216,12 +217,19 @@ class _ProfileScreenState extends State<ProfileScreen>
   void _onBlockStateChanged() {
     final uid = _profileTargetUserId;
     final redacted = _isBlockedByBbb(uid);
-    if (mounted) {
+    if (redacted && mounted) {
       setState(() {
-        _redactedByBlock = redacted;
+        _redactedByBlock = true;
       });
     }
     if (!redacted && _isOtherUser && uid != null) {
+      if (_profileUnblockRefreshInFlight) return;
+      // Keep all private/public profile surfaces redacted until the complete
+      // profile refresh and featured-room resolution finish.
+      if (mounted) {
+        setState(() => _redactedByBlock = true);
+      }
+      _profileUnblockRefreshInFlight = true;
       unawaited(_refreshProfileAfterUnblock(uid));
     }
   }
@@ -233,11 +241,21 @@ class _ProfileScreenState extends State<ProfileScreen>
         phone: _profilePhone(),
         forceRefresh: true,
       );
-      if (mounted && refreshed != null) {
-        setState(() => _profile = refreshed);
+      if (!mounted || refreshed == null) return;
+
+      // Resolve channel/group data before revealing any part of the profile.
+      await _loadProfileRoomCards(refreshed);
+      if (mounted) {
+        setState(() {
+          _profile = refreshed;
+          _redactedByBlock = false;
+          _profileLoading = false;
+        });
       }
     } catch (error) {
       debugPrint('[ProfileScreen] unblock profile refresh failed: $error');
+    } finally {
+      _profileUnblockRefreshInFlight = false;
     }
   }
 
