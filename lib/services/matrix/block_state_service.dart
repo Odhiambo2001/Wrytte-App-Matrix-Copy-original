@@ -349,6 +349,32 @@ class BlockStateService {
     _unblockController.add((blockedBy: blockedBy, roomId: roomId));
   }
 
+  /// The profile module is authoritative for the unblock relationship. If a
+  /// profile response contains fields that are never returned while blocked,
+  /// clear a stale BBB record even when the room event was delayed or missed.
+  Future<void> reconcileProfileUnblocked(String blockedBy) async {
+    final target = blockedBy.trim().toLowerCase();
+    if (target.isEmpty) return;
+    final before = _entries(_bbb).length;
+    await _update(bbbType, _bbb, (entries) {
+      entries.removeWhere((entry) {
+        final value = entry['blocked_by']?.toString().trim().toLowerCase();
+        return value == target;
+      });
+    });
+    if (_entries(_bbb).length != before) {
+      // Start the profile refresh gate before notifying avatar consumers.
+      // This prevents a single frame from rendering a cached/old avatar
+      // between BBB removal and the authoritative profile fetch.
+      _unblockController.add((blockedBy: blockedBy, roomId: ''));
+      revision.value++;
+      debugPrint(
+        '[BlockState] reconciled stale BBB after full profile response '
+        'blocked_by="$blockedBy" entries=${_entries(_bbb)}',
+      );
+    }
+  }
+
   Future<void> recordBlockedMessage({
     required String roomId,
     required String eventId,

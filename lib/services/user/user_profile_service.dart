@@ -632,6 +632,16 @@ class UserProfileService {
       // identity fields on transient errors.
       return null;
     }
+    final hasUnblockedPrivateFields = <String>{
+      'com.wrytte.avatar_image_url',
+      'com.wrytte.bio',
+      'com.wrytte.link',
+      'com.wrytte.channel_alias',
+      'com.wrytte.group_alias',
+    }.any(remote.containsKey);
+    if (hasUnblockedPrivateFields) {
+      await BlockStateService.instance.reconcileProfileUnblocked(uid);
+    }
     if (!_matchesRequestedPublicProfile(remote, uid: uid, phone: phone)) {
       debugPrint(
         '[UserProfileService] rejected unverified public profile for "$uid"',
