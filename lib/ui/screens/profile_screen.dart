@@ -1846,13 +1846,29 @@ class _ProfileScreenState extends State<ProfileScreen>
                     alignment: Alignment.centerLeft,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 42),
-                      child: Text(
-                        option,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w400,
-                        ),
+                      child: Row(
+                        children: [
+                          if (_moreOptionIconPath(option) != null) ...[
+                            SvgPicture.asset(
+                              _moreOptionIconPath(option)!,
+                              width: 26,
+                              height: 26,
+                              colorFilter: const ColorFilter.mode(
+                                Colors.white,
+                                BlendMode.srcIn,
+                              ),
+                            ),
+                            const SizedBox(width: 20),
+                          ],
+                          Text(
+                            option,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -1862,6 +1878,23 @@ class _ProfileScreenState extends State<ProfileScreen>
         ),
       ),
     );
+  }
+
+  String? _moreOptionIconPath(String option) {
+    switch (option) {
+      case 'Mute':
+        return 'assets/images/Bell new icon slash .svg';
+      case 'Share contact':
+        return 'assets/images/Share icon.svg';
+      case 'Auto delete':
+        return 'assets/images/Disappearing messages icon.svg';
+      case 'Clear chat':
+        return 'assets/images/Clear messages icon.svg';
+      case 'Block user':
+        return 'assets/images/Block user.svg';
+      default:
+        return null;
+    }
   }
 
   Widget _buildUnsavedProfileActions() {
