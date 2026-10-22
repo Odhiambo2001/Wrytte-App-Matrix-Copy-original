@@ -88,6 +88,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _showBlockUserCard = false;
   bool _showMoreOptions = false;
   bool _showMuteOptions = false;
+  bool _showClearChatConfirmation = false;
   bool _roomMuted = false;
   final LayerLink _moreOptionsLayerLink = LayerLink();
   bool _redactedByBlock = false;
@@ -1668,6 +1669,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                 offset: const Offset(-140, 66),
                 child: _showMuteOptions
                     ? _buildMuteOptionsCard()
+                    : _showClearChatConfirmation
+                    ? _buildClearChatConfirmationCard()
                     : _buildMoreOptionsCard(),
               ),
 
@@ -1830,7 +1833,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
         width: 200,
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         decoration: BoxDecoration(
           color: const Color(0xFF23262C).withValues(alpha: 0.30),
           borderRadius: BorderRadius.circular(38),
@@ -1852,9 +1855,11 @@ class _ProfileScreenState extends State<ProfileScreen>
                     ? () => setState(() => _showMuteOptions = true)
                     : option == 'Unmute'
                     ? _unmuteRoom
+                    : option == 'Clear chat'
+                    ? () => setState(() => _showClearChatConfirmation = true)
                     : () {},
                 child: SizedBox(
-                  height: 58,
+                  height: 52,
                   width: double.infinity,
                   child: Align(
                     alignment: Alignment.centerLeft,
@@ -1906,7 +1911,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
         width: 200,
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         decoration: BoxDecoration(
           color: const Color(0xFF23262C).withValues(alpha: 0.30),
           borderRadius: BorderRadius.circular(38),
@@ -1925,7 +1930,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             InkWell(
               onTap: () => setState(() => _showMuteOptions = false),
               child: SizedBox(
-                height: 58,
+                height: 52,
                 child: Row(
                   children: [
                     const SizedBox(width: 28),
@@ -1951,7 +1956,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               InkWell(
                 onTap: () => _applyMuteOption(option),
                 child: SizedBox(
-                  height: 58,
+                  height: 52,
                   child: Row(
                     children: [
                       const SizedBox(width: 28),
@@ -1982,6 +1987,87 @@ class _ProfileScreenState extends State<ProfileScreen>
           ),
         ),
       ),
+      ),
+    );
+  }
+
+  Widget _buildClearChatConfirmationCard() {
+    return Material(
+      color: Colors.transparent,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(38),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            width: 200,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
+              borderRadius: BorderRadius.circular(38),
+              border: Border.all(color: const Color(0xFF292C32)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                InkWell(
+                  onTap: () => setState(() => _showClearChatConfirmation = false),
+                  child: _clearChatConfirmationRow(
+                    child: Row(
+                      children: [
+                        SvgPicture.asset(
+                          'assets/svg/ic--round-arrow-back-ios.svg',
+                          width: 24,
+                          height: 24,
+                          colorFilter: const ColorFilter.mode(
+                            Colors.white,
+                            BlendMode.srcIn,
+                          ),
+                        ),
+                        const SizedBox(width: 26),
+                        const Text('Back', style: TextStyle(color: Colors.white, fontSize: 14)),
+                      ],
+                    ),
+                  ),
+                ),
+                _clearChatConfirmationRow(
+                  child: Text(
+                    'Do you want to clear all messages with\n${_profileDisplayName()}?',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ),
+                InkWell(
+                  onTap: () {},
+                  child: _clearChatConfirmationRow(
+                    child: const Text(
+                      'Clear all messages',
+                      style: TextStyle(color: Color(0xFFFF5C52), fontSize: 14),
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: () => setState(() => _showClearChatConfirmation = false),
+                  child: _clearChatConfirmationRow(
+                    child: const Text('Cancel', style: TextStyle(color: Colors.white, fontSize: 14)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _clearChatConfirmationRow({required Widget child}) {
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: child,
+        ),
       ),
     );
   }
