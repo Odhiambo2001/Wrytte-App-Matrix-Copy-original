@@ -28,6 +28,7 @@ class BlockStateService {
   Map<String, dynamic> _blockedMessages = <String, dynamic>{};
   Future<void> _writeQueue = Future<void>.value();
   Future<void>? _eventBackfill;
+  Future<void>? _loadInFlight;
   bool _ready = false;
 
   mx.Client get _client => MatrixClientService.instance.client;
@@ -38,9 +39,23 @@ class BlockStateService {
   bool get isReady => _ready;
 
   Future<void> load() async {
+    final existing = _loadInFlight;
+    if (existing != null) return existing;
+    final request = _loadInternal();
+    _loadInFlight = request;
+    return request.whenComplete(() => _loadInFlight = null);
+  }
+
+  Future<void> _loadInternal() async {
     try {
+      // Account data exposed by the SDK can lag behind a local write. Only
+      // hydrate BBB from it during the initial load; later sync notifications
+      // must not replace the authoritative in-memory state with that stale
+      // snapshot while event backfill is still running.
       _blocklist = _content(blocklistType);
-      _bbb = _content(bbbType);
+      if (!_ready) {
+        _bbb = _content(bbbType);
+      }
       _blockedMessages = _content(blockedMessagesType);
       await _backfillBlockEvents();
       _ready = true;
@@ -69,6 +84,7 @@ class BlockStateService {
       ).toJson(),
     );
 
+    final latestByRoom = <String, mx.MatrixEvent>{};
     for (final room in List<mx.Room>.from(_client.rooms)) {
       try {
         final response = await _client.getRoomEvents(
@@ -77,42 +93,66 @@ class BlockStateService {
           limit: 100,
           filter: filter,
         );
-        // /messages is returned newest-first. Replay oldest-to-newest so a
-        // later unblock cannot be overwritten by an older block event.
-        for (final matrixEvent in response.chunk.reversed) {
+        for (final matrixEvent in response.chunk) {
           final type = matrixEvent.type;
           if (type != blockedEventType && type != unblockedEventType) continue;
           final content = Map<String, dynamic>.from(matrixEvent.content);
           final eventRoom = content['room_id']?.toString() ?? room.id;
-          final blockedBy = content['blocked_by']?.toString() ??
-              matrixEvent.senderId;
-          if (blockedBy.isEmpty) continue;
-          debugPrint(
-            '[BlockState] backfill event type="$type" receiver="$userId" '
-            'sender="$blockedBy" room="$eventRoom" content=$content',
-          );
-          if (type == blockedEventType) {
-            final blockedUser = content['blocked_user_id']?.toString();
-            if (blockedUser != null &&
-                blockedUser.isNotEmpty &&
-                blockedUser != userId) {
-              continue;
-            }
-            await recordBlockedBy({
-              'blocked_by': blockedBy,
-              'blocked_user_id': userId,
-              'room_id': eventRoom,
-              'blocked_at': content['timestamp']?.toString() ??
-                  DateTime.now().toUtc().toIso8601String(),
-            });
-          } else {
-            await removeBlockedBy(blockedBy: blockedBy, roomId: eventRoom);
+          final previous = latestByRoom[eventRoom];
+          if (previous == null ||
+              matrixEvent.originServerTs.isAfter(previous.originServerTs) ||
+              (matrixEvent.originServerTs == previous.originServerTs &&
+                  matrixEvent.eventId.compareTo(previous.eventId) > 0)) {
+            latestByRoom[eventRoom] = matrixEvent;
           }
         }
       } catch (error) {
         debugPrint(
           '[BlockState] backfill failed room="${room.id}" error=$error',
         );
+      }
+    }
+
+    final latestEvents = latestByRoom.entries.toList()
+      ..sort((a, b) {
+        final timestamp = a.value.originServerTs.compareTo(b.value.originServerTs);
+        return timestamp != 0
+            ? timestamp
+            : a.value.eventId.compareTo(b.value.eventId);
+      });
+
+    for (final latest in latestEvents) {
+      try {
+        final matrixEvent = latest.value;
+        final type = matrixEvent.type;
+        final content = Map<String, dynamic>.from(matrixEvent.content);
+        final eventRoom = latest.key;
+        final blockedBy = content['blocked_by']?.toString() ??
+            matrixEvent.senderId;
+        if (blockedBy.isEmpty) continue;
+        debugPrint(
+          '[BlockState] backfill event type="$type" receiver="$userId" '
+          'sender="$blockedBy" room="$eventRoom" content=$content',
+        );
+        if (type == blockedEventType) {
+          final blockedUser = content['blocked_user_id']?.toString();
+          if (blockedUser != null &&
+              blockedUser.isNotEmpty &&
+              blockedUser != userId) {
+            continue;
+          }
+          await recordBlockedBy({
+            'blocked_by': blockedBy,
+            'blocked_user_id': userId,
+            'room_id': eventRoom,
+            'blocked_at': content['timestamp']?.toString() ??
+                matrixEvent.originServerTs.toUtc().toIso8601String(),
+          });
+        } else {
+          await removeBlockedBy(blockedBy: blockedBy, roomId: eventRoom);
+        }
+      } catch (error) {
+        debugPrint('[BlockState] backfill event apply failed error=$error');
       }
     }
   }
