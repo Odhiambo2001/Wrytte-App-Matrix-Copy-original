@@ -756,6 +756,60 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) setState(() {});
   }
 
+  bool _isBlockedByCurrentUser() {
+    if (_isGroupChat) return false;
+    final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
+    final peerId = (_profilePeerId() ?? widget.receiverId).trim();
+    if (roomId.isEmpty || peerId.isEmpty) return false;
+    return BlockStateService.instance.isBlocklisted(
+      roomId,
+      peerId: peerId,
+    );
+  }
+
+  Future<void> _unblockFromChat() async {
+    final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
+    final peerId = (_profilePeerId() ?? widget.receiverId).trim();
+    if (roomId.isEmpty || peerId.isEmpty) return;
+    await BlockStateService.instance.removeBlock(
+      userId: peerId,
+      roomId: roomId,
+    );
+    if (mounted) {
+      _focusNode.unfocus();
+      setState(() {});
+    }
+  }
+
+  Widget _buildUnblockBottomBar() {
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(48, 12, 48, 12),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: SizedBox(
+            height: 48,
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: _unblockFromChat,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+                shape: const StadiumBorder(),
+                backgroundColor: const Color(0xFF0D0F12),
+              ),
+              child: const Text(
+                'Unblock',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w400),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _subscribeToRoomProfileUpdates() {
     _roomProfileSyncSub = MatrixChatService.instance.syncStream.listen((
       update,
@@ -3580,7 +3634,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           if (_someoneElseTyping) const _TypingIndicator(),
 
 
-                          if (_isReadOnlySuggestedGroup)
+                          if (_isBlockedByCurrentUser())
+                            _buildUnblockBottomBar()
+                          else if (_isReadOnlySuggestedGroup)
                             _buildJoinGroupBottomBar()
                           else if (_isDeletedConversation)
                             _buildDeletedGroupBottomBar()
