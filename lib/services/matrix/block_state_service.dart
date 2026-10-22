@@ -32,6 +32,7 @@ class BlockStateService {
   Future<void> _eventApplyQueue = Future<void>.value();
   bool _eventBackfillCompleted = false;
   bool _ready = false;
+  final Map<String, DateTime> _profileUnblockedAt = <String, DateTime>{};
 
   mx.Client get _client => MatrixClientService.instance.client;
 
@@ -327,6 +328,20 @@ class BlockStateService {
   }
 
   Future<void> recordBlockedBy(Map<String, dynamic> entry) async {
+    final blockedBy = entry['blocked_by']?.toString().trim().toLowerCase() ?? '';
+    final blockedAt = DateTime.tryParse(
+      entry['blocked_at']?.toString() ?? '',
+    );
+    final unblockedAt = _profileUnblockedAt[blockedBy];
+    if (blockedAt != null &&
+        unblockedAt != null &&
+        !blockedAt.isAfter(unblockedAt)) {
+      debugPrint(
+        '[BlockState] ignored stale blocked event blocked_by="$blockedBy" '
+        'blocked_at="$blockedAt" unblocked_at="$unblockedAt"',
+      );
+      return;
+    }
     debugPrint(
       '[BlockState] persisting BBB receiver="${_client.userID}" entry=$entry',
     );
@@ -355,6 +370,11 @@ class BlockStateService {
   Future<void> reconcileProfileUnblocked(String blockedBy) async {
     final target = blockedBy.trim().toLowerCase();
     if (target.isEmpty) return;
+    final now = DateTime.now().toUtc();
+    final previous = _profileUnblockedAt[target];
+    if (previous == null || now.isAfter(previous)) {
+      _profileUnblockedAt[target] = now;
+    }
     final before = _entries(_bbb).length;
     await _update(bbbType, _bbb, (entries) {
       entries.removeWhere((entry) {

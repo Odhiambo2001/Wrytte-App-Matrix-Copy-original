@@ -638,6 +638,11 @@ class UserProfileService {
       'com.wrytte.link',
       'com.wrytte.channel_alias',
       'com.wrytte.group_alias',
+      'AvatarImg',
+      'Bio',
+      'Link',
+      'ChannelAlias',
+      'GroupAlias',
     }.any(remote.containsKey);
     if (hasUnblockedPrivateFields) {
       await BlockStateService.instance.reconcileProfileUnblocked(uid);
