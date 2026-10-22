@@ -10,6 +10,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   pro_video_editor: ^2.13.2
   visibility_detector: ^0.4.0+2
   vibration: ^3.1.3

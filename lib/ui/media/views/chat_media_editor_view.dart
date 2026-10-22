@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:material_ui/material_ui.dart' as material_ui;
 import 'package:path_provider/path_provider.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
@@ -809,22 +810,29 @@ class _ChatMediaEditorViewState extends State<ChatMediaEditorView> {
     // material_ui localization delegates now belong at MaterialApp.router in
     // app.dart. Do NOT put a Localizations.override here.
 
-    return PopScope(
-      // Prevent Android/system Back from killing the route while the final
-      // generated image is being converted/written.
-      canPop: !_exporting,
+    return Localizations(
+      locale: Localizations.localeOf(context),
+      delegates: [
+        ...GlobalMaterialLocalizations.delegates,
+        ...material_ui.GlobalMaterialLocalizations.delegates,
+      ],
+      child: PopScope(
+        // Prevent Android/system Back from killing the route while the final
+        // generated image is being converted/written.
+        canPop: !_exporting,
 
-      child: ColoredBox(
-        color: WrytteColors.background,
+        child: ColoredBox(
+          color: WrytteColors.background,
 
-        child: switch (_model.loadState) {
-          ChatMediaEditorLoadState.ready => _buildEditor(),
+          child: switch (_model.loadState) {
+            ChatMediaEditorLoadState.ready => _buildEditor(),
 
-          ChatMediaEditorLoadState.failed => _buildError(),
+            ChatMediaEditorLoadState.failed => _buildError(),
 
-          ChatMediaEditorLoadState.idle ||
-          ChatMediaEditorLoadState.loading => _buildOpeningPreview(),
-        },
+            ChatMediaEditorLoadState.idle ||
+            ChatMediaEditorLoadState.loading => _buildOpeningPreview(),
+          },
+        ),
       ),
     );
   }

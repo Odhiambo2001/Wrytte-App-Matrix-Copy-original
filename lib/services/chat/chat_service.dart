@@ -1531,7 +1531,11 @@ class ChatService {
   /// The marker is private room account data and is used as the recovery floor.
   Future<void> clearConversationForMe(String roomId) async {
     final id = roomId.trim();
-    if (id.isEmpty) return;
+    if (id.isEmpty) {
+      apkLog('ChatService.clearForMe', 'skipped empty room_id');
+      return;
+    }
+    apkLog('ChatService.clearForMe', 'start room_id="$id"');
     final messages = await ChatLocalDb.instance.loadMessages(id);
     final cached = _messagesCache[id] ?? const <ChatMessage>[];
     final all = <String, ChatMessage>{
@@ -1539,22 +1543,54 @@ class ChatService {
       for (final message in cached) message.id: message,
     }.values.toList()..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     final last = all.isEmpty ? null : all.last;
+    apkLog(
+      'ChatService.clearForMe',
+      'loaded room_id="$id" persisted=${messages.length} '
+          'cached=${cached.length} total=${all.length} '
+          'last_event_id="${last?.id ?? ''}" '
+          'last_timestamp="${last?.timestamp.toUtc().toIso8601String() ?? ''}"',
+    );
     if (last != null) {
       _clearedThroughByRoom[id] = last.timestamp;
       final room = _roomById(id);
       final client = MatrixClientService.instance.client;
       final userId = client.userID;
       if (userId != null && userId.isNotEmpty) {
-        await client.setAccountDataPerRoom(userId, id, _hiddenEventsAccountDataType, {
+        final content = {
           'hidden_event_ids': _hiddenEventIdsForRoom(id).toList()..add(last.id),
           _clearedThroughEventIdKey: last.id,
           _clearedThroughTimestampKey: last.timestamp.toUtc().toIso8601String(),
           'updated_at': DateTime.now().toUtc().toIso8601String(),
-        });
+        };
+        apkLog(
+          'ChatService.clearForMe',
+          'account_data_write start room_id="$id" user_id="$userId" '
+              'type="$_hiddenEventsAccountDataType" '
+              'cleared_through_event_id="${last.id}"',
+        );
+        await client.setAccountDataPerRoom(
+          userId,
+          id,
+          _hiddenEventsAccountDataType,
+          content,
+        );
+        apkLog(
+          'ChatService.clearForMe',
+          'account_data_write success room_id="$id" '
+              'cleared_through_event_id="${last.id}"',
+        );
         if (room != null) _syncHiddenEventsFromRoom(room);
+      } else {
+        apkLog(
+          'ChatService.clearForMe',
+          'account_data_write skipped: missing user_id room_id="$id"',
+        );
       }
+    } else {
+      apkLog('ChatService.clearForMe', 'no messages found; no marker written room_id="$id"');
     }
     await ChatLocalDb.instance.deleteConversationMessages(id);
+    apkLog('ChatService.clearForMe', 'local_messages_deleted room_id="$id"');
     _messagesCache[id] = <ChatMessage>[];
     final current = _conversationsMap[id];
     if (current != null) {
@@ -1566,9 +1602,15 @@ class ChatService {
       );
       _conversationsMap[id] = cleared;
       await ChatLocalDb.instance.saveConversations([cleared]);
+      apkLog(
+        'ChatService.clearForMe',
+        'conversation_shell_preserved room_id="$id" '
+            'name="${cleared.otherUserName}" avatar="${cleared.otherUserAvatar.isNotEmpty}"',
+      );
     }
     _emitRoomMessages(id);
     _emitConversations();
+    apkLog('ChatService.clearForMe', 'complete room_id="$id" emitted_messages=0');
   }
 
   void _syncPinnedForMeFromRoom(mx.Room room) {
