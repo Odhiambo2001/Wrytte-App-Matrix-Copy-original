@@ -20,6 +20,7 @@ import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/matrix/matrix_profile_service.dart';
 import 'package:wrytte/services/matrix/block_state_service.dart';
+import 'package:wrytte/services/matrix/mute_rooms_service.dart';
 import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
@@ -86,6 +87,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _profileLoading = true;
   bool _showBlockUserCard = false;
   bool _showMoreOptions = false;
+  bool _showMuteOptions = false;
   final LayerLink _moreOptionsLayerLink = LayerLink();
   bool _redactedByBlock = false;
   List<ChatMessage> _conversationMessages = const [];
@@ -1661,8 +1663,10 @@ class _ProfileScreenState extends State<ProfileScreen>
               CompositedTransformFollower(
                 link: _moreOptionsLayerLink,
                 showWhenUnlinked: false,
-                offset: const Offset(-266, 66),
-                child: _buildMoreOptionsCard(),
+                offset: const Offset(-140, 66),
+                child: _showMuteOptions
+                    ? _buildMuteOptionsCard()
+                    : _buildMoreOptionsCard(),
               ),
 
             // ── Top bar ───────────────────────────────────────────────────
@@ -1819,7 +1823,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     return Material(
       color: Colors.transparent,
       child: Container(
-        width: 350,
+        width: 200,
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
           color: const Color(0xFF15171B).withValues(alpha: 0.97),
@@ -1838,33 +1842,35 @@ class _ProfileScreenState extends State<ProfileScreen>
           children: [
             for (final option in options)
               InkWell(
-                onTap: () {},
+                onTap: option == 'Mute'
+                    ? () => setState(() => _showMuteOptions = true)
+                    : () {},
                 child: SizedBox(
                   height: 58,
                   width: double.infinity,
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 42),
+                      padding: const EdgeInsets.symmetric(horizontal: 28),
                       child: Row(
                         children: [
                           if (_moreOptionIconPath(option) != null) ...[
                             SvgPicture.asset(
                               _moreOptionIconPath(option)!,
-                              width: 26,
-                              height: 26,
+                              width: 20,
+                              height: 20,
                               colorFilter: const ColorFilter.mode(
                                 Colors.white,
                                 BlendMode.srcIn,
                               ),
                             ),
-                            const SizedBox(width: 20),
+                            const SizedBox(width: 6),
                           ],
                           Text(
                             option,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 17,
+                              fontSize: 14,
                               fontWeight: FontWeight.w400,
                             ),
                           ),
@@ -1878,6 +1884,112 @@ class _ProfileScreenState extends State<ProfileScreen>
         ),
       ),
     );
+  }
+
+  Widget _buildMuteOptionsCard() {
+    const options = ['8 hours', '1 day', '7 days', 'Always'];
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 200,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF15171B).withValues(alpha: 0.97),
+          borderRadius: BorderRadius.circular(38),
+          border: Border.all(color: const Color(0xFF292C32)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 24,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            InkWell(
+              onTap: () => setState(() => _showMuteOptions = false),
+              child: SizedBox(
+                height: 58,
+                child: Row(
+                  children: [
+                    const SizedBox(width: 28),
+                    SvgPicture.asset(
+                      'assets/svg/ic--round-arrow-back-ios.svg',
+                      width: 24,
+                      height: 24,
+                      colorFilter: const ColorFilter.mode(
+                        Colors.white,
+                        BlendMode.srcIn,
+                      ),
+                    ),
+                    const SizedBox(width: 26),
+                    const Text(
+                      'Back',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            for (final option in options)
+              InkWell(
+                onTap: () => _applyMuteOption(option),
+                child: SizedBox(
+                  height: 58,
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 28),
+                      SvgPicture.asset(
+                        'assets/images/Bell new icon slash .svg',
+                        width: 20,
+                        height: 20,
+                        colorFilter: ColorFilter.mode(
+                          option == 'Always' ? const Color(0xFFFF5C52) : Colors.white,
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                      const SizedBox(width: 26),
+                      Text(
+                        option,
+                        style: TextStyle(
+                          color: option == 'Always'
+                              ? const Color(0xFFFF5C52)
+                              : Colors.white,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _applyMuteOption(String option) async {
+    final roomId = widget.conversationId?.trim() ?? '';
+    if (roomId.isEmpty) return;
+    final duration = switch (option) {
+      '8 hours' => const Duration(hours: 8),
+      '1 day' => const Duration(days: 1),
+      '7 days' => const Duration(days: 7),
+      'Always' => null,
+      _ => null,
+    };
+    if (option == 'Always') {
+      await MuteRoomsService.instance.muteForever(roomId);
+    } else if (duration != null) {
+      await MuteRoomsService.instance.mute(roomId, duration);
+    }
+    if (!mounted) return;
+    setState(() {
+      _showMuteOptions = false;
+      _showMoreOptions = false;
+    });
   }
 
   String? _moreOptionIconPath(String option) {

@@ -14,6 +14,7 @@ import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/user_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
+import 'package:wrytte/services/matrix/mute_rooms_service.dart';
 
 class NotificationService {
   NotificationService._();
@@ -363,6 +364,7 @@ class NotificationService {
     final matrixUserId = MatrixClientService.instance.userId ?? '';
     if (_isOwnSender(message.senderId, matrixUserId)) return;
     if (await _shouldIgnoreLocalMessage(message)) return;
+    if (await MuteRoomsService.instance.isMuted(message.conversationId)) return;
 
     final sender = _displayName(
       message.senderName,
@@ -613,6 +615,13 @@ class NotificationService {
       final conversationId =
           _firstNonEmpty([data['conversationId'], data['conversation_id']]) ??
           '';
+      if (conversationId.isNotEmpty &&
+          await MuteRoomsService.instance.isMuted(conversationId)) {
+        debugPrint(
+          '[NotificationService] remote push ignored; room is muted room="$conversationId"',
+        );
+        return true;
+      }
       final eventTime = _remoteEventTime(data);
       final remoteStartedAt = _remoteMessageNotificationsStartedAt;
       if (remoteStartedAt != null) {
