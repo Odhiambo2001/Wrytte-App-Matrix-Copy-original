@@ -28,19 +28,23 @@ class BlockStateService {
   Map<String, dynamic> _blockedMessages = <String, dynamic>{};
   Future<void> _writeQueue = Future<void>.value();
   Future<void>? _eventBackfill;
+  bool _ready = false;
 
   mx.Client get _client => MatrixClientService.instance.client;
 
   Stream<({String blockedBy, String roomId})> get unblockStream =>
       _unblockController.stream;
 
+  bool get isReady => _ready;
+
   Future<void> load() async {
     try {
       _blocklist = _content(blocklistType);
       _bbb = _content(bbbType);
       _blockedMessages = _content(blockedMessagesType);
-      revision.value++;
       await _backfillBlockEvents();
+      _ready = true;
+      revision.value++;
     } catch (error) {
       debugPrint('[BlockState] load failed error=$error');
     }
@@ -203,6 +207,12 @@ class BlockStateService {
       'matched=$matched entries=${_entries(_bbb)}',
     );
     return matched;
+  }
+
+  /// Privacy-safe decision for profile/avatar consumers. Unknown state must
+  /// fail closed until account data and event backfill have completed.
+  bool isRedactedByBbb(String userId, {String? roomId}) {
+    return !_ready || isBlockedByBbb(userId, roomId: roomId);
   }
 
   bool isBlockedBy(String userId, {String? roomId}) => isRoomBlocked(

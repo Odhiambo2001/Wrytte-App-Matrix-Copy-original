@@ -114,14 +114,10 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _isBlockedByBbb(String? userId, {String? roomId}) {
     final target = userId == null ? '' : _matrixLocalpart(userId).toLowerCase();
     if (target.isEmpty) return false;
-    final room = roomId?.trim() ?? '';
-    return BlockStateService.instance.bbb.any((entry) {
-      final blockedBy = _matrixLocalpart(
-        entry['blocked_by']?.toString() ?? '',
-      ).toLowerCase();
-      final entryRoom = entry['room_id']?.toString().trim() ?? '';
-      return blockedBy == target && (room.isEmpty || entryRoom == room);
-    });
+    return BlockStateService.instance.isRedactedByBbb(
+      userId,
+      roomId: roomId,
+    );
   }
 
   bool get _showUnsavedProfileActions =>

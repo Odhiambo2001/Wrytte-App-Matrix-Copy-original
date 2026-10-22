@@ -4526,7 +4526,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
       avatarBuilder: (size) => UserAvatar(
         size: size,
-        imageUrl: BlockStateService.instance.isBlockedByBbb(
+        imageUrl: BlockStateService.instance.isRedactedByBbb(
                   _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                   roomId: _resolvedConversationId ?? widget.conversationId,
                 )
@@ -4536,7 +4536,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ? _receiverProfile!.profileImage
                     : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
               ),
-        localImagePath: BlockStateService.instance.isBlockedByBbb(
+        localImagePath: BlockStateService.instance.isRedactedByBbb(
                   _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                   roomId: _resolvedConversationId ?? widget.conversationId,
                 )
@@ -4581,7 +4581,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final isGroupChat = _isGroupChat;
     final displayName = _resolvedHeaderName;
     final blockedByPeer = !isGroupChat &&
-        BlockStateService.instance.isBlockedByBbb(
+        BlockStateService.instance.isRedactedByBbb(
           _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
           roomId: _resolvedConversationId ?? widget.conversationId,
         );
