@@ -40,6 +40,8 @@ class ChatService {
   factory ChatService() => _instance;
 
   static const String _hiddenEventsAccountDataType = 'com.wrytte.hidden_events';
+  static const String _clearedThroughEventIdKey = 'cleared_through_event_id';
+  static const String _clearedThroughTimestampKey = 'cleared_through_timestamp';
   static const String _pinnedForMeAccountDataType =
       'com.wrytte.pinned_events_for_me';
   static const String _mdlAccountDataType = 'com.wrytte.mdl';
@@ -114,6 +116,7 @@ class ChatService {
   final Map<String, ChatConversation> _conversationsMap = {};
   final Map<String, List<ChatMessage>> _messagesCache = {};
   final Map<String, Set<String>> _hiddenEventIdsByRoom = {};
+  final Map<String, DateTime> _clearedThroughByRoom = {};
   final Map<String, List<String>> _pinnedForMeEventIdsByRoom = {};
   final Map<String, List<String>> _pendingPinnedForMeEventIdsByRoom = {};
   final Map<String, DateTime> _groupJoinCutoffsByRoom = {};
@@ -1488,6 +1491,10 @@ class ChatService {
     final roomId = message.conversationId.trim();
     final eventId = message.id.trim();
     if (roomId.isEmpty || eventId.isEmpty) return false;
+    final clearedThrough = _clearedThroughByRoom[roomId];
+    if (clearedThrough != null && !message.timestamp.isAfter(clearedThrough)) {
+      return true;
+    }
     return _hiddenEventIdsForRoom(roomId).contains(eventId);
   }
 
@@ -1502,6 +1509,12 @@ class ChatService {
   void _syncHiddenEventsFromRoom(mx.Room room) {
     final content = room.roomAccountData[_hiddenEventsAccountDataType]?.content;
     if (content == null) return;
+    final clearedTimestamp = DateTime.tryParse(
+      content[_clearedThroughTimestampKey]?.toString() ?? '',
+    );
+    if (clearedTimestamp != null) {
+      _clearedThroughByRoom[room.id] = clearedTimestamp;
+    }
     final rawIds = content['hidden_event_ids'];
     if (rawIds is! Iterable) return;
     final ids =
@@ -1512,6 +1525,50 @@ class ChatService {
             .toSet();
     final existing = _hiddenEventIdsByRoom[room.id] ?? <String>{};
     _hiddenEventIdsByRoom[room.id] = {...existing, ...ids};
+  }
+
+  /// Clears this user's local view while preserving the conversation shell.
+  /// The marker is private room account data and is used as the recovery floor.
+  Future<void> clearConversationForMe(String roomId) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return;
+    final messages = await ChatLocalDb.instance.loadMessages(id);
+    final cached = _messagesCache[id] ?? const <ChatMessage>[];
+    final all = <String, ChatMessage>{
+      for (final message in messages) message.id: message,
+      for (final message in cached) message.id: message,
+    }.values.toList()..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final last = all.isEmpty ? null : all.last;
+    if (last != null) {
+      _clearedThroughByRoom[id] = last.timestamp;
+      final room = _roomById(id);
+      final client = MatrixClientService.instance.client;
+      final userId = client.userID;
+      if (userId != null && userId.isNotEmpty) {
+        await client.setAccountDataPerRoom(userId, id, _hiddenEventsAccountDataType, {
+          'hidden_event_ids': _hiddenEventIdsForRoom(id).toList()..add(last.id),
+          _clearedThroughEventIdKey: last.id,
+          _clearedThroughTimestampKey: last.timestamp.toUtc().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        });
+        if (room != null) _syncHiddenEventsFromRoom(room);
+      }
+    }
+    await ChatLocalDb.instance.deleteConversationMessages(id);
+    _messagesCache[id] = <ChatMessage>[];
+    final current = _conversationsMap[id];
+    if (current != null) {
+      final cleared = current.copyWith(
+        lastMessage: '',
+        lastMessageSenderId: '',
+        lastMessageType: '',
+        unreadCount: 0,
+      );
+      _conversationsMap[id] = cleared;
+      await ChatLocalDb.instance.saveConversations([cleared]);
+    }
+    _emitRoomMessages(id);
+    _emitConversations();
   }
 
   void _syncPinnedForMeFromRoom(mx.Room room) {

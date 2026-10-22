@@ -2036,7 +2036,14 @@ class _ProfileScreenState extends State<ProfileScreen>
                   ),
                 ),
                 InkWell(
-                  onTap: () {},
+                  onTap: () async {
+                    final roomId = widget.conversationId?.trim() ?? '';
+                    if (roomId.isNotEmpty) {
+                      await ChatService().clearConversationForMe(roomId);
+                    }
+                    if (!mounted) return;
+                    setState(() => _showClearChatConfirmation = false);
+                  },
                   child: _clearChatConfirmationRow(
                     child: const Text(
                       'Clear all messages',
