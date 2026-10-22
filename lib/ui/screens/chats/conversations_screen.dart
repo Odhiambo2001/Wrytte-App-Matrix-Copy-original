@@ -1566,7 +1566,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final blockedByPeer = BlockStateService.instance.isRedactedByBbb(
       profileUid,
       roomId: conv.id,
-    );
+    ) || UserProfileService.instance.isPublicProfileRefreshing(profileUid);
     // Prefer the canonical profile/cache avatar whenever available. Contact
     // and room values may be stale and caused the old avatar to render first
     // before the profile refresh replaced it.
@@ -2001,7 +2001,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         BlockStateService.instance.isRedactedByBbb(
           peerId,
           roomId: conv.id,
-        );
+        ) || UserProfileService.instance.isPublicProfileRefreshing(peerId);
     debugPrint(
       '[ConversationAvatar] room="${conv.id}" peer="${peerId ?? ''}" '
       'bbb_match=$blockedByPeer stored_avatar="${conv.otherUserAvatar ?? ''}" '

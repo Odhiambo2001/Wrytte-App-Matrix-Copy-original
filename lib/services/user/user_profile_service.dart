@@ -71,10 +71,14 @@ class UserProfileService {
   final StreamController<String> _publicProfileUpdateController =
       StreamController<String>.broadcast();
   final Map<String, String> _pendingPublicProfileUpdates = {};
+  final Set<String> _publicProfileRefreshInFlight = <String>{};
   Timer? _publicProfileUpdateFlushTimer;
 
   Stream<String> get publicProfileUpdateStream =>
       _publicProfileUpdateController.stream;
+
+  bool isPublicProfileRefreshing(String userId) =>
+      _publicProfileRefreshInFlight.contains(_matrixLocalpart(userId).toLowerCase());
 
   void _handlePublicProfileUpdated(String userId) {
     final localpart = _matrixLocalpart(userId).toLowerCase();
@@ -121,10 +125,25 @@ class UserProfileService {
   Future<void> _refreshProfileAfterUnblock(String userId) async {
     final normalized = userId.trim();
     if (normalized.isEmpty) return;
+    final localpart = _matrixLocalpart(normalized).toLowerCase();
+    if (!_publicProfileRefreshInFlight.add(localpart)) return;
     try {
-      _handlePublicProfileUpdated(normalized);
+      // Invalidate silently.  Emitting before the network refresh lets home
+      // and chat widgets render the old cached avatar for one frame.  The
+      // single notification below is published only after the authoritative
+      // profile has been fetched.
+      _publicProfileRevisions.update(
+        localpart,
+        (revision) => revision + 1,
+        ifAbsent: () => 1,
+      );
+      _publicProfileCache.removeWhere(
+        (key, _) => _profileCacheLocalpart(key) == localpart,
+      );
+      _publicProfileMisses.removeWhere(
+        (key) => _profileCacheLocalpart(key) == localpart,
+      );
       await getProfileByUid(normalized, forceRefresh: true);
-      _publicProfileUpdateController.add(normalized);
       debugPrint(
         '[UserProfileService] unblock profile refresh completed user_id="$normalized"',
       );
@@ -133,6 +152,9 @@ class UserProfileService {
         '[UserProfileService] unblock profile refresh failed '
         'user_id="$normalized" error=$error',
       );
+    } finally {
+      _publicProfileRefreshInFlight.remove(localpart);
+      _publicProfileUpdateController.add(normalized);
     }
   }
 
@@ -564,14 +586,11 @@ class UserProfileService {
       }
     } else {
       _publicProfileMisses.remove(cacheKey);
-      final pending = _publicProfileInFlight[cacheKey];
-      if (pending != null) {
-        debugPrint(
-          '[UserProfileService] profile source=in_flight_request user_id="$requestedUid" '
-          'force_refresh=true',
-        );
-        return pending;
-      }
+      // A force refresh must not join a request that started before the
+      // unblock/profile-update revision. That request may still complete with
+      // stale fields or an old avatar URL. Start a fresh authoritative read;
+      // the revision check in _getProfileByUidRemote prevents the older read
+      // from repopulating the cache.
     }
 
     debugPrint(

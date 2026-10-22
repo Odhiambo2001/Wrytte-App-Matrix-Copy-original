@@ -115,9 +115,18 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _isBlockedByBbb(String? userId, {String? roomId}) {
     final target = userId == null ? '' : _matrixLocalpart(userId).toLowerCase();
     if (target.isEmpty) return false;
+    final effectiveRoom = roomId ?? widget.conversationId;
+    // The owner must also redact a profile when the owner blocked that user.
+    // BBB covers the inverse direction only.
+    if (BlockStateService.instance.isBlocklisted(
+      effectiveRoom ?? '',
+      peerId: userId,
+    )) {
+      return true;
+    }
     return BlockStateService.instance.isRedactedByBbb(
       userId!,
-      roomId: roomId,
+      roomId: effectiveRoom,
     );
   }
 
@@ -200,6 +209,13 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (profileUid == null ||
         _matrixLocalpart(profileUid).toLowerCase() !=
             _matrixLocalpart(userId).toLowerCase()) {
+      return;
+    }
+    // The unblock path performs one atomic fetch, including channel/group
+    // resolution.  Ignore intermediate notifications so a stale profile
+    // cannot overwrite the complete refreshed result.
+    if (_profileUnblockRefreshInFlight ||
+        UserProfileService.instance.isPublicProfileRefreshing(profileUid)) {
       return;
     }
     unawaited(_loadProfile(forceRefresh: true));

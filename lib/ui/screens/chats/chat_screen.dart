@@ -4529,6 +4529,8 @@ class _ChatScreenState extends State<ChatScreen> {
         imageUrl: BlockStateService.instance.isRedactedByBbb(
                   _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                   roomId: _resolvedConversationId ?? widget.conversationId,
+                ) || UserProfileService.instance.isPublicProfileRefreshing(
+                  _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                 )
             ? null
             : _safePersonHeaderAvatar(
@@ -4539,6 +4541,8 @@ class _ChatScreenState extends State<ChatScreen> {
         localImagePath: BlockStateService.instance.isRedactedByBbb(
                   _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                   roomId: _resolvedConversationId ?? widget.conversationId,
+                ) || UserProfileService.instance.isPublicProfileRefreshing(
+                  _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                 )
             ? null
             : _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
