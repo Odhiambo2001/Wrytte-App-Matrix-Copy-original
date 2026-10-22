@@ -44,6 +44,11 @@ class BlockStateService {
   }
 
   void handleSyncUpdate(mx.SyncUpdate update) {
+    debugPrint(
+      '[BlockState] sync received user="${_client.userID}" '
+      'account_data=${update.accountData?.length ?? 0} '
+      'joined_rooms=${update.rooms?.join?.length ?? 0}',
+    );
     if (update.accountData?.any(
           (event) => event.type == blocklistType ||
               event.type == bbbType ||
@@ -57,11 +62,18 @@ class BlockStateService {
         const <String, mx.JoinedRoomUpdate>{}.entries) {
       final roomId = entry.key;
       for (final event in entry.value.timeline?.events ?? const <mx.MatrixEvent>[]) {
+        if (event.type == blockedEventType || event.type == unblockedEventType) {
+          debugPrint(
+            '[BlockState] block event received type="${event.type}" '
+            'receiver="${_client.userID}" sender="${event.senderId}" '
+            'room="$roomId" content=${event.content}',
+          );
+        }
         if (event.type == blockedEventType) {
           unawaited(recordBlockedBy({
-            'blocked_by': event.senderId,
+            'blocked_by': event.content['blocked_by']?.toString() ?? event.senderId,
             'blocked_user_id': _client.userID,
-            'room_id': roomId,
+            'room_id': event.content['room_id']?.toString() ?? roomId,
             'blocked_at': event.content['timestamp']?.toString() ??
                 event.originServerTs.toUtc().toIso8601String(),
           }));
@@ -110,11 +122,17 @@ class BlockStateService {
       return separator == -1 ? withoutAt : withoutAt.substring(0, separator);
     }
     final target = localpart(peer);
-    return _entries(_bbb).any((entry) {
+    final matched = _entries(_bbb).any((entry) {
       final blockedBy = localpart(entry['blocked_by']?.toString() ?? '');
       final entryRoom = entry['room_id']?.toString().trim() ?? '';
-      return blockedBy == target && (room.isEmpty || entryRoom == room);
+      return (room.isNotEmpty && entryRoom == room) ||
+          (blockedBy == target && room.isEmpty);
     });
+    debugPrint(
+      '[BlockState] BBB lookup peer="$userId" room="$room" '
+      'matched=$matched entries=${_entries(_bbb)}',
+    );
+    return matched;
   }
 
   bool isBlockedBy(String userId, {String? roomId}) => isRoomBlocked(
@@ -155,12 +173,18 @@ class BlockStateService {
   }
 
   Future<void> recordBlockedBy(Map<String, dynamic> entry) async {
+    debugPrint(
+      '[BlockState] persisting BBB receiver="${_client.userID}" entry=$entry',
+    );
     await _update(bbbType, _bbb, (entries) {
       entries.removeWhere((e) =>
           e['blocked_by'] == entry['blocked_by'] &&
           e['room_id'] == entry['room_id']);
       entries.add(entry);
     });
+    debugPrint(
+      '[BlockState] BBB persisted receiver="${_client.userID}" entries=${_entries(_bbb)}',
+    );
   }
 
   Future<void> removeBlockedBy({required String blockedBy, required String roomId}) async {

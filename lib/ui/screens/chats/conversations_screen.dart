@@ -1997,10 +1997,20 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
 
     final peerId = _profileUidForConversation(conv);
-    if (peerId != null &&
+    final blockedByPeer = peerId != null &&
         BlockStateService.instance.isBlockedByBbb(
           peerId,
-        )) {
+          roomId: conv.id,
+        );
+    debugPrint(
+      '[ConversationAvatar] room="${conv.id}" peer="${peerId ?? ''}" '
+      'bbb_match=$blockedByPeer stored_avatar="${conv.otherUserAvatar ?? ''}" '
+      'contact_avatar="${_contactAvatarCache[_contactKeyForConversation(conv)] ?? ''}"',
+    );
+    if (blockedByPeer) {
+      debugPrint(
+        '[ConversationAvatar] SUPPRESSED room="${conv.id}" peer="${peerId ?? ''}"',
+      );
       return null;
     }
 
@@ -2010,6 +2020,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       rejectPlaceholderVersion: true,
     );
     if (contactAvatar != null) {
+      debugPrint(
+        '[ConversationAvatar] RENDER room="${conv.id}" peer="${peerId ?? ''}" '
+        'source=contact avatar="$contactAvatar"',
+      );
       return contactAvatar;
     }
 
@@ -2017,6 +2031,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       _cachedPublicAvatarForConversation(conv),
     );
     if (cachedPublicAvatar != null) {
+      debugPrint(
+        '[ConversationAvatar] RENDER room="${conv.id}" peer="${peerId ?? ''}" '
+        'source=public_cache avatar="$cachedPublicAvatar"',
+      );
       return cachedPublicAvatar;
     }
 
@@ -2025,9 +2043,17 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       rejectPlaceholderVersion: true,
     );
     if (identityAvatar != null) {
+      debugPrint(
+        '[ConversationAvatar] RENDER room="${conv.id}" peer="${peerId ?? ''}" '
+        'source=identity avatar="$identityAvatar"',
+      );
       return identityAvatar;
     }
 
+    debugPrint(
+      '[ConversationAvatar] RENDER room="${conv.id}" peer="${peerId ?? ''}" '
+      'source=none avatar=""',
+    );
     return null;
   }
 
@@ -2108,7 +2134,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final uid = _profileUidForConversation(conv);
     if (uid == null) return null;
-    if (BlockStateService.instance.isBlockedByBbb(uid)) {
+    final blockedByPeer = BlockStateService.instance.isBlockedByBbb(uid);
+    if (blockedByPeer) {
+      debugPrint(
+        '[ConversationAvatar] LOCAL_PATH_SUPPRESSED room="${conv.id}" peer="$uid"',
+      );
       return null;
     }
     final cached = UserProfileService.instance.cachedPublicProfileByUid(
