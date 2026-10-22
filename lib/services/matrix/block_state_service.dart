@@ -29,6 +29,8 @@ class BlockStateService {
   Future<void> _writeQueue = Future<void>.value();
   Future<void>? _eventBackfill;
   Future<void>? _loadInFlight;
+  Future<void> _eventApplyQueue = Future<void>.value();
+  bool _eventBackfillCompleted = false;
   bool _ready = false;
 
   mx.Client get _client => MatrixClientService.instance.client;
@@ -57,7 +59,9 @@ class BlockStateService {
         _bbb = _content(bbbType);
       }
       _blockedMessages = _content(blockedMessagesType);
-      await _backfillBlockEvents();
+      if (!_eventBackfillCompleted) {
+        await _backfillBlockEvents();
+      }
       _ready = true;
       revision.value++;
     } catch (error) {
@@ -141,20 +145,32 @@ class BlockStateService {
               blockedUser != userId) {
             continue;
           }
-          await recordBlockedBy({
+          await _applyBlockEvent(() => recordBlockedBy({
             'blocked_by': blockedBy,
             'blocked_user_id': userId,
             'room_id': eventRoom,
             'blocked_at': content['timestamp']?.toString() ??
                 matrixEvent.originServerTs.toUtc().toIso8601String(),
-          });
+          }));
         } else {
-          await removeBlockedBy(blockedBy: blockedBy, roomId: eventRoom);
+          await _applyBlockEvent(() => removeBlockedBy(
+                blockedBy: blockedBy,
+                roomId: eventRoom,
+              ));
         }
       } catch (error) {
         debugPrint('[BlockState] backfill event apply failed error=$error');
       }
     }
+    _eventBackfillCompleted = true;
+  }
+
+  Future<void> _applyBlockEvent(Future<void> Function() operation) {
+    final result = _eventApplyQueue.then((_) => operation());
+    _eventApplyQueue = result.catchError((error, stackTrace) {
+      debugPrint('[BlockState] queued event apply failed error=$error');
+    });
+    return result;
   }
 
   void handleSyncUpdate(mx.SyncUpdate update) {
@@ -184,18 +200,18 @@ class BlockStateService {
           );
         }
         if (event.type == blockedEventType) {
-          unawaited(recordBlockedBy({
+          unawaited(_applyBlockEvent(() => recordBlockedBy({
             'blocked_by': event.content['blocked_by']?.toString() ?? event.senderId,
             'blocked_user_id': _client.userID,
             'room_id': event.content['room_id']?.toString() ?? roomId,
             'blocked_at': event.content['timestamp']?.toString() ??
                 event.originServerTs.toUtc().toIso8601String(),
-          }));
+          })));
         } else if (event.type == unblockedEventType) {
-          unawaited(removeBlockedBy(
-            blockedBy: event.senderId,
-            roomId: roomId,
-          ));
+          unawaited(_applyBlockEvent(() => removeBlockedBy(
+                blockedBy: event.senderId,
+                roomId: roomId,
+              )));
         }
       }
     }
