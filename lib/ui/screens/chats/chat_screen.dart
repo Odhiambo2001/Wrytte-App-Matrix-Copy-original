@@ -3771,9 +3771,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final enabledByCurrentUser = enabledBy != null &&
         enabledBy.isNotEmpty &&
         enabledBy == currentUserId;
+    final receiverName = _resolvedHeaderName.trim();
     final noticeText = enabledByCurrentUser
         ? 'You turned on auto-delete messages. '
-        : 'New messages will disappear from this chat ';
+        : '${receiverName.isEmpty ? 'This user' : receiverName} '
+            'turned on auto-delete messages. ';
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
       child: Row(

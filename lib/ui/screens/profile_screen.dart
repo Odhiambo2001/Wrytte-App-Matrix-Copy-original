@@ -87,6 +87,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   ContactIdentity? _identity;
   bool _profileLoading = true;
   bool _showBlockUserCard = false;
+  bool _showBlockConfirmation = false;
+  bool _showUnblockConfirmation = false;
   bool _showMoreOptions = false;
   bool _showMuteOptions = false;
   bool _showClearChatConfirmation = false;
@@ -1683,11 +1685,18 @@ class _ProfileScreenState extends State<ProfileScreen>
             ),
 
             if (_showBlockUserCard)
-              Positioned(
-                top: topBarHeight + 5,
-                right: 50,
-                child: _buildBlockUserCard(),
-              ),
+              _showBlockConfirmation
+                  ? CompositedTransformFollower(
+                      link: _moreOptionsLayerLink,
+                      showWhenUnlinked: false,
+                      offset: const Offset(-140, 66),
+                      child: _buildBlockConfirmationCard(),
+                    )
+                  : Positioned(
+                      top: topBarHeight + 5,
+                      right: 50,
+                      child: _buildBlockUserCard(),
+                    ),
 
             if (_showMoreOptions)
               CompositedTransformFollower(
@@ -1855,7 +1864,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       'Clear chat',
       if (widget.contactStatus == ProfileContactStatus.saved ||
           _savedContact != null)
-        'Block user',
+        _isProfileUserBlocked ? 'Unblock user' : 'Block user',
     ];
     return Material(
       color: Colors.transparent,
@@ -1893,6 +1902,19 @@ class _ProfileScreenState extends State<ProfileScreen>
                     ? () => setState(() => _showAutoDeleteOptions = true)
                     : option == 'Share contact'
                     ? _openShareContactPicker
+                    : option == 'Block user'
+                    ? () => setState(() {
+                        _showMoreOptions = false;
+                        _showBlockUserCard = true;
+                        _showBlockConfirmation = true;
+                      })
+                    : option == 'Unblock user'
+                    ? () => setState(() {
+                        _showMoreOptions = false;
+                        _showBlockUserCard = true;
+                        _showBlockConfirmation = true;
+                        _showUnblockConfirmation = true;
+                      })
                     : () {},
                 child: SizedBox(
                   height: 52,
@@ -1908,8 +1930,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                               _moreOptionIconPath(option)!,
                               width: 20,
                               height: 20,
-                              colorFilter: const ColorFilter.mode(
-                                Colors.white,
+                            colorFilter: ColorFilter.mode(
+                              option == 'Unblock user'
+                                  ? const Color(0xFFFF5C52)
+                                  : Colors.white,
                                 BlendMode.srcIn,
                               ),
                             ),
@@ -1917,8 +1941,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                           ],
                           Text(
                             option,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: option == 'Unblock user'
+                                  ? const Color(0xFFFF5C52)
+                                  : Colors.white,
                               fontSize: 14,
                               fontWeight: FontWeight.w400,
                             ),
@@ -2035,7 +2061,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
-            width: 200,
+            width: 400,
             padding: const EdgeInsets.symmetric(vertical: 8),
             decoration: BoxDecoration(
               color: const Color(0xFF23262C).withValues(alpha: 0.30),
@@ -2276,6 +2302,8 @@ class _ProfileScreenState extends State<ProfileScreen>
         return 'assets/images/Clear messages icon.svg';
       case 'Block user':
         return 'assets/images/Block user.svg';
+      case 'Unblock user':
+        return 'assets/images/Block user.svg';
       default:
         return null;
     }
@@ -2283,13 +2311,14 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _openShareContactPicker() async {
     setState(() => _showMoreOptions = false);
-    final owner = await AuthService.instance.getCurrentUserId() ?? '';
-    if (!mounted) return;
+    final owner = UserProfileService.instance.cachedProfile?.uid ?? '';
+    // Open the picker immediately. Loading contacts before presenting the
+    // sheet makes the Share contact action appear unresponsive on a cold
+    // cache or when the contacts service is slow.
     final contacts = owner.isEmpty
         ? const <Contact>[]
-        : await ContactService().getMatrixContactsCached(owner);
-    if (!mounted) return;
-    await showModalBottomSheet<void>(
+        : ContactService.matrixContactsSnapshot(owner);
+    final sent = await showModalBottomSheet<bool>(
       context: context,
       useRootNavigator: true,
       isScrollControlled: true,
@@ -2305,6 +2334,31 @@ class _ProfileScreenState extends State<ProfileScreen>
             body: '[wrytte-contact]\n${contact.formattedName}\n${contact.primaryPhone}',
           );
         },
+      ),
+    );
+    apkLog(
+      'ShareContact.navigation',
+      'picker closed result=$sent owner="$owner" room="${widget.conversationId}"',
+    );
+    if (!mounted || sent != true) return;
+    final roomId = widget.conversationId?.trim() ?? '';
+    if (owner.trim().isEmpty || roomId.isEmpty) {
+      apkLog('ShareContact.navigation', 'chat navigation skipped missing owner or room');
+      return;
+    }
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          conversationId: roomId,
+          receiverId: _profileTargetUserId ?? roomId,
+          currentUserId: owner,
+          title: _profileDisplayName(),
+          avatarUrl: _profileAvatarUrl(),
+          initialMessages: ChatService().cachedMessagesFor(roomId),
+          conversationKind: ConversationKind.direct,
+          loadRoomEventsOnDemand: true,
+        ),
       ),
     );
   }
@@ -2374,7 +2428,9 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildBlockUserCard() {
     return GestureDetector(
-      onTap: _isProfileUserBlocked ? _unblockProfileUser : _blockProfileUser,
+      onTap: _isProfileUserBlocked
+          ? _unblockProfileUser
+          : () => setState(() => _showBlockConfirmation = true),
       child: Container(
         height: 44,
         padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -2414,6 +2470,88 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Widget _buildBlockConfirmationCard() {
+    return Material(
+      color: Colors.transparent,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(38),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            width: 200,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
+              borderRadius: BorderRadius.circular(38),
+              border: Border.all(color: const Color(0xFF292C32)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                InkWell(
+                  onTap: () => setState(() => _showBlockConfirmation = false),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 28, vertical: 10),
+                    child: Row(
+                      children: [
+                        Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+                        SizedBox(width: 24),
+                        Text('Back', style: TextStyle(color: Colors.white, fontSize: 16)),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(20, 8, 20, 14),
+                  child: Text(
+                    _showUnblockConfirmation
+                        ? 'User will be able to message or call you.'
+                        : "User won't be able to message or call you.\nThey won't know you blocked them.",
+                    maxLines: _showUnblockConfirmation ? 1 : 2,
+                    softWrap: !_showUnblockConfirmation,
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: _showUnblockConfirmation ? 11 : 9,
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: _showUnblockConfirmation
+                      ? _unblockProfileUser
+                      : _blockProfileUser,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 28, vertical: 10),
+                    child: Text(
+                      _showUnblockConfirmation ? 'Unblock' : 'Block',
+                      style: TextStyle(
+                        color: _showUnblockConfirmation
+                            ? Colors.white
+                            : const Color(0xFFFF5C52),
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: () => setState(() {
+                    _showBlockConfirmation = false;
+                    _showUnblockConfirmation = false;
+                    _showBlockUserCard = false;
+                  }),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 28, vertical: 10),
+                    child: Text('Cancel', style: TextStyle(color: Colors.white, fontSize: 16)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _blockProfileUser() async {
     if (_blockActionInFlight) return;
     _blockActionInFlight = true;
@@ -2422,7 +2560,13 @@ class _ProfileScreenState extends State<ProfileScreen>
     final roomId = widget.conversationId?.trim() ?? '';
     if (userId == null || roomId.isEmpty) return;
     await BlockStateService.instance.addBlock(userId: userId, roomId: roomId);
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {
+        _showBlockConfirmation = false;
+        _showUnblockConfirmation = false;
+        _showBlockUserCard = false;
+      });
+    }
     } finally {
       _blockActionInFlight = false;
     }
@@ -2436,7 +2580,13 @@ class _ProfileScreenState extends State<ProfileScreen>
     final roomId = widget.conversationId?.trim() ?? '';
     if (userId == null || roomId.isEmpty) return;
     await BlockStateService.instance.removeBlock(userId: userId, roomId: roomId);
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {
+        _showBlockConfirmation = false;
+        _showUnblockConfirmation = false;
+        _showBlockUserCard = false;
+      });
+    }
     } finally {
       _blockActionInFlight = false;
     }
@@ -2449,6 +2599,9 @@ class _ProfileScreenState extends State<ProfileScreen>
     double iconSize = 36,
     VoidCallback? onTap,
   }) {
+    final actionColor = _showMoreOptions && label != 'More'
+        ? Colors.white38
+        : Colors.white;
     return GestureDetector(
       onTap: onTap,
 
@@ -2486,10 +2639,14 @@ class _ProfileScreenState extends State<ProfileScreen>
                           iconAsset,
                           width: iconSize,
                           height: iconSize,
+                          colorFilter: ColorFilter.mode(
+                            actionColor,
+                            BlendMode.srcIn,
+                          ),
                         )
                       : Icon(
                           icon,
-                          color: Colors.white,
+                          color: actionColor,
                           size: iconSize,
                         ),
             ),
@@ -2498,7 +2655,9 @@ class _ProfileScreenState extends State<ProfileScreen>
           Text(
             label,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.75),
+              color: _showMoreOptions && label != 'More'
+                  ? Colors.white38
+                  : Colors.white.withValues(alpha: 0.75),
               fontSize: 12,
             ),
           ),
@@ -3285,10 +3444,14 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final recent = _filtered.where((c) => c.isRecent).toList();
-    final others = _filtered.where((c) => !c.isRecent).toList();
+    final markedRecent = _filtered.where((c) => c.isRecent).toList();
+    final recent = markedRecent.isNotEmpty
+        ? markedRecent
+        : _filtered.take(2).toList();
+    final recentKeys = recent.map((c) => '${c.formattedName}|${c.primaryPhone}').toSet();
+    final others = _filtered.where((c) => !recentKeys.contains('${c.formattedName}|${c.primaryPhone}')).toList();
     return FractionallySizedBox(
-      heightFactor: .93,
+      heightFactor: .82,
       child: Material(
         color: const Color(0xFF0B0D0F),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
@@ -3315,7 +3478,18 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
                   style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
                     hintText: 'Search', hintStyle: const TextStyle(color: Color(0xFF9A9DA4)),
-                    prefixIcon: const Icon(Icons.search, color: Color(0xFF9A9DA4)),
+                    prefixIcon: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: SvgPicture.asset(
+                        'assets/images/Search icon new.svg',
+                        width: 24,
+                        height: 24,
+                        colorFilter: const ColorFilter.mode(
+                          Color(0xFF9A9DA4),
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                    ),
                     filled: true, fillColor: const Color(0xFF25282E),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
                   ),
@@ -3325,7 +3499,10 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
                 padding: const EdgeInsets.fromLTRB(24, 18, 24, 32),
                 children: [
                   if (recent.isNotEmpty) ...[_section('Recent chats'), ...recent.map(_contactRow)],
-                  if (others.isNotEmpty) ...[_section('Contacts'), ...others.map(_contactRow)],
+                  if (others.isNotEmpty) ...[
+                    _section('Contacts'),
+                    ..._alphabeticalRows(others),
+                  ],
                   if (_filtered.isEmpty) const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('No contacts found', style: TextStyle(color: Colors.grey)))),
                 ],
               )),
@@ -3337,6 +3514,25 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
   }
 
   Widget _section(String title) => Padding(padding: const EdgeInsets.only(top: 4, bottom: 8), child: Text(title, style: const TextStyle(color: Color(0xFF9A9DA4), fontSize: 16)));
+
+  List<Widget> _alphabeticalRows(List<Contact> contacts) {
+    final rows = <Widget>[];
+    String? previous;
+    for (final contact in contacts) {
+      final initial = contact.formattedName.trim().isEmpty
+          ? '#'
+          : contact.formattedName.trim()[0].toUpperCase();
+      if (initial != previous) {
+        rows.add(Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 4),
+          child: Text(initial, style: const TextStyle(color: Color(0xFF9A9DA4), fontSize: 16)),
+        ));
+        previous = initial;
+      }
+      rows.add(_contactRow(contact));
+    }
+    return rows;
+  }
 
   Widget _contactRow(Contact contact) {
     final key = '${contact.formattedName}|${contact.primaryPhone}';
@@ -3355,22 +3551,73 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
     );
   }
 
-  Widget _roundAction(IconData icon, VoidCallback? onTap) => IconButton(onPressed: onTap, icon: Icon(icon, color: onTap == null ? Colors.grey : Colors.white, size: 27));
+  Widget _roundAction(IconData icon, VoidCallback? onTap) => IconButton(
+    onPressed: onTap,
+    padding: EdgeInsets.zero,
+    icon: ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: const Color(0xFF23262C).withValues(alpha: 0.30),
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0xFF23262C)),
+          ),
+          child: Icon(icon, color: Colors.white, size: 20),
+        ),
+      ),
+    ),
+  );
 
-  Widget _sendAction() => IconButton(
-    onPressed: _selected.isEmpty || _sending ? null : _sendSelected,
+  Widget _sendAction() {
+    apkLog(
+      'ShareContact.sendIcon',
+      'building selected=${_selected.length} sending=$_sending asset=assets/images/Send icon.svg',
+    );
+    return IconButton(
+    onPressed: _selected.isEmpty || _sending
+        ? null
+        : () {
+            apkLog(
+              'ShareContact.sendButton',
+              'tapped selected=${_selected.length} sending=$_sending',
+            );
+            _sendSelected();
+          },
     icon: _sending
         ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-        : SvgPicture.asset(
-            'assets/images/Send icon.svg',
-            width: 27,
-            height: 27,
-            colorFilter: ColorFilter.mode(
-              _selected.isEmpty ? Colors.grey : Colors.white,
-              BlendMode.srcIn,
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10A9F0),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF10A9F0)),
+                ),
+                child: Center(
+                  child: SvgPicture.asset(
+                    'assets/images/Send icon.svg',
+                    width: 20,
+                    height: 20,
+                    fit: BoxFit.contain,
+                    colorFilter: const ColorFilter.mode(
+                      Colors.white,
+                      BlendMode.srcIn,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
-  );
+    );
+  }
 
   Future<void> _sendSelected() async {
     setState(() => _sending = true);
@@ -3381,7 +3628,7 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
       })) {
         await widget.onSend(contact);
       }
-      if (mounted) Navigator.pop(context);
+      if (mounted) Navigator.pop(context, true);
     } catch (_) {
       if (mounted) {
         setState(() => _sending = false);

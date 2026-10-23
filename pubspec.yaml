@@ -172,6 +172,8 @@ flutter:
     - assets/images/Video call new.svg
     - assets/images/Search icon new.svg
     - assets/images/Share icon.svg
+    - assets/images/Send icon.svg
+    - assets/images/Mute new display.svg
     - assets/images/Bell new icon .svg
     - assets/images/Clear messages icon.svg
     - assets/images/Disappearing messages icon.svg

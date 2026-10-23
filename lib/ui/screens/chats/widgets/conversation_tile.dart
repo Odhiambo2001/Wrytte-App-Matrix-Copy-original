@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:wrytte/components/user_avatar.dart';
+import 'package:wrytte/services/matrix/mute_rooms_service.dart';
 
 class ConversationTile extends StatelessWidget {
   final String name;
@@ -24,6 +25,8 @@ class ConversationTile extends StatelessWidget {
   final bool channelOnly;
   final int? channelSubscriberCount;
   final bool hasAutoDelete;
+  final bool isMuted;
+  final String? roomId;
 
   static const Color _blue = Color(0xFF4DA3FF);
 
@@ -48,6 +51,8 @@ class ConversationTile extends StatelessWidget {
     this.channelOnly = false,
     this.channelSubscriberCount,
     this.hasAutoDelete = false,
+    this.isMuted = false,
+    this.roomId,
   });
 
   @override
@@ -144,6 +149,8 @@ class ConversationTile extends StatelessWidget {
                               unreadCount: unreadCount,
                               isSelectionMode: isSelectionMode,
                               isSelected: isSelected,
+                              isMuted: isMuted,
+                              roomId: roomId,
                             )
                             : SizedBox(
                               height: 60,
@@ -215,6 +222,8 @@ class _ConversationDetails extends StatelessWidget {
   final int unreadCount;
   final bool isSelectionMode;
   final bool isSelected;
+  final bool isMuted;
+  final String? roomId;
 
   const _ConversationDetails({
     required this.name,
@@ -224,6 +233,8 @@ class _ConversationDetails extends StatelessWidget {
     required this.unreadCount,
     required this.isSelectionMode,
     required this.isSelected,
+    required this.isMuted,
+    required this.roomId,
   });
 
   @override
@@ -235,15 +246,43 @@ class _ConversationDetails extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Expanded(
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: Colors.white,
-                ),
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  if (isMuted) ...[
+                    const SizedBox(width: 6),
+                    SvgPicture.asset(
+                      'assets/images/Mute new display.svg',
+                      width: 18,
+                      height: 18,
+                    ),
+                  ] else if (roomId?.isNotEmpty == true)
+                    FutureBuilder<bool>(
+                      future: MuteRoomsService.instance.isMuted(roomId!),
+                      builder: (context, snapshot) {
+                        if (snapshot.data != true) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: SvgPicture.asset(
+                            'assets/images/Mute new display.svg',
+                            width: 18,
+                            height: 18,
+                          ),
+                        );
+                      },
+                    ),
+                ],
               ),
             ),
             Text(
