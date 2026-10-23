@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 
 /// Stores the selected per-room disappearing-message duration in Matrix
 /// account data. The value is also read synchronously by the home list from
@@ -10,6 +13,8 @@ class AutoDeleteService {
 
   static const accountDataType = 'com.wrytte.auto_delete';
   static const roomEventType = 'com.wrytte.auto_delete';
+  static const registerPath =
+      '/_synapse/client/wrytte/auto-delete/register';
   Map<String, dynamic>? _localRooms;
   final ValueNotifier<int> changes = ValueNotifier<int>(0);
 
@@ -77,6 +82,81 @@ class AutoDeleteService {
     final duration = content['duration']?.toString() ?? 'Off';
     await setDuration(roomId, duration, broadcast: false);
     debugPrint('[AutoDelete] remote event applied room="$roomId" duration="$duration"');
+  }
+
+  /// Registers a sent Matrix event with the server-side expiry worker.
+  ///
+  /// This is deliberately best-effort: sending a message must not fail just
+  /// because the module is temporarily unavailable. The message remains in
+  /// Matrix and can be retried by the caller or a future outbox.
+  Future<void> registerMessage({
+    required String roomId,
+    required String eventId,
+  }) async {
+    final duration = durationForRoom(roomId);
+    final client = MatrixClientService.instance.client;
+    final token = client.accessToken;
+    if (duration == null || token == null || token.isEmpty) return;
+
+    final timerMs = _durationToMilliseconds(duration);
+    if (timerMs == null || timerMs <= 0) {
+      debugPrint('[AutoDelete] unsupported duration="$duration"');
+      return;
+    }
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${MatrixConfig.homeserver}$registerPath'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'room_id': roomId,
+              'event_id': eventId,
+              'timer_ms': timerMs,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint(
+          '[AutoDelete] registration failed status=${response.statusCode} '
+          'room="$roomId" event="$eventId"',
+        );
+        return;
+      }
+      debugPrint(
+        '[AutoDelete] registered room="$roomId" event="$eventId" '
+        'timer_ms=$timerMs',
+      );
+    } catch (error) {
+      debugPrint(
+        '[AutoDelete] registration unavailable room="$roomId" '
+        'event="$eventId" error=$error',
+      );
+    }
+  }
+
+  int? _durationToMilliseconds(String value) {
+    final normalized = value.trim().toLowerCase();
+    final match = RegExp(
+      r'^(\d+(?:\.\d+)?)\s*(minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)$',
+    )
+        .firstMatch(normalized);
+    if (match == null) return null;
+    final amount = double.tryParse(match.group(1)!);
+    if (amount == null) return null;
+    final unit = match.group(2)!;
+    final multiplier = switch (unit) {
+      'm' || 'min' || 'mins' || 'minute' || 'minutes' => 60 * 1000,
+      'h' || 'hr' || 'hrs' || 'hour' || 'hours' => 60 * 60 * 1000,
+      'd' || 'day' || 'days' => 24 * 60 * 60 * 1000,
+      'w' || 'week' || 'weeks' => 7 * 24 * 60 * 60 * 1000,
+      _ => 0,
+    };
+    return (amount * multiplier).round();
   }
 
   Map<String, dynamic> _rooms() {

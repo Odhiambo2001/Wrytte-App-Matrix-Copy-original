@@ -1726,6 +1726,14 @@ class ChatService {
           status: MessageStatus.sent,
           senderPhone: _currentUserPhone,
         );
+        if (eventId != null) {
+          unawaited(
+            AutoDeleteService.instance.registerMessage(
+              roomId: room.id,
+              eventId: eventId,
+            ),
+          );
+        }
         _cacheMessage(sent);
         unawaited(
           _refreshPeerProfileFromBackendForMessage(sent, reason: 'sendMessage'),
