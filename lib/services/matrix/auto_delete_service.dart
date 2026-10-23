@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
+import 'package:wrytte/services/auth/api_service.dart';
+import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
-import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Stores the selected per-room disappearing-message duration in Matrix
@@ -15,8 +15,7 @@ class AutoDeleteService {
 
   static const accountDataType = 'com.wrytte.auto_delete';
   static const roomEventType = 'com.wrytte.auto_delete';
-  static const registerPath =
-      '/_synapse/client/wrytte/auto-delete/register';
+  static const registerPath = '/api/matrix/auto-delete/register';
   Map<String, dynamic>? _localRooms;
   final ValueNotifier<int> changes = ValueNotifier<int>(0);
   static const _outboxKey = 'wrytte.auto_delete.registration_outbox';
@@ -106,8 +105,10 @@ class AutoDeleteService {
   }) async {
     final duration = durationForRoom(roomId);
     final client = MatrixClientService.instance.client;
-    final token = client.accessToken;
-    if (duration == null || token == null || token.isEmpty) return;
+    final matrixToken = client.accessToken;
+    final backendToken = await AuthService.instance.getValidBackendToken();
+    if (duration == null || matrixToken == null || matrixToken.isEmpty ||
+        backendToken == null || backendToken.isEmpty) return;
 
     final timerMs = _durationToMilliseconds(duration);
     if (timerMs == null || timerMs <= 0) {
@@ -120,12 +121,13 @@ class AutoDeleteService {
     _outbox[key] = {'room_id': roomId, 'event_id': eventId};
     await _saveOutbox();
     _startRetryTimer();
-    await _attemptRegistration(key, token, timerMs);
+    await _attemptRegistration(key, backendToken, matrixToken, timerMs);
   }
 
   Future<void> _attemptRegistration(
     String key,
-    String token,
+    String backendToken,
+    String matrixToken,
     int timerMs,
   ) async {
     final item = _outbox[key];
@@ -133,28 +135,16 @@ class AutoDeleteService {
     final roomId = item['room_id']!;
     final eventId = item['event_id']!;
     try {
-      final response = await http
-          .post(
-            Uri.parse('${MatrixConfig.homeserver}$registerPath'),
-            headers: {
-              'Authorization': 'Bearer $token',
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode({
+      await ApiService.postJson(
+            registerPath,
+            token: backendToken,
+            body: {
               'room_id': roomId,
               'event_id': eventId,
               'timer_ms': timerMs,
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        debugPrint(
-          '[AutoDelete] registration failed status=${response.statusCode} '
-          'room="$roomId" event="$eventId"',
-        );
-        return;
-      }
+              'matrix_access_token': matrixToken,
+            },
+          );
       _outbox.remove(key);
       await _saveOutbox();
       debugPrint(
@@ -172,8 +162,10 @@ class AutoDeleteService {
   Future<void> _retryOutbox() async {
     await _ensureOutboxLoaded();
     final client = MatrixClientService.instance.client;
-    final token = client.accessToken;
-    if (token == null || token.isEmpty) return;
+    final matrixToken = client.accessToken;
+    final backendToken = await AuthService.instance.getValidBackendToken();
+    if (matrixToken == null || matrixToken.isEmpty ||
+        backendToken == null || backendToken.isEmpty) return;
     for (final key in List<String>.of(_outbox.keys)) {
       final roomId = _outbox[key]!['room_id']!;
       final duration = durationForRoom(roomId);
@@ -182,7 +174,7 @@ class AutoDeleteService {
         _outbox.remove(key);
         continue;
       }
-      await _attemptRegistration(key, token, timerMs);
+      await _attemptRegistration(key, backendToken, matrixToken, timerMs);
     }
     await _saveOutbox();
     if (_outbox.isEmpty) _retryTimer?.cancel();
