@@ -89,6 +89,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _showMoreOptions = false;
   bool _showMuteOptions = false;
   bool _showClearChatConfirmation = false;
+  bool _showAutoDeleteOptions = false;
+  String _autoDeleteDuration = 'Off';
   bool _conversationCleared = false;
   bool _roomMuted = false;
   final LayerLink _moreOptionsLayerLink = LayerLink();
@@ -1672,6 +1674,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                     ? _buildMuteOptionsCard()
                     : _showClearChatConfirmation
                     ? _buildClearChatConfirmationCard()
+                    : _showAutoDeleteOptions
+                    ? _buildAutoDeleteOptionsCard()
                     : _buildMoreOptionsCard(),
               ),
 
@@ -1861,6 +1865,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                     ? _unmuteRoom
                     : option == 'Clear chat'
                     ? () => setState(() => _showClearChatConfirmation = true)
+                    : option == 'Auto delete'
+                    ? () => setState(() => _showAutoDeleteOptions = true)
                     : () {},
                 child: SizedBox(
                   height: 52,
@@ -2067,6 +2073,102 @@ class _ProfileScreenState extends State<ProfileScreen>
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAutoDeleteOptionsCard() {
+    const durations = ['24 hours', '7 days', '30 days'];
+    return Material(
+      color: Colors.transparent,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(38),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            width: 200,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
+              borderRadius: BorderRadius.circular(38),
+              border: Border.all(color: const Color(0xFF292C32)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                InkWell(
+                  onTap: () => setState(() => _showAutoDeleteOptions = false),
+                  child: _clearChatConfirmationRow(
+                    child: Row(
+                      children: [
+                        SvgPicture.asset(
+                          'assets/svg/ic--round-arrow-back-ios.svg',
+                          width: 24,
+                          height: 24,
+                          colorFilter: const ColorFilter.mode(
+                            Colors.white,
+                            BlendMode.srcIn,
+                          ),
+                        ),
+                        const SizedBox(width: 26),
+                        const Text('Back', style: TextStyle(color: Colors.white, fontSize: 14)),
+                      ],
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(28, 8, 20, 8),
+                  child: Text(
+                    'New messages in this chat will disappear for everyone after the selected duration.',
+                    style: TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 28),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Learn more',
+                      style: TextStyle(color: Color(0xFF4DA3FF), fontSize: 12),
+                    ),
+                  ),
+                ),
+                _autoDeleteOptionRow('Off'),
+                for (final duration in durations) _autoDeleteOptionRow(duration),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _autoDeleteOptionRow(String option) {
+    final selected = _autoDeleteDuration == option;
+    return InkWell(
+      onTap: () => setState(() {
+        _autoDeleteDuration = option;
+        _showAutoDeleteOptions = false;
+      }),
+      child: _clearChatConfirmationRow(
+        child: Row(
+          children: [
+            if (option != 'Off') ...[
+              SvgPicture.asset(
+                'assets/images/Disappearing messages icon.svg',
+                width: 20,
+                height: 20,
+                colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+              ),
+              const SizedBox(width: 26),
+            ],
+            Text(option, style: const TextStyle(color: Colors.white, fontSize: 14)),
+            if (selected) ...[
+              const Spacer(),
+              const Icon(Icons.check, color: Color(0xFF4DA3FF), size: 22),
+            ],
+          ],
         ),
       ),
     );
