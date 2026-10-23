@@ -97,13 +97,14 @@ class AutoDeleteService {
   Future<void> applyRemoteEvent(
     String roomId,
     Map<String, dynamic> content,
+    {String? senderId}
   ) async {
     final duration = content['duration']?.toString() ?? 'Off';
     await setDuration(
       roomId,
       duration,
       broadcast: false,
-      enabledBy: content['sender']?.toString(),
+      enabledBy: senderId ?? content['sender']?.toString(),
     );
     debugPrint('[AutoDelete] remote event applied room="$roomId" duration="$duration"');
   }

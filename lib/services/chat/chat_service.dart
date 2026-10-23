@@ -246,6 +246,7 @@ class ChatService {
             AutoDeleteService.instance.applyRemoteEvent(
               event.room.id,
               Map<String, dynamic>.from(event.content),
+              senderId: event.senderId,
             ),
           );
           return;
