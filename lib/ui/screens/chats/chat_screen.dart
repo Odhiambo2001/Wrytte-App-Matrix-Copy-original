@@ -3797,7 +3797,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
                 children: [
                   TextSpan(
-                    text: '$actorText turned on auto-delete messages.\n',
+                    text: '$actorText turned on auto-delete messages. ',
                   ),
                   TextSpan(text: '$duration after they\'re sent. '),
                   WidgetSpan(
