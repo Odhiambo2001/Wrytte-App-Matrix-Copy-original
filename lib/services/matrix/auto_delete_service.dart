@@ -53,10 +53,9 @@ class AutoDeleteService {
   String? enabledByForRoom(String roomId) {
     final id = roomId.trim();
     final localValue = _rooms()[id];
-    final value = localValue is Map &&
-            localValue['enabledBy']?.toString().trim().isNotEmpty == true
-        ? localValue
-        : _roomState(id) ?? localValue;
+    // Room state is authoritative because account data is user-local and can
+    // contain the receiving user's old local fallback value.
+    final value = _roomState(id) ?? localValue;
     if (value is! Map) return null;
     final sender = value['enabledBy']?.toString().trim();
     return sender == null || sender.isEmpty ? null : sender;
