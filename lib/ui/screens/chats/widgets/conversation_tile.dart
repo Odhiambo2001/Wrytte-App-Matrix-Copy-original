@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:wrytte/components/user_avatar.dart';
 
 class ConversationTile extends StatelessWidget {
@@ -109,21 +110,15 @@ class ConversationTile extends StatelessWidget {
                         Positioned(
                           bottom: 0,
                           right: -2,
-                          child: Container(
-                            width: 28,
-                            height: 28,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF101116),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.redAccent,
-                                width: 2,
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: SvgPicture.asset(
+                              'assets/images/Disappearing messages icon.svg',
+                              colorFilter: const ColorFilter.mode(
+                                Colors.white,
+                                BlendMode.srcIn,
                               ),
-                            ),
-                            child: const Icon(
-                              Icons.timer_outlined,
-                              color: Colors.white,
-                              size: 17,
                             ),
                           ),
                         ),

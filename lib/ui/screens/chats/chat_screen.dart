@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -31,6 +32,7 @@ import 'package:wrytte/services/matrix/matrixrtc_livekit_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/matrix/block_state_service.dart';
+import 'package:wrytte/services/matrix/auto_delete_service.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
@@ -4588,9 +4590,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
 
 
-      avatarBuilder: (size) => UserAvatar(
-        size: size,
-        imageUrl: BlockStateService.instance.isRedactedForViewer(
+      avatarBuilder: (size) => Stack(
+        clipBehavior: Clip.none,
+        children: [
+          UserAvatar(
+            size: size,
+            imageUrl: BlockStateService.instance.isRedactedForViewer(
                   _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                   roomId: _resolvedConversationId ?? widget.conversationId,
                 ) || UserProfileService.instance.isPublicProfileRefreshing(
@@ -4613,7 +4618,28 @@ class _ChatScreenState extends State<ChatScreen> {
                 ? _receiverProfile!.localProfileImagePath.trim()
                 : null,
         name: _resolvedHeaderName,
-        isDeleted: _isDeletedConversation,
+            isDeleted: _isDeletedConversation,
+          ),
+          if (AutoDeleteService.instance.durationForRoom(
+                _resolvedConversationId ?? widget.conversationId,
+              ) !=
+              null)
+            Positioned(
+              bottom: -1,
+              left: size * .58,
+              child: SizedBox(
+                width: size * .38,
+                height: size * .38,
+                child: SvgPicture.asset(
+                  'assets/images/Disappearing messages icon.svg',
+                  colorFilter: const ColorFilter.mode(
+                    Colors.white,
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
