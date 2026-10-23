@@ -89,6 +89,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _showMoreOptions = false;
   bool _showMuteOptions = false;
   bool _showClearChatConfirmation = false;
+  bool _conversationCleared = false;
   bool _roomMuted = false;
   final LayerLink _moreOptionsLayerLink = LayerLink();
   bool _redactedByBlock = false;
@@ -1693,7 +1694,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                                 ? const SizedBox(width: 36)
                                 : _glassButton(
                                     icon: Icons.arrow_back_ios_new,
-                                    onTap: () => Navigator.pop(context),
+                                    onTap: () => Navigator.pop(
+                                      context,
+                                      _conversationCleared,
+                                    ),
                                   ),
 
                         Expanded(
@@ -2042,7 +2046,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                       await ChatService().clearConversationForMe(roomId);
                     }
                     if (!mounted) return;
-                    setState(() => _showClearChatConfirmation = false);
+                    setState(() {
+                      _conversationCleared = true;
+                      _showClearChatConfirmation = false;
+                    });
                   },
                   child: _clearChatConfirmationRow(
                     child: const Text(

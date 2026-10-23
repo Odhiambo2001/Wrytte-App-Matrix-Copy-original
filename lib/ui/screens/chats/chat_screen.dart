@@ -1456,9 +1456,9 @@ class _ChatScreenState extends State<ChatScreen> {
       if (_lastRoomStreamFingerprint == fingerprint) return;
       _lastRoomStreamFingerprint = fingerprint;
       apkLog('ChatScreen.roomStream', 'room="$convId" msgs=${messages.length}');
-      if (messages.isEmpty &&
-          _messages.isNotEmpty &&
-          !_chat.isConversationDeleted(convId)) {
+      if (messages.isEmpty) {
+        _initialStreamBuffer.clear();
+        setState(() => _messages.clear());
         return;
       }
       if (_loadingInitial) {
@@ -4552,8 +4552,8 @@ class _ChatScreenState extends State<ChatScreen> {
           'matrixId="${_receiverIdentity?.matrixUserId}" '
           'name="$_resolvedHeaderName"',
         );
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
+        final profileResult = await Navigator.of(context).push<bool>(
+          MaterialPageRoute<bool>(
             builder: (_) => ProfileScreen(
               // Prefer loaded profile/identity, but always fall back to the
               // route receiver so the profile is never opened without a user id.
@@ -4576,6 +4576,14 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
         );
+        if (profileResult == true && mounted) {
+          setState(() => _messages.clear());
+          apkLog(
+            'ChatScreen.clearForMe',
+            'cleared visible messages after returning from profile '
+                'room_id="${_resolvedConversationId ?? widget.conversationId}"',
+          );
+        }
       },
 
 

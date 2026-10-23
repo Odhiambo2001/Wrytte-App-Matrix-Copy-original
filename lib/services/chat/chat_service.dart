@@ -2920,6 +2920,9 @@ class ChatService {
   }
 
   Future<List<ChatMessage>> hydrateConversation(String conversationId) async {
+    // Load the delete-for-me boundary before consulting the in-memory cache.
+    // Otherwise a previously restored timeline can briefly bypass filtering.
+    await _loadClearMarkerForRoom(conversationId);
     final memory = getConversationMessages(conversationId);
     if (memory.isNotEmpty) {
       _emitRoomMessages(conversationId);
