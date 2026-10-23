@@ -29,7 +29,8 @@ class AutoDeleteService {
   }
 
   String? durationForRoom(String roomId) {
-    final value = _rooms()[roomId.trim()];
+    final id = roomId.trim();
+    final value = _rooms()[id] ?? _roomState(id);
     var duration = value is Map
         ? value['duration']?.toString().trim()
         : value?.toString().trim();
@@ -50,7 +51,12 @@ class AutoDeleteService {
   }
 
   String? enabledByForRoom(String roomId) {
-    final value = _rooms()[roomId.trim()];
+    final id = roomId.trim();
+    final localValue = _rooms()[id];
+    final value = localValue is Map &&
+            localValue['enabledBy']?.toString().trim().isNotEmpty == true
+        ? localValue
+        : _roomState(id) ?? localValue;
     if (value is! Map) return null;
     final sender = value['enabledBy']?.toString().trim();
     return sender == null || sender.isEmpty ? null : sender;
@@ -82,6 +88,14 @@ class AutoDeleteService {
     changes.value++;
     final room = client.getRoomById(id);
     if (broadcast && room != null) {
+      await client.setRoomStateWithKey(id, roomEventType, '', {
+        'room_id': id,
+        'duration': duration == 'Off' ? null : duration,
+        'enabled_at': duration == 'Off'
+            ? null
+            : (rooms[id] is Map ? rooms[id]['enabledAt'] : null),
+        'sender': userId,
+      });
       await room.sendEvent({
         'room_id': id,
         'duration': duration == 'Off' ? null : duration,
@@ -260,5 +274,18 @@ class AutoDeleteService {
     if (raw is! Map) return <String, dynamic>{};
     _localRooms = Map<String, dynamic>.from(raw);
     return Map<String, dynamic>.from(_localRooms!);
+  }
+
+  Map<String, dynamic>? _roomState(String roomId) {
+    final room = MatrixClientService.instance.client.getRoomById(roomId);
+    final state = room?.getState(roomEventType)?.content;
+    if (state == null || state.isEmpty) return null;
+    final duration = state['duration']?.toString().trim();
+    if (duration == null || duration.isEmpty || duration == 'Off') return null;
+    return {
+      'duration': duration,
+      'enabledAt': state['enabled_at'],
+      'enabledBy': state['sender'],
+    };
   }
 }
