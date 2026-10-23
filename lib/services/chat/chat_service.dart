@@ -21,6 +21,7 @@ import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/matrix/block_state_service.dart';
+import 'package:wrytte/services/matrix/auto_delete_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
@@ -239,6 +240,15 @@ class ChatService {
       }
       _loadMdlAccountData(client.accountData[_mdlAccountDataType]?.content);
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
+        if (event.type == AutoDeleteService.roomEventType) {
+          unawaited(
+            AutoDeleteService.instance.applyRemoteEvent(
+              event.room.id,
+              Map<String, dynamic>.from(event.content),
+            ),
+          );
+          return;
+        }
         if (_applyLiveRedactionEvent(event)) {
           return;
         }

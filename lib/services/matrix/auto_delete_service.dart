@@ -9,6 +9,7 @@ class AutoDeleteService {
   static final instance = AutoDeleteService._();
 
   static const accountDataType = 'com.wrytte.auto_delete';
+  static const roomEventType = 'com.wrytte.auto_delete';
   Map<String, dynamic>? _localRooms;
   final ValueNotifier<int> changes = ValueNotifier<int>(0);
 
@@ -33,7 +34,11 @@ class AutoDeleteService {
     return DateTime.tryParse(value['enabledAt']?.toString() ?? '')?.toLocal();
   }
 
-  Future<void> setDuration(String roomId, String duration) async {
+  Future<void> setDuration(
+    String roomId,
+    String duration, {
+    bool broadcast = true,
+  }) async {
     final id = roomId.trim();
     final client = MatrixClientService.instance.client;
     final userId = client.userID;
@@ -51,7 +56,27 @@ class AutoDeleteService {
     await client.setAccountData(userId, accountDataType, {'rooms': rooms});
     _localRooms = rooms;
     changes.value++;
+    final room = client.getRoomById(id);
+    if (broadcast && room != null) {
+      await room.sendEvent({
+        'room_id': id,
+        'duration': duration == 'Off' ? null : duration,
+        'enabled_at': duration == 'Off'
+            ? null
+            : (rooms[id] is Map ? rooms[id]['enabledAt'] : null),
+        'sender': userId,
+      }, type: roomEventType);
+    }
     debugPrint('[AutoDelete] updated room="$id" duration="$duration"');
+  }
+
+  Future<void> applyRemoteEvent(
+    String roomId,
+    Map<String, dynamic> content,
+  ) async {
+    final duration = content['duration']?.toString() ?? 'Off';
+    await setDuration(roomId, duration, broadcast: false);
+    debugPrint('[AutoDelete] remote event applied room="$roomId" duration="$duration"');
   }
 
   Map<String, dynamic> _rooms() {
