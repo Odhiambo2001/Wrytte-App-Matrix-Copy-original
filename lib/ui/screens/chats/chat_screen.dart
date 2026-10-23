@@ -4540,7 +4540,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       },
 
-      onProfilePressed: () {
+      onProfilePressed: () async {
         if (_isGroupChat) {
           unawaited(_openGroupProfileFromHeader());
           return;
