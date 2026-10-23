@@ -1470,6 +1470,15 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
       setState(() => _replaceMessagesFromSharedCache(messages));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollCtrl.hasClients) return;
+        _scrollCtrl.jumpTo(0);
+        debugPrint(
+          '[AutoDeleteTimeline] room="$convId" '
+          'scroll_to_latest=true pixels=${_scrollCtrl.position.pixels} '
+          'max=${_scrollCtrl.position.maxScrollExtent}',
+        );
+      });
       final currentConv = _resolvedConversationId ?? widget.conversationId;
       if (convId == currentConv && messages.any((m) => !_isMine(m))) {
         unawaited(_chat.markConversationAsRead(convId));
@@ -3635,7 +3644,6 @@ class _ChatScreenState extends State<ChatScreen> {
                           Expanded(child: _buildMessageList()),
                           if (_someoneElseTyping) const _TypingIndicator(),
 
-
                           if (_isBlockedByCurrentUser())
                             _buildUnblockBottomBar()
                           else if (_isReadOnlySuggestedGroup)
@@ -3754,6 +3762,73 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildAutoDeleteBanner(String duration) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: SvgPicture.asset(
+              'assets/images/Disappearing messages icon.svg',
+              width: 20,
+              height: 20,
+              colorFilter: const ColorFilter.mode(
+                Colors.white70,
+                BlendMode.srcIn,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                children: [
+                  const TextSpan(
+                    text: 'New messages will disappear from this chat\n',
+                  ),
+                  TextSpan(text: '$duration after they\'re sent. '),
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.baseline,
+                    baseline: TextBaseline.alphabetic,
+                    child: GestureDetector(
+                      onTap: _openProfileFromAutoDeleteBanner,
+                      child: const Text(
+                        'Change timer',
+                        style: TextStyle(
+                          color: Color(0xFF4DA3FF),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openProfileFromAutoDeleteBanner() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProfileScreen(
+          uid: _receiverProfile?.uid ?? _receiverIdentity?.matrixUserId ?? widget.receiverId,
+          conversationId: _resolvedConversationId ?? widget.conversationId,
+          savedNameHint: _resolvedHeaderName,
+          contactStatus: ProfileContactStatus.unsaved,
+          initialAvatarUrl: _stableHeaderAvatarUrl,
+          initialProfileName: _resolvedHeaderName,
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
   }
 
   // ─── DEBUG OVERLAY ─────────────────────────────────────────────────────────
@@ -3986,6 +4061,27 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isDeletedConversation) {
       return const SizedBox.expand();
     }
+    final autoDeleteDuration = AutoDeleteService.instance.durationForRoom(
+      _resolvedConversationId ?? widget.conversationId,
+    );
+    final autoDeleteEnabledAt = AutoDeleteService.instance.enabledAtForRoom(
+      _resolvedConversationId ?? widget.conversationId,
+    );
+    final autoDeleteNewCount = autoDeleteDuration == null
+        ? 0
+        : _messages.where((message) {
+            return autoDeleteEnabledAt == null ||
+                !message.timestamp.isBefore(autoDeleteEnabledAt);
+          }).length;
+    if (autoDeleteDuration != null) {
+      debugPrint(
+        '[AutoDeleteTimeline] room="${widget.conversationId}" '
+        'duration="$autoDeleteDuration" enabledAt="$autoDeleteEnabledAt" '
+        'messagesAfterBoundary=$autoDeleteNewCount total=${_messages.length}',
+      );
+    }
+    final liftShortConversation =
+        _shouldLiftShortConversation && autoDeleteDuration == null;
     return Column(
       children: [
         Expanded(
@@ -4012,16 +4108,53 @@ class _ChatScreenState extends State<ChatScreen> {
                     physics: const ClampingScrollPhysics(),
                     itemCount:
                         _messages.length +
-                        (_shouldLiftShortConversation ? 1 : 0),
+                        (liftShortConversation ? 1 : 0) +
+                        (autoDeleteDuration != null ? 1 : 0),
                     itemBuilder: (context, index) {
-                      if (_shouldLiftShortConversation && index == 0) {
+                      if (liftShortConversation && index == 0) {
+                        debugPrint(
+                          '[AutoDeleteTimeline] room="${widget.conversationId}" '
+                          'index=$index type=short_conversation_spacer',
+                        );
                         return const SizedBox(height: 96);
                       }
 
                       final adjustedIndex =
-                          index - (_shouldLiftShortConversation ? 1 : 0);
-                      final msgIndex = _messages.length - 1 - adjustedIndex;
+                          index - (liftShortConversation ? 1 : 0);
+                      if (autoDeleteDuration != null &&
+                          adjustedIndex == autoDeleteNewCount) {
+                        debugPrint(
+                          '[AutoDeleteTimeline] room="${widget.conversationId}" '
+                          'index=$index type=notice duration="$autoDeleteDuration"',
+                        );
+                        return _buildAutoDeleteBanner(autoDeleteDuration);
+                      }
+
+                      final messageIndex = autoDeleteDuration != null &&
+                              adjustedIndex > autoDeleteNewCount
+                          ? adjustedIndex - 1
+                          : adjustedIndex;
+                      final msgIndex = autoDeleteDuration != null &&
+                              adjustedIndex > autoDeleteNewCount
+                          ? _messages.length - adjustedIndex
+                          : _messages.length - 1 - messageIndex;
+                      if (msgIndex < 0 || msgIndex >= _messages.length) {
+                        debugPrint(
+                          '[AutoDeleteTimeline] room="${widget.conversationId}" '
+                          'index=$index type=invalid adjusted=$adjustedIndex '
+                          'messageIndex=$messageIndex msgIndex=$msgIndex '
+                          'messageCount=${_messages.length}',
+                        );
+                        return const SizedBox.shrink();
+                      }
                       final msg = _messages[msgIndex];
+                      if (autoDeleteDuration != null) {
+                        debugPrint(
+                          '[AutoDeleteTimeline] room="${widget.conversationId}" '
+                          'index=$index type=message msgIndex=$msgIndex '
+                          'eventId="${msg.id}" newCount=$autoDeleteNewCount',
+                        );
+                      }
                       final isMine = _isMine(msg);
                       final previousChronological =
                           msgIndex > 0 ? _messages[msgIndex - 1] : null;
@@ -4578,6 +4711,9 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
         );
+        if (mounted) {
+          setState(() {});
+        }
         if (profileResult == true && mounted) {
           setState(() => _messages.clear());
           apkLog(

@@ -1440,7 +1440,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                           SizedBox(
                             width: 100,
                             height: 100,
-                            child:
+                            child: Stack(
+                              clipBehavior: Clip.none,
+                              children: [
                                 _profileLoading &&
                                         !hasProfile &&
                                         !hasInitialAvatar
@@ -1456,6 +1458,27 @@ class _ProfileScreenState extends State<ProfileScreen>
                                           'user:${(widget.uid ?? _profile?.uid ?? '').trim().toLowerCase()}',
                                       name: displayName,
                                     ),
+                                if (AutoDeleteService.instance.durationForRoom(
+                                      widget.conversationId ?? '',
+                                    ) !=
+                                    null)
+                                  Positioned(
+                                    right: -2,
+                                    bottom: -2,
+                                    child: SizedBox(
+                                      width: 34,
+                                      height: 34,
+                                      child: SvgPicture.asset(
+                                        'assets/images/Disappearing messages icon.svg',
+                                        colorFilter: const ColorFilter.mode(
+                                          Colors.white,
+                                          BlendMode.srcIn,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
 
                           const SizedBox(height: 12),
@@ -2157,6 +2180,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           widget.conversationId ?? '',
           option,
         );
+        if (mounted) setState(() {});
       },
       child: _clearChatConfirmationRow(
         child: Row(

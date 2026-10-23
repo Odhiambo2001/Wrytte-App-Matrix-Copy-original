@@ -148,9 +148,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // persisted identity cache and Profile 2 contacts, then publishes rows.
     _scrollCtrl.addListener(_onScroll);
     BlockStateService.instance.revision.addListener(_onBlockStateChanged);
+    AutoDeleteService.instance.changes.addListener(_onAutoDeleteChanged);
     _profileUpdatesSub = UserProfileService.instance.publicProfileUpdateStream
         .listen(_onPublicProfileUpdated);
     Future.microtask(_initialize);
+  }
+
+  void _onAutoDeleteChanged() {
+    if (mounted) setState(() {});
   }
 
   void _seedHydratedConversationSnapshot() {
@@ -240,6 +245,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   @override
   void dispose() {
+    AutoDeleteService.instance.changes.removeListener(_onAutoDeleteChanged);
     _convSub?.cancel();
     _chatConnectionSub?.cancel();
     _connectivitySub?.cancel();

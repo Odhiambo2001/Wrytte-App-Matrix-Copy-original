@@ -10,13 +10,22 @@ class AutoDeleteService {
 
   static const accountDataType = 'com.wrytte.auto_delete';
   Map<String, dynamic>? _localRooms;
+  final ValueNotifier<int> changes = ValueNotifier<int>(0);
 
   String? durationForRoom(String roomId) {
     final value = _rooms()[roomId.trim()];
-    final duration = value?.toString().trim();
+    final duration = value is Map
+        ? value['duration']?.toString().trim()
+        : value?.toString().trim();
     return duration == null || duration.isEmpty || duration == 'Off'
         ? null
         : duration;
+  }
+
+  DateTime? enabledAtForRoom(String roomId) {
+    final value = _rooms()[roomId.trim()];
+    if (value is! Map) return null;
+    return DateTime.tryParse(value['enabledAt']?.toString() ?? '')?.toLocal();
   }
 
   Future<void> setDuration(String roomId, String duration) async {
@@ -29,10 +38,14 @@ class AutoDeleteService {
     if (duration == 'Off') {
       rooms.remove(id);
     } else {
-      rooms[id] = duration;
+      rooms[id] = {
+        'duration': duration,
+        'enabledAt': DateTime.now().toUtc().toIso8601String(),
+      };
     }
     await client.setAccountData(userId, accountDataType, {'rooms': rooms});
     _localRooms = rooms;
+    changes.value++;
     debugPrint('[AutoDelete] updated room="$id" duration="$duration"');
   }
 
