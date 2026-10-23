@@ -2295,7 +2295,17 @@ class _ProfileScreenState extends State<ProfileScreen>
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: .60),
-      builder: (_) => ShareContactPickerSheet(contacts: contacts),
+      builder: (_) => ShareContactPickerSheet(
+        contacts: contacts,
+        onSend: (contact) async {
+          final roomId = widget.conversationId?.trim() ?? '';
+          if (roomId.isEmpty || contact.primaryPhone.trim().isEmpty) return;
+          await MatrixChatService.instance.sendText(
+            roomId: roomId,
+            body: '[wrytte-contact]\n${contact.formattedName}\n${contact.primaryPhone}',
+          );
+        },
+      ),
     );
   }
 
@@ -3234,9 +3244,14 @@ class _ProfileScreenState extends State<ProfileScreen>
 }
 
 class ShareContactPickerSheet extends StatefulWidget {
-  const ShareContactPickerSheet({super.key, required this.contacts});
+  const ShareContactPickerSheet({
+    super.key,
+    required this.contacts,
+    required this.onSend,
+  });
 
   final List<Contact> contacts;
+  final Future<void> Function(Contact contact) onSend;
 
   @override
   State<ShareContactPickerSheet> createState() => _ShareContactPickerSheetState();
@@ -3246,6 +3261,7 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
   final _searchController = TextEditingController();
   String _query = '';
   final Set<String> _selected = <String>{};
+  bool _sending = false;
 
   @override
   void dispose() {
@@ -3287,7 +3303,7 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
                     const Expanded(
                       child: Center(child: Text('Share contact', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700))),
                     ),
-                    _roundAction(Icons.arrow_upward_rounded, _selected.isEmpty ? null : () => Navigator.pop(context)),
+                    _sendAction(),
                   ],
                 ),
               ),
@@ -3340,6 +3356,41 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
   }
 
   Widget _roundAction(IconData icon, VoidCallback? onTap) => IconButton(onPressed: onTap, icon: Icon(icon, color: onTap == null ? Colors.grey : Colors.white, size: 27));
+
+  Widget _sendAction() => IconButton(
+    onPressed: _selected.isEmpty || _sending ? null : _sendSelected,
+    icon: _sending
+        ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+        : SvgPicture.asset(
+            'assets/images/Send icon.svg',
+            width: 27,
+            height: 27,
+            colorFilter: ColorFilter.mode(
+              _selected.isEmpty ? Colors.grey : Colors.white,
+              BlendMode.srcIn,
+            ),
+          ),
+  );
+
+  Future<void> _sendSelected() async {
+    setState(() => _sending = true);
+    try {
+      for (final contact in _filtered.where((contact) {
+        final key = '${contact.formattedName}|${contact.primaryPhone}';
+        return _selected.contains(key);
+      })) {
+        await widget.onSend(contact);
+      }
+      if (mounted) Navigator.pop(context);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _sending = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to send contact')),
+        );
+      }
+    }
+  }
 }
 
 class _ProfileAddContactSheet extends StatefulWidget {
