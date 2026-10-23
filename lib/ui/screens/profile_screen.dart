@@ -21,6 +21,7 @@ import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/matrix/matrix_profile_service.dart';
 import 'package:wrytte/services/matrix/block_state_service.dart';
 import 'package:wrytte/services/matrix/mute_rooms_service.dart';
+import 'package:wrytte/services/matrix/auto_delete_service.dart';
 import 'package:wrytte/models/user_models/wrytte_profile.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
@@ -2147,10 +2148,16 @@ class _ProfileScreenState extends State<ProfileScreen>
   Widget _autoDeleteOptionRow(String option) {
     final selected = _autoDeleteDuration == option;
     return InkWell(
-      onTap: () => setState(() {
-        _autoDeleteDuration = option;
-        _showAutoDeleteOptions = false;
-      }),
+      onTap: () async {
+        setState(() {
+          _autoDeleteDuration = option;
+          _showAutoDeleteOptions = false;
+        });
+        await AutoDeleteService.instance.setDuration(
+          widget.conversationId ?? '',
+          option,
+        );
+      },
       child: _clearChatConfirmationRow(
         child: Row(
           children: [

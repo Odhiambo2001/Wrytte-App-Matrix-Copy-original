@@ -25,6 +25,7 @@ import 'package:wrytte/services/contacts/contact_service.dart';
 import 'package:wrytte/services/contacts/user_search_service.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
+import 'package:wrytte/services/matrix/auto_delete_service.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/services/matrix/block_state_service.dart';
 import 'package:wrytte/services/notification_service.dart';
@@ -2664,6 +2665,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       channelOnly: channelOnly,
       channelSubscriberCount:
           channelOnly ? _channelSubscriberCount(conv) : null,
+      hasAutoDelete:
+          AutoDeleteService.instance.durationForRoom(conv.id) != null,
       onLongPress: () async {
         if (isDeleted) {
           await _removeDeletedRoomShell(

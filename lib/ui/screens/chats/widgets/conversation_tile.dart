@@ -22,6 +22,7 @@ class ConversationTile extends StatelessWidget {
   final VoidCallback? onSelectionToggle;
   final bool channelOnly;
   final int? channelSubscriberCount;
+  final bool hasAutoDelete;
 
   static const Color _blue = Color(0xFF4DA3FF);
 
@@ -45,6 +46,7 @@ class ConversationTile extends StatelessWidget {
     this.onSelectionToggle,
     this.channelOnly = false,
     this.channelSubscriberCount,
+    this.hasAutoDelete = false,
   });
 
   @override
@@ -99,6 +101,29 @@ class ConversationTile extends StatelessWidget {
                               color: Colors.green,
                               shape: BoxShape.circle,
                               border: Border.all(color: Colors.white, width: 2),
+                            ),
+                          ),
+                        ),
+
+                      if (hasAutoDelete && !isSelectionMode)
+                        Positioned(
+                          bottom: 0,
+                          right: -2,
+                          child: Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF101116),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.redAccent,
+                                width: 2,
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.timer_outlined,
+                              color: Colors.white,
+                              size: 17,
                             ),
                           ),
                         ),
