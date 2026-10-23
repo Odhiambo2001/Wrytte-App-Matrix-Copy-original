@@ -1793,6 +1793,14 @@ class ChatService {
         file,
         durationInMs: durationSeconds * 1000,
       );
+      if (eventId != null) {
+        unawaited(
+          AutoDeleteService.instance.registerMessage(
+            roomId: room.id,
+            eventId: eventId,
+          ),
+        );
+      }
       final local = ChatMessage(
         id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
         conversationId: room.id,
@@ -1860,6 +1868,14 @@ class ChatService {
         duration: durationSeconds * 1000,
       );
       final eventId = await room.sendFileEvent(file);
+      if (eventId != null) {
+        unawaited(
+          AutoDeleteService.instance.registerMessage(
+            roomId: room.id,
+            eventId: eventId,
+          ),
+        );
+      }
       final local = ChatMessage(
         id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
         conversationId: room.id,
@@ -1966,6 +1982,14 @@ class ChatService {
         matrixFile,
         extraContent: extraContent.isEmpty ? null : extraContent,
       );
+      if (eventId != null) {
+        unawaited(
+          AutoDeleteService.instance.registerMessage(
+            roomId: room.id,
+            eventId: eventId,
+          ),
+        );
+      }
       final local = ChatMessage(
         id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
         conversationId: room.id,
