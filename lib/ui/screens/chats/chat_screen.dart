@@ -3802,21 +3802,26 @@ class _ChatScreenState extends State<ChatScreen> {
                   TextSpan(
                     text: noticeText,
                   ),
-                  TextSpan(text: '$duration after they\'re sent. '),
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.baseline,
-                    baseline: TextBaseline.alphabetic,
-                    child: GestureDetector(
-                      onTap: _openProfileFromAutoDeleteBanner,
-                      child: const Text(
-                        'Change timer',
-                        style: TextStyle(
-                          color: Color(0xFF4DA3FF),
-                          fontSize: 13,
+                  TextSpan(
+                    text:
+                        'New messages will disappear from this chat '
+                        '$duration after they\'re sent. ',
+                  ),
+                  if (enabledByCurrentUser)
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.baseline,
+                      baseline: TextBaseline.alphabetic,
+                      child: GestureDetector(
+                        onTap: _openProfileFromAutoDeleteBanner,
+                        child: const Text(
+                          'Change timer',
+                          style: TextStyle(
+                            color: Color(0xFF4DA3FF),
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -3836,6 +3841,7 @@ class _ChatScreenState extends State<ChatScreen> {
           contactStatus: ProfileContactStatus.unsaved,
           initialAvatarUrl: _stableHeaderAvatarUrl,
           initialProfileName: _resolvedHeaderName,
+          openAutoDeleteOptions: true,
         ),
       ),
     );

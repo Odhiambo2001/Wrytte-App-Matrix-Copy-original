@@ -45,9 +45,15 @@ class AutoDeleteService {
   }
 
   DateTime? enabledAtForRoom(String roomId) {
-    final value = _rooms()[roomId.trim()];
-    if (value is! Map) return null;
-    return DateTime.tryParse(value['enabledAt']?.toString() ?? '')?.toLocal();
+    final id = roomId.trim();
+    final localValue = _rooms()[id];
+    DateTime? parse(dynamic value) {
+      if (value is! Map) return null;
+      return DateTime.tryParse(
+        (value['enabledAt'] ?? value['enabled_at'])?.toString() ?? '',
+      )?.toLocal();
+    }
+    return parse(localValue) ?? parse(_roomState(id));
   }
 
   String? enabledByForRoom(String roomId) {

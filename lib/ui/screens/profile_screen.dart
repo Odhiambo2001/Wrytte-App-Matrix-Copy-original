@@ -61,6 +61,7 @@ class ProfileScreen extends StatefulWidget {
   final String? initialProfileName;
   final ProfileContactStatus? contactStatus;
   final bool embeddedInHome;
+  final bool openAutoDeleteOptions;
 
   const ProfileScreen({
     super.key,
@@ -71,6 +72,7 @@ class ProfileScreen extends StatefulWidget {
     this.initialProfileName,
     this.contactStatus,
     this.embeddedInHome = false,
+    this.openAutoDeleteOptions = false,
   });
 
   @override
@@ -173,6 +175,14 @@ class _ProfileScreenState extends State<ProfileScreen>
   @override
   void initState() {
     super.initState();
+    _autoDeleteDuration = AutoDeleteService.instance.durationForRoom(
+          widget.conversationId ?? '',
+        ) ??
+        'Off';
+    if (widget.openAutoDeleteOptions) {
+      _showMoreOptions = true;
+      _showAutoDeleteOptions = true;
+    }
     BlockStateService.instance.revision.addListener(_onBlockStateChanged);
     if (_isOtherUser) {
       final hintedUserId = _validProfileUid(widget.uid);
@@ -1216,6 +1226,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           child: _ProfileAddContactSheet(
             initialName: _profileDisplayName(),
             phone: phone.isNotEmpty ? phone : (uid ?? ''),
+            onSave: (name) => _saveProfile2Contact(name, phone: phone, uid: uid),
           ),
         ),
       ),
@@ -1248,6 +1259,11 @@ class _ProfileScreenState extends State<ProfileScreen>
           child: _ProfileAddContactSheet(
             initialName: _profileDisplayName(),
             phone: _profilePhone(),
+            onSave: (name) => _saveProfile2Contact(
+              name,
+              phone: _profilePhone(),
+              uid: _profileTargetUserId,
+            ),
             showDeleteContact: _isOtherUser && _savedContact != null,
             onDeleteContact: _confirmDeleteSavedContact,
           ),
@@ -1255,6 +1271,39 @@ class _ProfileScreenState extends State<ProfileScreen>
       ),
     );
     if (mounted) unawaited(_loadProfile());
+  }
+
+  Future<void> _saveProfile2Contact(
+    String name, {
+    required String phone,
+    required String? uid,
+  }) async {
+    final owner = await AuthService.instance.getCurrentUserId() ?? '';
+    final cleanName = name.trim();
+    if (owner.isEmpty || cleanName.isEmpty) return;
+    final contact = Contact(
+      displayName: cleanName,
+      phones: phone.trim().isEmpty ? const [] : [phone.trim()],
+      wrytteUserId: uid,
+      avatarUrl: _profileAvatarUrl(),
+      bio: _profile?.bio,
+      isOnWrytte: true,
+      isSaved: true,
+    );
+    await ContactLocalDb.addContact(contact, ownerUserId: owner);
+    await ContactService().saveContactToBackend(
+      ownerUserId: owner,
+      contact: contact,
+    );
+    await ChatService().applySavedContact(contact);
+    ContactService.notifyContactsChanged(owner);
+    if (mounted) {
+      setState(() {
+        _seededSavedName = cleanName;
+        _savedContact = contact;
+      });
+      unawaited(_loadProfile());
+    }
   }
 
   Future<void> _confirmDeleteSavedContact() async {
@@ -2318,7 +2367,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     final contacts = owner.isEmpty
         ? const <Contact>[]
         : ContactService.matrixContactsSnapshot(owner);
-    final sent = await showModalBottomSheet<bool>(
+    final sentCount = await showModalBottomSheet<int>(
       context: context,
       useRootNavigator: true,
       isScrollControlled: true,
@@ -2338,9 +2387,10 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
     apkLog(
       'ShareContact.navigation',
-      'picker closed result=$sent owner="$owner" room="${widget.conversationId}"',
+      'picker closed result=$sentCount owner="$owner" room="${widget.conversationId}"',
     );
-    if (!mounted || sent != true) return;
+    // Keep the profile open when a contact is shared with multiple people.
+    if (!mounted || sentCount != 1) return;
     final roomId = widget.conversationId?.trim() ?? '';
     if (owner.trim().isEmpty || roomId.isEmpty) {
       apkLog('ShareContact.navigation', 'chat navigation skipped missing owner or room');
@@ -3628,7 +3678,7 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
       })) {
         await widget.onSend(contact);
       }
-      if (mounted) Navigator.pop(context, true);
+      if (mounted) Navigator.pop(context, _selected.length);
     } catch (_) {
       if (mounted) {
         setState(() => _sending = false);
@@ -3644,12 +3694,14 @@ class _ProfileAddContactSheet extends StatefulWidget {
   const _ProfileAddContactSheet({
     required this.initialName,
     required this.phone,
+    required this.onSave,
     this.showDeleteContact = false,
     this.onDeleteContact,
   });
 
   final String initialName;
   final String phone;
+  final Future<void> Function(String name) onSave;
   final bool showDeleteContact;
   final VoidCallback? onDeleteContact;
 
@@ -3719,7 +3771,12 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                       final hasName = _nameController.text.trim().isNotEmpty;
                       return GestureDetector(
                         onTap: hasName
-                            ? () => Navigator.pop(context, true)
+                            ? () async {
+                                await widget.onSave(_nameController.text);
+                                if (context.mounted) {
+                                  Navigator.pop(context, true);
+                                }
+                              }
                             : null,
                         child: Container(
                           width: 36,
