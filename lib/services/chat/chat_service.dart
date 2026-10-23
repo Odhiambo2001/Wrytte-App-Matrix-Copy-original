@@ -239,6 +239,7 @@ class ChatService {
         throw StateError('Matrix session did not match the current user.');
       }
       _loadMdlAccountData(client.accountData[_mdlAccountDataType]?.content);
+      unawaited(AutoDeleteService.instance.initialize());
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
         if (event.type == AutoDeleteService.roomEventType) {
           unawaited(

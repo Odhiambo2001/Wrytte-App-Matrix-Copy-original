@@ -1,8 +1,10 @@
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Stores the selected per-room disappearing-message duration in Matrix
 /// account data. The value is also read synchronously by the home list from
@@ -17,6 +19,15 @@ class AutoDeleteService {
       '/_synapse/client/wrytte/auto-delete/register';
   Map<String, dynamic>? _localRooms;
   final ValueNotifier<int> changes = ValueNotifier<int>(0);
+  static const _outboxKey = 'wrytte.auto_delete.registration_outbox';
+  final Map<String, Map<String, String>> _outbox = {};
+  Timer? _retryTimer;
+  Future<void>? _outboxLoad;
+
+  Future<void> initialize() async {
+    await _ensureOutboxLoaded();
+    if (_outbox.isNotEmpty) unawaited(_retryOutbox());
+  }
 
   String? durationForRoom(String roomId) {
     final value = _rooms()[roomId.trim()];
@@ -104,6 +115,23 @@ class AutoDeleteService {
       return;
     }
 
+    final key = '$roomId|$eventId';
+    await _ensureOutboxLoaded();
+    _outbox[key] = {'room_id': roomId, 'event_id': eventId};
+    await _saveOutbox();
+    _startRetryTimer();
+    await _attemptRegistration(key, token, timerMs);
+  }
+
+  Future<void> _attemptRegistration(
+    String key,
+    String token,
+    int timerMs,
+  ) async {
+    final item = _outbox[key];
+    if (item == null) return;
+    final roomId = item['room_id']!;
+    final eventId = item['event_id']!;
     try {
       final response = await http
           .post(
@@ -127,6 +155,8 @@ class AutoDeleteService {
         );
         return;
       }
+      _outbox.remove(key);
+      await _saveOutbox();
       debugPrint(
         '[AutoDelete] registered room="$roomId" event="$eventId" '
         'timer_ms=$timerMs',
@@ -137,6 +167,63 @@ class AutoDeleteService {
         'event="$eventId" error=$error',
       );
     }
+  }
+
+  Future<void> _retryOutbox() async {
+    await _ensureOutboxLoaded();
+    final client = MatrixClientService.instance.client;
+    final token = client.accessToken;
+    if (token == null || token.isEmpty) return;
+    for (final key in List<String>.of(_outbox.keys)) {
+      final roomId = _outbox[key]!['room_id']!;
+      final duration = durationForRoom(roomId);
+      final timerMs = duration == null ? null : _durationToMilliseconds(duration);
+      if (timerMs == null || timerMs <= 0) {
+        _outbox.remove(key);
+        continue;
+      }
+      await _attemptRegistration(key, token, timerMs);
+    }
+    await _saveOutbox();
+    if (_outbox.isEmpty) _retryTimer?.cancel();
+  }
+
+  void _startRetryTimer() {
+    _retryTimer ??= Timer.periodic(const Duration(seconds: 30), (_) {
+      unawaited(_retryOutbox());
+    });
+  }
+
+  Future<void> _ensureOutboxLoaded() {
+    return _outboxLoad ??= _loadOutbox();
+  }
+
+  Future<void> _loadOutbox() async {
+    final preferences = await SharedPreferences.getInstance();
+    final raw = preferences.getString(_outboxKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+      for (final item in decoded) {
+        if (item is Map && item['room_id'] is String && item['event_id'] is String) {
+          final roomId = item['room_id'] as String;
+          final eventId = item['event_id'] as String;
+          _outbox['$roomId|$eventId'] = {
+            'room_id': roomId,
+            'event_id': eventId,
+          };
+        }
+      }
+      if (_outbox.isNotEmpty) _startRetryTimer();
+    } catch (error) {
+      debugPrint('[AutoDelete] invalid registration outbox: $error');
+    }
+  }
+
+  Future<void> _saveOutbox() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(_outboxKey, jsonEncode(_outbox.values.toList()));
   }
 
   int? _durationToMilliseconds(String value) {
