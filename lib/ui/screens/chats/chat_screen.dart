@@ -3765,6 +3765,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildAutoDeleteBanner(String duration) {
+    final roomId = _resolvedConversationId ?? widget.conversationId;
+    final enabledBy = AutoDeleteService.instance.enabledByForRoom(roomId);
+    final currentUserId = MatrixClientService.instance.client.userID;
+    final enabledByOther = enabledBy != null &&
+        enabledBy.isNotEmpty &&
+        enabledBy != currentUserId;
+    final actorName = enabledByOther ? _resolvedHeaderName.trim() : 'You';
+    final actorText = actorName.isEmpty ? 'This user' : actorName;
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
       child: Row(
@@ -3788,8 +3796,8 @@ class _ChatScreenState extends State<ChatScreen> {
               TextSpan(
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
                 children: [
-                  const TextSpan(
-                    text: 'New messages will disappear from this chat\n',
+                  TextSpan(
+                    text: '$actorText turned on auto-delete messages.\n',
                   ),
                   TextSpan(text: '$duration after they\'re sent. '),
                   WidgetSpan(

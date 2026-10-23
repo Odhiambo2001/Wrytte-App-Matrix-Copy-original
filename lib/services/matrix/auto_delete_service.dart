@@ -49,10 +49,18 @@ class AutoDeleteService {
     return DateTime.tryParse(value['enabledAt']?.toString() ?? '')?.toLocal();
   }
 
+  String? enabledByForRoom(String roomId) {
+    final value = _rooms()[roomId.trim()];
+    if (value is! Map) return null;
+    final sender = value['enabledBy']?.toString().trim();
+    return sender == null || sender.isEmpty ? null : sender;
+  }
+
   Future<void> setDuration(
     String roomId,
     String duration, {
     bool broadcast = true,
+    String? enabledBy,
   }) async {
     final id = roomId.trim();
     final client = MatrixClientService.instance.client;
@@ -66,6 +74,7 @@ class AutoDeleteService {
       rooms[id] = {
         'duration': duration,
         'enabledAt': DateTime.now().toUtc().toIso8601String(),
+        'enabledBy': enabledBy ?? userId,
       };
     }
     await client.setAccountData(userId, accountDataType, {'rooms': rooms});
@@ -90,7 +99,12 @@ class AutoDeleteService {
     Map<String, dynamic> content,
   ) async {
     final duration = content['duration']?.toString() ?? 'Off';
-    await setDuration(roomId, duration, broadcast: false);
+    await setDuration(
+      roomId,
+      duration,
+      broadcast: false,
+      enabledBy: content['sender']?.toString(),
+    );
     debugPrint('[AutoDelete] remote event applied room="$roomId" duration="$duration"');
   }
 
