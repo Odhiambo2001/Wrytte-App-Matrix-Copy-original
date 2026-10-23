@@ -1527,6 +1527,45 @@ class ChatService {
     _hiddenEventIdsByRoom[room.id] = {...existing, ...ids};
   }
 
+  Future<void> _loadClearMarkerForRoom(String roomId) async {
+    final id = roomId.trim();
+    if (id.isEmpty || !MatrixClientService.instance.isInitialized) return;
+    final client = MatrixClientService.instance.client;
+    final userId = client.userID;
+    if (userId == null || userId.isEmpty) return;
+    try {
+      final content = await client.getAccountDataPerRoom(
+        userId,
+        id,
+        _hiddenEventsAccountDataType,
+      );
+      final marker = DateTime.tryParse(
+        content[_clearedThroughTimestampKey]?.toString() ?? '',
+      );
+      if (marker != null) {
+        _clearedThroughByRoom[id] = marker;
+        apkLog(
+          'ChatService.clearForMe',
+          'recovery_marker_loaded room_id="$id" '
+              'cleared_through_event_id="${content[_clearedThroughEventIdKey] ?? ''}" '
+              'timestamp="${marker.toIso8601String()}"',
+        );
+      }
+      final rawIds = content['hidden_event_ids'];
+      if (rawIds is Iterable) {
+        _hiddenEventIdsByRoom[id] = {
+          ...?_hiddenEventIdsByRoom[id],
+          ...rawIds.map((value) => value.toString().trim()).where((value) => value.isNotEmpty),
+        };
+      }
+    } catch (error) {
+      apkLog(
+        'ChatService.clearForMe',
+        'recovery_marker_load_failed room_id="$id" error="$error"',
+      );
+    }
+  }
+
   /// Clears this user's local view while preserving the conversation shell.
   /// The marker is private room account data and is used as the recovery floor.
   Future<void> clearConversationForMe(String roomId) async {
@@ -1605,7 +1644,8 @@ class ChatService {
       apkLog(
         'ChatService.clearForMe',
         'conversation_shell_preserved room_id="$id" '
-            'name="${cleared.otherUserName}" avatar="${cleared.otherUserAvatar.isNotEmpty}"',
+            'name="${cleared.otherUserName}" '
+                'avatar="${cleared.otherUserAvatar?.isNotEmpty ?? false}"',
       );
     }
     _emitRoomMessages(id);
@@ -2853,6 +2893,7 @@ class ChatService {
   }
 
   Future<List<ChatMessage>> loadCachedMessages(String conversationId) async {
+    await _loadClearMarkerForRoom(conversationId);
     final cached = await ChatLocalDb.instance.loadMessages(conversationId);
     final hiddenIds = _hiddenEventIdsForRoom(conversationId);
     final visible =
