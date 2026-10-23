@@ -14,9 +14,14 @@ class AutoDeleteService {
 
   String? durationForRoom(String roomId) {
     final value = _rooms()[roomId.trim()];
-    final duration = value is Map
+    var duration = value is Map
         ? value['duration']?.toString().trim()
         : value?.toString().trim();
+    // Recover values written by older builds as a Dart map string.
+    if (duration != null && duration.startsWith('{duration:')) {
+      final match = RegExp(r'^\{duration:\s*([^,}]+)').firstMatch(duration);
+      duration = match?.group(1)?.trim();
+    }
     return duration == null || duration.isEmpty || duration == 'Off'
         ? null
         : duration;
