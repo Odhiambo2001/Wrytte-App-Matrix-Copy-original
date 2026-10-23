@@ -1891,6 +1891,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                     ? () => setState(() => _showClearChatConfirmation = true)
                     : option == 'Auto delete'
                     ? () => setState(() => _showAutoDeleteOptions = true)
+                    : option == 'Share contact'
+                    ? _openShareContactPicker
                     : () {},
                 child: SizedBox(
                   height: 52,
@@ -2277,6 +2279,24 @@ class _ProfileScreenState extends State<ProfileScreen>
       default:
         return null;
     }
+  }
+
+  Future<void> _openShareContactPicker() async {
+    setState(() => _showMoreOptions = false);
+    final owner = await AuthService.instance.getCurrentUserId() ?? '';
+    if (!mounted) return;
+    final contacts = owner.isEmpty
+        ? const <Contact>[]
+        : await ContactService().getMatrixContactsCached(owner);
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: .60),
+      builder: (_) => ShareContactPickerSheet(contacts: contacts),
+    );
   }
 
   Widget _buildUnsavedProfileActions() {
@@ -3211,6 +3231,115 @@ class _ProfileScreenState extends State<ProfileScreen>
       ),
     );
   }
+}
+
+class ShareContactPickerSheet extends StatefulWidget {
+  const ShareContactPickerSheet({super.key, required this.contacts});
+
+  final List<Contact> contacts;
+
+  @override
+  State<ShareContactPickerSheet> createState() => _ShareContactPickerSheetState();
+}
+
+class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
+  final _searchController = TextEditingController();
+  String _query = '';
+  final Set<String> _selected = <String>{};
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<Contact> get _filtered {
+    final q = _query.trim().toLowerCase();
+    final contacts = widget.contacts.where((c) {
+      if (q.isEmpty) return true;
+      return c.formattedName.toLowerCase().contains(q) ||
+          c.primaryPhone.toLowerCase().contains(q);
+    }).toList();
+    contacts.sort((a, b) {
+      if (a.isRecent != b.isRecent) return a.isRecent ? -1 : 1;
+      return a.formattedName.toLowerCase().compareTo(b.formattedName.toLowerCase());
+    });
+    return contacts;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final recent = _filtered.where((c) => c.isRecent).toList();
+    final others = _filtered.where((c) => !c.isRecent).toList();
+    return FractionallySizedBox(
+      heightFactor: .93,
+      child: Material(
+        color: const Color(0xFF0B0D0F),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 14),
+                child: Row(
+                  children: [
+                    _roundAction(Icons.close, () => Navigator.pop(context)),
+                    const Expanded(
+                      child: Center(child: Text('Share contact', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700))),
+                    ),
+                    _roundAction(Icons.arrow_upward_rounded, _selected.isEmpty ? null : () => Navigator.pop(context)),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (value) => setState(() => _query = value),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Search', hintStyle: const TextStyle(color: Color(0xFF9A9DA4)),
+                    prefixIcon: const Icon(Icons.search, color: Color(0xFF9A9DA4)),
+                    filled: true, fillColor: const Color(0xFF25282E),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+                  ),
+                ),
+              ),
+              Expanded(child: ListView(
+                padding: const EdgeInsets.fromLTRB(24, 18, 24, 32),
+                children: [
+                  if (recent.isNotEmpty) ...[_section('Recent chats'), ...recent.map(_contactRow)],
+                  if (others.isNotEmpty) ...[_section('Contacts'), ...others.map(_contactRow)],
+                  if (_filtered.isEmpty) const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('No contacts found', style: TextStyle(color: Colors.grey)))),
+                ],
+              )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _section(String title) => Padding(padding: const EdgeInsets.only(top: 4, bottom: 8), child: Text(title, style: const TextStyle(color: Color(0xFF9A9DA4), fontSize: 16)));
+
+  Widget _contactRow(Contact contact) {
+    final key = '${contact.formattedName}|${contact.primaryPhone}';
+    final selected = _selected.contains(key);
+    return InkWell(
+      onTap: () => setState(() => selected ? _selected.remove(key) : _selected.add(key)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(children: [
+          UserAvatar(imageUrl: contact.avatarUrl, size: 54, name: contact.formattedName),
+          const SizedBox(width: 14),
+          Expanded(child: Text(contact.formattedName, style: const TextStyle(color: Colors.white, fontSize: 17))),
+          Container(width: 24, height: 24, decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: selected ? Colors.lightBlueAccent : const Color(0xFF555960), width: 1.5), color: selected ? Colors.lightBlueAccent : Colors.transparent), child: selected ? const Icon(Icons.check, size: 16, color: Colors.white) : null),
+        ]),
+      ),
+    );
+  }
+
+  Widget _roundAction(IconData icon, VoidCallback? onTap) => IconButton(onPressed: onTap, icon: Icon(icon, color: onTap == null ? Colors.grey : Colors.white, size: 27));
 }
 
 class _ProfileAddContactSheet extends StatefulWidget {
