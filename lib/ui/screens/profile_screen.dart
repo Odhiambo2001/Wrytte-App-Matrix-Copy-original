@@ -131,14 +131,8 @@ class _ProfileScreenState extends State<ProfileScreen>
     final target = userId == null ? '' : _matrixLocalpart(userId).toLowerCase();
     if (target.isEmpty) return false;
     final effectiveRoom = roomId ?? widget.conversationId;
-    // The owner must also redact a profile when the owner blocked that user.
-    // BBB covers the inverse direction only.
-    if (BlockStateService.instance.isBlocklisted(
-      effectiveRoom ?? '',
-      peerId: userId,
-    )) {
-      return true;
-    }
+    // BBB is directional: it is recorded on the blocked user's account.
+    // The blocker must continue seeing the other user's complete profile.
     return BlockStateService.instance.isRedactedByBbb(
       userId!,
       roomId: effectiveRoom,
@@ -256,6 +250,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   void _onBlockStateChanged() {
+    if (!_isOtherUser) return;
     final uid = _profileTargetUserId;
     final redacted = _isBlockedByBbb(uid);
     if (redacted && mounted) {
@@ -263,7 +258,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         _redactedByBlock = true;
       });
     }
-    if (!redacted && _isOtherUser && uid != null) {
+    if (!redacted && _redactedByBlock && uid != null) {
       if (_profileUnblockRefreshInFlight) return;
       // Keep all private/public profile surfaces redacted until the complete
       // profile refresh and featured-room resolution finish.
