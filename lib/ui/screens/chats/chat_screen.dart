@@ -1013,20 +1013,30 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _subscribeToGroupContactUpdates() {
-    if (!_isGroupChat) return;
     _groupContactsChangedSub = ContactService.contactsChanged.listen((owner) {
+      apkLog(
+        'Profile2.chatTrace',
+        'contactsChanged owner="$owner" currentUser="${widget.currentUserId}" room="${widget.conversationId}" direct=${!_isGroupChat}',
+      );
       if (!mounted ||
-          owner.trim().toLowerCase() !=
-              widget.currentUserId.trim().toLowerCase()) {
+          _matrixLocalpart(owner).toLowerCase() !=
+              _matrixLocalpart(widget.currentUserId).toLowerCase()) {
         return;
       }
-      _groupMemberNames.clear();
-      _groupMemberAvatars.clear();
-      _seedGroupProfile2FromMemory();
-      _resolveGroupMessageSenders(_messages);
-      _groupProfilesReady = false;
-      if (mounted) setState(() {});
-      unawaited(_refreshGroupContactProfiles());
+      if (_isGroupChat) {
+        _groupMemberNames.clear();
+        _groupMemberAvatars.clear();
+        _seedGroupProfile2FromMemory();
+        _resolveGroupMessageSenders(_messages);
+        _groupProfilesReady = false;
+        if (mounted) setState(() {});
+        unawaited(_refreshGroupContactProfiles());
+      } else {
+        // Profile 2 saves must update an already-open direct-chat header
+        // immediately when returning from the profile screen.
+        apkLog('Profile2.chatTrace', 'refreshing direct chat receiver identity');
+        unawaited(_loadReceiverProfile(forceRefresh: true));
+      }
     });
   }
 
@@ -1586,6 +1596,10 @@ class _ChatScreenState extends State<ChatScreen> {
     bool publish = true,
     bool forceRefresh = false,
   }) async {
+    apkLog(
+      'Profile2.chatTrace',
+      'receiver load start room="${widget.conversationId}" receiver="${widget.receiverId}" forceRefresh=$forceRefresh',
+    );
     // A group has no receiver profile. Its identity is the room ID and its
     // avatar may only come from the room's m.room.avatar state event. Looking
     // through message peers here can otherwise select a member as "receiver".
@@ -1637,6 +1651,10 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     if (ownerUserId != null && ownerUserId.isNotEmpty) {
+      apkLog(
+        'Profile2.chatTrace',
+        'receiver resolved profileUid="$profileUid" owner="$ownerUserId" saved="${saved?.formattedName}" identitySaved="${identity?.savedName}" fallbackPhone="$fallbackPhone"',
+      );
       if (saved != null && profile != null) {
         final nextAvatar =
             profile.moduleProfileLoaded
@@ -1821,6 +1839,10 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     final savedName = _cleanDisplayName(_receiverIdentity?.savedName);
+    apkLog(
+      'Profile2.chatTrace',
+      'header resolve receiver="${widget.receiverId}" identitySaved="${_receiverIdentity?.savedName}" widgetTitle="${widget.title}" chosenSaved="${savedName.isNotEmpty}"',
+    );
     if (savedName.isNotEmpty) return savedName;
 
     final initialSavedName = _cleanDisplayName(widget.title);

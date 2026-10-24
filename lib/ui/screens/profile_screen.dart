@@ -91,6 +91,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _showBlockUserCard = false;
   bool _showBlockConfirmation = false;
   bool _showUnblockConfirmation = false;
+  bool _profile2Saved = false;
   bool _showMoreOptions = false;
   bool _showMuteOptions = false;
   bool _showClearChatConfirmation = false;
@@ -150,7 +151,8 @@ class _ProfileScreenState extends State<ProfileScreen>
       (widget.contactStatus == ProfileContactStatus.unsaved ||
           !_hasSavedContactHint) &&
       _savedContact == null &&
-      _cleanName(_identity?.savedName).isEmpty;
+      _cleanName(_identity?.savedName).isEmpty &&
+      !_profile2Saved;
 
   bool get _hasSavedContactHint =>
       widget.contactStatus == ProfileContactStatus.saved ||
@@ -300,6 +302,10 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _loadProfile({bool forceRefresh = false}) async {
     var uid = _validProfileUid(widget.uid);
+    apkLog(
+      'Profile2.renderTrace',
+      'load start widgetUid="${widget.uid}" initialName="${widget.initialProfileName}" forceRefresh=$forceRefresh',
+    );
     debugPrint(
       '[ProfileScreen] load start: widgetUid="${widget.uid}" '
       'conversationId="${widget.conversationId}" '
@@ -321,6 +327,10 @@ class _ProfileScreenState extends State<ProfileScreen>
             )
             : null;
     var savedContact = _isOtherUser ? await _findSavedContact(uid ?? '') : null;
+    apkLog(
+      'Profile2.trace',
+      'load uid="$uid" owner="$ownerUserId" identitySaved="${identity?.savedName}" savedContact="${savedContact?.formattedName}"',
+    );
     uid =
         uid ??
         _validProfileUid(savedContact?.wrytteUserId) ??
@@ -335,17 +345,31 @@ class _ProfileScreenState extends State<ProfileScreen>
       );
     }
     savedContact ??= uid != null ? await _findSavedContact(uid) : null;
-    if (mounted && (identity != null || savedContact != null)) {
+    apkLog(
+      'Profile2.trace',
+      'resolved uid="$uid" identitySaved="${identity?.savedName}" savedContact="${savedContact?.formattedName}"',
+    );
+    if (mounted) {
       setState(() {
         _identity = identity;
         _savedContact = savedContact;
+        // Local contact data is authoritative for the first render. Remote
+        // profile enrichment must never expose an intermediate placeholder.
+        _profileLoading = false;
       });
+      apkLog(
+        'Profile2.localFirst',
+        'local state committed before remote lookup uid="$uid" '
+        'name="${savedContact?.formattedName ?? identity?.savedName ?? widget.initialProfileName}" '
+        'avatar="${savedContact?.avatarUrl ?? identity?.avatarUrl ?? widget.initialAvatarUrl}" '
+        'saved=${savedContact != null}',
+      );
     }
     final profileLookupPhone =
         _phoneFromIdentifier(savedContact?.primaryPhone).isNotEmpty
             ? _phoneFromIdentifier(savedContact?.primaryPhone)
             : identity?.phone ?? _phoneFromIdentifier(uid);
-    final profile =
+    var profile =
         uid != null
             ? await UserProfileService.instance.getProfileByUid(
               uid,
@@ -370,12 +394,33 @@ class _ProfileScreenState extends State<ProfileScreen>
       _identity = identity;
       _profileLoading = false;
     });
+    apkLog(
+      'Profile2.renderTrace',
+      'profile state applied uid="$uid" name="${_profileDisplayName()}" saved="${savedContact?.formattedName}" identitySaved="${identity?.savedName}" loading=$_profileLoading avatar="${_profileAvatarUrl()}"',
+    );
     if (profile != null) unawaited(_loadProfileRoomCards(profile));
 
     final matrixProfile =
         uid != null && profile?.moduleProfileLoaded != true
             ? await _loadMatrixProfile(uid)
             : null;
+
+    // The module-profile request refreshes UserProfileService asynchronously.
+    // Re-read the current profile before rendering so bio, links, channel,
+    // and group data are applied to this screen's state as well.
+    if (!_isOtherUser && uid != null) {
+      final refreshedProfile = await UserProfileService.instance
+          .getCurrentUserProfile(forceRefresh: true);
+      if (refreshedProfile != null) {
+        profile = refreshedProfile;
+        apkLog(
+          'ProfileFields.trace',
+          'screen refresh uid="$uid" bio=${profile.bio.isNotEmpty} '
+              'links=${profile.links.length} channel="${profile.channelAlias}" '
+              'group="${profile.groupAlias}"',
+        );
+      }
+    }
 
     if (uid != null && ownerUserId != null && ownerUserId.isNotEmpty) {
       if (savedContact == null) {
@@ -958,8 +1003,13 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
 
     final targetPhone = normalizedPhone(phone);
-    final contacts = await ContactService().getMatrixContactsCached(
-      ownerUserId,
+    final contacts = <Contact>[
+      ...await ContactService().getMatrixContactsCached(ownerUserId),
+      ...await ContactLocalDb.loadSavedContacts(ownerUserId: ownerUserId),
+    ];
+    apkLog(
+      'Profile2.trace',
+      'saved lookup target="$uid" owner="$ownerUserId" contacts=${contacts.length}',
     );
     for (final contact in contacts) {
       final contactId = contact.wrytteUserId;
@@ -970,8 +1020,15 @@ class _ProfileScreenState extends State<ProfileScreen>
       final samePhone =
           targetPhone.isNotEmpty &&
           contact.phones.map(normalizedPhone).contains(targetPhone);
-      if (sameWrytteId || samePhone) return contact;
+      if (sameWrytteId || samePhone) {
+        apkLog(
+          'Profile2.trace',
+          'saved match name="${contact.formattedName}" contactUid="${contact.wrytteUserId}" phone="${contact.primaryPhone}" sameUid=$sameWrytteId samePhone=$samePhone',
+        );
+        return contact;
+      }
     }
+    apkLog('Profile2.trace', 'saved lookup MISS target="$uid"');
     return null;
   }
 
@@ -1101,6 +1158,10 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   String? _profileAvatarUrl() {
     if (_redactedByBlock) return null;
+    final localAvatar = _savedContact?.avatarUrl?.trim() ?? '';
+    if (localAvatar.isNotEmpty) return localAvatar;
+    final identityAvatar = _identity?.avatarUrl?.trim() ?? '';
+    if (identityAvatar.isNotEmpty) return identityAvatar;
     final profile = _profile;
     if (profile?.hasProfileImage == true) return profile!.profileImage;
     if (profile?.moduleProfileLoaded == true) return null;
@@ -1281,6 +1342,10 @@ class _ProfileScreenState extends State<ProfileScreen>
     final owner = await AuthService.instance.getCurrentUserId() ?? '';
     final cleanName = name.trim();
     if (owner.isEmpty || cleanName.isEmpty) return;
+    apkLog(
+      'Profile2.trace',
+      'save start owner="$owner" uid="$uid" phone="$phone" name="$cleanName"',
+    );
     final contact = Contact(
       displayName: cleanName,
       phones: phone.trim().isEmpty ? const [] : [phone.trim()],
@@ -1295,12 +1360,28 @@ class _ProfileScreenState extends State<ProfileScreen>
       ownerUserId: owner,
       contact: contact,
     );
+    if (uid?.trim().isNotEmpty == true) {
+      await ContactIdentityCache.instance.upsert(
+        ownerUserId: owner,
+        matrixUserId: uid!,
+        phone: phone,
+        profileName: _profile?.displayName,
+        savedName: cleanName,
+        avatarUrl: contact.avatarUrl,
+        bio: contact.bio,
+      );
+    }
     await ChatService().applySavedContact(contact);
     ContactService.notifyContactsChanged(owner);
+    apkLog(
+      'Profile2.trace',
+      'save complete owner="$owner" uid="$uid" name="$cleanName" notified=true',
+    );
     if (mounted) {
       setState(() {
         _seededSavedName = cleanName;
         _savedContact = contact;
+        _profile2Saved = true;
       });
       unawaited(_loadProfile());
     }
@@ -1386,24 +1467,78 @@ class _ProfileScreenState extends State<ProfileScreen>
       return;
     }
 
-    await ContactLocalDb.removeContact(contact, ownerUserId: ownerUserId);
-    unawaited(
-      ContactService()
-          .removeContactFromBackend(ownerUserId: ownerUserId, contact: contact)
-          .catchError(
-            (e) => debugPrint('[ProfileScreen] backend contact remove failed: $e'),
-          ),
+    apkLog(
+      'Profile2.delete',
+      'delete start owner="$ownerUserId" uid="$uid" name="${contact.formattedName}"',
     );
+
+    // Remove the local state first so the profile, chat header, and homepage
+    // cannot continue displaying Profile 2 while the Matrix write is pending.
+    await ContactLocalDb.removeContact(contact, ownerUserId: ownerUserId);
     await ContactIdentityCache.instance.clearSavedName(
       ownerUserId: ownerUserId,
       matrixUserId: uid,
     );
-    await ChatService().applyUnsavedContact(contact);
+    // Restore Profile 1 in chat/home instead of replacing it with the raw
+    // phone number. Profile 2 is the saved contact overlay being deleted;
+    // the remote profile and its avatar must remain visible.
+    final profileOneName = _cleanName(_profile?.displayName).isNotEmpty
+        ? _cleanName(_profile?.displayName)
+        : _cleanName(widget.initialProfileName);
+    final profileOneAvatar =
+        _profile?.hasProfileImage == true
+            ? _profile?.profileImage
+            : (widget.initialAvatarUrl?.trim().isNotEmpty == true
+                ? widget.initialAvatarUrl
+                : null);
+    final profileOneContact = Contact(
+      displayName: profileOneName.isNotEmpty ? profileOneName : contact.primaryPhone,
+      phones: contact.phones,
+      wrytteUserId: contact.wrytteUserId ?? uid,
+      avatarUrl: profileOneAvatar,
+      bio: _profile?.bio,
+      isOnWrytte: true,
+      isSaved: false,
+    );
+    await ChatService().applyUnsavedContact(profileOneContact);
     ContactService.invalidateMatrixContactsCache();
     ContactService().invalidateCache();
+    ContactService.notifyContactsChanged(ownerUserId);
+
+    if (mounted) {
+      setState(() {
+        _savedContact = null;
+        _identity = null;
+        _seededSavedName = null;
+        _profile2Saved = false;
+      });
+      apkLog(
+        'Profile2.delete',
+        'UI restored Profile1 name="${profileOneContact.formattedName}" '
+        'avatar="${profileOneContact.avatarUrl}" actions=Block/Add',
+      );
+    }
+
+    // Persist the same deletion to Matrix. The UI has already been updated
+    // locally and the change event has already refreshed other screens.
+    try {
+      await ContactService().removeContactFromBackend(
+        ownerUserId: ownerUserId,
+        contact: contact,
+      );
+      apkLog(
+        'Profile2.delete',
+        'delete complete owner="$ownerUserId" uid="$uid" notified=true',
+      );
+    } catch (error) {
+      debugPrint('[ProfileScreen] backend contact remove failed: $error');
+      apkLog(
+        'Profile2.delete',
+        'local delete complete but backend delete failed owner="$ownerUserId" uid="$uid" error="$error"',
+      );
+    }
 
     if (!mounted) return;
-    setState(() => _savedContact = null);
     Navigator.of(context).pop();
   }
 
@@ -1416,12 +1551,20 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (_redactedByBlock) return false;
     final bio = _profileBio();
     final links = _profile?.links ?? [];
-    return bio.isNotEmpty ||
+    final visible = bio.isNotEmpty ||
         links.isNotEmpty ||
         (_canViewProfileField(_profile, 'Channel') &&
             (_profile?.channelAlias.trim().isNotEmpty ?? false)) ||
         (_canViewProfileField(_profile, 'Group') &&
             (_profile?.groupAlias.trim().isNotEmpty ?? false));
+    apkLog(
+      'ProfileFields.trace',
+      'card decision uid="${widget.uid ?? _profile?.uid}" '
+          'loading=$_profileLoading bio=${bio.isNotEmpty} links=${links.length} '
+          'channel="${_profile?.channelAlias ?? ''}" group="${_profile?.groupAlias ?? ''}" '
+          'visible=$visible redacted=$_redactedByBlock',
+    );
+    return visible;
   }
 
   String _profileBio() {
@@ -1431,6 +1574,10 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   @override
   Widget build(BuildContext context) {
+    apkLog(
+      'Profile2.renderTrace',
+      'build loading=$_profileLoading other=$_isOtherUser savedContact="${_savedContact?.formattedName}" identitySaved="${_identity?.savedName}" displayName="${_profileDisplayName()}" avatar="${_profileAvatarUrl()}" actions=${_showUnsavedProfileActions ? 'Block/Add' : 'Edit'}',
+    );
     debugPrint(
       '[ProfileActions] build: loading=$_profileLoading '
       'other=$_isOtherUser saved=${_savedContact != null} '
@@ -1464,6 +1611,12 @@ class _ProfileScreenState extends State<ProfileScreen>
         !_redactedByBlock && _canViewProfileField(_profile, 'Group')
             ? _profile?.groupAlias.trim() ?? ''
             : '';
+    apkLog(
+      'ProfileFields.trace',
+      'render uid="${widget.uid ?? _profile?.uid}" bioText=${bioText.isNotEmpty} '
+          'links=${links.length} channelRef="$channelRef" groupRef="$groupRef" '
+          'loading=$_profileLoading',
+    );
 
     return Theme(
       data: theme.copyWith(
@@ -1790,10 +1943,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                           child: const SizedBox.shrink(),
                         ),
 
-                        _isOtherUser &&
-                                _profileLoading &&
-                                widget.contactStatus == null &&
-                                !_hasSavedContactHint
+                        _isOtherUser && _profileLoading
                             ? const SizedBox(width: 84, height: 44)
                             : _isOtherUser
                             ? _showUnsavedProfileActions
@@ -2480,7 +2630,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     return GestureDetector(
       onTap: _isProfileUserBlocked
           ? _unblockProfileUser
-          : () => setState(() => _showBlockConfirmation = true),
+          : _blockProfileUser,
       child: Container(
         height: 44,
         padding: const EdgeInsets.symmetric(horizontal: 18),

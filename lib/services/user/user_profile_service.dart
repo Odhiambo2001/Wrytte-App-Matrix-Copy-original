@@ -760,6 +760,10 @@ class UserProfileService {
           ignoreStoredProfile ? '' : await _storage.read(key: _nameKey) ?? '';
       var bio =
           ignoreStoredProfile ? '' : await _storage.read(key: _bioKey) ?? '';
+      final linksRaw =
+          ignoreStoredProfile
+              ? ''
+              : await _storage.read(key: 'user_links') ?? '';
       var moduleProfileLoaded = false;
       var channelAlias = '';
       var groupAlias = '';
@@ -777,6 +781,11 @@ class UserProfileService {
             );
           }
         }
+        apkLog(
+          'ProfileFields.trace',
+          'local read uid="$uid" bio=${bio.isNotEmpty} links=$linksRaw '
+              'channel="$channelAlias" group="$groupAlias"',
+        );
       }
       var profileImage =
           ignoreStoredAvatar || ignoreStoredProfile
@@ -813,12 +822,30 @@ class UserProfileService {
           matrixDisplayNameLoaded = remote.containsKey('DisplayName');
           final remotePhone = _normalizePhone(_field(remote, 'Phone') ?? '');
           if (remotePhone.isNotEmpty) phone = remotePhone;
-          // A successful Module response is authoritative: omitted fields
-          // have been deleted or are no longer visible, so clear stale local
-          // values instead of carrying them forward.
-          bio = _field(remote, 'Bio') ?? '';
-          channelAlias = _field(remote, 'ChannelAlias') ?? '';
-          groupAlias = _field(remote, 'GroupAlias') ?? '';
+          // Keep locally saved profile fields when the module response omits
+          // them. The edit profile screen reads these local values, so
+          // clearing them here makes the profile view hide valid content.
+          final remoteBio = _field(remote, 'Bio');
+          final remoteChannel = _field(remote, 'ChannelAlias');
+          final remoteGroup = _field(remote, 'GroupAlias');
+          apkLog(
+            'ProfileFields.trace',
+            'remote response uid="$uid" keys=${remote.keys.toList()} '
+                'bio="${remoteBio ?? ''}" channel="${remoteChannel ?? ''}" '
+                'group="${remoteGroup ?? ''}"',
+          );
+          if (remoteBio?.trim().isNotEmpty == true) bio = remoteBio!.trim();
+          if (remoteChannel?.trim().isNotEmpty == true) {
+            channelAlias = remoteChannel!.trim();
+          }
+          if (remoteGroup?.trim().isNotEmpty == true) {
+            groupAlias = remoteGroup!.trim();
+          }
+          apkLog(
+            'ProfileFields.trace',
+            'merged uid="$uid" bio=${bio.isNotEmpty} linksRaw="$linksRaw" '
+                'channel="$channelAlias" group="$groupAlias"',
+          );
           final visibilityJson = _field(remote, 'VisibilitySettings');
           visibilitySettings = <String, String>{};
           if (visibilityJson != null && visibilityJson.isNotEmpty) {
@@ -930,11 +957,6 @@ class UserProfileService {
           await _storage.write(key: _nameKey, value: name);
         }
       }
-      final linksRaw =
-          ignoreStoredProfile
-              ? ''
-              : await _storage.read(key: 'user_links') ?? '';
-
       if (avatarRevisionAtStart != _avatarMutationRevision) {
         profileImage = await _storage.read(key: _profileImageKey) ?? '';
         localProfileImagePath = await _readLocalProfileImagePath(uid);
