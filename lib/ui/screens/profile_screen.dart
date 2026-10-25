@@ -172,6 +172,12 @@ class _ProfileScreenState extends State<ProfileScreen>
       _cleanName(_identity?.savedName).isEmpty &&
       !_profile2Saved;
 
+  bool get _isSavedProfile2 =>
+      _isOtherUser &&
+      (widget.contactStatus == ProfileContactStatus.saved ||
+          _savedContact != null ||
+          _profile2Saved);
+
   bool get _profileActionsReady =>
       !_isOtherUser ||
       widget.contactStatus == ProfileContactStatus.saved ||
@@ -2485,7 +2491,8 @@ class _ProfileScreenState extends State<ProfileScreen>
       'Share contact',
       'Auto delete',
       'Clear chat',
-      if (_isOtherUser) _isProfileUserBlocked ? 'Unblock user' : 'Block user',
+      if (_isSavedProfile2)
+        _isProfileUserBlocked ? 'Unblock user' : 'Block user',
     ];
     return Material(
       color: Colors.transparent,
@@ -3383,9 +3390,6 @@ class _ProfileScreenState extends State<ProfileScreen>
         blockLog('cancelled missing_target_or_room');
         return;
       }
-      blockLog('add_block_start');
-      await BlockStateService.instance.addBlock(userId: userId, roomId: roomId);
-      blockLog('add_block_done');
       if (mounted) {
         setState(() {
           _showBlockConfirmation = false;
@@ -3394,9 +3398,22 @@ class _ProfileScreenState extends State<ProfileScreen>
         });
         blockLog('ui_updated');
       }
-    } catch (error) {
-      blockLog('failed error="$error"');
-      rethrow;
+      _blockActionInFlight = false;
+
+      // Persist the block asynchronously so a slow Matrix account-data write
+      // or room notice cannot keep the block card visible.
+      unawaited(() async {
+        try {
+          blockLog('add_block_start');
+          await BlockStateService.instance.addBlock(
+            userId: userId,
+            roomId: roomId,
+          );
+          blockLog('add_block_done');
+        } catch (error) {
+          blockLog('background_persist_failed error="$error"');
+        }
+      }());
     } finally {
       _blockActionInFlight = false;
       blockLog('complete');
@@ -4283,10 +4300,21 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
     return FractionallySizedBox(
       heightFactor: .82,
       child: Material(
-        color: const Color(0xFF0B0D0F),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-        child: SafeArea(
-          child: Column(
+        color: Colors.transparent,
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            child: Container(
+              decoration: const BoxDecoration(
+                color: Color(0x4D23262C),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                border: Border(
+                  top: BorderSide(color: Color(0xFF23262C), width: 1),
+                ),
+              ),
+              child: SafeArea(
+                child: Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 20, 24, 14),
@@ -4309,36 +4337,45 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
                   ],
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: TextField(
-                  controller: _searchController,
-                  onChanged: (value) => setState(() => _query = value),
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    hintText: 'Search',
-                    hintStyle: const TextStyle(color: Color(0xFF9A9DA4)),
-                    prefixIcon: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: SvgPicture.asset(
-                        'assets/images/Search icon new.svg',
-                        width: 24,
-                        height: 24,
-                        colorFilter: const ColorFilter.mode(
-                          Color(0xFF9A9DA4),
-                          BlendMode.srcIn,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(24),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF23262C).withValues(alpha: 0.30),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: const Color(0xFF23262C)),
+                          ),
+                          child: TextField(
+                            controller: _searchController,
+                            onChanged: (value) => setState(() => _query = value),
+                            style: const TextStyle(color: Colors.white),
+                            decoration: InputDecoration(
+                              hintText: 'Search',
+                              hintStyle: const TextStyle(color: Color(0xFF9A9DA4)),
+                              prefixIcon: Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: SvgPicture.asset(
+                                  'assets/images/Search icon new.svg',
+                                  width: 24,
+                                  height: 24,
+                                  colorFilter: const ColorFilter.mode(
+                                    Color(0xFF9A9DA4),
+                                    BlendMode.srcIn,
+                                  ),
+                                ),
+                              ),
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                    filled: true,
-                    fillColor: const Color(0xFF25282E),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(28),
-                      borderSide: BorderSide.none,
-                    ),
                   ),
-                ),
-              ),
               Expanded(
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(24, 18, 24, 32),
@@ -4365,6 +4402,9 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
                 ),
               ),
             ],
+                ),
+              ),
+            ),
           ),
         ),
       ),

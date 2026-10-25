@@ -27,6 +27,9 @@ class BlockStateService {
   Map<String, dynamic> _blocklist = <String, dynamic>{};
   Map<String, dynamic> _bbb = <String, dynamic>{};
   Map<String, dynamic> _blockedMessages = <String, dynamic>{};
+  final Map<String, Map<String, dynamic>> _optimisticBlocks =
+      <String, Map<String, dynamic>>{};
+  final Set<String> _optimisticUnblocks = <String>{};
   Future<void> _writeQueue = Future<void>.value();
   Future<void>? _eventBackfill;
   Future<void>? _loadInFlight;
@@ -57,6 +60,26 @@ class BlockStateService {
       // must not replace the authoritative in-memory state with that stale
       // snapshot while event backfill is still running.
       _blocklist = _content(blocklistType);
+      // Matrix account-data can briefly return a stale snapshot after a
+      // successful write. Preserve explicit local block/unblock decisions
+      // until the server catches up or the user changes the decision again.
+      final loadedBlocks = _entries(_blocklist);
+      loadedBlocks.removeWhere((entry) {
+        final key = _blockKey(
+          entry['user_id']?.toString() ?? '',
+          entry['room_id']?.toString() ?? '',
+        );
+        return _optimisticUnblocks.contains(key);
+      });
+      for (final entry in _optimisticBlocks.values) {
+        loadedBlocks.removeWhere(
+          (existing) =>
+              existing['user_id'] == entry['user_id'] ||
+              existing['room_id'] == entry['room_id'],
+        );
+        loadedBlocks.add(entry);
+      }
+      _blocklist = <String, dynamic>{'entries': loadedBlocks};
       if (!_ready) {
         _bbb = _content(bbbType);
       }
@@ -330,6 +353,13 @@ class BlockStateService {
     required String userId,
     required String roomId,
   }) async {
+    final key = _blockKey(userId, roomId);
+    _optimisticUnblocks.remove(key);
+    _optimisticBlocks[key] = {
+      'user_id': userId,
+      'room_id': roomId,
+      'blocked_at': DateTime.now().toUtc().toIso8601String(),
+    };
     debugPrint(
       '[BlockState][DIAG] addBlock user="$userId" room="$roomId" '
       'self="${_client.userID}"',
@@ -356,6 +386,9 @@ class BlockStateService {
     required String userId,
     required String roomId,
   }) async {
+    final key = _blockKey(userId, roomId);
+    _optimisticBlocks.remove(key);
+    _optimisticUnblocks.add(key);
     final exists = _entries(_blocklist).any(
       (entry) =>
           entry['user_id']?.toString() == userId ||
@@ -380,6 +413,9 @@ class BlockStateService {
       'room_id': roomId,
     });
   }
+
+  String _blockKey(String userId, String roomId) =>
+      '${userId.trim()}|${roomId.trim()}';
 
   Future<void> recordBlockedBy(Map<String, dynamic> entry) async {
     final blockedBy =
@@ -511,11 +547,14 @@ class BlockStateService {
       final entries = _entries(source.isEmpty ? current : source);
       change(entries);
       final next = <String, dynamic>{'entries': entries};
-      await _client.setAccountData(userId, type, next);
       if (type == blocklistType) _blocklist = next;
       if (type == bbbType) _bbb = next;
       if (type == blockedMessagesType) _blockedMessages = next;
+      // Publish the local state before the network write. A slow/offline
+      // Matrix server must not prevent the chat/profile UI from reflecting
+      // the user's block action.
       revision.value++;
+      await _client.setAccountData(userId, type, next);
     });
     _writeQueue = write.catchError((Object error) {
       debugPrint(

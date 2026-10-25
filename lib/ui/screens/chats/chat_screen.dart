@@ -2132,6 +2132,31 @@ class _ChatScreenState extends State<ChatScreen> {
       conversationId: realConvId ?? optimistic.conversationId,
     );
 
+    // Blocking can change while room resolution is in flight. Re-check before
+    // publishing so a message cannot race a newly-blocked conversation.
+    await blockState.load();
+    if (realConvId != null &&
+        blockState.isRoomBlocked(realConvId, peerId: _profilePeerId())) {
+      final blocked = outbound.copyWith(
+        id: 'blocked_${DateTime.now().microsecondsSinceEpoch}',
+        status: MessageStatus.sent,
+      );
+      await blockState.recordBlockedMessage(
+        roomId: realConvId,
+        eventId: blocked.id,
+        text: blocked.content,
+        time: blocked.timestamp,
+      );
+      await _saveLocalMessage(blocked);
+      if (mounted) {
+        setState(() {
+          _replaceOptimisticMessage(optimistic.id, blocked);
+          _isSending = false;
+        });
+      }
+      return;
+    }
+
     if (!_matrixAvailable || realConvId == null) {
       final local = outbound.copyWith(status: MessageStatus.failed);
       await _saveLocalMessage(local);
@@ -2661,6 +2686,18 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _replaceMessagesFromSharedCache(List<ChatMessage> incoming) {
+    // Room-cache refreshes can contain both the optimistic local row and its
+    // Matrix echo. Collapse those before replacing the visible list.
+    final canonical = <String, ChatMessage>{};
+    for (final message in incoming) {
+      final previous = canonical[message.id];
+      if (previous == null ||
+          previous.status == MessageStatus.sending ||
+          previous.status == MessageStatus.failed) {
+        canonical[message.id] = message;
+      }
+    }
+    incoming = canonical.values.toList();
     final optimistic = _messages.where(_isLocalOutgoingEcho).toList();
     _messages
       ..clear()
