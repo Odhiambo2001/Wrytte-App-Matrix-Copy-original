@@ -424,8 +424,18 @@ class UserProfileService {
     String? groupAlias,
     Map<String, String>? visibilitySettings,
   }) async {
+    final timer = Stopwatch()..start();
+    void logSave(String message) {
+      debugPrint(
+        '[UserProfileService.updateProfile] '
+        't_ms=${timer.elapsedMilliseconds} $message',
+      );
+    }
+
+    logSave('start');
     final backendFields = <String, String>{};
     String? previousAvatarForEviction;
+    String? uidForRemoteSync;
     final String? displayNameToSave = name != null
         ? name.trim()
         : (firstName != null || lastName != null)
@@ -439,10 +449,7 @@ class UserProfileService {
       if (uid == null || uid.trim().isEmpty) {
         throw StateError('Cannot update Matrix displayname without a user ID.');
       }
-      await MatrixProfileService.instance.setDisplayName(
-        uid,
-        displayNameToSave,
-      );
+      uidForRemoteSync = uid.trim();
       if (displayNameToSave.isEmpty) {
         await _storage.delete(key: _nameKey);
       } else {
@@ -496,12 +503,58 @@ class UserProfileService {
       backendFields['VisibilitySettings'] = jsonEncode(visibilitySettings);
     }
     if (backendFields.isNotEmpty) {
-      await _saveBackendProfileBestEffort(backendFields);
+      logSave('local_fields_saved fields=${backendFields.keys.join(",")}');
     }
     _cache = null;
-    await _refreshAndNotify(forceRefresh: true);
-    if (previousAvatarForEviction != null) {
-      await UserAvatar.evictCachedUrl(previousAvatarForEviction);
+    await _refreshAndNotify(forceRefresh: false);
+    logSave('local_save_complete');
+
+    // Network synchronization must not keep the editor/spinner open. The
+    // local profile is already available to the UI; remote writes can retry
+    // independently when Matrix or the Module API is slow.
+    unawaited(
+      _syncProfileRemotely(
+        uid: uidForRemoteSync,
+        displayName: displayNameToSave,
+        backendFields: backendFields,
+        previousAvatarForEviction: previousAvatarForEviction,
+      ),
+    );
+  }
+
+  Future<void> _syncProfileRemotely({
+    required String? uid,
+    required String? displayName,
+    required Map<String, String> backendFields,
+    required String? previousAvatarForEviction,
+  }) async {
+    final timer = Stopwatch()..start();
+    void logSync(String message) => debugPrint(
+      '[UserProfileService.remoteSync] '
+      't_ms=${timer.elapsedMilliseconds} $message',
+    );
+    try {
+      if (uid != null && displayName != null) {
+        logSync('displayname_start');
+        await MatrixProfileService.instance.setDisplayName(uid, displayName)
+            .timeout(const Duration(seconds: 15));
+        logSync('displayname_done');
+      }
+      if (backendFields.isNotEmpty) {
+        logSync('backend_save_start fields=${backendFields.keys.join(",")}');
+        await _saveBackendProfileBestEffort(
+          backendFields,
+        ).timeout(const Duration(seconds: 20));
+        logSync('backend_save_done');
+      }
+      if (previousAvatarForEviction != null) {
+        await UserAvatar.evictCachedUrl(previousAvatarForEviction);
+        logSync('avatar_cache_evicted');
+      }
+      logSync('complete');
+    } catch (error) {
+      logSync('failed error="$error"');
+      debugPrint('[UserProfileService.remoteSync] deferred_sync_failed');
     }
   }
 
@@ -1697,6 +1750,15 @@ class UserProfileService {
     Map<String, String> fields, {
     bool create = false,
   }) async {
+    final timer = Stopwatch()..start();
+    void logSave(String message) {
+      debugPrint(
+        '[UserProfileService.backendSave] '
+        't_ms=${timer.elapsedMilliseconds} $message',
+      );
+    }
+
+    logSave('start fields=${fields.keys.join(",")}');
     try {
       final uid = await AuthService.instance.getCurrentUserId();
       if (uid == null || uid.trim().isEmpty) return;
@@ -1741,12 +1803,15 @@ class UserProfileService {
       }
       if (create) {
         moduleFields.removeWhere((_, value) => value.toString().trim().isEmpty);
+        logSave('add_fields_start');
         await MatrixProfileService.instance.addFields(
           uid,
           fields: moduleFields,
           visibility: visibility,
         );
+        logSave('add_fields_done');
       } else {
+        logSave('update_owner_start');
         await MatrixProfileService.instance.updateOwnerProfile(
           userId: uid,
           bio: moduleFields[WrytteProfile.bio]?.toString(),
@@ -1757,8 +1822,11 @@ class UserProfileService {
           visibilitySettings: visibility.isEmpty ? null : visibility,
           avatarUrl: moduleFields[WrytteProfile.avatarImageUrl]?.toString(),
         );
+        logSave('update_owner_done');
       }
+      logSave('complete');
     } catch (e) {
+      logSave('failed error="$e"');
       debugPrint('[UserProfileService] Module profile save skipped: $e');
       rethrow;
     }

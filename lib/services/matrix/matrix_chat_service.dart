@@ -1643,8 +1643,12 @@ class MatrixChatService {
     required String roomId,
     required String body,
   }) async {
-    final room = getRoomById(roomId);
-    if (room == null) throw StateError('Unknown Matrix room: $roomId');
+    // startDirectChat(waitForSync: false) returns a valid room ID before the
+    // next sync necessarily adds the room to the local room cache. Construct
+    // a lightweight room in that case so the event can still be sent.
+    final room =
+        getRoomById(roomId) ??
+        Room(id: roomId, client: MatrixClientService.instance.client);
     final eventId = await room.sendTextEvent(body);
     apkLog(
       'Matrix.send',

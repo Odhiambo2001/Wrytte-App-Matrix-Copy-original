@@ -1748,6 +1748,34 @@ class ChatService {
     }
   }
 
+  /// Publishes a message that was sent through a specialized Matrix path.
+  /// Contact sharing sends directly through MatrixChatService, so it must
+  /// explicitly publish the acknowledged event to the local cache and stream.
+  void recordSentMessage({
+    required String eventId,
+    required String roomId,
+    required String receiverId,
+    required String content,
+  }) {
+    final client = MatrixClientService.instance.client;
+    apkLog(
+      'ChatService.localSend',
+      'record room="$roomId" event="$eventId" content_length=${content.length}',
+    );
+    _cacheMessage(
+      ChatMessage(
+        id: eventId,
+        conversationId: roomId,
+        senderId: client.userID ?? _currentUserId ?? '',
+        receiverId: receiverId,
+        content: content,
+        timestamp: DateTime.now(),
+        status: MessageStatus.sent,
+        senderPhone: _currentUserPhone,
+      ),
+    );
+  }
+
   Future<void> sendVoiceMessage({
     required String receiverID,
     required String filePath,

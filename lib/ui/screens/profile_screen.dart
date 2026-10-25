@@ -172,6 +172,11 @@ class _ProfileScreenState extends State<ProfileScreen>
       _cleanName(_identity?.savedName).isEmpty &&
       !_profile2Saved;
 
+  bool get _profileActionsReady =>
+      !_isOtherUser ||
+      widget.contactStatus == ProfileContactStatus.saved ||
+      (!_profileLoading && _savedContactLookupComplete);
+
   bool get _isProfileUserBlocked {
     final userId = _profileTargetUserId;
     if (userId == null) return false;
@@ -401,7 +406,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         _savedContact = savedContact;
         // Local contact data is authoritative for the first render. Remote
         // profile enrichment must never expose an intermediate placeholder.
-      _profileLoading = false;
+        _profileLoading = false;
       });
       apkLog(
         'Profile2.localFirst',
@@ -439,7 +444,8 @@ class _ProfileScreenState extends State<ProfileScreen>
             forceRefresh: forceRefresh,
           );
     if (!isCurrentLoad()) return;
-    if (profile != null && uid != null &&
+    if (profile != null &&
+        uid != null &&
         _validProfileUid(profile.uid) != null &&
         _matrixLocalpart(_validProfileUid(profile.uid)!) !=
             _matrixLocalpart(uid)) {
@@ -837,7 +843,8 @@ class _ProfileScreenState extends State<ProfileScreen>
         unawaited(
           AvatarPreloadService.warm(
             refreshed.avatarUrl,
-            cacheIdentity: 'room:${refreshed.roomId}:${refreshed.profileVersionFingerprint}',
+            cacheIdentity:
+                'room:${refreshed.roomId}:${refreshed.profileVersionFingerprint}',
           ),
         );
         unawaited(
@@ -1069,7 +1076,9 @@ class _ProfileScreenState extends State<ProfileScreen>
         return room;
       }
       try {
-        final cached = await ChatService().loadSuggestedRoomProfile(room.roomId);
+        final cached = await ChatService().loadSuggestedRoomProfile(
+          room.roomId,
+        );
         final avatar = cached?['avatarUrl']?.toString().trim() ?? '';
         if (avatar.isEmpty) return room;
         final restored = MatrixPublicGroup(
@@ -1091,7 +1100,8 @@ class _ProfileScreenState extends State<ProfileScreen>
         unawaited(
           AvatarPreloadService.warm(
             avatar,
-            cacheIdentity: 'room:${room.roomId}:${room.profileVersionFingerprint}',
+            cacheIdentity:
+                'room:${room.roomId}:${room.profileVersionFingerprint}',
           ),
         );
         return restored;
@@ -1108,8 +1118,9 @@ class _ProfileScreenState extends State<ProfileScreen>
     return 'profile_room_metadata_v1_$localpart';
   }
 
-  Future<(MatrixPublicGroup?, MatrixPublicGroup?)?>
-  _readCachedProfileRooms(String uid) async {
+  Future<(MatrixPublicGroup?, MatrixPublicGroup?)?> _readCachedProfileRooms(
+    String uid,
+  ) async {
     final localpart = _matrixLocalpart(uid).trim();
     if (localpart.isEmpty) return null;
     try {
@@ -1123,7 +1134,10 @@ class _ProfileScreenState extends State<ProfileScreen>
           : null;
       return (parse(decoded['channel']), parse(decoded['group']));
     } catch (error) {
-      apkLog('Profile.room', 'local_batch_read_failed user_id="$uid" error="$error"');
+      apkLog(
+        'Profile.room',
+        'local_batch_read_failed user_id="$uid" error="$error"',
+      );
       return null;
     }
   }
@@ -1151,7 +1165,10 @@ class _ProfileScreenState extends State<ProfileScreen>
             'channel=${channel?.roomId ?? ''} group=${group?.roomId ?? ''}',
       );
     } catch (error) {
-      apkLog('Profile.room', 'local_batch_write_failed user_id="$uid" error="$error"');
+      apkLog(
+        'Profile.room',
+        'local_batch_write_failed user_id="$uid" error="$error"',
+      );
     }
   }
 
@@ -2291,7 +2308,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                         Expanded(child: const SizedBox.shrink()),
 
                         _isOtherUser
-                            ? _showUnsavedProfileActions
+                            ? !_profileActionsReady
+                                  ? const SizedBox(width: 72, height: 44)
+                                  : _showUnsavedProfileActions
                                   ? _buildUnsavedProfileActions()
                                   : _glassTextButton(
                                       text: 'Edit',
@@ -2934,13 +2953,25 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _openShareContactPicker() async {
     setState(() => _showMoreOptions = false);
-    final owner = UserProfileService.instance.cachedProfile?.uid ?? '';
-    // Open the picker immediately. Loading contacts before presenting the
-    // sheet makes the Share contact action appear unresponsive on a cold
-    // cache or when the contacts service is slow.
+    var owner = UserProfileService.instance.cachedProfile?.uid?.trim() ?? '';
+    // Profile hydration can still be incomplete even though authentication is
+    // ready. Resolve the owner from the auth service so saved contacts are not
+    // skipped and the picker does not incorrectly show an empty state.
+    if (owner.isEmpty) {
+      owner = (await AuthService.instance.getCurrentUserId())?.trim() ?? '';
+    }
+    // Always resolve the owner's saved contacts before creating the picker.
+    // The in-memory snapshot can be empty while the async contacts preload is
+    // still running, which previously caused a false "No contacts found" UI
+    // even though contacts existed in SQLite/account data.
     final contacts = owner.isEmpty
         ? const <Contact>[]
-        : ContactService.matrixContactsSnapshot(owner);
+        : await ContactService().getMatrixContactsCached(owner);
+    apkLog(
+      'ShareContact.contacts',
+      'picker_contacts_loaded owner="$owner" count=${contacts.length}',
+    );
+    if (!mounted) return;
 
     // Contact card we are sharing = the profile user (e.g. Rew), NOT the
     // people selected in the picker.
@@ -2973,7 +3004,18 @@ class _ProfileScreenState extends State<ProfileScreen>
         contacts: contacts,
         onSend: (recipient) async {
           // recipient = person who should RECEIVE the profile contact card
+          final timing = Stopwatch()..start();
+          apkLog(
+            'ShareContact.timing',
+            'room_resolve_start name="${recipient.formattedName}" '
+                'uid="${recipient.wrytteUserId}"',
+          );
           final roomId = await _directRoomIdForContact(recipient);
+          apkLog(
+            'ShareContact.timing',
+            'room_resolve_done room="${roomId ?? ''}" '
+                'elapsed_ms=${timing.elapsedMilliseconds}',
+          );
           if (roomId == null || roomId.isEmpty) {
             apkLog(
               'ShareContact.send',
@@ -2982,9 +3024,30 @@ class _ProfileScreenState extends State<ProfileScreen>
             );
             return;
           }
-          await MatrixChatService.instance.sendText(
+          apkLog('ShareContact.timing', 'matrix_send_start room="$roomId"');
+          final eventId = await MatrixChatService.instance.sendText(
             roomId: roomId,
             body: contactBody,
+          );
+          final sentEventId = eventId?.trim();
+          if (sentEventId == null || sentEventId.isEmpty) {
+            throw StateError('Matrix returned no event ID for contact message');
+          }
+          // Matrix acknowledges the event before the next sync necessarily
+          // updates the local room timeline. Publish it immediately so the
+          // chat opened below shows the contact in real time.
+          ChatService().recordSentMessage(
+            eventId: sentEventId,
+            roomId: roomId,
+            receiverId: recipient.wrytteUserId?.trim().isNotEmpty == true
+                ? recipient.wrytteUserId!.trim()
+                : roomId,
+            content: contactBody,
+          );
+          apkLog(
+            'ShareContact.timing',
+            'matrix_send_done room="$roomId" '
+                'elapsed_ms=${timing.elapsedMilliseconds}',
           );
           // Remember the last successful recipient (used only when count == 1).
           singleRecipientRoomId = roomId;
@@ -3032,7 +3095,10 @@ class _ProfileScreenState extends State<ProfileScreen>
           avatarUrl: singleRecipientAvatar,
           initialMessages: ChatService().cachedMessagesFor(roomId),
           conversationKind: ConversationKind.direct,
-          loadRoomEventsOnDemand: true,
+          // This is a normal direct chat, not a profile preview. Let the
+          // chat screen hydrate and subscribe to the room immediately so the
+          // message we just sent is visible when navigation completes.
+          loadRoomEventsOnDemand: false,
         ),
       ),
     );
@@ -3041,8 +3107,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   /// Resolves (or creates) the direct room with [contact] so we can send
   /// the profile user's contact card into *their* chat.
   Future<String?> _directRoomIdForContact(Contact contact) async {
+    final timing = Stopwatch()..start();
     final rawUid = contact.wrytteUserId?.trim() ?? '';
-    if (rawUid.isEmpty) return null;
+    if (rawUid.isEmpty) {
+      apkLog('ShareContact.room', 'resolve_skipped missing_uid');
+      return null;
+    }
 
     final matrixUserId = _toMatrixUserId(rawUid);
 
@@ -3053,6 +3123,11 @@ class _ProfileScreenState extends State<ProfileScreen>
         if (directId.isEmpty) continue;
         if (_matrixLocalpart(directId).toLowerCase() ==
             _matrixLocalpart(matrixUserId).toLowerCase()) {
+          apkLog(
+            'ShareContact.room',
+            'existing_room_hit user="$matrixUserId" room="${room.id}" '
+                'elapsed_ms=${timing.elapsedMilliseconds}',
+          );
           return room.id;
         }
       }
@@ -3062,8 +3137,30 @@ class _ProfileScreenState extends State<ProfileScreen>
 
     // 2. Ask Matrix to start / return a direct chat.
     try {
+      apkLog(
+        'ShareContact.room',
+        'existing_room_miss user="$matrixUserId" connect_start',
+      );
       final client = await MatrixChatService.instance.connect();
-      final roomId = await client.startDirectChat(matrixUserId);
+      apkLog(
+        'ShareContact.room',
+        'connect_done user="$matrixUserId" '
+            'elapsed_ms=${timing.elapsedMilliseconds} start_direct_start',
+      );
+      // Do not wait for the room to appear in a future sync response here.
+      // The returned room ID is immediately usable for sending, while the
+      // sync loop can populate the local room cache asynchronously. Waiting
+      // with the SDK default (waitForSync: true) can block for ~100 seconds
+      // when that sync response is delayed or missed.
+      final roomId = await client.startDirectChat(
+        matrixUserId,
+        waitForSync: false,
+      );
+      apkLog(
+        'ShareContact.room',
+        'start_direct_done user="$matrixUserId" room="$roomId" '
+            'elapsed_ms=${timing.elapsedMilliseconds}',
+      );
       if (roomId.trim().isNotEmpty) return roomId;
     } catch (error) {
       apkLog(
@@ -3272,21 +3369,37 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _blockProfileUser() async {
     if (_blockActionInFlight) return;
+    final timer = Stopwatch()..start();
+    void blockLog(String message) => debugPrint(
+      '[ProfileBlock] t_ms=${timer.elapsedMilliseconds} $message',
+    );
+    blockLog('tap');
     _blockActionInFlight = true;
     try {
       final userId = _profileTargetUserId;
       final roomId = widget.conversationId?.trim() ?? '';
-      if (userId == null || roomId.isEmpty) return;
+      blockLog('target user_id="${userId ?? ''}" room_id="$roomId"');
+      if (userId == null || roomId.isEmpty) {
+        blockLog('cancelled missing_target_or_room');
+        return;
+      }
+      blockLog('add_block_start');
       await BlockStateService.instance.addBlock(userId: userId, roomId: roomId);
+      blockLog('add_block_done');
       if (mounted) {
         setState(() {
           _showBlockConfirmation = false;
           _showUnblockConfirmation = false;
           _showBlockUserCard = false;
         });
+        blockLog('ui_updated');
       }
+    } catch (error) {
+      blockLog('failed error="$error"');
+      rethrow;
     } finally {
       _blockActionInFlight = false;
+      blockLog('complete');
     }
   }
 
@@ -4411,16 +4524,44 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
   }
 
   Future<void> _sendSelected() async {
+    final flow = Stopwatch()..start();
+    final selectedContacts = _filtered
+        .where((contact) {
+          final key = '${contact.formattedName}|${contact.primaryPhone}';
+          return _selected.contains(key);
+        })
+        .toList(growable: false);
+    apkLog(
+      'ShareContact.timing',
+      'send_start selected=${selectedContacts.length} '
+          'picker_contacts=${widget.contacts.length}',
+    );
     setState(() => _sending = true);
     try {
-      for (final contact in _filtered.where((contact) {
-        final key = '${contact.formattedName}|${contact.primaryPhone}';
-        return _selected.contains(key);
-      })) {
+      for (final contact in selectedContacts) {
+        final item = Stopwatch()..start();
+        apkLog(
+          'ShareContact.timing',
+          'recipient_start name="${contact.formattedName}" '
+              'uid="${contact.wrytteUserId}" phone="${contact.primaryPhone}"',
+        );
         await widget.onSend(contact);
+        apkLog(
+          'ShareContact.timing',
+          'recipient_done name="${contact.formattedName}" '
+              'elapsed_ms=${item.elapsedMilliseconds}',
+        );
       }
+      apkLog(
+        'ShareContact.timing',
+        'send_done elapsed_ms=${flow.elapsedMilliseconds}',
+      );
       if (mounted) Navigator.pop(context, _selected.length);
-    } catch (_) {
+    } catch (error) {
+      apkLog(
+        'ShareContact.timing',
+        'send_error elapsed_ms=${flow.elapsedMilliseconds} error="$error"',
+      );
       if (mounted) {
         setState(() => _sending = false);
         ScaffoldMessenger.of(
@@ -4544,7 +4685,6 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                           Expanded(
                             child: TextField(
                               controller: _nameController,
-                              autofocus: true,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 18,
@@ -4596,7 +4736,7 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                       ],
                     ),
                     if (widget.showDeleteContact) ...[
-                      const SizedBox(height: 5),
+                      const SizedBox(height: 30),
                       GestureDetector(
                         onTap: widget.onDeleteContact,
                         child: ClipRRect(

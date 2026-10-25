@@ -708,7 +708,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
     _seedGroupProfile2FromMemory();
     _logger.addListener(_onNewLog);
-    if (widget.initialMessages.isNotEmpty && _suppliedRoomMatchesScreenKind) {
+    // A newly-created direct room may not be present in the Matrix room cache
+    // yet. The sender already has an acknowledged local message, so direct
+    // routes must render supplied messages without waiting for room
+    // verification or the next sync response.
+    if (widget.initialMessages.isNotEmpty &&
+        (widget.conversationKind == ConversationKind.direct ||
+            _suppliedRoomMatchesScreenKind)) {
+      apkLog(
+        'ChatScreen.initMessages',
+        'seeded room="${widget.conversationId}" '
+            'count=${widget.initialMessages.length}',
+      );
       _mergeMessages(widget.initialMessages);
       _loadingInitial = false;
     }
@@ -1486,7 +1497,7 @@ class _ChatScreenState extends State<ChatScreen> {
       'ChatScreen._hydrateAndSubscribe',
       'hydrated ${msgs.length} msgs for "$convId"',
     );
-    if (mounted && (msgs.isNotEmpty || _messages.isEmpty)) {
+    if (mounted && msgs.isNotEmpty) {
       if (!publishHydrated || _loadingInitial) {
         _replaceMessagesFromSharedCache(msgs);
       } else {
@@ -1495,6 +1506,12 @@ class _ChatScreenState extends State<ChatScreen> {
           unawaited(_loadReceiverProfile(forceRefresh: false));
         }
       }
+    } else if (mounted) {
+      apkLog(
+        'ChatScreen._hydrateAndSubscribe',
+        'no_cached_messages room="$convId" '
+            'preserved_messages=${_messages.length}',
+      );
     }
 
     if (_messagesSub != null && _messagesSubscriptionConversationId == convId) {
@@ -1510,6 +1527,14 @@ class _ChatScreenState extends State<ChatScreen> {
       _lastRoomStreamFingerprint = fingerprint;
       apkLog('ChatScreen.roomStream', 'room="$convId" msgs=${messages.length}');
       if (messages.isEmpty) {
+        if (_loadingInitial && _messages.isNotEmpty) {
+          apkLog(
+            'ChatScreen.roomStream',
+            'ignored_empty_snapshot room="$convId" '
+                'preserved_messages=${_messages.length}',
+          );
+          return;
+        }
         _initialStreamBuffer.clear();
         setState(() => _messages.clear());
         return;

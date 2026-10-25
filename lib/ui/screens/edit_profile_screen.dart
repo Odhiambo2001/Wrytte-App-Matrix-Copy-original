@@ -340,29 +340,44 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   Future<void> _save() async {
     if (_isSaving || !_hasName) return;
+    final saveTimer = Stopwatch()..start();
+    void saveLog(String message) {
+      debugPrint(
+        '[EditProfile.save] t_ms=${saveTimer.elapsedMilliseconds} $message',
+      );
+    }
+
+    saveLog('start');
     final uid = await AuthService.instance.getCurrentUserId();
     if (uid == null || uid.isEmpty) {
+      saveLog('cancelled reason=not_authenticated');
       _showSnack('Not authenticated.', isError: true);
       return;
     }
+    saveLog('auth_ready uid="$uid"');
     setState(() => _isSaving = true);
     try {
       final avatarWasRemoved = _avatarRemovalPending;
       String? newImageUrl = avatarWasRemoved ? null : _currentImageUrl;
       var avatarUploadPending = false;
       if (_pickedImageFile != null) {
+        saveLog('avatar_upload_start');
         try {
           newImageUrl = await UserProfileService.instance.uploadProfileImage(
             _pickedImageFile!,
           );
+          saveLog('avatar_upload_done');
         } catch (e) {
           avatarUploadPending = true;
+          saveLog('avatar_upload_failed error="$e"');
           debugPrint('[EditProfile] Avatar upload queued: $e');
         }
       }
 
       if (avatarWasRemoved) {
+        saveLog('avatar_delete_start');
         await UserProfileService.instance.deleteProfileImage();
+        saveLog('avatar_delete_done');
       }
 
       final fullName = _nameController.text.trim();
@@ -384,6 +399,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       } else {
         if (existingLinks.isNotEmpty) existingLinks.removeAt(0);
       }
+      saveLog('update_profile_start');
       await UserProfileService.instance.updateProfile(
         name: fullName,
         firstName: firstName,
@@ -400,8 +416,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           isChannel: false,
         ),
       );
+      saveLog('update_profile_done');
+      saveLog('refresh_profile_start');
       final refreshedProfile = await UserProfileService.instance
-          .getCurrentUserProfile(forceRefresh: true);
+          .getCurrentUserProfile(forceRefresh: false);
+      saveLog('refresh_profile_done has_profile=${refreshedProfile != null}');
       final displayImageUrl = newImageUrl?.trim().isNotEmpty == true
           ? newImageUrl
           : refreshedProfile?.profileImage;
@@ -424,13 +443,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         }
         _isSaving = false;
       });
+      saveLog('ui_state_updated');
       Navigator.pop(
         context,
         avatarUploadPending
             ? 'Profile saved. Photo will upload when internet is back.'
             : 'Profile updated successfully.',
       );
+      saveLog('complete');
     } catch (e) {
+      saveLog('failed error="$e"');
       if (!mounted) return;
       setState(() => _isSaving = false);
       _showSnack(e.toString(), isError: true);
