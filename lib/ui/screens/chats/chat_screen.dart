@@ -3870,10 +3870,9 @@ class _ChatScreenState extends State<ChatScreen> {
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ProfileScreen(
-          uid:
-              _receiverProfile?.uid ??
-              _receiverIdentity?.matrixUserId ??
-              widget.receiverId,
+          uid: widget.receiverId.trim().isNotEmpty
+              ? widget.receiverId
+              : _receiverProfile?.uid ?? _receiverIdentity?.matrixUserId,
           conversationId: _resolvedConversationId ?? widget.conversationId,
           savedNameHint: _resolvedHeaderName,
           contactStatus: _receiverIsSavedContact
@@ -4730,10 +4729,9 @@ class _ChatScreenState extends State<ChatScreen> {
             builder: (_) => ProfileScreen(
               // Prefer loaded profile/identity, but always fall back to the
               // route receiver so the profile is never opened without a user id.
-              uid:
-                  _receiverProfile?.uid ??
-                  _receiverIdentity?.matrixUserId ??
-                  widget.receiverId,
+              uid: widget.receiverId.trim().isNotEmpty
+                  ? widget.receiverId
+                  : _receiverProfile?.uid ?? _receiverIdentity?.matrixUserId,
               conversationId: widget.conversationId,
               savedNameHint: _resolvedHeaderName,
               contactStatus:
@@ -4946,8 +4944,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           // Always provide a direct peer ID. The room/message
                           // heuristics are useful fallbacks, but must never
                           // turn a user profile into the owner's profile.
-                          final profileUid =
-                              _profilePeerId() ?? widget.receiverId;
+                          final profileUid = widget.receiverId.trim().isNotEmpty
+                              ? widget.receiverId
+                              : _profilePeerId();
                           await Navigator.push(
                             context,
                             MaterialPageRoute(
