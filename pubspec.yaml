@@ -59,6 +59,7 @@ dependencies:
   flutter_onnxruntime: ^1.8.3
   image: ^4.8.0
   crypto: ^3.0.6
+  http: ^1.6.0
   cryptography: ^2.7.0
   ffi: ^2.1.4
   flutter_secure_storage: ^10.0.0

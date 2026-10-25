@@ -1423,7 +1423,13 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
 
-    await _loadReceiverProfile(publish: false);
+    // Publish the locally-resolved receiver before the first chat frame is
+    // considered ready.  Previously this used publish:false, which populated
+    // _receiverProfile/_receiverIdentity without rebuilding the header.  The
+    // header therefore rendered with identitySaved=null and had to start a
+    // second network avatar resolution even though the contact/profile data
+    // was already available locally.
+    await _loadReceiverProfile(publish: true);
 
     if (_isKnownGroupConversationId(realConvId) || _isGroupChat) {
       await _primeGroupMemberProfiles(realConvId);

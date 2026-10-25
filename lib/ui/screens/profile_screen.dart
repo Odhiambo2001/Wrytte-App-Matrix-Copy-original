@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:matrix/matrix.dart' as mx;
@@ -111,6 +114,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   MatrixPublicGroup? _profileChannel;
   MatrixPublicGroup? _profileGroup;
   int _profileRoomResolveRevision = 0;
+  int _profileLoadRevision = 0;
   bool _statusIconBuildLogged = false;
   bool _blockActionInFlight = false;
   bool _profileUnblockRefreshInFlight = false;
@@ -163,17 +167,10 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   bool get _showUnsavedProfileActions =>
       _isOtherUser &&
-      _savedContactLookupComplete &&
       widget.contactStatus != ProfileContactStatus.saved &&
-      (widget.contactStatus == ProfileContactStatus.unsaved ||
-          !_hasSavedContactHint) &&
       _savedContact == null &&
       _cleanName(_identity?.savedName).isEmpty &&
       !_profile2Saved;
-
-  bool get _hasSavedContactHint =>
-      widget.contactStatus == ProfileContactStatus.saved ||
-      _cleanName(widget.savedNameHint).isNotEmpty;
 
   bool get _isProfileUserBlocked {
     final userId = _profileTargetUserId;
@@ -322,6 +319,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _loadProfile({bool forceRefresh = false}) async {
+    final loadRevision = ++_profileLoadRevision;
+    bool isCurrentLoad() => mounted && loadRevision == _profileLoadRevision;
+
     var uid = _validProfileUid(widget.uid);
     apkLog(
       'Profile2.renderTrace',
@@ -333,11 +333,27 @@ class _ProfileScreenState extends State<ProfileScreen>
       'initialName="${widget.initialProfileName}"',
     );
     uid ??= await _resolveProfileUidFromConversation();
+    if (!isCurrentLoad()) return;
     debugPrint('[ProfileScreen] resolved uid: "$uid"');
+
+    // Never commit an incomplete other-user profile. When a profile is opened
+    // from a conversation, the peer UID can require a local room/message
+    // lookup. Previously a null result was published as a completed profile,
+    // which rendered an empty card and allowed the owner profile stream to
+    // populate the screen before the selected peer was resolved.
+    if (_isOtherUser && uid == null) {
+      apkLog(
+        'Profile2.trace',
+        'peer uid unresolved; keeping profile loading and discarding empty state',
+      );
+      if (isCurrentLoad()) setState(() => _profileLoading = true);
+      return;
+    }
 
     if (uid != null && _isOtherUser) {
       final blockState = BlockStateService.instance;
       await blockState.load();
+      if (!isCurrentLoad()) return;
       _redactedByBlock = _isBlockedByBbb(uid);
       debugPrint(
         '[ProfileScreen][DIAG] load uid="$uid" room="${widget.conversationId}" '
@@ -347,6 +363,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       );
     }
     final ownerUserId = await AuthService.instance.getCurrentUserId();
+    if (!isCurrentLoad()) return;
     var identity = uid != null && ownerUserId != null && ownerUserId.isNotEmpty
         ? await ContactIdentityCache.instance.findByMatrixId(
             ownerUserId: ownerUserId,
@@ -372,18 +389,19 @@ class _ProfileScreenState extends State<ProfileScreen>
       );
     }
     savedContact ??= uid != null ? await _findSavedContact(uid) : null;
+    if (!isCurrentLoad()) return;
     _savedContactLookupComplete = !_isOtherUser || uid != null;
     apkLog(
       'Profile2.trace',
       'resolved uid="$uid" identitySaved="${identity?.savedName}" savedContact="${savedContact?.formattedName}"',
     );
-    if (mounted) {
+    if (isCurrentLoad()) {
       setState(() {
         _identity = identity;
         _savedContact = savedContact;
         // Local contact data is authoritative for the first render. Remote
         // profile enrichment must never expose an intermediate placeholder.
-        _profileLoading = false;
+      _profileLoading = false;
       });
       apkLog(
         'Profile2.localFirst',
@@ -420,6 +438,17 @@ class _ProfileScreenState extends State<ProfileScreen>
         : await UserProfileService.instance.getCurrentUserProfile(
             forceRefresh: forceRefresh,
           );
+    if (!isCurrentLoad()) return;
+    if (profile != null && uid != null &&
+        _validProfileUid(profile.uid) != null &&
+        _matrixLocalpart(_validProfileUid(profile.uid)!) !=
+            _matrixLocalpart(uid)) {
+      apkLog(
+        'Profile2.trace',
+        'discarded stale profile result requested="$uid" returned="${profile.uid}"',
+      );
+      return;
+    }
     debugPrint(
       '[ProfileScreen] lookup result: found=${profile != null} '
       'uid="${profile?.uid}" name="${profile?.displayName ?? profile?.name}" '
@@ -435,22 +464,28 @@ class _ProfileScreenState extends State<ProfileScreen>
           'group="${profile?.groupAlias ?? ''}"',
     );
 
-    if (!mounted) return;
+    if (!isCurrentLoad()) return;
     setState(() {
       _profile = profile ?? _profile;
       _savedContact = savedContact;
       _identity = identity;
+      // The profile fields are complete at this point. Linked room metadata
+      // is hydrated/rendered independently and refreshed in the background;
+      // media downloads must never block the profile card.
       _profileLoading = false;
     });
     apkLog(
       'Profile2.renderTrace',
       'profile state applied uid="$uid" name="${_profileDisplayName()}" saved="${savedContact?.formattedName}" identitySaved="${identity?.savedName}" loading=$_profileLoading avatar="${_profileAvatarUrl()}"',
     );
-    if (profile != null) unawaited(_loadProfileRoomCards(profile));
+    if (profile != null) {
+      unawaited(_loadProfileRoomCards(profile));
+    }
 
     final matrixProfile = uid != null && profile?.moduleProfileLoaded != true
         ? await _loadMatrixProfile(uid)
         : null;
+    if (!isCurrentLoad()) return;
 
     // The module-profile request refreshes UserProfileService asynchronously.
     // Re-read the current profile before rendering so bio, links, channel,
@@ -458,6 +493,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (!_isOtherUser && uid != null) {
       final refreshedProfile = await UserProfileService.instance
           .getCurrentUserProfile(forceRefresh: true);
+      if (!isCurrentLoad()) return;
       if (refreshedProfile != null) {
         profile = refreshedProfile;
         apkLog(
@@ -501,8 +537,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                   : nextAvatar,
               bio: profile.bio,
             );
+        if (!isCurrentLoad()) return;
         if (refreshedContact != null) {
           await ChatService().applySavedContact(refreshedContact);
+          if (!isCurrentLoad()) return;
         }
       }
       await ContactIdentityCache.instance.upsert(
@@ -534,9 +572,10 @@ class _ProfileScreenState extends State<ProfileScreen>
         ownerUserId: ownerUserId,
         matrixUserId: uid,
       );
+      if (!isCurrentLoad()) return;
     }
 
-    if (!mounted) return;
+    if (!isCurrentLoad()) return;
     setState(() {
       _profile = profile ?? _profile;
       _savedContact = savedContact;
@@ -559,6 +598,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       'action=${_showUnsavedProfileActions ? 'Block/Add' : 'Edit'}',
     );
     final resolvedAvatar = _profileAvatarUrl();
+    if (!isCurrentLoad()) return;
     await AvatarPreloadService.warm(
       resolvedAvatar,
       cacheIdentity: 'user:${(uid ?? '').trim().toLowerCase()}',
@@ -751,8 +791,18 @@ class _ProfileScreenState extends State<ProfileScreen>
     String reference, {
     required bool isChannel,
   }) async {
+    apkLog(
+      'Profile.room',
+      'resolve start kind="${isChannel ? 'channel' : 'group'}" '
+          'reference="${reference.trim()}"',
+    );
     final local = _profileRoomFromJoinedRooms(reference, isChannel: isChannel);
     if (local != null) {
+      apkLog(
+        'Profile.room',
+        'local match kind="${isChannel ? 'channel' : 'group'}" '
+            'room_id="${local.roomId}" avatar="${local.avatarUrl ?? ''}"',
+      );
       try {
         final client = await MatrixChatService.instance.connect();
         final summary = await client.getRoomSummary(local.roomId);
@@ -777,6 +827,18 @@ class _ProfileScreenState extends State<ProfileScreen>
           memberCount: count,
           worldReadable: summary.worldReadable,
           roomType: summary.roomType ?? local.roomType,
+        );
+        apkLog(
+          'Profile.room',
+          'resolved kind="${isChannel ? 'channel' : 'group'}" '
+              'room_id="${refreshed.roomId}" name="${refreshed.name}" '
+              'avatar="${refreshed.avatarUrl ?? ''}" source="local_summary"',
+        );
+        unawaited(
+          AvatarPreloadService.warm(
+            refreshed.avatarUrl,
+            cacheIdentity: 'room:${refreshed.roomId}:${refreshed.profileVersionFingerprint}',
+          ),
         );
         unawaited(
           ChatService()
@@ -817,6 +879,19 @@ class _ProfileScreenState extends State<ProfileScreen>
       final summaryName = summary.name?.trim() ?? '';
       final summaryAvatar = summary.avatarUrl?.toString();
       final summaryTopic = summary.topic;
+      apkLog(
+        'Profile.room',
+        'resolved kind="${isChannel ? 'channel' : 'group'}" '
+            'reference="${reference.trim()}" room_id="${summary.roomId}" '
+            'name="${summaryName}" avatar="${summaryAvatar ?? ''}" '
+            'source="matrix_summary"',
+      );
+      unawaited(
+        AvatarPreloadService.warm(
+          summaryAvatar,
+          cacheIdentity: 'room:${summary.roomId}',
+        ),
+      );
       unawaited(
         ChatService()
             .cacheSuggestedRoomProfile(summary.roomId, {
@@ -853,7 +928,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         final joinedCount = cachedMembers
             .where((member) => member['membership']?.toString() == 'join')
             .length;
-        return MatrixPublicGroup(
+        final cachedRoom = MatrixPublicGroup(
           roomId: reference.trim(),
           name: cached['name']?.toString().trim().isNotEmpty == true
               ? cached['name'].toString().trim()
@@ -865,6 +940,19 @@ class _ProfileScreenState extends State<ProfileScreen>
           worldReadable: true,
           roomType: isChannel ? MatrixPublicGroup.channelRoomType : 'group',
         );
+        apkLog(
+          'Profile.room',
+          'resolved kind="${isChannel ? 'channel' : 'group'}" '
+              'room_id="${cachedRoom.roomId}" avatar="${cachedRoom.avatarUrl ?? ''}" '
+              'source="local_suggested_cache"',
+        );
+        unawaited(
+          AvatarPreloadService.warm(
+            cachedRoom.avatarUrl,
+            cacheIdentity: 'room:${cachedRoom.roomId}',
+          ),
+        );
+        return cachedRoom;
       } catch (cacheError) {
         apkLog(
           'Profile.room',
@@ -880,6 +968,30 @@ class _ProfileScreenState extends State<ProfileScreen>
     int? channelMemberCount;
     int? groupMemberCount;
     final profileUserId = _profileTargetUserId ?? profile.uid;
+
+    // Room metadata is part of the local profile snapshot. Paint it before
+    // any Matrix request; avatar bytes are resolved independently by the
+    // shared avatar cache and are never allowed to block this screen.
+    final cachedRoomsRaw = await _readCachedProfileRooms(profileUserId);
+    final cachedRooms = cachedRoomsRaw == null
+        ? null
+        : await _restoreRoomAvatarsFromRoomCache(cachedRoomsRaw);
+    if (!mounted || revision != _profileRoomResolveRevision) return;
+    if (cachedRooms != null) {
+      setState(() {
+        _profileChannel = cachedRooms.$1;
+        _profileGroup = cachedRooms.$2;
+      });
+      apkLog(
+        'Profile.room',
+        'local_batch_hit user_id="$profileUserId" '
+            'channel=${cachedRooms.$1?.roomId ?? ''} '
+            'channel_avatar="${cachedRooms.$1?.avatarUrl ?? ''}" '
+            'group=${cachedRooms.$2?.roomId ?? ''} '
+            'group_avatar="${cachedRooms.$2?.avatarUrl ?? ''}"',
+      );
+    }
+
     try {
       final moduleProfile = await MatrixProfileService.instance.getProfile(
         profileUserId,
@@ -945,6 +1057,102 @@ class _ProfileScreenState extends State<ProfileScreen>
       _profileChannel = results[0];
       _profileGroup = results[1];
     });
+    await _writeCachedProfileRooms(profileUserId, results[0], results[1]);
+  }
+
+  Future<(MatrixPublicGroup?, MatrixPublicGroup?)>
+  _restoreRoomAvatarsFromRoomCache(
+    (MatrixPublicGroup?, MatrixPublicGroup?) rooms,
+  ) async {
+    Future<MatrixPublicGroup?> restore(MatrixPublicGroup? room) async {
+      if (room == null || room.avatarUrl?.trim().isNotEmpty == true) {
+        return room;
+      }
+      try {
+        final cached = await ChatService().loadSuggestedRoomProfile(room.roomId);
+        final avatar = cached?['avatarUrl']?.toString().trim() ?? '';
+        if (avatar.isEmpty) return room;
+        final restored = MatrixPublicGroup(
+          roomId: room.roomId,
+          name: room.name,
+          avatarUrl: avatar,
+          canonicalAlias: room.canonicalAlias,
+          topic: room.topic,
+          memberCount: room.memberCount,
+          worldReadable: room.worldReadable,
+          avatarVersion: room.avatarVersion,
+          nameVersion: room.nameVersion,
+          descriptionVersion: room.descriptionVersion,
+          linkVersion: room.linkVersion,
+          aliasVersion: room.aliasVersion,
+          link: room.link,
+          roomType: room.roomType,
+        );
+        unawaited(
+          AvatarPreloadService.warm(
+            avatar,
+            cacheIdentity: 'room:${room.roomId}:${room.profileVersionFingerprint}',
+          ),
+        );
+        return restored;
+      } catch (_) {
+        return room;
+      }
+    }
+
+    return (await restore(rooms.$1), await restore(rooms.$2));
+  }
+
+  String _profileRoomsCacheKey(String uid) {
+    final localpart = _matrixLocalpart(uid).trim().toLowerCase();
+    return 'profile_room_metadata_v1_$localpart';
+  }
+
+  Future<(MatrixPublicGroup?, MatrixPublicGroup?)?>
+  _readCachedProfileRooms(String uid) async {
+    final localpart = _matrixLocalpart(uid).trim();
+    if (localpart.isEmpty) return null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_profileRoomsCacheKey(uid));
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      MatrixPublicGroup? parse(Object? value) => value is Map
+          ? MatrixPublicGroup.fromJson(Map<String, dynamic>.from(value))
+          : null;
+      return (parse(decoded['channel']), parse(decoded['group']));
+    } catch (error) {
+      apkLog('Profile.room', 'local_batch_read_failed user_id="$uid" error="$error"');
+      return null;
+    }
+  }
+
+  Future<void> _writeCachedProfileRooms(
+    String uid,
+    MatrixPublicGroup? channel,
+    MatrixPublicGroup? group,
+  ) async {
+    final localpart = _matrixLocalpart(uid).trim();
+    if (localpart.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _profileRoomsCacheKey(uid),
+        jsonEncode({
+          'channel': channel?.toJson(),
+          'group': group?.toJson(),
+          'savedAt': DateTime.now().toIso8601String(),
+        }),
+      );
+      apkLog(
+        'Profile.room',
+        'local_batch_write user_id="$uid" '
+            'channel=${channel?.roomId ?? ''} group=${group?.roomId ?? ''}',
+      );
+    } catch (error) {
+      apkLog('Profile.room', 'local_batch_write_failed user_id="$uid" error="$error"');
+    }
   }
 
   Future<void> _openProfileRoom(
@@ -1239,16 +1447,20 @@ class _ProfileScreenState extends State<ProfileScreen>
       return;
     }
     debugPrint('[ProfileAvatar] viewer_open url="$raw"');
+    final localPath = await AvatarPreloadService.localPathFor(raw);
+    final ImageProvider<Object> imageProvider = localPath != null
+        ? FileImage(File(localPath))
+        : CachedNetworkImageProvider(
+            url,
+            headers: {
+              if (AuthService.instance.cachedBackendToken?.isNotEmpty == true)
+                'Authorization':
+                    'Bearer ${AuthService.instance.cachedBackendToken}',
+            },
+          );
     final result = await showWrytteImageViewer(
       context,
-      image: CachedNetworkImageProvider(
-        url,
-        headers: {
-          if (AuthService.instance.cachedBackendToken?.isNotEmpty == true)
-            'Authorization':
-                'Bearer ${AuthService.instance.cachedBackendToken}',
-        },
-      ),
+      image: imageProvider,
       imageAspectRatio: 1,
       allowDelete: !_isOtherUser,
       showHeaderLabel: false,
@@ -2078,12 +2290,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
                         Expanded(child: const SizedBox.shrink()),
 
-                        _isOtherUser &&
-                                (!_savedContactLookupComplete ||
-                                    (_profileLoading &&
-                                        widget.contactStatus == null))
-                            ? const SizedBox(width: 84, height: 44)
-                            : _isOtherUser
+                        _isOtherUser
                             ? _showUnsavedProfileActions
                                   ? _buildUnsavedProfileActions()
                                   : _glassTextButton(

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -6,6 +7,7 @@ import 'package:wrytte/services/auth/api_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/utils/apk_debug_logger.dart';
 
 class UserAvatar extends StatefulWidget {
@@ -76,11 +78,10 @@ class _UserAvatarState extends State<UserAvatar> {
     final url = _resolveImageUrl(rawUrl);
     if (url.isEmpty) return;
     final baseUrl = _stripVersion(url);
-    final matchingKeys =
-        _resolvedImageCache.keys.where((key) {
-          final cachedUrl = key.contains('|') ? key.split('|').last : key;
-          return _stripVersion(cachedUrl) == baseUrl;
-        }).toList();
+    final matchingKeys = _resolvedImageCache.keys.where((key) {
+      final cachedUrl = key.contains('|') ? key.split('|').last : key;
+      return _stripVersion(cachedUrl) == baseUrl;
+    }).toList();
 
     for (final key in matchingKeys) {
       final provider = _resolvedImageCache.remove(key);
@@ -110,8 +111,21 @@ class _UserAvatarState extends State<UserAvatar> {
   @override
   void initState() {
     super.initState();
+    AvatarPreloadService.cacheRevision.addListener(_onAvatarCacheChanged);
     _rememberStableSources();
     _warmAuthToken();
+    unawaited(_loadPersistentAvatar());
+  }
+
+  void _onAvatarCacheChanged() {
+    if (!mounted) return;
+    unawaited(_loadPersistentAvatar());
+  }
+
+  @override
+  void dispose() {
+    AvatarPreloadService.cacheRevision.removeListener(_onAvatarCacheChanged);
+    super.dispose();
   }
 
   @override
@@ -134,6 +148,7 @@ class _UserAvatarState extends State<UserAvatar> {
       _lastGoodLocalImagePath = null;
     }
     _rememberStableSources();
+    unawaited(_loadPersistentAvatar());
     if (oldWidget.imageUrl != widget.imageUrl) {
       _warmAuthToken();
     }
@@ -180,6 +195,28 @@ class _UserAvatarState extends State<UserAvatar> {
         });
   }
 
+  Future<void> _loadPersistentAvatar() async {
+    final rawUrl = widget.imageUrl?.trim() ?? '';
+    if (rawUrl.isEmpty || widget.localImagePath?.trim().isNotEmpty == true) {
+      return;
+    }
+    var path = await AvatarPreloadService.localPathFor(rawUrl);
+    if (path == null) {
+      await AvatarPreloadService.warm(
+        rawUrl,
+        cacheIdentity: widget.cacheIdentity,
+      );
+      path = await AvatarPreloadService.localPathFor(rawUrl);
+    }
+    if (!mounted || path == null || path == _lastGoodLocalImagePath) return;
+    _knownGoodLocalPaths.add(path);
+    setState(() => _lastGoodLocalImagePath = path);
+    apkLog(
+      'Avatar.load',
+      'state="local_file_ready" path="$path" url="${_resolveImageUrl(rawUrl)}"',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     Widget avatarWidget;
@@ -191,10 +228,9 @@ class _UserAvatarState extends State<UserAvatar> {
     final localFile = _localImageFile();
 
     final imageUrl = _effectiveImageUrl();
-    final cachedProvider =
-        imageUrl.isNotEmpty
-            ? _resolvedImageCache[_providerCacheKey(imageUrl)]
-            : null;
+    final cachedProvider = imageUrl.isNotEmpty
+        ? _resolvedImageCache[_providerCacheKey(imageUrl)]
+        : null;
 
     if (widget.image != null) {
       avatarWidget = _buildFromImageProvider(widget.image!);
@@ -299,10 +335,9 @@ class _UserAvatarState extends State<UserAvatar> {
     final url = _resolveImageUrl(rawUrl);
     if (url.isEmpty) return _buildPlaceholder();
     final providerKey = _providerCacheKey(rawUrl);
-    final logIdentity =
-        widget.cacheIdentity?.trim().isNotEmpty == true
-            ? widget.cacheIdentity!.trim()
-            : providerKey;
+    final logIdentity = widget.cacheIdentity?.trim().isNotEmpty == true
+        ? widget.cacheIdentity!.trim()
+        : providerKey;
     if (_loggedLoadKeys.add(providerKey)) {
       apkLog(
         'Avatar.load',
@@ -357,10 +392,9 @@ class _UserAvatarState extends State<UserAvatar> {
   void _logPaintOnce(String rawUrl, {required String source}) {
     final key = _providerCacheKey(rawUrl);
     if (!_loggedPaintKeys.add(key)) return;
-    final logIdentity =
-        widget.cacheIdentity?.trim().isNotEmpty == true
-            ? widget.cacheIdentity!.trim()
-            : key;
+    final logIdentity = widget.cacheIdentity?.trim().isNotEmpty == true
+        ? widget.cacheIdentity!.trim()
+        : key;
     apkLog(
       'Avatar.load',
       'state="painted" source="$source" '
@@ -439,22 +473,21 @@ class _UserAvatarState extends State<UserAvatar> {
         color: Color(0xFF0F2A44),
       ),
       child: Center(
-        child:
-            initials != null
-                ? Text(
-                  initials,
-                  style: TextStyle(
-                    color: const Color(0xFF4DA3FF),
-                    fontSize: widget.size * 0.36,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.5,
-                  ),
-                )
-                : Icon(
-                  Icons.person,
-                  size: widget.size * 0.5,
+        child: initials != null
+            ? Text(
+                initials,
+                style: TextStyle(
                   color: const Color(0xFF4DA3FF),
+                  fontSize: widget.size * 0.36,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
                 ),
+              )
+            : Icon(
+                Icons.person,
+                size: widget.size * 0.5,
+                color: const Color(0xFF4DA3FF),
+              ),
       ),
     );
   }

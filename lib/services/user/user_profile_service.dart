@@ -60,6 +60,7 @@ class UserProfileService {
   // Avoid retrying a known-missing profile on every chat-list repaint, while
   // allowing newly-created profiles to appear after the TTL expires.
   final Map<String, DateTime> _publicProfileMisses = {};
+  final Map<String, DateTime> _publicProfileIncompleteRefreshes = {};
   Future<void>? _publicProfileDiskReady;
   static const _publicProfileDiskCacheKey = 'public_profile_disk_cache_v1';
   Future<UserProfile?>? _loginProfileInFlight;
@@ -601,6 +602,10 @@ class UserProfileService {
               'channel="${cached.channelAlias}" '
               'group="${cached.groupAlias}"',
         );
+        _refreshIncompletePublicProfileInBackground(
+          cached,
+          phone: phone,
+        );
         return cached;
       }
       final missAt = _publicProfileMisses[cacheKey];
@@ -642,6 +647,35 @@ class UserProfileService {
         _publicProfileInFlight.remove(cacheKey);
       }
     });
+  }
+
+  void _refreshIncompletePublicProfileInBackground(
+    UserProfile profile, {
+    String? phone,
+  }) {
+    final key = _publicProfileCacheKey(profile.uid, phone);
+    final complete = profile.bio.trim().isNotEmpty &&
+        profile.links.isNotEmpty &&
+        profile.channelAlias.trim().isNotEmpty &&
+        profile.groupAlias.trim().isNotEmpty;
+    if (complete) return;
+    final last = _publicProfileIncompleteRefreshes[key];
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(minutes: 2)) {
+      return;
+    }
+    _publicProfileIncompleteRefreshes[key] = DateTime.now();
+    apkLog(
+      'ProfileCache',
+      'incomplete_background_refresh uid="${profile.uid}" '
+          'bio=${profile.bio.isNotEmpty} links=${profile.links.length} '
+          'channel="${profile.channelAlias}" group="${profile.groupAlias}"',
+    );
+    unawaited(
+      getProfileByUid(profile.uid, phone: phone, forceRefresh: true).catchError(
+        (_) => null,
+      ),
+    );
   }
 
   Future<UserProfile?> _getProfileByUidRemote(
@@ -808,6 +842,7 @@ class UserProfileService {
     _publicProfilePreviousAvatarUrls.clear();
     _publicProfileRevisions.clear();
     _publicProfileMisses.clear();
+    _publicProfileIncompleteRefreshes.clear();
     _loginProfileInFlight = null;
     _currentProfileBackendFetchedAt = null;
     _profileController.add(null);
