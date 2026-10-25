@@ -65,6 +65,11 @@ class BlockStateService {
       }
       _ready = true;
       revision.value++;
+      debugPrint(
+        '[BlockState][DIAG] load done ready=$_ready '
+        'self="${_client.userID}" '
+        'bbb=${_entries(_bbb)} blocklist=${_entries(_blocklist)}',
+      );
     } catch (error) {
       debugPrint('[BlockState] load failed error=$error');
     }
@@ -125,6 +130,11 @@ class BlockStateService {
             ? timestamp
             : a.value.eventId.compareTo(b.value.eventId);
       });
+
+    debugPrint(
+      '[BlockState][DIAG] backfill rooms_scanned=${_client.rooms.length} '
+      'latest_events=${latestEvents.length}',
+    );
 
     for (final latest in latestEvents) {
       try {
@@ -256,12 +266,15 @@ class BlockStateService {
     final matched = _entries(_bbb).any((entry) {
       final blockedBy = localpart(entry['blocked_by']?.toString() ?? '');
       final entryRoom = entry['room_id']?.toString().trim() ?? '';
-      return (room.isNotEmpty && entryRoom == room) ||
-          (blockedBy == target && room.isEmpty);
+      // Match by peer localpart always; room narrows when provided.
+      final peerMatch = blockedBy == target;
+      final roomMatch = room.isEmpty || entryRoom == room || entryRoom.isEmpty;
+      return peerMatch && roomMatch;
     });
     debugPrint(
-      '[BlockState] BBB lookup peer="$userId" room="$room" '
-      'matched=$matched entries=${_entries(_bbb)}',
+      '[BlockState][DIAG] BBB lookup peer="$userId" room="$room" '
+      'targetLocalpart="$target" matched=$matched ready=$_ready '
+      'entries=${_entries(_bbb)}',
     );
     return matched;
   }
@@ -269,7 +282,12 @@ class BlockStateService {
   /// Privacy-safe decision for profile/avatar consumers. Unknown state must
   /// fail closed until account data and event backfill have completed.
   bool isRedactedByBbb(String userId, {String? roomId}) {
-    return !_ready || isBlockedByBbb(userId, roomId: roomId);
+    final result = !_ready || isBlockedByBbb(userId, roomId: roomId);
+    debugPrint(
+      '[BlockState][DIAG] isRedactedByBbb peer="$userId" room="${roomId ?? ''}" '
+      'ready=$_ready result=$result',
+    );
+    return result;
   }
 
   /// Privacy-safe decision for every profile surface. This covers both
@@ -289,6 +307,10 @@ class BlockStateService {
   List<Map<String, dynamic>> get blockedMessages => _entries(_blockedMessages);
 
   Future<void> addBlock({required String userId, required String roomId}) async {
+    debugPrint(
+      '[BlockState][DIAG] addBlock user="$userId" room="$roomId" '
+      'self="${_client.userID}"',
+    );
     await _update(blocklistType, _blocklist, (entries) {
       entries.removeWhere((e) => e['user_id'] == userId || e['room_id'] == roomId);
       entries.add({
@@ -317,6 +339,9 @@ class BlockStateService {
       );
       return;
     }
+    debugPrint(
+      '[BlockState][DIAG] removeBlock user="$userId" room="$roomId"',
+    );
     await _update(blocklistType, _blocklist, (entries) {
       entries.removeWhere((e) => e['user_id'] == userId || e['room_id'] == roomId);
     });
@@ -352,11 +377,15 @@ class BlockStateService {
       entries.add(entry);
     });
     debugPrint(
-      '[BlockState] BBB persisted receiver="${_client.userID}" entries=${_entries(_bbb)}',
+      '[BlockState][DIAG] BBB after record self="${_client.userID}" '
+      'entries=${_entries(_bbb)}',
     );
   }
 
   Future<void> removeBlockedBy({required String blockedBy, required String roomId}) async {
+    debugPrint(
+      '[BlockState][DIAG] removeBlockedBy blockedBy="$blockedBy" room="$roomId"',
+    );
     await _update(bbbType, _bbb, (entries) {
       entries.removeWhere((e) =>
           e['blocked_by'] == blockedBy && e['room_id'] == roomId);
@@ -364,9 +393,6 @@ class BlockStateService {
     _unblockController.add((blockedBy: blockedBy, roomId: roomId));
   }
 
-  /// The profile module is authoritative for the unblock relationship. If a
-  /// profile response contains fields that are never returned while blocked,
-  /// clear a stale BBB record even when the room event was delayed or missed.
   Future<void> reconcileProfileUnblocked(String blockedBy) async {
     final target = blockedBy.trim().toLowerCase();
     if (target.isEmpty) return;
@@ -383,14 +409,11 @@ class BlockStateService {
       });
     });
     if (_entries(_bbb).length != before) {
-      // Start the profile refresh gate before notifying avatar consumers.
-      // This prevents a single frame from rendering a cached/old avatar
-      // between BBB removal and the authoritative profile fetch.
       _unblockController.add((blockedBy: blockedBy, roomId: ''));
       revision.value++;
       debugPrint(
-        '[BlockState] reconciled stale BBB after full profile response '
-        'blocked_by="$blockedBy" entries=${_entries(_bbb)}',
+        '[BlockState][DIAG] reconciled stale BBB blocked_by="$blockedBy" '
+        'entries=${_entries(_bbb)}',
       );
     }
   }

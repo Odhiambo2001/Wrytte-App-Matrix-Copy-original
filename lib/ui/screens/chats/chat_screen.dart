@@ -754,8 +754,12 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
+
   void _onBlockStateChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   bool _isBlockedByCurrentUser() {
@@ -870,6 +874,17 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  bool _isPeerPresenceRedacted() {
+    if (_isGroupChat) return false;
+    final peerId = (_profilePeerId() ?? widget.receiverId).trim();
+    final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
+    if (peerId.isEmpty) return false;
+    return BlockStateService.instance.isRedactedByBbb(
+      peerId,
+      roomId: roomId.isEmpty ? null : roomId,
+    );
+  }
+
   bool _currentPeerPresenceIsOnline() {
     if (_isGroupChat || !MatrixClientService.instance.isInitialized) {
       return false;
@@ -899,6 +914,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _refreshPeerPresence() async {
+    if (_isPeerPresenceRedacted()) return;
     if (_isGroupChat || !MatrixClientService.instance.isInitialized) return;
     final peerId = _profilePeerId();
     if (peerId == null || peerId.trim().isEmpty) return;
@@ -923,6 +939,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _applyPeerPresenceUpdate(mx.SyncUpdate update) {
+    if (_isPeerPresenceRedacted()) return;
     if (_isGroupChat) return;
     final peerId = _profilePeerId();
     if (peerId == null || peerId.trim().isEmpty) return;
@@ -1108,6 +1125,19 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _peerPresenceLabel() {
+    // Person B must not see Person A's online / last-seen when A blocked B.
+    if (!_isGroupChat) {
+      final peerId = (_profilePeerId() ?? widget.receiverId).trim();
+      final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
+      if (peerId.isNotEmpty &&
+          BlockStateService.instance.isRedactedByBbb(
+            peerId,
+            roomId: roomId.isEmpty ? null : roomId,
+          )) {
+        return '';
+      }
+    }
+
     if (_receiverOnline) return 'Online';
     final lastActiveAt = _peerLastActiveAt;
     // Do not display a generic fallback when Matrix has not supplied a
@@ -4770,19 +4800,19 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           UserAvatar(
             size: size,
-            imageUrl: BlockStateService.instance.isRedactedForViewer(
-                  _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
-                  roomId: _resolvedConversationId ?? widget.conversationId,
-                ) || UserProfileService.instance.isPublicProfileRefreshing(
-                  _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
-                )
-            ? null
-            : _safePersonHeaderAvatar(
-                _receiverProfile?.hasProfileImage == true
-                    ? _receiverProfile!.profileImage
-                    : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
-              ),
-        localImagePath: BlockStateService.instance.isRedactedForViewer(
+              imageUrl: BlockStateService.instance.isRedactedByBbb(
+                    _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
+                    roomId: _resolvedConversationId ?? widget.conversationId,
+                  ) || UserProfileService.instance.isPublicProfileRefreshing(
+                    _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
+                  )
+              ? null
+              : _safePersonHeaderAvatar(
+                  _receiverProfile?.hasProfileImage == true
+                      ? _receiverProfile!.profileImage
+                      : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
+                ),
+        localImagePath: BlockStateService.instance.isRedactedByBbb(
                   _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
                   roomId: _resolvedConversationId ?? widget.conversationId,
                 ) || UserProfileService.instance.isPublicProfileRefreshing(

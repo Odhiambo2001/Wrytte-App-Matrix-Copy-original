@@ -248,28 +248,30 @@ class _ProfileScreenState extends State<ProfileScreen>
     _tabController.dispose();
     super.dispose();
   }
-
   void _onBlockStateChanged() {
     if (!_isOtherUser) return;
     final uid = _profileTargetUserId;
     final redacted = _isBlockedByBbb(uid);
-    if (redacted && mounted) {
-      setState(() {
-        _redactedByBlock = true;
-      });
-    }
-    if (!redacted && _redactedByBlock && uid != null) {
-      if (_profileUnblockRefreshInFlight) return;
-      // Keep all private/public profile surfaces redacted until the complete
-      // profile refresh and featured-room resolution finish.
-      if (mounted) {
-        setState(() => _redactedByBlock = true);
+    debugPrint(
+      '[ProfileScreen][DIAG] blockStateChanged uid="$uid" redacted=$redacted '
+      'was=$_redactedByBlock bbb=${BlockStateService.instance.bbb}',
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (redacted) {
+        setState(() {
+          _redactedByBlock = true;
+        });
       }
-      _profileUnblockRefreshInFlight = true;
-      unawaited(_refreshProfileAfterUnblock(uid));
-    }
+      if (!redacted && _redactedByBlock && uid != null) {
+        if (_profileUnblockRefreshInFlight) return;
+        // Keep surfaces redacted until the full profile refresh finishes.
+        setState(() => _redactedByBlock = true);
+        _profileUnblockRefreshInFlight = true;
+        unawaited(_refreshProfileAfterUnblock(uid));
+      }
+    });
   }
-
   Future<void> _refreshProfileAfterUnblock(String uid) async {
     try {
       final refreshed = await UserProfileService.instance.getProfileByUid(
@@ -308,10 +310,17 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
     uid ??= await _resolveProfileUidFromConversation();
     debugPrint('[ProfileScreen] resolved uid: "$uid"');
+  
     if (uid != null && _isOtherUser) {
       final blockState = BlockStateService.instance;
       await blockState.load();
       _redactedByBlock = _isBlockedByBbb(uid);
+      debugPrint(
+        '[ProfileScreen][DIAG] load uid="$uid" room="${widget.conversationId}" '
+        'ready=${blockState.isReady} redacted=$_redactedByBlock '
+        'bbb=${blockState.bbb} '
+        'isBlockedByBbb=${blockState.isBlockedByBbb(uid, roomId: widget.conversationId)}',
+      );
     }
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     var identity =
@@ -1606,6 +1615,13 @@ class _ProfileScreenState extends State<ProfileScreen>
         !_redactedByBlock && _canViewProfileField(_profile, 'Group')
             ? _profile?.groupAlias.trim() ?? ''
             : '';
+    debugPrint(
+      '[ProfileScreen][DIAG][build] redacted=$_redactedByBlock '
+      'avatar="${_profileAvatarUrl()}" bioLen=${bioText.length} '
+      'links=${links.length} channel="$channelRef" group="$groupRef" '
+      'uid="${_profileTargetUserId}" room="${widget.conversationId}"',
+    );  
+
     apkLog(
       'ProfileFields.trace',
       'render uid="${widget.uid ?? _profile?.uid}" bioText=${bioText.isNotEmpty} '
@@ -2503,6 +2519,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+
   Future<void> _openShareContactPicker() async {
     setState(() => _showMoreOptions = false);
     final owner = UserProfileService.instance.cachedProfile?.uid ?? '';
@@ -2512,6 +2529,28 @@ class _ProfileScreenState extends State<ProfileScreen>
     final contacts = owner.isEmpty
         ? const <Contact>[]
         : ContactService.matrixContactsSnapshot(owner);
+
+    // Contact card we are sharing = the profile user (e.g. Rew), NOT the
+    // people selected in the picker.
+    final sharedName = _profileDisplayName().trim();
+    final sharedPhone = _profilePhone().trim();
+    if (sharedName.isEmpty && sharedPhone.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No contact details to share')),
+      );
+      return;
+    }
+    final contactBody =
+        '[wrytte-contact]\n'
+        '${sharedName.isEmpty ? sharedPhone : sharedName}\n'
+        '$sharedPhone';
+
+  String? singleRecipientRoomId;
+    String? singleRecipientId;
+    String? singleRecipientName;
+    String? singleRecipientAvatar;
+
     final sentCount = await showModalBottomSheet<int>(
       context: context,
       useRootNavigator: true,
@@ -2520,36 +2559,66 @@ class _ProfileScreenState extends State<ProfileScreen>
       barrierColor: Colors.black.withValues(alpha: .60),
       builder: (_) => ShareContactPickerSheet(
         contacts: contacts,
-        onSend: (contact) async {
-          final roomId = widget.conversationId?.trim() ?? '';
-          if (roomId.isEmpty || contact.primaryPhone.trim().isEmpty) return;
+        onSend: (recipient) async {
+          // recipient = person who should RECEIVE the profile contact card
+          final roomId = await _directRoomIdForContact(recipient);
+          if (roomId == null || roomId.isEmpty) {
+            apkLog(
+              'ShareContact.send',
+              'no room for recipient name="${recipient.formattedName}" '
+                  'uid="${recipient.wrytteUserId}" phone="${recipient.primaryPhone}"',
+            );
+            return;
+          }
           await MatrixChatService.instance.sendText(
             roomId: roomId,
-            body: '[wrytte-contact]\n${contact.formattedName}\n${contact.primaryPhone}',
+            body: contactBody,
+          );
+          // Remember the last successful recipient (used only when count == 1).
+          singleRecipientRoomId = roomId;
+          singleRecipientId =
+              recipient.wrytteUserId?.trim().isNotEmpty == true
+                  ? recipient.wrytteUserId
+                  : roomId;
+          singleRecipientName = recipient.formattedName;
+          singleRecipientAvatar = recipient.avatarUrl;
+          apkLog(
+            'ShareContact.send',
+            'sent profile contact to room="$roomId" '
+                'recipient="${recipient.formattedName}"',
           );
         },
       ),
     );
+
     apkLog(
       'ShareContact.navigation',
-      'picker closed result=$sentCount owner="$owner" room="${widget.conversationId}"',
+      'picker closed result=$sentCount owner="$owner" '
+          'profile="${_profileTargetUserId}"',
     );
-    // Keep the profile open when a contact is shared with multiple people.
+
+    // 1 person → open that person's chat
+    // 2+ people → stay on the profile
     if (!mounted || sentCount != 1) return;
-    final roomId = widget.conversationId?.trim() ?? '';
+
+    final roomId = singleRecipientRoomId?.trim() ?? '';
     if (owner.trim().isEmpty || roomId.isEmpty) {
-      apkLog('ShareContact.navigation', 'chat navigation skipped missing owner or room');
+      apkLog(
+        'ShareContact.navigation',
+        'chat navigation skipped missing owner or room',
+      );
       return;
     }
+
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => ChatScreen(
           conversationId: roomId,
-          receiverId: _profileTargetUserId ?? roomId,
+          receiverId: singleRecipientId ?? roomId,
           currentUserId: owner,
-          title: _profileDisplayName(),
-          avatarUrl: _profileAvatarUrl(),
+          title: singleRecipientName ?? '',
+          avatarUrl: singleRecipientAvatar,
           initialMessages: ChatService().cachedMessagesFor(roomId),
           conversationKind: ConversationKind.direct,
           loadRoomEventsOnDemand: true,
@@ -2558,6 +2627,42 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  /// Resolves (or creates) the direct room with [contact] so we can send
+  /// the profile user's contact card into *their* chat.
+  Future<String?> _directRoomIdForContact(Contact contact) async {
+    final rawUid = contact.wrytteUserId?.trim() ?? '';
+    if (rawUid.isEmpty) return null;
+
+    final matrixUserId = _toMatrixUserId(rawUid);
+
+    // 1. Prefer an existing direct room.
+    try {
+      for (final room in MatrixChatService.instance.rooms) {
+        final directId = room.directChatMatrixID?.trim() ?? '';
+        if (directId.isEmpty) continue;
+        if (_matrixLocalpart(directId).toLowerCase() ==
+            _matrixLocalpart(matrixUserId).toLowerCase()) {
+          return room.id;
+        }
+      }
+    } catch (error) {
+      apkLog('ShareContact.room', 'existing room scan failed: $error');
+    }
+
+    // 2. Ask Matrix to start / return a direct chat.
+    try {
+      final client = await MatrixChatService.instance.connect();
+      final roomId = await client.startDirectChat(matrixUserId);
+      if (roomId.trim().isNotEmpty) return roomId;
+    } catch (error) {
+      apkLog(
+        'ShareContact.room',
+        'startDirectChat failed user="$matrixUserId" error="$error"',
+      );
+    }
+
+    return null;
+  }
   Widget _buildUnsavedProfileActions() {
     return ClipRRect(
       borderRadius: BorderRadius.circular(22),

@@ -197,7 +197,15 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   void _onBlockStateChanged() {
-    if (mounted) setState(() {});
+    debugPrint(
+      '[ConversationAvatar][DIAG] blockState revision '
+      'ready=${BlockStateService.instance.isReady} '
+      'bbb=${BlockStateService.instance.bbb}',
+    );
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _refreshConversationProfiles(
@@ -288,10 +296,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Future<void> _initialize() async {
-    _currentUserId =
-        widget.currentUserId.isNotEmpty
-            ? widget.currentUserId
-            : await AuthService.instance.getCurrentUserId() ?? '';
+    _currentUserId = widget.currentUserId.isNotEmpty
+        ? widget.currentUserId
+        : await AuthService.instance.getCurrentUserId() ?? '';
 
     if (_currentUserId.isEmpty) return;
 
@@ -369,10 +376,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         return MatrixPublicGroup(
           roomId: roomId,
           name: room?.name ?? 'Retired test group',
-          canonicalAlias:
-              room?.canonicalAlias.trim().isNotEmpty == true
-                  ? room!.canonicalAlias
-                  : null,
+          canonicalAlias: room?.canonicalAlias.trim().isNotEmpty == true
+              ? room!.canonicalAlias
+              : null,
           memberCount: 0,
           worldReadable: false,
         );
@@ -476,18 +482,19 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           previous == 'channel_owned' ||
           previous == 'group_owned' ||
           _chat.isCreatedGroupRoom(conversation.id);
-      repaired[conversation.id] =
-          isChannel
-              ? (owned ? 'channel_owned' : 'channel_subscribed')
-              : (owned ? 'group_owned' : 'group_joined');
-      repairedKinds[conversation.id] =
-          isChannel ? ConversationKind.channel : ConversationKind.group;
+      repaired[conversation.id] = isChannel
+          ? (owned ? 'channel_owned' : 'channel_subscribed')
+          : (owned ? 'group_owned' : 'group_joined');
+      repairedKinds[conversation.id] = isChannel
+          ? ConversationKind.channel
+          : ConversationKind.group;
     }
 
     for (final room in _suggestedGroups) {
       if (localRoomIds.contains(room.roomId)) continue;
-      repaired[room.roomId] =
-          _isSuggestedChannel(room) ? 'channel_suggested' : 'group_suggested';
+      repaired[room.roomId] = _isSuggestedChannel(room)
+          ? 'channel_suggested'
+          : 'group_suggested';
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -530,10 +537,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       final decoded = jsonDecode(encoded);
       if (decoded is! Map) return;
       final encodedSources = prefs.getString(_roomAvatarSourcesCacheKey);
-      final decodedSources =
-          encodedSources == null || encodedSources.isEmpty
-              ? const <String, dynamic>{}
-              : jsonDecode(encodedSources);
+      final decodedSources = encodedSources == null || encodedSources.isEmpty
+          ? const <String, dynamic>{}
+          : jsonDecode(encodedSources);
       final paths = <String, String>{};
       final sources = <String, String>{};
       for (final entry in decoded.entries) {
@@ -574,10 +580,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       final liveAvatar = _groupRoomAvatarUrl(
         MatrixChatService.instance.getRoomById(conversation.id),
       );
-      final source =
-          liveAvatar?.trim().isNotEmpty == true
-              ? liveAvatar!.trim()
-              : conversation.otherUserAvatar?.trim() ?? '';
+      final source = liveAvatar?.trim().isNotEmpty == true
+          ? liveAvatar!.trim()
+          : conversation.otherUserAvatar?.trim() ?? '';
       if (source.isNotEmpty) sources[conversation.id] = source;
     }
 
@@ -604,8 +609,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         var resolved = entry.value;
         if (resolved.startsWith('mxc://')) {
           final mxc = Uri.parse(resolved);
-          final mediaId =
-              mxc.pathSegments.isEmpty ? '' : mxc.pathSegments.join('/');
+          final mediaId = mxc.pathSegments.isEmpty
+              ? ''
+              : mxc.pathSegments.join('/');
           if (mxc.host.isEmpty || mediaId.isEmpty) continue;
           final response = await MatrixClientService.instance.client.getContent(
             mxc.host,
@@ -639,19 +645,17 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         final uri = Uri.tryParse(resolved);
         final isBackendAvatar =
             ApiService.isBackendHost(uri?.host) || uri?.host == 'wrytte.com';
-        final backendToken =
-            isBackendAvatar
-                ? (AuthService.instance.cachedBackendToken?.trim().isNotEmpty ==
-                        true
-                    ? AuthService.instance.cachedBackendToken
-                    : await AuthService.instance.getValidBackendToken())
-                : null;
+        final backendToken = isBackendAvatar
+            ? (AuthService.instance.cachedBackendToken?.trim().isNotEmpty ==
+                      true
+                  ? AuthService.instance.cachedBackendToken
+                  : await AuthService.instance.getValidBackendToken())
+            : null;
         final cached = await DefaultCacheManager().getSingleFile(
           resolved,
-          headers:
-              backendToken?.trim().isNotEmpty == true
-                  ? {'Authorization': 'Bearer ${backendToken!.trim()}'}
-                  : null,
+          headers: backendToken?.trim().isNotEmpty == true
+              ? {'Authorization': 'Bearer ${backendToken!.trim()}'}
+              : null,
         );
         final extension = p
             .extension(uri?.path ?? '')
@@ -722,11 +726,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // Merge instead of replacing. A partial sync must never erase categories
     // that are required for a later offline launch.
     final categories = Map<String, String>.from(_cachedRoomCategories);
-    final joinedIds =
-        MatrixChatService.instance.rooms
-            .where((room) => room.membership == mx.Membership.join)
-            .map((room) => room.id)
-            .toSet();
+    final joinedIds = MatrixChatService.instance.rooms
+        .where((room) => room.membership == mx.Membership.join)
+        .map((room) => room.id)
+        .toSet();
 
     for (final conversation in _conversations.where(
       _isDisplayableGroupConversation,
@@ -739,10 +742,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       }
       final isChannel = _isChannelConversation(conversation);
       final owned = _isOwnGroupConversation(conversation);
-      categories[conversation.id] =
-          isChannel
-              ? (owned ? 'channel_owned' : 'channel_subscribed')
-              : (owned ? 'group_owned' : 'group_joined');
+      categories[conversation.id] = isChannel
+          ? (owned ? 'channel_owned' : 'channel_subscribed')
+          : (owned ? 'group_owned' : 'group_joined');
     }
     final localRoomIds = _conversations.map((room) => room.id).toSet();
     for (final room in discovered.where(
@@ -750,18 +752,18 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           !joinedIds.contains(room.roomId) &&
           !localRoomIds.contains(room.roomId),
     )) {
-      categories[room.roomId] =
-          _isSuggestedChannel(room) ? 'channel_suggested' : 'group_suggested';
+      categories[room.roomId] = _isSuggestedChannel(room)
+          ? 'channel_suggested'
+          : 'group_suggested';
     }
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_roomCategoryCacheKey, jsonEncode(categories));
     if (mounted) {
       setState(
-        () =>
-            _cachedRoomCategories = Map<String, String>.unmodifiable(
-              categories,
-            ),
+        () => _cachedRoomCategories = Map<String, String>.unmodifiable(
+          categories,
+        ),
       );
     }
     apkLog(
@@ -909,10 +911,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         setState(() {
           _suggestedGroups = _suggestedGroups
               .map(
-                (candidate) =>
-                    candidate.roomId == group.roomId
-                        ? candidate.copyWithProfile(profile)
-                        : candidate,
+                (candidate) => candidate.roomId == group.roomId
+                    ? candidate.copyWithProfile(profile)
+                    : candidate,
               )
               .toList(growable: false);
         });
@@ -922,13 +923,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       );
       if (!complete) continue;
       final members = await _chat.loadSuggestedPreviewMembers(group.roomId);
-      final joinedCount =
-          members
-              .where(
-                (member) =>
-                    member['membership']?.toString().toLowerCase() == 'join',
-              )
-              .length;
+      final joinedCount = members
+          .where(
+            (member) =>
+                member['membership']?.toString().toLowerCase() == 'join',
+          )
+          .length;
       if (joinedCount > 0) continue;
 
       await MatrixChatService.instance.dismissPublicGroup(
@@ -955,8 +955,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   List<MatrixPublicGroup> _previewEligibleSuggestedGroups(
     List<MatrixPublicGroup> groups,
   ) {
-    final allGroups =
-        _conversations.where(_isDisplayableGroupConversation).toList();
+    final allGroups = _conversations
+        .where(_isDisplayableGroupConversation)
+        .toList();
     final createdIds = _chat.createdGroupRoomIds;
     final joinedIds = {
       ...allGroups.map((group) => group.id),
@@ -1006,6 +1007,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
         setState(() => _conversations = visible);
         _notifyUnread(_conversations);
+        // The local snapshot is authoritative for the first paint. Profile
+        // and avatar enrichment must never hold a Matrix sync update hostage.
+        unawaited(_enrichAndPublishConversationsInBackground(visible));
       }
     } finally {
       _conversationBatchInFlight = false;
@@ -1052,6 +1056,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       _notifyUnread(_conversations);
 
       _prewarmVisibleMessages(visible);
+      // Paint SQLite/cache data immediately; resolve missing identity data
+      // after the first frame, like production messaging clients do.
+      unawaited(_enrichAndPublishConversationsInBackground(visible));
     } catch (e) {
       debugPrint('[ConversationsScreen] local conversation load error: $e');
     }
@@ -1269,12 +1276,26 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     List<ChatConversation> convs,
     int version,
   ) async {
-    var withSavedContacts = _enrichSavedContactNames(convs);
-    if (_hasRowsMissingStableIdentity(withSavedContacts)) {
-      withSavedContacts = await _enrichNames(withSavedContacts);
-    }
+    // This method is deliberately local-only. Network profile lookups belong
+    // to the deferred enrichment pass and must not block the initial paint.
+    final withSavedContacts = _enrichSavedContactNames(convs);
     unawaited(_precacheInitialConversationAvatars(withSavedContacts));
     return withSavedContacts;
+  }
+
+  Future<void> _enrichAndPublishConversationsInBackground(
+    List<ChatConversation> baseRows,
+  ) async {
+    if (!mounted || !_hasRowsMissingStableIdentity(baseRows)) return;
+    try {
+      final enriched = await _enrichNames(baseRows);
+      if (!mounted) return;
+      await _publishPreparedConversations(enriched);
+    } catch (e) {
+      debugPrint(
+        '[ConversationsScreen] deferred profile enrichment skipped: $e',
+      );
+    }
   }
 
   Future<void> _precacheInitialConversationAvatars(
@@ -1428,23 +1449,22 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     // Saved contact names always win. Matrix displayname is used when there
     // is no local contact label.
-    final enriched =
-        deduped.map((c) {
-          if (_isGroupConversation(c)) {
-            final groupTitle = _conversationTitle(c);
-            return c.copyWith(
-              otherUserName: groupTitle.trim().isEmpty ? 'Group' : groupTitle,
-              otherUserAvatar: _preferredAvatarForConversation(c, null),
-            );
-          }
-          final title = _conversationTitle(c);
-          final contactKey = _contactKeyForConversation(c);
-          final fallbackTitle = _fallbackConversationTitle(c);
-          return c.copyWith(
-            otherUserName: title.trim().isEmpty ? fallbackTitle : title,
-            otherUserAvatar: _preferredAvatarForConversation(c, contactKey),
-          );
-        }).toList();
+    final enriched = deduped.map((c) {
+      if (_isGroupConversation(c)) {
+        final groupTitle = _conversationTitle(c);
+        return c.copyWith(
+          otherUserName: groupTitle.trim().isEmpty ? 'Group' : groupTitle,
+          otherUserAvatar: _preferredAvatarForConversation(c, null),
+        );
+      }
+      final title = _conversationTitle(c);
+      final contactKey = _contactKeyForConversation(c);
+      final fallbackTitle = _fallbackConversationTitle(c);
+      return c.copyWith(
+        otherUserName: title.trim().isEmpty ? fallbackTitle : title,
+        otherUserAvatar: _preferredAvatarForConversation(c, contactKey),
+      );
+    }).toList();
 
     return _dedupePeerConversations(enriched);
   }
@@ -1459,15 +1479,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     for (final conversation in incoming) {
       final existing = byId[conversation.id];
-      byId[conversation.id] =
-          existing == null
-              ? conversation
-              : _preferRicherConversation(existing, conversation);
+      byId[conversation.id] = existing == null
+          ? conversation
+          : _preferRicherConversation(existing, conversation);
     }
 
-    final merged =
-        byId.values.toList()
-          ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
+    final merged = byId.values.toList()
+      ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
     return merged;
   }
 
@@ -1499,19 +1517,17 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       return cached.copyWith(
         unreadCount: unreadCount,
         otherUserName: incoming.otherUserName ?? cached.otherUserName,
-        otherUserAvatar:
-            cached.otherUserAvatar?.trim().isNotEmpty == true
-                ? cached.otherUserAvatar
-                : incoming.otherUserAvatar,
+        otherUserAvatar: cached.otherUserAvatar?.trim().isNotEmpty == true
+            ? cached.otherUserAvatar
+            : incoming.otherUserAvatar,
       );
     }
     return incoming.copyWith(
       unreadCount: unreadCount,
       otherUserName: incoming.otherUserName ?? cached.otherUserName,
-      otherUserAvatar:
-          cached.otherUserAvatar?.trim().isNotEmpty == true
-              ? cached.otherUserAvatar
-              : incoming.otherUserAvatar,
+      otherUserAvatar: cached.otherUserAvatar?.trim().isNotEmpty == true
+          ? cached.otherUserAvatar
+          : incoming.otherUserAvatar,
     );
   }
 
@@ -1535,28 +1551,25 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       phone: fallbackPhone,
       forceRefresh: forceRefresh,
     );
-    final matrixProfile =
-        profile?.moduleProfileLoaded == true
-            ? null
-            : await _loadMatrixProfile(profileUid);
+    final matrixProfile = profile?.moduleProfileLoaded == true
+        ? null
+        : await _loadMatrixProfile(profileUid);
     if (profile == null && matrixProfile == null) return conv;
 
     final contactKey = _contactKeyForConversation(conv);
-    var contactName =
-        contactKey == null
-            ? ''
-            : _cleanHumanName(_contactNameCache[contactKey]);
+    var contactName = contactKey == null
+        ? ''
+        : _cleanHumanName(_contactNameCache[contactKey]);
     final contactAvatar = _safeDirectAvatarUrl(
       contactKey == null ? null : _contactAvatarCache[contactKey],
       rejectPlaceholderVersion: true,
     );
     final phone = _fallbackPhoneForConversation(conv);
-    final name =
-        contactName.isNotEmpty
-            ? contactName
-            : phone.isNotEmpty
-            ? _formatPhone(phone)
-            : '';
+    final name = contactName.isNotEmpty
+        ? contactName
+        : phone.isNotEmpty
+        ? _formatPhone(phone)
+        : '';
     final existingAvatar = _safeDirectAvatarUrl(
       conv.otherUserAvatar,
       rejectPlaceholderVersion: true,
@@ -1570,20 +1583,31 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       rejectPlaceholderVersion: profile?.moduleProfileLoaded != true,
     );
     final matrixAvatar = _safeDirectAvatarUrl(matrixProfile?.$2);
-    final blockedByPeer = BlockStateService.instance.isRedactedForViewer(
-      profileUid,
-      roomId: conv.id,
-    ) || UserProfileService.instance.isPublicProfileRefreshing(profileUid);
+    final blockedByPeer =
+        BlockStateService.instance.isRedactedByBbb(
+          profileUid,
+          roomId: conv.id,
+        ) ||
+        UserProfileService.instance.isPublicProfileRefreshing(profileUid);
+
+    debugPrint(
+      '[ConversationAvatar][DIAG] enrich room="${conv.id}" peer="$profileUid" '
+      'ready=${BlockStateService.instance.isReady} '
+      'redactedByBbb=${BlockStateService.instance.isBlockedByBbb(profileUid, roomId: conv.id)} '
+      'blockedByPeer=$blockedByPeer '
+      'bbb=${BlockStateService.instance.bbb}',
+    );
+
     // Prefer the canonical profile/cache avatar whenever available. Contact
     // and room values may be stale and caused the old avatar to render first
     // before the profile refresh replaced it.
     final avatar = blockedByPeer
         ? null
         : profileAvatar ??
-            contactAvatar ??
-            matrixAvatar ??
-            existingAvatar ??
-            identityAvatar;
+              contactAvatar ??
+              matrixAvatar ??
+              existingAvatar ??
+              identityAvatar;
     if ((avatar ?? '').trim().isNotEmpty &&
         avatar?.trim() != conv.otherUserAvatar?.trim()) {
       unawaited(
@@ -1593,16 +1617,15 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         ),
       );
     }
-    final refreshedSavedContact =
-        profile == null
-            ? null
-            : await ContactLocalDb.refreshPublicProfileFields(
-              ownerUserId: _currentUserId,
-              wrytteUserId: profileUid,
-              phone: profile.phone.isNotEmpty ? profile.phone : phone,
-              avatarUrl: profile.moduleProfileLoaded ? (avatar ?? '') : avatar,
-              bio: profile.bio,
-            );
+    final refreshedSavedContact = profile == null
+        ? null
+        : await ContactLocalDb.refreshPublicProfileFields(
+            ownerUserId: _currentUserId,
+            wrytteUserId: profileUid,
+            phone: profile.phone.isNotEmpty ? profile.phone : phone,
+            avatarUrl: profile.moduleProfileLoaded ? (avatar ?? '') : avatar,
+            bio: profile.bio,
+          );
     if (refreshedSavedContact != null) {
       _cacheContactName(
         refreshedSavedContact.wrytteUserId,
@@ -1618,12 +1641,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       }
       contactName = _cleanHumanName(refreshedSavedContact.formattedName);
     }
-    final resolvedName =
-        contactName.isNotEmpty
-            ? contactName
-            : phone.isNotEmpty
-            ? _formatPhone(phone)
-            : name;
+    final resolvedName = contactName.isNotEmpty
+        ? contactName
+        : phone.isNotEmpty
+        ? _formatPhone(phone)
+        : name;
     final enriched = conv.copyWith(
       otherUserName: resolvedName,
       otherUserAvatar: avatar,
@@ -1657,12 +1679,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       final identity = ContactIdentity(
         matrixUserId: profileUid,
         phone: profile?.phone ?? phone,
-        profileName:
-            _cleanHumanName(profile?.displayName).isNotEmpty
-                ? _cleanHumanName(profile?.displayName)
-                : _cleanHumanName(matrixProfile?.$1).isNotEmpty
-                ? _cleanHumanName(matrixProfile?.$1)
-                : null,
+        profileName: _cleanHumanName(profile?.displayName).isNotEmpty
+            ? _cleanHumanName(profile?.displayName)
+            : _cleanHumanName(matrixProfile?.$1).isNotEmpty
+            ? _cleanHumanName(matrixProfile?.$1)
+            : null,
         avatarUrl: avatar,
         bio: profile?.bio,
       );
@@ -1671,12 +1692,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         ownerUserId: _currentUserId,
         matrixUserId: profileUid,
         phone: profile?.phone ?? phone,
-        profileName:
-            _cleanHumanName(profile?.displayName).isNotEmpty
-                ? _cleanHumanName(profile?.displayName)
-                : _cleanHumanName(matrixProfile?.$1).isNotEmpty
-                ? _cleanHumanName(matrixProfile?.$1)
-                : null,
+        profileName: _cleanHumanName(profile?.displayName).isNotEmpty
+            ? _cleanHumanName(profile?.displayName)
+            : _cleanHumanName(matrixProfile?.$1).isNotEmpty
+            ? _cleanHumanName(matrixProfile?.$1)
+            : null,
         avatarUrl: avatar,
         bio: profile?.bio,
         clearAvatar: profile?.moduleProfileLoaded == true && avatar == null,
@@ -1980,8 +2000,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     if (_isGroupConversation(conv)) {
       if (_isChannelConversation(conv)) {
         final room = MatrixChatService.instance.getRoomById(conv.id);
-        final rawAvatar =
-            room?.getState(mx.EventTypes.RoomAvatar)?.content['url'];
+        final rawAvatar = room
+            ?.getState(mx.EventTypes.RoomAvatar)
+            ?.content['url'];
         final channelAvatar = rawAvatar is String ? rawAvatar.trim() : '';
         if (channelAvatar.isNotEmpty) return channelAvatar;
         final publicAvatar = _suggestedGroups
@@ -2004,16 +2025,27 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
 
     final peerId = _profileUidForConversation(conv);
-    final blockedByPeer = peerId != null &&
-        BlockStateService.instance.isRedactedForViewer(
-          peerId,
-          roomId: conv.id,
-        ) || UserProfileService.instance.isPublicProfileRefreshing(peerId ?? '');
+    final blockedByPeer =
+        peerId != null &&
+            BlockStateService.instance.isRedactedByBbb(
+              peerId,
+              roomId: conv.id,
+            ) ||
+        UserProfileService.instance.isPublicProfileRefreshing(peerId ?? '');
+    debugPrint(
+      '[ConversationAvatar][DIAG] tile room="${conv.id}" peer="${peerId ?? ''}" '
+      'ready=${BlockStateService.instance.isReady} '
+      'redactedByBbb=${peerId != null ? BlockStateService.instance.isBlockedByBbb(peerId, roomId: conv.id) : false} '
+      'blockedByPeer=$blockedByPeer '
+      'stored="${conv.otherUserAvatar ?? ''}" '
+      'bbb=${BlockStateService.instance.bbb}',
+    );
     debugPrint(
       '[ConversationAvatar] room="${conv.id}" peer="${peerId ?? ''}" '
       'bbb_match=$blockedByPeer stored_avatar="${conv.otherUserAvatar ?? ''}" '
       'contact_avatar="${_contactAvatarCache[_contactKeyForConversation(conv)] ?? ''}"',
     );
+
     if (blockedByPeer) {
       debugPrint(
         '[ConversationAvatar] SUPPRESSED room="${conv.id}" peer="${peerId ?? ''}"',
@@ -2141,9 +2173,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final uid = _profileUidForConversation(conv);
     if (uid == null) return null;
-    final blockedByPeer = BlockStateService.instance.isRedactedForViewer(
+    final blockedByPeer = BlockStateService.instance.isRedactedByBbb(
       uid,
       roomId: conv.id,
+    );
+    debugPrint(
+      '[ConversationAvatar][DIAG] localPath room="${conv.id}" peer="$uid" '
+      'ready=${BlockStateService.instance.isReady} '
+      'redactedByBbb=${BlockStateService.instance.isBlockedByBbb(uid, roomId: conv.id)} '
+      'blockedByPeer=$blockedByPeer '
+      'bbb=${BlockStateService.instance.bbb}',
     );
     if (blockedByPeer) {
       debugPrint(
@@ -2186,11 +2225,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   List<ChatConversation> _dedupeLocalPlaceholders(
     List<ChatConversation> convs,
   ) {
-    final matrixPeerKeys =
-        convs
-            .where((c) => c.id.startsWith('!'))
-            .expand(_conversationKeys)
-            .toSet();
+    final matrixPeerKeys = convs
+        .where((c) => c.id.startsWith('!'))
+        .expand(_conversationKeys)
+        .toSet();
 
     if (matrixPeerKeys.isEmpty) return convs;
 
@@ -2208,15 +2246,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     for (final conversation in conversations) {
       final key = _dedupePeerKey(conversation);
       final existing = byKey[key];
-      byKey[key] =
-          existing == null
-              ? conversation
-              : _preferPeerDedupeConversation(existing, conversation);
+      byKey[key] = existing == null
+          ? conversation
+          : _preferPeerDedupeConversation(existing, conversation);
     }
 
-    final deduped =
-        byKey.values.toList()
-          ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
+    final deduped = byKey.values.toList()
+      ..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
     return deduped;
   }
 
@@ -2267,32 +2303,28 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   ) {
     final aHasMessage = a.lastMessage.trim().isNotEmpty;
     final bHasMessage = b.lastMessage.trim().isNotEmpty;
-    final chosen =
-        aHasMessage != bHasMessage
-            ? (aHasMessage ? a : b)
-            : b.lastMessageTime.isAfter(a.lastMessageTime)
-            ? b
-            : a;
+    final chosen = aHasMessage != bHasMessage
+        ? (aHasMessage ? a : b)
+        : b.lastMessageTime.isAfter(a.lastMessageTime)
+        ? b
+        : a;
     final other = identical(chosen, a) ? b : a;
-    final mergedParticipants =
-        <String>{
-          ...chosen.participants,
-          ...other.participants,
-        }.where((participant) => participant.trim().isNotEmpty).toList();
-    final unread =
-        chosen.unreadCount > other.unreadCount
-            ? chosen.unreadCount
-            : other.unreadCount;
+    final mergedParticipants = <String>{
+      ...chosen.participants,
+      ...other.participants,
+    }.where((participant) => participant.trim().isNotEmpty).toList();
+    final unread = chosen.unreadCount > other.unreadCount
+        ? chosen.unreadCount
+        : other.unreadCount;
     final chosenName = _cleanHumanName(chosen.otherUserName);
     final otherName = _cleanHumanName(other.otherUserName);
     return chosen.copyWith(
       participants: mergedParticipants,
       unreadCount: unread,
       otherUserName: chosenName.isNotEmpty ? chosen.otherUserName : otherName,
-      otherUserAvatar:
-          chosen.otherUserAvatar?.trim().isNotEmpty == true
-              ? chosen.otherUserAvatar
-              : other.otherUserAvatar,
+      otherUserAvatar: chosen.otherUserAvatar?.trim().isNotEmpty == true
+          ? chosen.otherUserAvatar
+          : other.otherUserAvatar,
     );
   }
 
@@ -2352,8 +2384,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   String _directAvatarCacheIdentity(ChatConversation conversation) {
     final uid = _profileUidForConversation(conversation)?.trim() ?? '';
-    final peer =
-        uid.isNotEmpty ? uid.toLowerCase() : conversation.id.toLowerCase();
+    final peer = uid.isNotEmpty
+        ? uid.toLowerCase()
+        : conversation.id.toLowerCase();
     return 'user:$peer';
   }
 
@@ -2468,8 +2501,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     if (normalized.isEmpty) return false;
     for (final member in room.getParticipants([mx.Membership.join])) {
       if (member.id == MatrixClientService.instance.userId) continue;
-      final memberName =
-          _cleanHumanName(member.calcDisplayname()).toLowerCase();
+      final memberName = _cleanHumanName(
+        member.calcDisplayname(),
+      ).toLowerCase();
       if (memberName.isNotEmpty && memberName == normalized) return true;
     }
     return false;
@@ -2573,8 +2607,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       }
     }
     text = text.replaceFirst(RegExp(r'^<[^>]+>\s*'), '').trim();
-    text =
-        text.replaceFirst(RegExp(r'^@[A-Za-z0-9._=-]+:[^\s]+\s*'), '').trim();
+    text = text
+        .replaceFirst(RegExp(r'^@[A-Za-z0-9._=-]+:[^\s]+\s*'), '')
+        .trim();
     return linkDisplayText(text);
   }
 
@@ -2641,10 +2676,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final hasMessage = !isDeleted && conv.lastMessage.trim().isNotEmpty;
     // A deleted-group shell is intentionally title-only. Sender and preview
     // text belong to the purged conversation and must never be shown.
-    final senderName =
-        hasMessage && _isGroupConversation(conv)
-            ? _groupLastSenderName(conv)
-            : null;
+    final senderName = hasMessage && _isGroupConversation(conv)
+        ? _groupLastSenderName(conv)
+        : null;
 
     return ConversationTile(
       name: name,
@@ -2653,15 +2687,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       lastMessage: isDeleted ? '' : _conversationPreview(conv),
       time: hasMessage ? _formatTime(conv.lastMessageTime) : '',
       avatarUrl: avatar,
-      avatarCacheIdentity:
-          _isGroupConversation(conv)
-              ? MatrixChatService.instance.roomProfileCacheIdentity(
-                accountId: _currentUserId,
-                roomId: conv.id,
-                avatarUrl: avatar,
-                room: MatrixChatService.instance.getRoomById(conv.id),
-              )
-              : _directAvatarCacheIdentity(conv),
+      avatarCacheIdentity: _isGroupConversation(conv)
+          ? MatrixChatService.instance.roomProfileCacheIdentity(
+              accountId: _currentUserId,
+              roomId: conv.id,
+              avatarUrl: avatar,
+              room: MatrixChatService.instance.getRoomById(conv.id),
+            )
+          : _directAvatarCacheIdentity(conv),
       localAvatarPath: localAvatarPath,
       unreadCount: conv.unreadCount,
       isDeleted: isDeleted,
@@ -2669,8 +2702,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       isSelected: selected,
       onSelectionToggle: () => _toggleSelection(conv.id),
       channelOnly: channelOnly,
-      channelSubscriberCount:
-          channelOnly ? _channelSubscriberCount(conv) : null,
+      channelSubscriberCount: channelOnly
+          ? _channelSubscriberCount(conv)
+          : null,
       hasAutoDelete:
           AutoDeleteService.instance.durationForRoom(conv.id) != null,
       isMuted: conv.isMuted,
@@ -2689,14 +2723,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           barrierDismissible: true,
           barrierLabel: 'Preview',
           barrierColor: Colors.transparent,
-          pageBuilder:
-              (_, __, ___) => MiniChatPreview(
-                conversationId: conv.id,
-                name: name,
-                avatarUrl: avatar,
-                currentUserId: _currentUserId,
-                receiverId: conv.otherUserId,
-              ),
+          pageBuilder: (_, __, ___) => MiniChatPreview(
+            conversationId: conv.id,
+            name: name,
+            avatarUrl: avatar,
+            currentUserId: _currentUserId,
+            receiverId: conv.otherUserId,
+          ),
         );
       },
       onTap: () async {
@@ -2725,12 +2758,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
         if (mounted) {
           setState(() {
-            _conversations =
-                _conversations
-                    .map(
-                      (c) => c.id == conv.id ? c.copyWith(unreadCount: 0) : c,
-                    )
-                    .toList();
+            _conversations = _conversations
+                .map((c) => c.id == conv.id ? c.copyWith(unreadCount: 0) : c)
+                .toList();
           });
           _notifyUnread(_conversations);
         }
@@ -2768,35 +2798,31 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           PageRouteBuilder(
             transitionDuration: const Duration(milliseconds: 300),
             reverseTransitionDuration: const Duration(milliseconds: 220),
-            pageBuilder:
-                (_, __, ___) =>
-                    isChannel
-                        ? ChannelFeedScreen(
-                          conversationId: conv.id,
-                          currentUserId: _currentUserId,
-                          title: name,
-                          avatarUrl: avatar,
-                          localAvatarPath: localAvatarPath,
-                          initialPosts: initialMessages,
-                          subscriberCount: conv.participants.length,
-                          canPost: _isOwnGroupConversation(conv),
-                        )
-                        : ChatScreen(
-                          conversationId: conv.id,
-                          receiverId: chatReceiverId,
-                          currentUserId: _currentUserId,
-                          title: name,
-                          avatarUrl: avatar,
-                          initialMessages: initialMessages,
-                          initialMemberCount:
-                              isGroup && conv.participants.length > 1
-                                  ? conv.participants.length
-                                  : null,
-                          conversationKind:
-                              isGroup
-                                  ? ConversationKind.group
-                                  : ConversationKind.direct,
-                        ),
+            pageBuilder: (_, __, ___) => isChannel
+                ? ChannelFeedScreen(
+                    conversationId: conv.id,
+                    currentUserId: _currentUserId,
+                    title: name,
+                    avatarUrl: avatar,
+                    localAvatarPath: localAvatarPath,
+                    initialPosts: initialMessages,
+                    subscriberCount: conv.participants.length,
+                    canPost: _isOwnGroupConversation(conv),
+                  )
+                : ChatScreen(
+                    conversationId: conv.id,
+                    receiverId: chatReceiverId,
+                    currentUserId: _currentUserId,
+                    title: name,
+                    avatarUrl: avatar,
+                    initialMessages: initialMessages,
+                    initialMemberCount: isGroup && conv.participants.length > 1
+                        ? conv.participants.length
+                        : null,
+                    conversationKind: isGroup
+                        ? ConversationKind.group
+                        : ConversationKind.direct,
+                  ),
             transitionsBuilder: (_, animation, __, child) {
               final curved = CurvedAnimation(
                 parent: animation,
@@ -2838,34 +2864,33 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final roomKind = isChannel ? 'Channel' : 'Group';
     final confirmed = await showDialog<bool>(
       context: context,
-      builder:
-          (dialogContext) => AlertDialog(
-            backgroundColor: const Color(0xFF23262C),
-            title: Text(
-              'Delete $roomKind',
-              style: const TextStyle(color: Colors.white),
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF23262C),
+        title: Text(
+          'Delete $roomKind',
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          'Delete $roomName completely from this device?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white70),
             ),
-            content: Text(
-              'Delete $roomName completely from this device?',
-              style: const TextStyle(color: Colors.white70),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text(
-                  'Cancel',
-                  style: TextStyle(color: Colors.white70),
-                ),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                child: const Text(
-                  'Delete',
-                  style: TextStyle(color: Color(0xFFE85D75)),
-                ),
-              ),
-            ],
           ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Color(0xFFE85D75)),
+            ),
+          ),
+        ],
+      ),
     );
     if (confirmed != true) return;
     // Update the screen guard immediately so a concurrent contact or Matrix
@@ -3057,19 +3082,19 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           physics: const BouncingScrollPhysics(),
           padding: EdgeInsets.only(top: topPadding, bottom: 120),
           itemCount: conversations.length,
-          itemBuilder:
-              (_, i) => KeyedSubtree(
-                key: ValueKey(conversations[i].id),
-                child: _buildTile(conversations[i]),
-              ),
+          itemBuilder: (_, i) => KeyedSubtree(
+            key: ValueKey(conversations[i].id),
+            child: _buildTile(conversations[i]),
+          ),
         ),
       ),
     );
   }
 
   Widget _buildChatsTab(double topPadding) {
-    final chats =
-        _conversations.where((c) => !_isGroupConversation(c)).toList();
+    final chats = _conversations
+        .where((c) => !_isGroupConversation(c))
+        .toList();
     return _buildConversationTab(
       topPadding,
       conversations: chats,
@@ -3086,10 +3111,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         MatrixChatService.instance.isChannelRoom(liveRoom)) {
       return true;
     }
-    final directoryRoom =
-        _suggestedGroups
-            .where((room) => room.roomId == conversation.id)
-            .firstOrNull;
+    final directoryRoom = _suggestedGroups
+        .where((room) => room.roomId == conversation.id)
+        .firstOrNull;
     if (directoryRoom?.isChannel == true) return true;
     if (conversation.isChannelKind) return true;
     final category = _cachedRoomCategories[conversation.id];
@@ -3109,29 +3133,24 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Widget _buildChannelsTab(double topPadding) {
-    final allChannels =
-        _conversations
-            .where(
-              (conversation) =>
-                  _isChannelConversation(conversation) &&
-                  _cachedRoomCategories[conversation.id] !=
-                      'channel_suggested' &&
-                  _isDisplayableGroupConversation(conversation),
-            )
-            .toList();
+    final allChannels = _conversations
+        .where(
+          (conversation) =>
+              _isChannelConversation(conversation) &&
+              _cachedRoomCategories[conversation.id] != 'channel_suggested' &&
+              _isDisplayableGroupConversation(conversation),
+        )
+        .toList();
     final ownChannels = allChannels.where(_isOwnGroupConversation).toList();
-    final subscriptions =
-        allChannels
-            .where((channel) => !ownChannels.any((own) => own.id == channel.id))
-            .toList();
-    final suggestedChannels =
-        _suggestedGroups
-            .where(_isSuggestedChannel)
-            .where(
-              (group) =>
-                  !allChannels.any((channel) => channel.id == group.roomId),
-            )
-            .toList();
+    final subscriptions = allChannels
+        .where((channel) => !ownChannels.any((own) => own.id == channel.id))
+        .toList();
+    final suggestedChannels = _suggestedGroups
+        .where(_isSuggestedChannel)
+        .where(
+          (group) => !allChannels.any((channel) => channel.id == group.roomId),
+        )
+        .toList();
 
     return ListView(
       padding: EdgeInsets.only(top: topPadding, bottom: 120),
@@ -3210,21 +3229,20 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                   SizedBox(
                     height: 1,
                     child: LayoutBuilder(
-                      builder:
-                          (context, constraints) => OverflowBox(
-                            alignment: Alignment.centerLeft,
-                            maxWidth: constraints.maxWidth + 20,
-                            maxHeight: 1,
-                            child: SizedBox(
-                              width: constraints.maxWidth + 20,
-                              height: 1,
-                              child: Divider(
-                                color: Colors.grey.withValues(alpha: 0.3),
-                                thickness: 0.5,
-                                height: 1,
-                              ),
-                            ),
+                      builder: (context, constraints) => OverflowBox(
+                        alignment: Alignment.centerLeft,
+                        maxWidth: constraints.maxWidth + 20,
+                        maxHeight: 1,
+                        child: SizedBox(
+                          width: constraints.maxWidth + 20,
+                          height: 1,
+                          child: Divider(
+                            color: Colors.grey.withValues(alpha: 0.3),
+                            thickness: 0.5,
+                            height: 1,
                           ),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -3234,8 +3252,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             SizedBox(
               height: 36,
               child: FilledButton(
-                onPressed:
-                    isSubscribing ? null : () => _joinSuggestedGroup(channel),
+                onPressed: isSubscribing
+                    ? null
+                    : () => _joinSuggestedGroup(channel),
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xFF4DA3FF),
                   foregroundColor: Colors.white,
@@ -3244,24 +3263,23 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                   ),
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                 ),
-                child:
-                    isSubscribing
-                        ? const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
+                child: isSubscribing
+                    ? const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
                             ),
-                            SizedBox(width: 8),
-                            Text('Subscribing'),
-                          ],
-                        )
-                        : const Text('Subscribe'),
+                          ),
+                          SizedBox(width: 8),
+                          Text('Subscribing'),
+                        ],
+                      )
+                    : const Text('Subscribe'),
               ),
             ),
           ],
@@ -3271,37 +3289,36 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Widget _buildGroupsTab(double topPadding) {
-    final allGroups =
-        _conversations
-            .where(
-              (conversation) =>
-                  !_isChannelConversation(conversation) &&
-                  _cachedRoomCategories[conversation.id] != 'group_suggested' &&
-                  _isDisplayableGroupConversation(conversation),
-            )
-            .toList();
+    final allGroups = _conversations
+        .where(
+          (conversation) =>
+              !_isChannelConversation(conversation) &&
+              _cachedRoomCategories[conversation.id] != 'group_suggested' &&
+              _isDisplayableGroupConversation(conversation),
+        )
+        .toList();
     final createdIds = _chat.createdGroupRoomIds;
     final shouldPromotePublicGroupsAsOwn =
         allGroups.isEmpty &&
         createdIds.isNotEmpty &&
         MatrixChatService.instance.rooms.isEmpty;
-    final promotedOwnGroups =
-        shouldPromotePublicGroupsAsOwn
-            ? _suggestedGroups
-                .where((g) => !_isSuggestedChannel(g))
-                .where((g) => createdIds.contains(g.roomId))
-                .where(
-                  (g) => !MatrixChatService.instance.isPublicGroupDismissed(g),
-                )
-                .map(_publicGroupAsOwnedConversation)
-                .toList()
-            : const <ChatConversation>[];
+    final promotedOwnGroups = shouldPromotePublicGroupsAsOwn
+        ? _suggestedGroups
+              .where((g) => !_isSuggestedChannel(g))
+              .where((g) => createdIds.contains(g.roomId))
+              .where(
+                (g) => !MatrixChatService.instance.isPublicGroupDismissed(g),
+              )
+              .map(_publicGroupAsOwnedConversation)
+              .toList()
+        : const <ChatConversation>[];
     final ownGroups = [
       ...allGroups.where(_isOwnGroupConversation),
       ...promotedOwnGroups,
     ];
-    final joinedGroups =
-        allGroups.where((group) => !_isOwnGroupConversation(group)).toList();
+    final joinedGroups = allGroups
+        .where((group) => !_isOwnGroupConversation(group))
+        .toList();
     final localGroupNames = allGroups.map(_normalizedGroupTitle).toSet();
     final joinedIds = {
       ...allGroups.map((group) => group.id),
@@ -3310,19 +3327,18 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       ...createdIds,
     };
     final joinedAliases = _joinedMatrixGroupAliases();
-    final suggested =
-        _suggestedGroups
-            .where((group) => !_isSuggestedChannel(group))
-            .where(
-              (group) =>
-                  group.memberCount > 0 &&
-                  !MatrixChatService.instance.isPublicGroupDismissed(group) &&
-                  !_chat.isConversationDeleted(group.roomId) &&
-                  !joinedIds.contains(group.roomId) &&
-                  !_suggestedAliasMatchesJoined(group, joinedAliases) &&
-                  !_suggestedNameMatchesLocalGroup(group, localGroupNames),
-            )
-            .toList();
+    final suggested = _suggestedGroups
+        .where((group) => !_isSuggestedChannel(group))
+        .where(
+          (group) =>
+              group.memberCount > 0 &&
+              !MatrixChatService.instance.isPublicGroupDismissed(group) &&
+              !_chat.isConversationDeleted(group.roomId) &&
+              !joinedIds.contains(group.roomId) &&
+              !_suggestedAliasMatchesJoined(group, joinedAliases) &&
+              !_suggestedNameMatchesLocalGroup(group, localGroupNames),
+        )
+        .toList();
 
     final diagnostic =
         'all=${allGroups.length} own=${ownGroups.length} joined=${joinedGroups.length} '
@@ -3611,10 +3627,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       var fresh = await ChatLocalDb.instance.isSuggestedPreviewFresh(
         group.roomId,
       );
-      var previewMessages =
-          fresh
-              ? await _chat.hydrateConversation(group.roomId)
-              : await _chat.fetchPublicGroupPreview(roomId: group.roomId);
+      var previewMessages = fresh
+          ? await _chat.hydrateConversation(group.roomId)
+          : await _chat.fetchPublicGroupPreview(roomId: group.roomId);
       if (fresh &&
           previewMessages.any((message) => message.content.startsWith('> '))) {
         apkLog(
@@ -3639,34 +3654,31 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 300),
           reverseTransitionDuration: const Duration(milliseconds: 220),
-          pageBuilder:
-              (_, __, ___) =>
-                  _isSuggestedChannel(group)
-                      ? ChannelFeedScreen(
-                        conversationId: group.roomId,
-                        currentUserId: _currentUserId,
-                        title: group.name,
-                        avatarUrl: group.avatarUrl,
-                        initialPosts: previewMessages,
-                        subscriberCount: group.memberCount,
-                        readOnlyUntilSubscribe: true,
-                        subscribeAlias: group.canonicalAlias,
-                      )
-                      : ChatScreen(
-                        conversationId: group.roomId,
-                        receiverId: group.roomId,
-                        currentUserId: _currentUserId,
-                        title: group.name,
-                        avatarUrl: group.avatarUrl,
-                        readOnlyUntilJoin: true,
-                        initialMessages: previewMessages,
-                        initialMemberCount: group.memberCount,
-                        groupAlias: group.canonicalAlias,
-                        groupDescription: group.topic,
-                        conversationKind: ConversationKind.group,
-                        initialRoomProfileVersion:
-                            group.profileVersionFingerprint,
-                      ),
+          pageBuilder: (_, __, ___) => _isSuggestedChannel(group)
+              ? ChannelFeedScreen(
+                  conversationId: group.roomId,
+                  currentUserId: _currentUserId,
+                  title: group.name,
+                  avatarUrl: group.avatarUrl,
+                  initialPosts: previewMessages,
+                  subscriberCount: group.memberCount,
+                  readOnlyUntilSubscribe: true,
+                  subscribeAlias: group.canonicalAlias,
+                )
+              : ChatScreen(
+                  conversationId: group.roomId,
+                  receiverId: group.roomId,
+                  currentUserId: _currentUserId,
+                  title: group.name,
+                  avatarUrl: group.avatarUrl,
+                  readOnlyUntilJoin: true,
+                  initialMessages: previewMessages,
+                  initialMemberCount: group.memberCount,
+                  groupAlias: group.canonicalAlias,
+                  groupDescription: group.topic,
+                  conversationKind: ConversationKind.group,
+                  initialRoomProfileVersion: group.profileVersionFingerprint,
+                ),
           transitionsBuilder: (_, animation, __, child) {
             final curved = CurvedAnimation(
               parent: animation,
@@ -3712,14 +3724,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
     if (mounted) {
       setState(() {
-        _conversations =
-            _conversations
-                .where((conversation) => conversation.id != request.roomId)
-                .toList();
-        _suggestedGroups =
-            _suggestedGroups
-                .where((group) => group.roomId != request.roomId)
-                .toList();
+        _conversations = _conversations
+            .where((conversation) => conversation.id != request.roomId)
+            .toList();
+        _suggestedGroups = _suggestedGroups
+            .where((group) => group.roomId != request.roomId)
+            .toList();
       });
     }
     await WidgetsBinding.instance.endOfFrame;
@@ -3816,10 +3826,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         roomId: roomId,
         name: group.name,
         avatarUrl: group.avatarUrl,
-        conversationKind:
-            _isSuggestedChannel(group)
-                ? ConversationKind.channel
-                : ConversationKind.group,
+        conversationKind: _isSuggestedChannel(group)
+            ? ConversationKind.channel
+            : ConversationKind.group,
       );
       if (mounted) {
         setState(() {
@@ -3830,10 +3839,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             ),
             joinedConversation,
           ];
-          _suggestedGroups =
-              _suggestedGroups
-                  .where((candidate) => candidate.roomId != group.roomId)
-                  .toList();
+          _suggestedGroups = _suggestedGroups
+              .where((candidate) => candidate.roomId != group.roomId)
+              .toList();
         });
       }
       unawaited(_finishSuggestedGroupSubscription(roomId));
@@ -3896,38 +3904,37 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       backgroundColor: Colors.transparent,
       extendBody: true,
       extendBodyBehindAppBar: true,
-      floatingActionButton:
-          _isSelectionMode
-              ? null
-              : Padding(
-                padding: EdgeInsets.only(bottom: bottomInset + 80.0),
-                child: FloatingActionButton(
-                  heroTag: 'conversations_new_chat_fab',
-                  // ── FIX: await the push so we can reload contacts on return ──
-                  onPressed: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const FirebaseNewChatScreen(),
-                      ),
-                    );
-                    // Reload contacts fresh (static cache was busted by
-                    // ContactService.invalidateMatrixContactsCache() on save)
-                    // then re-enrich so the new contact name shows immediately.
-                    if (mounted) {
-                      await _loadSavedContacts();
-                      final enriched = await _enrichNames(_conversations);
-                      await _publishPreparedConversations(enriched);
-                    }
-                  },
-                  backgroundColor: const Color(0xFF4DA3FF),
-                  child: const Icon(
-                    Icons.edit_outlined,
-                    color: Colors.black,
-                    size: 24,
-                  ),
+      floatingActionButton: _isSelectionMode
+          ? null
+          : Padding(
+              padding: EdgeInsets.only(bottom: bottomInset + 80.0),
+              child: FloatingActionButton(
+                heroTag: 'conversations_new_chat_fab',
+                // ── FIX: await the push so we can reload contacts on return ──
+                onPressed: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const FirebaseNewChatScreen(),
+                    ),
+                  );
+                  // Reload contacts fresh (static cache was busted by
+                  // ContactService.invalidateMatrixContactsCache() on save)
+                  // then re-enrich so the new contact name shows immediately.
+                  if (mounted) {
+                    await _loadSavedContacts();
+                    final enriched = await _enrichNames(_conversations);
+                    await _publishPreparedConversations(enriched);
+                  }
+                },
+                backgroundColor: const Color(0xFF4DA3FF),
+                child: const Icon(
+                  Icons.edit_outlined,
+                  color: Colors.black,
+                  size: 24,
                 ),
               ),
+            ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Stack(
         children: [
