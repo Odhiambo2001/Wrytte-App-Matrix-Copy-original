@@ -24,10 +24,8 @@ import 'package:wrytte/data/services/device_camera_service.dart';
 import 'package:wrytte/data/services/device_media_library_service.dart';
 import 'package:wrytte/ui/camera/views/wrytte_camera_route.dart';
 import 'package:wrytte/ui/camera/widgets/attachment_camera_preview.dart';
-import 'package:wrytte/ui/core/models/expanding_surface_origin.dart';
 import 'package:wrytte/ui/media/views/attachment_gallery_sheet.dart';
 import 'package:wrytte/ui/media/views/profile_photo_crop_view.dart';
-import 'package:wrytte/ui/media/views/full_screen_image_view.dart';
 import 'package:wrytte/services/matrix/matrix_chat_service.dart';
 import 'package:wrytte/utils/country_phone_number.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
@@ -90,28 +88,93 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _seedProfile(
       widget.initialProfile ?? UserProfileService.instance.cachedProfile,
     );
-    _loadProfile();
+    unawaited(_loadProfile());
   }
 
   Future<void> _loadProfile() async {
+    debugPrint(
+      '[EditProfileAvatar] refresh_start '
+      'current_url="${_currentImageUrl ?? ''}" '
+      'current_local="${_currentLocalImagePath ?? ''}"',
+    );
     if (_profile == null) {
       setState(() => _isLoading = true);
     }
-    final profile = await UserProfileService.instance.getCurrentUserProfile(
-      forceRefresh: true,
-    );
+    // Always hydrate local storage before waiting on the backend. The editor
+    // must be usable even when login/profile bootstrap is still in flight.
+    final localProfile = await UserProfileService.instance
+        .getCurrentUserProfileLocalOnly();
+    if (mounted && localProfile != null) {
+      debugPrint(
+        '[EditProfileAvatar] local_ready '
+        'uid="${localProfile.uid}" has_avatar=${localProfile.hasProfileImage} '
+        'url="${localProfile.profileImage}"',
+      );
+      _applyProfile(localProfile);
+      setState(() {
+        _profile = localProfile;
+        _isLoading = false;
+      });
+    }
+
+    UserProfile? profile;
+    try {
+      profile = await UserProfileService.instance
+          .getCurrentUserProfile(forceRefresh: true)
+          .timeout(const Duration(seconds: 8));
+    } on TimeoutException {
+      debugPrint('[EditProfileAvatar] refresh_timeout fallback=local');
+    } catch (error) {
+      debugPrint(
+        '[EditProfileAvatar] refresh_error error=$error fallback=local',
+      );
+    }
     if (!mounted) return;
     if (profile != null) {
-      _applyProfile(profile);
+      // A backend refresh can omit AvatarImg while the local/identity cache
+      // still has the valid avatar currently shown on the profile screen.
+      // Do not replace that avatar with initials unless the user explicitly
+      // removes it from this editor.
+      final refreshed =
+          !profile.hasProfileImage &&
+              !_avatarRemovalPending &&
+              ((_currentImageUrl?.trim().isNotEmpty ?? false) ||
+                  (_currentLocalImagePath?.trim().isNotEmpty ?? false))
+          ? profile.copyWith(
+              profileImage: _currentImageUrl,
+              localProfileImagePath: _currentLocalImagePath,
+            )
+          : profile;
+      debugPrint(
+        '[EditProfileAvatar] refresh_result '
+        'remote_url="${profile.profileImage}" '
+        'remote_has_avatar=${profile.hasProfileImage} '
+        'preserved=${!identical(refreshed, profile)} '
+        'final_url="${refreshed.profileImage}" '
+        'final_local="${refreshed.localProfileImagePath}"',
+      );
+      _applyProfile(refreshed);
+    } else {
+      debugPrint(
+        '[EditProfileAvatar] refresh_result profile=null fallback=local',
+      );
     }
     setState(() {
-      _profile = profile;
+      _profile = profile ?? _profile;
       _isLoading = false;
     });
   }
 
   void _seedProfile(UserProfile? profile) {
-    if (profile == null) return;
+    if (profile == null) {
+      debugPrint('[EditProfileAvatar] seed profile=null');
+      return;
+    }
+    debugPrint(
+      '[EditProfileAvatar] seed '
+      'url="${profile.profileImage}" has_avatar=${profile.hasProfileImage} '
+      'local="${profile.localProfileImagePath}" source=initial_profile',
+    );
     _applyProfile(profile);
     _profile = profile;
     _isLoading = false;
@@ -127,14 +190,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _channelAliasController.text = profile.channelAlias;
     _groupAliasController.text = profile.groupAlias;
     _currentImageUrl = profile.hasProfileImage ? profile.profileImage : null;
-    _currentLocalImagePath =
-        profile.localProfileImagePath.trim().isNotEmpty
-            ? profile.localProfileImagePath
-            : null;
+    _currentLocalImagePath = profile.localProfileImagePath.trim().isNotEmpty
+        ? profile.localProfileImagePath
+        : null;
     _avatarRemovalPending = false;
-    if (_currentImageUrl != null) {
-      _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
-    }
+    // Keep the canonical URL during initial/refresh hydration so the editor
+    // reuses the avatar already resolved by the profile screen. Cache busting
+    // is reserved for an actual avatar mutation.
     _originalName = _nameController.text;
     _originalBio = _bioController.text;
     _originalLink = _linkController.text;
@@ -142,6 +204,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _originalGroup = _groupAliasController.text;
     _originalImageUrl = _currentImageUrl;
     _originalLocalImagePath = _currentLocalImagePath;
+    debugPrint(
+      '[EditProfileAvatar] applied '
+      'url="${_currentImageUrl ?? ''}" '
+      'local="${_currentLocalImagePath ?? ''}" '
+      'has_avatar=${_currentImageUrl != null || _currentLocalImagePath != null} '
+      'module_loaded=${profile.moduleProfileLoaded}',
+    );
   }
 
   bool get _hasUnsavedChanges {
@@ -203,10 +272,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         final cropped = await showWrytteProfilePhotoCrop(
           context,
           sourcePath: path,
-          sourcePixelSize: Size(asset.width.toDouble(), asset.height.toDouble()),
+          sourcePixelSize: Size(
+            asset.width.toDouble(),
+            asset.height.toDouble(),
+          ),
           origin: origin,
         );
-        return cropped == null ? null : AttachmentGalleryResult.prepared(cropped);
+        return cropped == null
+            ? null
+            : AttachmentGalleryResult.prepared(cropped);
       },
       onCameraRequested: (origin, _) async {
         if (!mounted) return null;
@@ -244,8 +318,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   bool get _hasAvatarToRemove =>
-      !_avatarRemovalPending &&
-      _currentImageUrl?.trim().isNotEmpty == true ||
+      !_avatarRemovalPending && _currentImageUrl?.trim().isNotEmpty == true ||
       (!_avatarRemovalPending &&
           (_currentLocalImagePath?.trim().isNotEmpty == true ||
               _profile?.hasProfileImage == true));
@@ -263,31 +336,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   void _showImageOptions() {
     unawaited(_chooseProfilePhoto());
-  }
-
-  Future<void> _viewProfilePhoto() async {
-    final path = _pickedImageFile?.path ?? _currentLocalImagePath;
-    if (path == null || !await File(path).exists() || !mounted) return;
-    final result = await showWrytteImageViewer(
-      context,
-      image: FileImage(File(path)),
-      imageAspectRatio: 1,
-      origin: ExpandingSurfaceOrigin.fromKey(
-        _profilePhotoKey,
-        borderRadius: BorderRadius.circular(1000),
-      ),
-      onShare: () => _showSnack('Profile photo sharing will be available here.'),
-      allowDelete: true,
-      showHeaderLabel: false,
-      enableVerticalDragDismiss: true,
-    );
-    if (result == FullScreenImageResult.deleteRequested && mounted) {
-      if (_pickedImageFile != null) {
-        setState(() => _pickedImageFile = null);
-      } else {
-        await _removeAvatar();
-      }
-    }
   }
 
   Future<void> _save() async {
@@ -320,8 +368,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       final fullName = _nameController.text.trim();
       final nameParts = fullName.split(RegExp(r'\s+'));
       final firstName = nameParts.isNotEmpty ? nameParts[0] : '';
-      final lastName =
-          nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
+      final lastName = nameParts.length > 1
+          ? nameParts.sublist(1).join(' ')
+          : '';
 
       final bio = _bioController.text.trim();
       final link = _linkController.text.trim();
@@ -353,19 +402,19 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       );
       final refreshedProfile = await UserProfileService.instance
           .getCurrentUserProfile(forceRefresh: true);
-      final displayImageUrl =
-          newImageUrl?.trim().isNotEmpty == true
-              ? newImageUrl
-              : refreshedProfile?.profileImage;
+      final displayImageUrl = newImageUrl?.trim().isNotEmpty == true
+          ? newImageUrl
+          : refreshedProfile?.profileImage;
       if (!mounted) return;
       setState(() {
         _profile = refreshedProfile ?? _profile;
-        _currentImageUrl =
-            displayImageUrl?.trim().isNotEmpty == true ? displayImageUrl : null;
+        _currentImageUrl = displayImageUrl?.trim().isNotEmpty == true
+            ? displayImageUrl
+            : null;
         _currentLocalImagePath =
             refreshedProfile?.localProfileImagePath.trim().isNotEmpty == true
-                ? refreshedProfile!.localProfileImagePath
-                : _currentLocalImagePath;
+            ? refreshedProfile!.localProfileImagePath
+            : _currentLocalImagePath;
         _avatarRemovalPending = false;
         if (_currentImageUrl != null) {
           _avatarCacheRevision = DateTime.now().millisecondsSinceEpoch;
@@ -518,10 +567,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     indent: 16,
   );
 
-  Widget _outlinedCard({
-    required Widget child,
-    double radius = 24,
-  }) {
+  Widget _outlinedCard({required Widget child, double radius = 24}) {
     return Container(
       decoration: BoxDecoration(
         color: _cardBg,
@@ -543,10 +589,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       controller: ctrl,
       maxLines: maxLines,
       maxLength: maxLength,
-      inputFormatters:
-          singleLineLink
-              ? [FilteringTextInputFormatter.deny(RegExp(r'\s'))]
-              : null,
+      inputFormatters: singleLineLink
+          ? [FilteringTextInputFormatter.deny(RegExp(r'\s'))]
+          : null,
       style: const TextStyle(color: Colors.white, fontSize: 16),
       onChanged: (_) {
         if (_showDiscardConfirmation) {
@@ -574,11 +619,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     for (final room in MatrixChatService.instance.rooms) {
       final roomMatches =
           room.id == normalized || room.canonicalAlias.trim() == normalized;
-      final kindMatches =
-          isChannel
-              ? MatrixChatService.instance.isChannelRoom(room)
-              : MatrixChatService.instance.isMatrixGroupRoom(room) &&
-                  !MatrixChatService.instance.isChannelRoom(room);
+      final kindMatches = isChannel
+          ? MatrixChatService.instance.isChannelRoom(room)
+          : MatrixChatService.instance.isMatrixGroupRoom(room) &&
+                !MatrixChatService.instance.isChannelRoom(room);
       if (roomMatches && kindMatches) return room;
     }
     return null;
@@ -598,11 +642,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final result = await Navigator.push<ProfileRoomPickerResult>(
       context,
       MaterialPageRoute(
-        builder:
-            (_) => ProfileRoomPickerScreen(
-              isChannel: isChannel,
-              selectedValue: controller.text,
-            ),
+        builder: (_) => ProfileRoomPickerScreen(
+          isChannel: isChannel,
+          selectedValue: controller.text,
+        ),
       ),
     );
     if (result == null || !mounted) return;
@@ -619,8 +662,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }) {
     final room = _selectedProfileRoom(controller.text, isChannel: isChannel);
     final title = room?.getLocalizedDisplayname()?.trim();
-    final displayLabel =
-        (title != null && title.isNotEmpty) ? title : label;
+    final displayLabel = (title != null && title.isNotEmpty) ? title : label;
 
     return InkWell(
       onTap: () => _openProfileRoomPicker(controller, isChannel: isChannel),
@@ -633,10 +675,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 displayLabel,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                ),
+                style: const TextStyle(color: Colors.white, fontSize: 16),
               ),
             ),
             const Text(
@@ -644,11 +683,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               style: TextStyle(color: Colors.white, fontSize: 16),
             ),
             const SizedBox(width: 4),
-            const Icon(
-              Icons.chevron_right,
-              color: Color(0xFF9A9DA4),
-              size: 20,
-            ),
+            const Icon(Icons.chevron_right, color: Color(0xFF9A9DA4), size: 20),
           ],
         ),
       ),
@@ -685,10 +720,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             decoration: BoxDecoration(
               color: const Color(0xFF23262C).withValues(alpha: 0.30),
               borderRadius: BorderRadius.circular(40 / 2),
-              border: Border.all(
-                color: const Color(0xFF23262C),
-                width: 1.0,
-              ),
+              border: Border.all(color: const Color(0xFF23262C), width: 1.0),
             ),
             child: const Center(
               child: Icon(Icons.close, color: Colors.white, size: 20),
@@ -758,10 +790,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final statusBar = MediaQuery.of(context).padding.top;
-    final accountLabel =
-        WrytteId.forDisplay(_profile?.phone ?? '') != null
-            ? 'Wrytte ID'
-            : 'Phone number';
+    final accountLabel = WrytteId.forDisplay(_profile?.phone ?? '') != null
+        ? 'Wrytte ID'
+        : 'Phone number';
 
     const topBarBlock = 40.0 + 16.0;
     const avatarTopGap = 12.0;
@@ -771,7 +802,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     Widget avatarWidget = _pickedImageFile != null
         ? GestureDetector(
             key: _profilePhotoKey,
-            onTap: _viewProfilePhoto,
+            onTap: _showImageOptions,
             child: ClipOval(
               child: Image.file(
                 _pickedImageFile!,
@@ -783,7 +814,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           )
         : GestureDetector(
             key: _profilePhotoKey,
-            onTap: _hasAvatarToRemove ? _viewProfilePhoto : _chooseProfilePhoto,
+            onTap: _showImageOptions,
             child: UserAvatar(
               size: avatarSize,
               imageUrl: _cacheBustedAvatarUrl(_currentImageUrl),
@@ -814,10 +845,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          _closeButton(),
-                          _saveButton(),
-                        ],
+                        children: [_closeButton(), _saveButton()],
                       ),
                     ),
                     Expanded(

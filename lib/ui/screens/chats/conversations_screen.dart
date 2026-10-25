@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -131,6 +130,26 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   DateTime? _lastSuggestedGroupsLoadAt;
   String? _lastGroupsDiagnostic;
   static const Duration _suggestedGroupsRefreshInterval = Duration(seconds: 8);
+  final Stopwatch _chatStartupClock = Stopwatch();
+  DateTime? _chatStartupStartedAt;
+  bool _profileEnrichmentInFlight = false;
+  List<ChatConversation>? _pendingProfileEnrichment;
+
+  void _chatStartupLog(String message) {
+    final startedAt = _chatStartupStartedAt;
+    final elapsed = startedAt == null
+        ? 0
+        : DateTime.now().difference(startedAt).inMilliseconds;
+    apkLog('ChatStartup', 't_ms=$elapsed $message');
+  }
+
+  void _chatAssetsLog(String message) {
+    final startedAt = _chatStartupStartedAt;
+    final elapsed = startedAt == null
+        ? 0
+        : DateTime.now().difference(startedAt).inMilliseconds;
+    apkLog('ChatAssets', 't_ms=$elapsed $message');
+  }
 
   // ===========================================================================
   //  LIFECYCLE
@@ -296,6 +315,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Future<void> _initialize() async {
+    _chatStartupStartedAt = DateTime.now();
+    _chatStartupClock
+      ..reset()
+      ..start();
+    _chatStartupLog('initialize_start');
     _currentUserId = widget.currentUserId.isNotEmpty
         ? widget.currentUserId
         : await AuthService.instance.getCurrentUserId() ?? '';
@@ -305,19 +329,28 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // Load the account-scoped deleted-room dismissal list before reading
     // SQLite. ChatService.connect() loads the same list later, but waiting for
     // that would allow a dismissed shell to flash during the first local paint.
+    _chatStartupLog('before_dismissed_rooms');
     _dismissedDeletedGroupRoomIds = await _chat
         .dismissedDeletedGroupRoomIdsForOwner(_currentUserId);
+    _chatStartupLog('after_dismissed_rooms');
     _dismissedDeletedGroupRoomIds = <String>{
       ..._dismissedDeletedGroupRoomIds,
       ...MatrixChatService.retiredTestGroupRoomIds,
     };
     await _chat.restoreCreatedGroupRoomIdsForOwner(_currentUserId);
+    _chatStartupLog('after_created_groups');
     await _loadCachedRoomCategories();
+    _chatStartupLog('after_room_categories');
     await _loadLocalRoomAvatarPaths();
+    _chatStartupLog('after_local_room_avatars');
     await _loadCachedPublicRoomDirectory();
+    _chatStartupLog('after_public_room_directory');
     await _loadIdentityCacheFast();
+    _chatStartupLog('identity_cache_ready');
     await _loadSavedContacts();
+    _chatStartupLog('saved_contacts_ready count=${_savedContacts.length}');
     await _loadLocalConversations();
+    _chatStartupLog('local_conversations_ready rows=${_conversations.length}');
     await _repairOfflineRoomCategories();
     if (mounted) setState(() => _initialCacheWarmup = false);
 
@@ -345,7 +378,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     // Connect ChatService (idempotent) after local conversations are visible.
     try {
+      _chatStartupLog('matrix_connect_start');
       await _chat.connect();
+      _chatStartupLog('matrix_connect_done connected=${_chat.isConnected}');
       await _retireTestGroupsFromAccount();
       unawaited(_restoreContactsAfterMatrixReady());
       unawaited(_cacheRoomAvatars(_suggestedGroups));
@@ -1033,7 +1068,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
   Future<void> _loadLocalConversations() async {
     try {
+      final timer = Stopwatch()..start();
+      _chatStartupLog('local_read_start');
       final local = await ChatLocalDb.instance.loadConversations();
+      _chatStartupLog(
+        'local_read_done elapsed_ms=${timer.elapsedMilliseconds} rows=${local.length}',
+      );
       if (!mounted) return;
       final initialRows = _mergeConversationLists(
         local,
@@ -1054,6 +1094,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       if (!mounted || version != _conversationPaintVersion) return;
       setState(() => _conversations = visible);
       _notifyUnread(_conversations);
+      _chatStartupLog('local_first_paint rows=${visible.length}');
 
       _prewarmVisibleMessages(visible);
       // Paint SQLite/cache data immediately; resolve missing identity data
@@ -1252,7 +1293,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     return Future.wait(
       afterSavedContacts.map(
-        (conv) => _enrichConversationFromPublicProfile(conv),
+        (conv) => _enrichConversationFromPublicProfile(conv).timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            _chatAssetsLog('profile_timeout room=${conv.id} after_ms=5000');
+            return conv;
+          },
+        ),
       ),
     );
   }
@@ -1287,14 +1334,35 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     List<ChatConversation> baseRows,
   ) async {
     if (!mounted || !_hasRowsMissingStableIdentity(baseRows)) return;
+    if (_profileEnrichmentInFlight) {
+      _pendingProfileEnrichment = baseRows;
+      _chatAssetsLog('profile_batch_coalesced rows=${baseRows.length}');
+      return;
+    }
+    _profileEnrichmentInFlight = true;
+    final timer = Stopwatch()..start();
+    _chatAssetsLog('profile_batch_start rows=${baseRows.length}');
     try {
       final enriched = await _enrichNames(baseRows);
+      _chatAssetsLog(
+        'profile_batch_done elapsed_ms=${timer.elapsedMilliseconds} rows=${enriched.length}',
+      );
       if (!mounted) return;
       await _publishPreparedConversations(enriched);
     } catch (e) {
+      _chatAssetsLog(
+        'profile_batch_error elapsed_ms=${timer.elapsedMilliseconds} error=$e',
+      );
       debugPrint(
         '[ConversationsScreen] deferred profile enrichment skipped: $e',
       );
+    } finally {
+      _profileEnrichmentInFlight = false;
+      final pending = _pendingProfileEnrichment;
+      _pendingProfileEnrichment = null;
+      if (mounted && pending != null) {
+        unawaited(_enrichAndPublishConversationsInBackground(pending));
+      }
     }
   }
 
@@ -1347,9 +1415,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     List<ChatConversation> conversations,
   ) async {
     if (!mounted) return;
-    final token =
-        AuthService.instance.cachedBackendToken ??
-        await AuthService.instance.getValidBackendToken();
+    final timer = Stopwatch()..start();
+    _chatAssetsLog('avatar_batch_start rows=${conversations.length}');
     final seen = <String>{};
     final futures = <Future<void>>[];
 
@@ -1358,11 +1425,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       final url = _resolveAvatarUrl(rawAvatar);
       if (url.isEmpty || !seen.add(url)) continue;
       futures.add(
-        _warmAvatarImage(
-          CachedNetworkImageProvider(
-            url,
-            headers: _avatarAuthHeaders(url, token, rawUrl: rawAvatar),
-          ),
+        // Use the shared avatar cache instead of resolving a new image stream
+        // for every conversation refresh. This deduplicates in-flight loads,
+        // reuses disk-cached files, and applies the failure cooldown.
+        AvatarPreloadService.warm(
+          rawAvatar,
+          cacheIdentity: 'conversation:${conversation.id}',
         ).catchError((e) {
           debugPrint(
             '[ConversationsScreen] avatar precache skipped url="$url" error=$e',
@@ -1371,26 +1439,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       );
     }
 
-    if (futures.isEmpty) return;
+    if (futures.isEmpty) {
+      _chatAssetsLog(
+        'avatar_batch_done elapsed_ms=${timer.elapsedMilliseconds} unique_urls=0',
+      );
+      return;
+    }
     await Future.wait(futures);
-  }
-
-  Future<void> _warmAvatarImage(ImageProvider provider) {
-    final completer = Completer<void>();
-    final stream = provider.resolve(ImageConfiguration.empty);
-    late final ImageStreamListener listener;
-    listener = ImageStreamListener(
-      (_, __) {
-        stream.removeListener(listener);
-        if (!completer.isCompleted) completer.complete();
-      },
-      onError: (error, stackTrace) {
-        stream.removeListener(listener);
-        if (!completer.isCompleted) completer.completeError(error, stackTrace);
-      },
+    _chatAssetsLog(
+      'avatar_batch_done elapsed_ms=${timer.elapsedMilliseconds} unique_urls=${seen.length}',
     );
-    stream.addListener(listener);
-    return completer.future;
   }
 
   String _resolveAvatarUrl(String? raw) {
@@ -1415,31 +1473,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           '${Uri.encodeComponent(mediaId)}',
         )
         .toString();
-  }
-
-  Map<String, String>? _avatarAuthHeaders(
-    String url,
-    String? token, {
-    String? rawUrl,
-  }) {
-    if (rawUrl?.trim().startsWith('mxc://') == true) {
-      final matrixToken =
-          MatrixClientService.instance.client.accessToken?.trim() ?? '';
-      return matrixToken.isEmpty
-          ? null
-          : {'Authorization': 'Bearer $matrixToken'};
-    }
-    final clean = token?.trim() ?? '';
-    if (clean.isEmpty) return null;
-    final uri = Uri.tryParse(url);
-    final host = uri?.host.toLowerCase() ?? '';
-    final isWrytteImage =
-        url.startsWith('${ApiService.baseUrl}/usrimg/') ||
-        url.startsWith('/usrimg/') ||
-        ApiService.isBackendHost(host) ||
-        host == 'wrytte.com';
-    if (!isWrytteImage) return null;
-    return {'Authorization': 'Bearer $clean'};
   }
 
   List<ChatConversation> _enrichSavedContactNames(
@@ -1583,12 +1616,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       rejectPlaceholderVersion: profile?.moduleProfileLoaded != true,
     );
     final matrixAvatar = _safeDirectAvatarUrl(matrixProfile?.$2);
-    final blockedByPeer =
-        BlockStateService.instance.isRedactedByBbb(
-          profileUid,
-          roomId: conv.id,
-        ) ||
-        UserProfileService.instance.isPublicProfileRefreshing(profileUid);
+    // A profile refresh must never hide an avatar that is already available
+    // locally. Only an actual BBB match is a suppression decision.
+    final blockedByPeer = BlockStateService.instance.isRedactedByBbb(
+      profileUid,
+      roomId: conv.id,
+    );
 
     debugPrint(
       '[ConversationAvatar][DIAG] enrich room="${conv.id}" peer="$profileUid" '
@@ -2025,13 +2058,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
 
     final peerId = _profileUidForConversation(conv);
+    // Keep rendering cached/contact avatars while profile data refreshes in
+    // the background. Suppress only when the block state explicitly matches.
     final blockedByPeer =
         peerId != null &&
-            BlockStateService.instance.isRedactedByBbb(
-              peerId,
-              roomId: conv.id,
-            ) ||
-        UserProfileService.instance.isPublicProfileRefreshing(peerId ?? '');
+        BlockStateService.instance.isRedactedByBbb(peerId, roomId: conv.id);
     debugPrint(
       '[ConversationAvatar][DIAG] tile room="${conv.id}" peer="${peerId ?? ''}" '
       'ready=${BlockStateService.instance.isReady} '
@@ -2048,7 +2079,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
 
     if (blockedByPeer) {
       debugPrint(
-        '[ConversationAvatar] SUPPRESSED room="${conv.id}" peer="${peerId ?? ''}"',
+        '[ConversationAvatar] SUPPRESSED room="${conv.id}" peer="$peerId"',
       );
       return null;
     }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:matrix/matrix.dart' as mx;
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui';
@@ -31,6 +32,7 @@ import 'package:wrytte/ui/auth/widgets/wrytte_id_checkmark.dart';
 import 'package:wrytte/ui/screens/channels/channel_feed_screen.dart';
 import 'package:wrytte/ui/screens/chats/chat_screen.dart';
 import 'package:wrytte/ui/widgets/full_screen_image_viewer.dart';
+import 'package:wrytte/ui/media/views/full_screen_image_view.dart';
 import 'package:wrytte/ui/widgets/full_screen_video_viewer.dart';
 import 'package:wrytte/ui/widgets/profile_tab_bar_section.dart';
 import 'package:wrytte/ui/widgets/wrytte_file_card.dart';
@@ -115,9 +117,28 @@ class _ProfileScreenState extends State<ProfileScreen>
   late final TabController _tabController;
 
   bool get _isOtherUser {
+    // The profile opened from the home bottom navbar is always the signed-in
+    // owner's profile. Do not let asynchronous identity hydration briefly
+    // classify it as another user and render Block/Add actions.
+    if (widget.embeddedInHome) return false;
     final uid = _profileTargetUserId;
     final ownUid = UserProfileService.instance.cachedProfile?.uid;
-    if (uid != null && uid != ownUid) return true;
+    if (uid != null && ownUid != null) {
+      String normalize(String value) {
+        final raw = value.trim().toLowerCase();
+        if (raw.startsWith('@')) {
+          final withoutAt = raw.substring(1);
+          final separator = withoutAt.indexOf(':');
+          return separator == -1
+              ? withoutAt
+              : withoutAt.substring(0, separator);
+        }
+        return raw.split(':').first;
+      }
+
+      if (normalize(uid) != normalize(ownUid)) return true;
+      return false;
+    }
     return widget.conversationId?.trim().isNotEmpty ?? false;
   }
 
@@ -157,9 +178,9 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (userId == null) return false;
     try {
       return BlockStateService.instance.isBlocklisted(
-            widget.conversationId ?? '',
-            peerId: userId,
-          );
+        widget.conversationId ?? '',
+        peerId: userId,
+      );
     } catch (_) {
       return false;
     }
@@ -171,7 +192,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   @override
   void initState() {
     super.initState();
-    _autoDeleteDuration = AutoDeleteService.instance.durationForRoom(
+    _autoDeleteDuration =
+        AutoDeleteService.instance.durationForRoom(
           widget.conversationId ?? '',
         ) ??
         'Off';
@@ -189,9 +211,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         );
       }
     }
-    _seededSavedName = _cleanName(
-      widget.savedNameHint,
-    );
+    _seededSavedName = _cleanName(widget.savedNameHint);
     _tabController = TabController(length: _tabs.length, vsync: this);
     _seedProfileForFirstPaint();
     if (_profile != null) unawaited(_loadProfileRoomCards(_profile!));
@@ -248,6 +268,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     _tabController.dispose();
     super.dispose();
   }
+
   void _onBlockStateChanged() {
     if (!_isOtherUser) return;
     final uid = _profileTargetUserId;
@@ -272,6 +293,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       }
     });
   }
+
   Future<void> _refreshProfileAfterUnblock(String uid) async {
     try {
       final refreshed = await UserProfileService.instance.getProfileByUid(
@@ -310,7 +332,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
     uid ??= await _resolveProfileUidFromConversation();
     debugPrint('[ProfileScreen] resolved uid: "$uid"');
-  
+
     if (uid != null && _isOtherUser) {
       final blockState = BlockStateService.instance;
       await blockState.load();
@@ -323,13 +345,12 @@ class _ProfileScreenState extends State<ProfileScreen>
       );
     }
     final ownerUserId = await AuthService.instance.getCurrentUserId();
-    var identity =
-        uid != null && ownerUserId != null && ownerUserId.isNotEmpty
-            ? await ContactIdentityCache.instance.findByMatrixId(
-              ownerUserId: ownerUserId,
-              matrixUserId: uid,
-            )
-            : null;
+    var identity = uid != null && ownerUserId != null && ownerUserId.isNotEmpty
+        ? await ContactIdentityCache.instance.findByMatrixId(
+            ownerUserId: ownerUserId,
+            matrixUserId: uid,
+          )
+        : null;
     var savedContact = _isOtherUser ? await _findSavedContact(uid ?? '') : null;
     apkLog(
       'Profile2.trace',
@@ -364,31 +385,51 @@ class _ProfileScreenState extends State<ProfileScreen>
       apkLog(
         'Profile2.localFirst',
         'local state committed before remote lookup uid="$uid" '
-        'name="${savedContact?.formattedName ?? identity?.savedName ?? widget.initialProfileName}" '
-        'avatar="${savedContact?.avatarUrl ?? identity?.avatarUrl ?? widget.initialAvatarUrl}" '
-        'saved=${savedContact != null}',
+            'name="${savedContact?.formattedName ?? identity?.savedName ?? widget.initialProfileName}" '
+            'avatar="${savedContact?.avatarUrl ?? identity?.avatarUrl ?? widget.initialAvatarUrl}" '
+            'saved=${savedContact != null}',
+      );
+      apkLog(
+        'ProfileFields.localFirst',
+        'uid="${uid ?? ''}" '
+            'bio=${identity?.bio?.trim().isNotEmpty == true} '
+            'avatar=${(savedContact?.avatarUrl ?? identity?.avatarUrl ?? widget.initialAvatarUrl ?? '').trim().isNotEmpty} '
+            'links=unknown channel=unknown group=unknown '
+            'source=${savedContact != null
+                ? 'saved_contact'
+                : identity != null
+                ? 'identity_cache'
+                : 'route_hint'}',
       );
     }
     final profileLookupPhone =
         _phoneFromIdentifier(savedContact?.primaryPhone).isNotEmpty
-            ? _phoneFromIdentifier(savedContact?.primaryPhone)
-            : identity?.phone ?? _phoneFromIdentifier(uid);
-    var profile =
-        uid != null
-            ? await UserProfileService.instance.getProfileByUid(
-              uid,
-              phone: profileLookupPhone,
-              forceRefresh: forceRefresh,
-            )
-            : _isOtherUser
-            ? _profile
-            : await UserProfileService.instance.getCurrentUserProfile(
-              forceRefresh: forceRefresh,
-            );
+        ? _phoneFromIdentifier(savedContact?.primaryPhone)
+        : identity?.phone ?? _phoneFromIdentifier(uid);
+    var profile = uid != null
+        ? await UserProfileService.instance.getProfileByUid(
+            uid,
+            phone: profileLookupPhone,
+            forceRefresh: forceRefresh,
+          )
+        : _isOtherUser
+        ? _profile
+        : await UserProfileService.instance.getCurrentUserProfile(
+            forceRefresh: forceRefresh,
+          );
     debugPrint(
       '[ProfileScreen] lookup result: found=${profile != null} '
       'uid="${profile?.uid}" name="${profile?.displayName ?? profile?.name}" '
       'hasImage=${profile?.hasProfileImage}',
+    );
+    apkLog(
+      'ProfileFields.remoteResult',
+      'uid="${uid ?? ''}" found=${profile != null} '
+          'bio=${profile?.bio.trim().isNotEmpty == true} '
+          'avatar=${profile?.hasProfileImage == true} '
+          'links=${profile?.links.length ?? 0} '
+          'channel="${profile?.channelAlias ?? ''}" '
+          'group="${profile?.groupAlias ?? ''}"',
     );
 
     if (!mounted) return;
@@ -404,10 +445,9 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
     if (profile != null) unawaited(_loadProfileRoomCards(profile));
 
-    final matrixProfile =
-        uid != null && profile?.moduleProfileLoaded != true
-            ? await _loadMatrixProfile(uid)
-            : null;
+    final matrixProfile = uid != null && profile?.moduleProfileLoaded != true
+        ? await _loadMatrixProfile(uid)
+        : null;
 
     // The module-profile request refreshes UserProfileService asynchronously.
     // Re-read the current profile before rendering so bio, links, channel,
@@ -433,12 +473,11 @@ class _ProfileScreenState extends State<ProfileScreen>
           matrixUserId: uid,
         );
       } else if (profile != null) {
-        final nextAvatar =
-            profile.moduleProfileLoaded
-                ? (profile.hasProfileImage ? profile.profileImage : null)
-                : profile.hasProfileImage
-                ? profile.profileImage
-                : matrixProfile?.$2;
+        final nextAvatar = profile.moduleProfileLoaded
+            ? (profile.hasProfileImage ? profile.profileImage : null)
+            : profile.hasProfileImage
+            ? profile.profileImage
+            : matrixProfile?.$2;
         if (nextAvatar?.trim().isNotEmpty == true) {
           unawaited(
             AvatarPreloadService.replace(
@@ -451,10 +490,12 @@ class _ProfileScreenState extends State<ProfileScreen>
             await ContactLocalDb.refreshPublicProfileFields(
               ownerUserId: ownerUserId,
               wrytteUserId: uid,
-              phone:
-                  profile.phone.isNotEmpty ? profile.phone : profileLookupPhone,
-              avatarUrl:
-                  profile.moduleProfileLoaded ? (nextAvatar ?? '') : nextAvatar,
+              phone: profile.phone.isNotEmpty
+                  ? profile.phone
+                  : profileLookupPhone,
+              avatarUrl: profile.moduleProfileLoaded
+                  ? (nextAvatar ?? '')
+                  : nextAvatar,
               bio: profile.bio,
             );
         if (refreshedContact != null) {
@@ -465,25 +506,22 @@ class _ProfileScreenState extends State<ProfileScreen>
         ownerUserId: ownerUserId,
         matrixUserId: uid,
         phone: profile?.phone ?? profileLookupPhone,
-        profileName:
-            _cleanName(profile?.displayName).isNotEmpty
-                ? profile?.displayName
-                : _cleanName(matrixProfile?.$1).isNotEmpty
-                ? matrixProfile?.$1
-                : identity?.profileName,
+        profileName: _cleanName(profile?.displayName).isNotEmpty
+            ? profile?.displayName
+            : _cleanName(matrixProfile?.$1).isNotEmpty
+            ? matrixProfile?.$1
+            : identity?.profileName,
         savedName: savedContact?.formattedName,
-        avatarUrl:
-            profile?.moduleProfileLoaded == true
-                ? (profile!.hasProfileImage ? profile.profileImage : '')
-                : profile?.hasProfileImage == true
-                ? profile!.profileImage
-                : matrixProfile?.$2,
-        bio:
-            profile?.moduleProfileLoaded == true
-                ? profile!.bio
-                : profile?.bio.trim().isNotEmpty == true
-                ? profile!.bio
-                : identity?.bio,
+        avatarUrl: profile?.moduleProfileLoaded == true
+            ? (profile!.hasProfileImage ? profile.profileImage : '')
+            : profile?.hasProfileImage == true
+            ? profile!.profileImage
+            : matrixProfile?.$2,
+        bio: profile?.moduleProfileLoaded == true
+            ? profile!.bio
+            : profile?.bio.trim().isNotEmpty == true
+            ? profile!.bio
+            : identity?.bio,
         clearAvatar:
             profile?.moduleProfileLoaded == true &&
             profile?.hasProfileImage != true,
@@ -693,8 +731,9 @@ class _ProfileScreenState extends State<ProfileScreen>
         roomId: room.id,
         name: room.getLocalizedDisplayname(),
         avatarUrl: room.avatar?.toString(),
-        canonicalAlias:
-            room.canonicalAlias.trim().isEmpty ? null : room.canonicalAlias,
+        canonicalAlias: room.canonicalAlias.trim().isEmpty
+            ? null
+            : room.canonicalAlias,
         topic: room.topic,
         memberCount: matrix.groupMemberCount(room),
         worldReadable:
@@ -726,10 +765,9 @@ class _ProfileScreenState extends State<ProfileScreen>
         }
         final refreshed = MatrixPublicGroup(
           roomId: local.roomId,
-          name:
-              summary.name?.trim().isNotEmpty == true
-                  ? summary.name!.trim()
-                  : local.name,
+          name: summary.name?.trim().isNotEmpty == true
+              ? summary.name!.trim()
+              : local.name,
           avatarUrl: summary.avatarUrl?.toString() ?? local.avatarUrl,
           canonicalAlias: summary.canonicalAlias ?? local.canonicalAlias,
           topic: summary.topic ?? local.topic,
@@ -761,10 +799,9 @@ class _ProfileScreenState extends State<ProfileScreen>
       final client = await MatrixChatService.instance.connect();
       final summary = await client.getRoomSummary(reference);
       final canonicalAlias = summary.canonicalAlias?.trim() ?? '';
-      final aliasLocalpart =
-          canonicalAlias.startsWith('#')
-              ? canonicalAlias.substring(1)
-              : canonicalAlias;
+      final aliasLocalpart = canonicalAlias.startsWith('#')
+          ? canonicalAlias.substring(1)
+          : canonicalAlias;
       final summaryIsChannel =
           summary.roomType?.trim().toLowerCase() ==
               MatrixPublicGroup.channelRoomType ||
@@ -810,16 +847,14 @@ class _ProfileScreenState extends State<ProfileScreen>
         final cachedMembers = await chat.loadSuggestedPreviewMembers(
           reference.trim(),
         );
-        final joinedCount =
-            cachedMembers
-                .where((member) => member['membership']?.toString() == 'join')
-                .length;
+        final joinedCount = cachedMembers
+            .where((member) => member['membership']?.toString() == 'join')
+            .length;
         return MatrixPublicGroup(
           roomId: reference.trim(),
-          name:
-              cached['name']?.toString().trim().isNotEmpty == true
-                  ? cached['name'].toString().trim()
-                  : reference.trim(),
+          name: cached['name']?.toString().trim().isNotEmpty == true
+              ? cached['name'].toString().trim()
+              : reference.trim(),
           avatarUrl: cached['avatarUrl']?.toString(),
           canonicalAlias: cached['canonicalAlias']?.toString(),
           topic: cached['description']?.toString(),
@@ -864,12 +899,12 @@ class _ProfileScreenState extends State<ProfileScreen>
             'error="$error"',
       );
     }
-    final channelRef =
-        _canViewProfileField(profile, 'Channel')
-            ? profile.channelAlias.trim()
-            : '';
-    final groupRef =
-        _canViewProfileField(profile, 'Group') ? profile.groupAlias.trim() : '';
+    final channelRef = _canViewProfileField(profile, 'Channel')
+        ? profile.channelAlias.trim()
+        : '';
+    final groupRef = _canViewProfileField(profile, 'Group')
+        ? profile.groupAlias.trim()
+        : '';
     final resolvedRooms = await Future.wait<MatrixPublicGroup?>([
       channelRef.isEmpty
           ? Future<MatrixPublicGroup?>.value(null)
@@ -952,44 +987,42 @@ class _ProfileScreenState extends State<ProfileScreen>
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder:
-              (_) => ChannelFeedScreen(
-                conversationId: group.roomId,
-                currentUserId: currentUserId,
-                title: group.name,
-                avatarUrl: group.avatarUrl,
-                initialPosts: previewMessages,
-                subscriberCountIsAuthoritative: true,
-                loadRoomEventsOnDemand: true,
-                initialEventsHaveMore: hasMoreRoomEvents,
-                subscriberCount: group.memberCount,
-                readOnlyUntilSubscribe: !alreadyJoined,
-                subscribeAlias: group.roomId,
-              ),
+          builder: (_) => ChannelFeedScreen(
+            conversationId: group.roomId,
+            currentUserId: currentUserId,
+            title: group.name,
+            avatarUrl: group.avatarUrl,
+            initialPosts: previewMessages,
+            subscriberCountIsAuthoritative: true,
+            loadRoomEventsOnDemand: true,
+            initialEventsHaveMore: hasMoreRoomEvents,
+            subscriberCount: group.memberCount,
+            readOnlyUntilSubscribe: !alreadyJoined,
+            subscribeAlias: group.roomId,
+          ),
         ),
       );
     } else {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder:
-              (_) => ChatScreen(
-                conversationId: group.roomId,
-                receiverId: group.roomId,
-                currentUserId: currentUserId,
-                title: group.name,
-                avatarUrl: group.avatarUrl,
-                initialMessages: previewMessages,
-                loadRoomEventsOnDemand: true,
-                initialEventsHaveMore: hasMoreRoomEvents,
-                readOnlyUntilJoin: !alreadyJoined,
-                initialMemberCount: group.memberCount,
-                initialMemberCountIsAuthoritative: true,
-                groupAlias: group.roomId,
-                groupDescription: group.topic,
-                conversationKind: ConversationKind.group,
-                initialRoomProfileVersion: group.profileVersionFingerprint,
-              ),
+          builder: (_) => ChatScreen(
+            conversationId: group.roomId,
+            receiverId: group.roomId,
+            currentUserId: currentUserId,
+            title: group.name,
+            avatarUrl: group.avatarUrl,
+            initialMessages: previewMessages,
+            loadRoomEventsOnDemand: true,
+            initialEventsHaveMore: hasMoreRoomEvents,
+            readOnlyUntilJoin: !alreadyJoined,
+            initialMemberCount: group.memberCount,
+            initialMemberCountIsAuthoritative: true,
+            groupAlias: group.roomId,
+            groupDescription: group.topic,
+            conversationKind: ConversationKind.group,
+            initialRoomProfileVersion: group.profileVersionFingerprint,
+          ),
         ),
       );
     }
@@ -1161,16 +1194,100 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   String? _profileAvatarUrl() {
-    if (_redactedByBlock) return null;
+    if (_redactedByBlock) {
+      debugPrint('[ProfileAvatar] source=none reason=redacted');
+      return null;
+    }
     final localAvatar = _savedContact?.avatarUrl?.trim() ?? '';
-    if (localAvatar.isNotEmpty) return localAvatar;
+    if (localAvatar.isNotEmpty) {
+      debugPrint('[ProfileAvatar] source=saved_contact url="$localAvatar"');
+      return localAvatar;
+    }
     final identityAvatar = _identity?.avatarUrl?.trim() ?? '';
-    if (identityAvatar.isNotEmpty) return identityAvatar;
+    if (identityAvatar.isNotEmpty) {
+      debugPrint('[ProfileAvatar] source=identity_cache url="$identityAvatar"');
+      return identityAvatar;
+    }
     final profile = _profile;
-    if (profile?.hasProfileImage == true) return profile!.profileImage;
-    if (profile?.moduleProfileLoaded == true) return null;
+    if (profile?.hasProfileImage == true) {
+      debugPrint(
+        '[ProfileAvatar] source=public_profile url="${profile!.profileImage}"',
+      );
+      return profile.profileImage;
+    }
+    if (profile?.moduleProfileLoaded == true) {
+      debugPrint('[ProfileAvatar] source=none reason=profile_no_avatar');
+      return null;
+    }
     final initial = widget.initialAvatarUrl?.trim() ?? '';
+    debugPrint(
+      initial.isEmpty
+          ? '[ProfileAvatar] source=none reason=no_source'
+          : '[ProfileAvatar] source=route_hint url="$initial"',
+    );
     return initial.isEmpty ? null : initial;
+  }
+
+  Future<void> _viewProfileAvatar() async {
+    final raw = _profileAvatarUrl()?.trim() ?? '';
+    final url = _resolveProfileImageUrl(raw);
+    if (url.isEmpty || !mounted) {
+      debugPrint('[ProfileAvatar] viewer_skipped reason=no_avatar_url');
+      return;
+    }
+    debugPrint('[ProfileAvatar] viewer_open url="$raw"');
+    final result = await showWrytteImageViewer(
+      context,
+      image: CachedNetworkImageProvider(
+        url,
+        headers: {
+          if (AuthService.instance.cachedBackendToken?.isNotEmpty == true)
+            'Authorization':
+                'Bearer ${AuthService.instance.cachedBackendToken}',
+        },
+      ),
+      imageAspectRatio: 1,
+      allowDelete: !_isOtherUser,
+      showHeaderLabel: false,
+      enableVerticalDragDismiss: true,
+      onShare: _isOtherUser
+          ? null
+          : () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Profile photo sharing will be available here.',
+                  ),
+                ),
+              );
+            },
+    );
+    if (!_isOtherUser &&
+        result == FullScreenImageResult.deleteRequested &&
+        mounted) {
+      debugPrint('[ProfileAvatar] delete_requested');
+      await UserProfileService.instance.deleteProfileImage();
+      if (mounted) await _loadProfile(forceRefresh: true);
+    }
+  }
+
+  String _resolveProfileImageUrl(String raw) {
+    if (raw.isEmpty) return '';
+    if (!raw.startsWith('mxc://')) return raw;
+    final uri = Uri.tryParse(raw);
+    final homeserver = Uri.tryParse(MatrixConfig.homeserver);
+    if (uri == null || homeserver == null || uri.host.isEmpty) return '';
+    final mediaId = uri.pathSegments.join('/');
+    if (mediaId.isEmpty) return '';
+    final download = homeserver.resolve(
+      '/_matrix/client/v1/media/download/'
+      '${Uri.encodeComponent(uri.host)}/'
+      '${Uri.encodeComponent(mediaId)}',
+    );
+    final version = uri.queryParameters['v'];
+    return download
+        .replace(queryParameters: version == null ? null : {'v': version})
+        .toString();
   }
 
   String _profilePhone() {
@@ -1291,7 +1408,8 @@ class _ProfileScreenState extends State<ProfileScreen>
           child: _ProfileAddContactSheet(
             initialName: _profileDisplayName(),
             phone: phone.isNotEmpty ? phone : (uid ?? ''),
-            onSave: (name) => _saveProfile2Contact(name, phone: phone, uid: uid),
+            onSave: (name) =>
+                _saveProfile2Contact(name, phone: phone, uid: uid),
           ),
         ),
       ),
@@ -1467,7 +1585,10 @@ class _ProfileScreenState extends State<ProfileScreen>
     final contact = _savedContact;
     final ownerUserId = await AuthService.instance.getCurrentUserId();
     final uid = _profileTargetUserId;
-    if (contact == null || ownerUserId == null || ownerUserId.isEmpty || uid == null) {
+    if (contact == null ||
+        ownerUserId == null ||
+        ownerUserId.isEmpty ||
+        uid == null) {
       return;
     }
 
@@ -1489,14 +1610,15 @@ class _ProfileScreenState extends State<ProfileScreen>
     final profileOneName = _cleanName(_profile?.displayName).isNotEmpty
         ? _cleanName(_profile?.displayName)
         : _cleanName(widget.initialProfileName);
-    final profileOneAvatar =
-        _profile?.hasProfileImage == true
-            ? _profile?.profileImage
-            : (widget.initialAvatarUrl?.trim().isNotEmpty == true
-                ? widget.initialAvatarUrl
-                : null);
+    final profileOneAvatar = _profile?.hasProfileImage == true
+        ? _profile?.profileImage
+        : (widget.initialAvatarUrl?.trim().isNotEmpty == true
+              ? widget.initialAvatarUrl
+              : null);
     final profileOneContact = Contact(
-      displayName: profileOneName.isNotEmpty ? profileOneName : contact.primaryPhone,
+      displayName: profileOneName.isNotEmpty
+          ? profileOneName
+          : contact.primaryPhone,
       phones: contact.phones,
       wrytteUserId: contact.wrytteUserId ?? uid,
       avatarUrl: profileOneAvatar,
@@ -1519,7 +1641,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       apkLog(
         'Profile2.delete',
         'UI restored Profile1 name="${profileOneContact.formattedName}" '
-        'avatar="${profileOneContact.avatarUrl}" actions=Block/Add',
+            'avatar="${profileOneContact.avatarUrl}" actions=Block/Add',
       );
     }
 
@@ -1555,7 +1677,8 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (_redactedByBlock) return false;
     final bio = _profileBio();
     final links = _profile?.links ?? [];
-    final visible = bio.isNotEmpty ||
+    final visible =
+        bio.isNotEmpty ||
         links.isNotEmpty ||
         (_canViewProfileField(_profile, 'Channel') &&
             (_profile?.channelAlias.trim().isNotEmpty ?? false)) ||
@@ -1585,42 +1708,41 @@ class _ProfileScreenState extends State<ProfileScreen>
     debugPrint(
       '[ProfileActions] build: loading=$_profileLoading '
       'other=$_isOtherUser saved=${_savedContact != null} '
-      'rendered=${_profileLoading &&
-              !_hasSavedContactHint &&
-              widget.contactStatus != ProfileContactStatus.unsaved
-          ? 'none'
-          : (_showUnsavedProfileActions ? 'Block/Add' : 'Edit')}',
+      'rendered=${_profileLoading && !_hasSavedContactHint && widget.contactStatus != ProfileContactStatus.unsaved ? 'none' : (_showUnsavedProfileActions ? 'Block/Add' : 'Edit')}',
     );
     final theme = Theme.of(context);
     final double statusBarHeight = MediaQuery.of(context).padding.top;
     final double topBarHeight = statusBarHeight + kToolbarHeight;
 
     final hasProfile = _profile != null;
-    final hasInitialProfileName =
-        _cleanName(widget.initialProfileName).isNotEmpty;
+    final hasInitialProfileName = _cleanName(
+      widget.initialProfileName,
+    ).isNotEmpty;
     final hasInitialAvatar =
         (widget.initialAvatarUrl?.trim().isNotEmpty ?? false);
     final String displayName =
         _profileLoading && !hasProfile && !hasInitialProfileName
-            ? ''
-            : _profileDisplayName();
+        ? ''
+        : _profileDisplayName();
     final String phone = _profileLoading && !hasProfile ? '' : _profilePhone();
     final String bioText = _profileBio();
-    final List<String> links = _redactedByBlock ? const [] : (_profile?.links ?? []);
+    final List<String> links = _redactedByBlock
+        ? const []
+        : (_profile?.links ?? []);
     final channelRef =
         !_redactedByBlock && _canViewProfileField(_profile, 'Channel')
-            ? _profile?.channelAlias.trim() ?? ''
-            : '';
+        ? _profile?.channelAlias.trim() ?? ''
+        : '';
     final groupRef =
         !_redactedByBlock && _canViewProfileField(_profile, 'Group')
-            ? _profile?.groupAlias.trim() ?? ''
-            : '';
+        ? _profile?.groupAlias.trim() ?? ''
+        : '';
     debugPrint(
       '[ProfileScreen][DIAG][build] redacted=$_redactedByBlock '
       'avatar="${_profileAvatarUrl()}" bioLen=${bioText.length} '
       'links=${links.length} channel="$channelRef" group="$groupRef" '
       'uid="${_profileTargetUserId}" room="${widget.conversationId}"',
-    );  
+    );
 
     apkLog(
       'ProfileFields.trace',
@@ -1643,114 +1765,113 @@ class _ProfileScreenState extends State<ProfileScreen>
               physics: const BouncingScrollPhysics(
                 parent: AlwaysScrollableScrollPhysics(),
               ),
-              headerSliverBuilder:
-                  (context, innerBoxIsScrolled) => [
-                    SliverToBoxAdapter(
-                      child: Column(
-                        children: [
-                          // Reduced top spacing so avatar/name/phone sit higher
-                          SizedBox(height: topBarHeight - 18),
+              headerSliverBuilder: (context, innerBoxIsScrolled) => [
+                SliverToBoxAdapter(
+                  child: Column(
+                    children: [
+                      // Reduced top spacing so avatar/name/phone sit higher
+                      SizedBox(height: topBarHeight - 18),
 
-                          // ── Avatar ──────────────────────────────────────────
-                          SizedBox(
-                            width: 100,
-                            height: 100,
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                _profileLoading &&
-                                        !hasProfile &&
-                                        !hasInitialAvatar
-                                    ? _buildAvatarShimmer(100)
-                                    : UserAvatar(
+                      // ── Avatar ──────────────────────────────────────────
+                      SizedBox(
+                        width: 100,
+                        height: 100,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            _profileLoading && !hasProfile && !hasInitialAvatar
+                                ? _buildAvatarShimmer(100)
+                                : GestureDetector(
+                                    onTap: _viewProfileAvatar,
+                                    child: UserAvatar(
                                       size: 100,
                                       imageUrl: _profileAvatarUrl(),
-                                      localImagePath:
-                                          _redactedByBlock
-                                              ? null
-                                              : _profile?.localProfileImagePath,
+                                      localImagePath: _redactedByBlock
+                                          ? null
+                                          : _profile?.localProfileImagePath,
                                       cacheIdentity:
                                           'user:${(widget.uid ?? _profile?.uid ?? '').trim().toLowerCase()}',
                                       name: displayName,
                                     ),
-                                if (AutoDeleteService.instance.durationForRoom(
-                                      widget.conversationId ?? '',
-                                    ) !=
-                                    null)
-                                  Positioned(
-                                    right: -2,
-                                    bottom: -2,
-                                    child: SizedBox(
-                                      width: 34,
-                                      height: 34,
-                                      child: SvgPicture.asset(
-                                        'assets/images/Disappearing messages icon.svg',
-                                        colorFilter: const ColorFilter.mode(
-                                          Colors.white,
-                                          BlendMode.srcIn,
-                                        ),
-                                      ),
+                                  ),
+                            if (AutoDeleteService.instance.durationForRoom(
+                                  widget.conversationId ?? '',
+                                ) !=
+                                null)
+                              Positioned(
+                                right: -2,
+                                bottom: -2,
+                                child: SizedBox(
+                                  width: 34,
+                                  height: 34,
+                                  child: SvgPicture.asset(
+                                    'assets/images/Disappearing messages icon.svg',
+                                    colorFilter: const ColorFilter.mode(
+                                      Colors.white,
+                                      BlendMode.srcIn,
                                     ),
                                   ),
-                              ],
-                            ),
-                          ),
-
-                          const SizedBox(height: 12),
-
-                          // ── Name ────────────────────────────────────────────
-                          if (!_isOtherUser || displayName.isNotEmpty)
-                            Text(
-                              _isOtherUser
-                                  ? displayName
-                                  : displayName.isNotEmpty
-                                  ? displayName
-                                  : 'You',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 22,
-                                fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
-
-                          const SizedBox(height: 4),
-
-                          // ── Phone ───────────────────────────────────────────
-                          if (phone.isNotEmpty)
-                            Text(
-                              phone,
-                              style: const TextStyle(
-                                color: Color(0xFF4DA3FF),
-                                fontSize: 16,
-                              ),
-                            ),
-
-                          const SizedBox(height: 16),
-
-                          // ── Quick actions (other user only) ─────────────────
-                          if (_isOtherUser) ...[
-                            _buildQuickActions(),
-                            const SizedBox(height: 20),
                           ],
+                        ),
+                      ),
 
-                          // ── Bio, links, and featured rooms ────────────────
-                          if (!_profileLoading &&
-                              (bioText.isNotEmpty ||
-                                  links.isNotEmpty ||
-                                  channelRef.isNotEmpty ||
-                                  groupRef.isNotEmpty)) ...[
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                              ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(60),
-                                child: BackdropFilter(
-                                  filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                                  child: Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.symmetric(vertical: 29),
-                                    decoration: BoxDecoration(
+                      const SizedBox(height: 12),
+
+                      // ── Name ────────────────────────────────────────────
+                      if (!_isOtherUser || displayName.isNotEmpty)
+                        Text(
+                          _isOtherUser
+                              ? displayName
+                              : displayName.isNotEmpty
+                              ? displayName
+                              : 'You',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+
+                      const SizedBox(height: 4),
+
+                      // ── Phone ───────────────────────────────────────────
+                      if (phone.isNotEmpty)
+                        Text(
+                          phone,
+                          style: const TextStyle(
+                            color: Color(0xFF4DA3FF),
+                            fontSize: 16,
+                          ),
+                        ),
+
+                      const SizedBox(height: 16),
+
+                      // ── Quick actions (other user only) ─────────────────
+                      if (_isOtherUser) ...[
+                        _buildQuickActions(),
+                        const SizedBox(height: 20),
+                      ],
+
+                      // ── Bio, links, and featured rooms ────────────────
+                      if (!_profileLoading &&
+                          (bioText.isNotEmpty ||
+                              links.isNotEmpty ||
+                              channelRef.isNotEmpty ||
+                              groupRef.isNotEmpty)) ...[
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(60),
+                            child: BackdropFilter(
+                              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 29,
+                                ),
+                                decoration: BoxDecoration(
                                   color: const Color(0xFF08090B),
                                   border: Border.all(
                                     color: const Color(0xFF23262C),
@@ -1759,13 +1880,14 @@ class _ProfileScreenState extends State<ProfileScreen>
                                   borderRadius: BorderRadius.circular(60),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.25),
+                                      color: Colors.black.withValues(
+                                        alpha: 0.25,
+                                      ),
                                       blurRadius: 30,
                                       offset: const Offset(0, 10),
                                     ),
                                   ],
                                 ),
-
 
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1781,11 +1903,12 @@ class _ProfileScreenState extends State<ProfileScreen>
                                     // NO divider between bio and links
                                     if (links.isNotEmpty)
                                       Padding(
-                                        padding: EdgeInsets.symmetric(
-                                          horizontal: 20,
-                                        ).copyWith(
-                                          top: bioText.isNotEmpty ? 4 : 0,
-                                        ),
+                                        padding:
+                                            EdgeInsets.symmetric(
+                                              horizontal: 20,
+                                            ).copyWith(
+                                              top: bioText.isNotEmpty ? 4 : 0,
+                                            ),
                                         child: _buildLinks(links),
                                       ),
                                     if (links.isNotEmpty &&
@@ -1827,49 +1950,45 @@ class _ProfileScreenState extends State<ProfileScreen>
                                       ),
                                   ],
                                 ),
-                                  ),
-                                ),
                               ),
                             ),
-                            const SizedBox(height: 20),
-                          ],
-
-                          if (_profileLoading || !_hasCard)
-                            const SizedBox(height: 4),
-                        ],
-                      ),
-                    ),
-
-                    // ── Sticky tab bar ───────────────────────────────────────
-                    SliverPersistentHeader(
-                      pinned: true,
-                      delegate: _StickyTabBarDelegate(
-                        topOffset: topBarHeight,
-                        child: Container(
-                          color: const Color(0xFF08090B),
-                          child: ProfileTabBarSection(
-                            controller: _tabController,
-                            tabs: _tabs,
                           ),
                         ),
+                        const SizedBox(height: 20),
+                      ],
+
+                      if (_profileLoading || !_hasCard)
+                        const SizedBox(height: 4),
+                    ],
+                  ),
+                ),
+
+                // ── Sticky tab bar ───────────────────────────────────────
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _StickyTabBarDelegate(
+                    topOffset: topBarHeight,
+                    child: Container(
+                      color: const Color(0xFF08090B),
+                      child: ProfileTabBarSection(
+                        controller: _tabController,
+                        tabs: _tabs,
                       ),
                     ),
-                  ],
+                  ),
+                ),
+              ],
               body: TabBarView(
                 controller: _tabController,
                 physics: const BouncingScrollPhysics(),
-                children:
-                    _isOtherUser
-                        ? [
-                          _buildMediaTab(),
-                          _buildFilesTab(),
-                          _buildEmptyTab(
-                            Icons.dynamic_feed_outlined,
-                            'No feed',
-                          ),
-                          _buildLinksTab(),
-                        ]
-                        : [_buildPostsTab(), _buildSavedTab()],
+                children: _isOtherUser
+                    ? [
+                        _buildMediaTab(),
+                        _buildFilesTab(),
+                        _buildEmptyTab(Icons.dynamic_feed_outlined, 'No feed'),
+                        _buildLinksTab(),
+                      ]
+                    : [_buildPostsTab(), _buildSavedTab()],
               ),
             ),
 
@@ -1941,60 +2060,117 @@ class _ProfileScreenState extends State<ProfileScreen>
                         widget.embeddedInHome && !_isOtherUser
                             ? _buildTopAddButton()
                             : widget.embeddedInHome
-                                ? const SizedBox(width: 36)
-                                : _glassButton(
-                                    icon: Icons.arrow_back_ios_new,
-                                    onTap: () => Navigator.pop(
-                                      context,
-                                      _conversationCleared,
-                                    ),
-                                  ),
+                            ? const SizedBox(width: 36)
+                            : _glassButton(
+                                icon: Icons.arrow_back_ios_new,
+                                onTap: () => Navigator.pop(
+                                  context,
+                                  _conversationCleared,
+                                ),
+                              ),
 
-                        Expanded(
-                          child: const SizedBox.shrink(),
-                        ),
+                        Expanded(child: const SizedBox.shrink()),
 
                         _isOtherUser && _profileLoading
                             ? const SizedBox(width: 84, height: 44)
                             : _isOtherUser
                             ? _showUnsavedProfileActions
-                                ? _buildUnsavedProfileActions()
-                                : _glassTextButton(
-                                    text: 'Edit',
-                                    onTap: _openProfileEditSheet,
-                                  )
+                                  ? _buildUnsavedProfileActions()
+                                  : _glassTextButton(
+                                      text: 'Edit',
+                                      onTap: _openProfileEditSheet,
+                                    )
                             : _glassTextButton(
-                              text: "Edit",
-                              onTap: () async {
-                                final message = await Navigator.push<String>(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder:
-                                        (_) => EditProfileScreen(
-                                          initialProfile: _profile,
-                                        ),
-                                  ),
-                                );
-                                if (!context.mounted) return;
-                                unawaited(_loadProfile());
-                                if (message?.trim().isNotEmpty == true) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(message!),
-                                      backgroundColor: const Color(0xFF4DA3FF),
-                                      behavior: SnackBarBehavior.floating,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      margin: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 12,
+                                text: "Edit",
+                                onTap: () async {
+                                  var displayedAvatar = _profileAvatarUrl();
+                                  var cachedOwner =
+                                      _profile ??
+                                      UserProfileService.instance.cachedProfile;
+                                  // The profile header and the owner profile
+                                  // cache can hydrate on different timelines.
+                                  // Resolve local storage before opening the
+                                  // editor if the current frame has no URL.
+                                  if ((displayedAvatar ?? '').trim().isEmpty) {
+                                    final localOwner = await UserProfileService
+                                        .instance
+                                        .getCurrentUserProfileLocalOnly();
+                                    if (localOwner != null) {
+                                      cachedOwner ??= localOwner;
+                                      if (localOwner.hasProfileImage) {
+                                        displayedAvatar =
+                                            localOwner.profileImage;
+                                      }
+                                      debugPrint(
+                                        '[ProfileEditRoute] local_fallback '
+                                        'has_avatar=${localOwner.hasProfileImage} '
+                                        'url="${localOwner.profileImage}"',
+                                      );
+                                    }
+                                  }
+                                  final editProfile = cachedOwner != null
+                                      ? cachedOwner.copyWith(
+                                          profileImage: displayedAvatar,
+                                        )
+                                      : UserProfile(
+                                          uid:
+                                              UserProfileService
+                                                  .instance
+                                                  .cachedProfile
+                                                  ?.uid ??
+                                              '',
+                                          name: _profileDisplayName(),
+                                          username: _profileDisplayName(),
+                                          phone: _profilePhone(),
+                                          bio: _profileBio(),
+                                          profileImage: displayedAvatar ?? '',
+                                          links: _profile?.links ?? const [],
+                                        );
+                                  debugPrint(
+                                    '[ProfileEditRoute] avatar '
+                                    'displayed="${displayedAvatar ?? ''}" '
+                                    'base="${cachedOwner?.profileImage ?? ''}" '
+                                    'passed="${editProfile.profileImage}"',
+                                  );
+                                  if (!mounted) return;
+                                  final message = await Navigator.push<String>(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => EditProfileScreen(
+                                        // The profile header may be rendering
+                                        // an avatar from identity/contact
+                                        // cache even when the public profile
+                                        // object has no profileImage field.
+                                        // Pass the effective displayed avatar
+                                        // into the editor as well.
+                                        initialProfile: editProfile,
                                       ),
                                     ),
                                   );
-                                }
-                              },
-                            ),
+                                  if (!context.mounted) return;
+                                  unawaited(_loadProfile());
+                                  if (message?.trim().isNotEmpty == true) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(message!),
+                                        backgroundColor: const Color(
+                                          0xFF4DA3FF,
+                                        ),
+                                        behavior: SnackBarBehavior.floating,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        margin: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 12,
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
                       ],
                     ),
                   ),
@@ -2018,47 +2194,48 @@ class _ProfileScreenState extends State<ProfileScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-          Expanded(
-            child: _actionPill(
-              null,
-              'Call',
-              iconAsset: 'assets/images/Phone new.svg',
-              iconSize: 24,
-              onTap: () {},
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _actionPill(
-              null,
-              'Video',
-              iconAsset: 'assets/images/Video call new.svg',
-              iconSize: 28,
-              onTap: () {},
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _actionPill(
-              null,
-              'Search',
-              iconAsset: 'assets/images/Search icon new.svg',
-              iconSize: 24,
-              onTap: () {},
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: CompositedTransformTarget(
-              link: _moreOptionsLayerLink,
-              child: _actionPill(
-                Icons.more_horiz,
-                'More',
-                iconSize: 24,
-                onTap: () => setState(() => _showMoreOptions = !_showMoreOptions),
+              Expanded(
+                child: _actionPill(
+                  null,
+                  'Call',
+                  iconAsset: 'assets/images/Phone new.svg',
+                  iconSize: 24,
+                  onTap: () {},
+                ),
               ),
-            ),
-          ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _actionPill(
+                  null,
+                  'Video',
+                  iconAsset: 'assets/images/Video call new.svg',
+                  iconSize: 28,
+                  onTap: () {},
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _actionPill(
+                  null,
+                  'Search',
+                  iconAsset: 'assets/images/Search icon new.svg',
+                  iconSize: 24,
+                  onTap: () {},
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: CompositedTransformTarget(
+                  link: _moreOptionsLayerLink,
+                  child: _actionPill(
+                    Icons.more_horiz,
+                    'More',
+                    iconSize: 24,
+                    onTap: () =>
+                        setState(() => _showMoreOptions = !_showMoreOptions),
+                  ),
+                ),
+              ),
             ],
           ),
         ],
@@ -2072,9 +2249,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       'Share contact',
       'Auto delete',
       'Clear chat',
-      if (widget.contactStatus == ProfileContactStatus.saved ||
-          _savedContact != null)
-        _isProfileUserBlocked ? 'Unblock user' : 'Block user',
+      if (_isOtherUser) _isProfileUserBlocked ? 'Unblock user' : 'Block user',
     ];
     return Material(
       color: Colors.transparent,
@@ -2083,92 +2258,93 @@ class _ProfileScreenState extends State<ProfileScreen>
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
-        width: 200,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF23262C).withValues(alpha: 0.30),
-          borderRadius: BorderRadius.circular(38),
-          border: Border.all(color: const Color(0xFF292C32)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 24,
-              offset: const Offset(0, 12),
+            width: 200,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
+              borderRadius: BorderRadius.circular(38),
+              border: Border.all(color: const Color(0xFF292C32)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  blurRadius: 24,
+                  offset: const Offset(0, 12),
+                ),
+              ],
             ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final option in options)
-              InkWell(
-                onTap: option == 'Mute'
-                    ? () => setState(() => _showMuteOptions = true)
-                    : option == 'Unmute'
-                    ? _unmuteRoom
-                    : option == 'Clear chat'
-                    ? () => setState(() => _showClearChatConfirmation = true)
-                    : option == 'Auto delete'
-                    ? () => setState(() => _showAutoDeleteOptions = true)
-                    : option == 'Share contact'
-                    ? _openShareContactPicker
-                    : option == 'Block user'
-                    ? () => setState(() {
-                        _showMoreOptions = false;
-                        _showBlockUserCard = true;
-                        _showBlockConfirmation = true;
-                      })
-                    : option == 'Unblock user'
-                    ? () => setState(() {
-                        _showMoreOptions = false;
-                        _showBlockUserCard = true;
-                        _showBlockConfirmation = true;
-                        _showUnblockConfirmation = true;
-                      })
-                    : () {},
-                child: SizedBox(
-                  height: 52,
-                  width: double.infinity,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 28),
-                      child: Row(
-                        children: [
-                          if (_moreOptionIconPath(option) != null) ...[
-                            SvgPicture.asset(
-                              _moreOptionIconPath(option)!,
-                              width: 20,
-                              height: 20,
-                            colorFilter: ColorFilter.mode(
-                              option == 'Unblock user'
-                                  ? const Color(0xFFFF5C52)
-                                  : Colors.white,
-                                BlendMode.srcIn,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final option in options)
+                  InkWell(
+                    onTap: option == 'Mute'
+                        ? () => setState(() => _showMuteOptions = true)
+                        : option == 'Unmute'
+                        ? _unmuteRoom
+                        : option == 'Clear chat'
+                        ? () =>
+                              setState(() => _showClearChatConfirmation = true)
+                        : option == 'Auto delete'
+                        ? () => setState(() => _showAutoDeleteOptions = true)
+                        : option == 'Share contact'
+                        ? _openShareContactPicker
+                        : option == 'Block user'
+                        ? () => setState(() {
+                            _showMoreOptions = false;
+                            _showBlockUserCard = true;
+                            _showBlockConfirmation = true;
+                          })
+                        : option == 'Unblock user'
+                        ? () => setState(() {
+                            _showMoreOptions = false;
+                            _showBlockUserCard = true;
+                            _showBlockConfirmation = true;
+                            _showUnblockConfirmation = true;
+                          })
+                        : () {},
+                    child: SizedBox(
+                      height: 52,
+                      width: double.infinity,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 28),
+                          child: Row(
+                            children: [
+                              if (_moreOptionIconPath(option) != null) ...[
+                                SvgPicture.asset(
+                                  _moreOptionIconPath(option)!,
+                                  width: 20,
+                                  height: 20,
+                                  colorFilter: ColorFilter.mode(
+                                    option == 'Unblock user'
+                                        ? const Color(0xFFFF5C52)
+                                        : Colors.white,
+                                    BlendMode.srcIn,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                              ],
+                              Text(
+                                option,
+                                style: TextStyle(
+                                  color: option == 'Unblock user'
+                                      ? const Color(0xFFFF5C52)
+                                      : Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w400,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 6),
-                          ],
-                          Text(
-                            option,
-                            style: TextStyle(
-                              color: option == 'Unblock user'
-                                  ? const Color(0xFFFF5C52)
-                                  : Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w400,
-                            ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
-          ],
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -2182,83 +2358,85 @@ class _ProfileScreenState extends State<ProfileScreen>
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
-        width: 200,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF23262C).withValues(alpha: 0.30),
-          borderRadius: BorderRadius.circular(38),
-          border: Border.all(color: const Color(0xFF292C32)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 24,
-              offset: const Offset(0, 12),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            InkWell(
-              onTap: () => setState(() => _showMuteOptions = false),
-              child: SizedBox(
-                height: 52,
-                child: Row(
-                  children: [
-                    const SizedBox(width: 28),
-                    SvgPicture.asset(
-                      'assets/svg/ic--round-arrow-back-ios.svg',
-                      width: 24,
-                      height: 24,
-                      colorFilter: const ColorFilter.mode(
-                        Colors.white,
-                        BlendMode.srcIn,
-                      ),
-                    ),
-                    const SizedBox(width: 26),
-                    const Text(
-                      'Back',
-                      style: TextStyle(color: Colors.white, fontSize: 14),
-                    ),
-                  ],
+            width: 200,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF23262C).withValues(alpha: 0.30),
+              borderRadius: BorderRadius.circular(38),
+              border: Border.all(color: const Color(0xFF292C32)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  blurRadius: 24,
+                  offset: const Offset(0, 12),
                 ),
-              ),
+              ],
             ),
-            for (final option in options)
-              InkWell(
-                onTap: () => _applyMuteOption(option),
-                child: SizedBox(
-                  height: 52,
-                  child: Row(
-                    children: [
-                      const SizedBox(width: 28),
-                      SvgPicture.asset(
-                        'assets/images/Bell new icon slash .svg',
-                        width: 20,
-                        height: 20,
-                        colorFilter: ColorFilter.mode(
-                          option == 'Always' ? const Color(0xFFFF5C52) : Colors.white,
-                          BlendMode.srcIn,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                InkWell(
+                  onTap: () => setState(() => _showMuteOptions = false),
+                  child: SizedBox(
+                    height: 52,
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 28),
+                        SvgPicture.asset(
+                          'assets/svg/ic--round-arrow-back-ios.svg',
+                          width: 24,
+                          height: 24,
+                          colorFilter: const ColorFilter.mode(
+                            Colors.white,
+                            BlendMode.srcIn,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 26),
-                      Text(
-                        option,
-                        style: TextStyle(
-                          color: option == 'Always'
-                              ? const Color(0xFFFF5C52)
-                              : Colors.white,
-                          fontSize: 14,
+                        const SizedBox(width: 26),
+                        const Text(
+                          'Back',
+                          style: TextStyle(color: Colors.white, fontSize: 14),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-          ],
+                for (final option in options)
+                  InkWell(
+                    onTap: () => _applyMuteOption(option),
+                    child: SizedBox(
+                      height: 52,
+                      child: Row(
+                        children: [
+                          const SizedBox(width: 28),
+                          SvgPicture.asset(
+                            'assets/images/Bell new icon slash .svg',
+                            width: 20,
+                            height: 20,
+                            colorFilter: ColorFilter.mode(
+                              option == 'Always'
+                                  ? const Color(0xFFFF5C52)
+                                  : Colors.white,
+                              BlendMode.srcIn,
+                            ),
+                          ),
+                          const SizedBox(width: 26),
+                          Text(
+                            option,
+                            style: TextStyle(
+                              color: option == 'Always'
+                                  ? const Color(0xFFFF5C52)
+                                  : Colors.white,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -2282,7 +2460,8 @@ class _ProfileScreenState extends State<ProfileScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 InkWell(
-                  onTap: () => setState(() => _showClearChatConfirmation = false),
+                  onTap: () =>
+                      setState(() => _showClearChatConfirmation = false),
                   child: _clearChatConfirmationRow(
                     child: Row(
                       children: [
@@ -2296,7 +2475,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                           ),
                         ),
                         const SizedBox(width: 26),
-                        const Text('Back', style: TextStyle(color: Colors.white, fontSize: 14)),
+                        const Text(
+                          'Back',
+                          style: TextStyle(color: Colors.white, fontSize: 14),
+                        ),
                       ],
                     ),
                   ),
@@ -2327,9 +2509,13 @@ class _ProfileScreenState extends State<ProfileScreen>
                   ),
                 ),
                 InkWell(
-                  onTap: () => setState(() => _showClearChatConfirmation = false),
+                  onTap: () =>
+                      setState(() => _showClearChatConfirmation = false),
                   child: _clearChatConfirmationRow(
-                    child: const Text('Cancel', style: TextStyle(color: Colors.white, fontSize: 14)),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
                   ),
                 ),
               ],
@@ -2374,7 +2560,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                           ),
                         ),
                         const SizedBox(width: 26),
-                        const Text('Back', style: TextStyle(color: Colors.white, fontSize: 14)),
+                        const Text(
+                          'Back',
+                          style: TextStyle(color: Colors.white, fontSize: 14),
+                        ),
                       ],
                     ),
                   ),
@@ -2397,7 +2586,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                   ),
                 ),
                 _autoDeleteOptionRow('Off'),
-                for (final duration in durations) _autoDeleteOptionRow(duration),
+                for (final duration in durations)
+                  _autoDeleteOptionRow(duration),
               ],
             ),
           ),
@@ -2428,11 +2618,17 @@ class _ProfileScreenState extends State<ProfileScreen>
                 'assets/images/Disappearing messages icon.svg',
                 width: 20,
                 height: 20,
-                colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+                colorFilter: const ColorFilter.mode(
+                  Colors.white,
+                  BlendMode.srcIn,
+                ),
               ),
               const SizedBox(width: 26),
             ],
-            Text(option, style: const TextStyle(color: Colors.white, fontSize: 14)),
+            Text(
+              option,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
             if (selected) ...[
               const Spacer(),
               const Icon(Icons.check, color: Color(0xFF4DA3FF), size: 22),
@@ -2519,7 +2715,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-
   Future<void> _openShareContactPicker() async {
     setState(() => _showMoreOptions = false);
     final owner = UserProfileService.instance.cachedProfile?.uid ?? '';
@@ -2546,7 +2741,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         '${sharedName.isEmpty ? sharedPhone : sharedName}\n'
         '$sharedPhone';
 
-  String? singleRecipientRoomId;
+    String? singleRecipientRoomId;
     String? singleRecipientId;
     String? singleRecipientName;
     String? singleRecipientAvatar;
@@ -2576,10 +2771,9 @@ class _ProfileScreenState extends State<ProfileScreen>
           );
           // Remember the last successful recipient (used only when count == 1).
           singleRecipientRoomId = roomId;
-          singleRecipientId =
-              recipient.wrytteUserId?.trim().isNotEmpty == true
-                  ? recipient.wrytteUserId
-                  : roomId;
+          singleRecipientId = recipient.wrytteUserId?.trim().isNotEmpty == true
+              ? recipient.wrytteUserId
+              : roomId;
           singleRecipientName = recipient.formattedName;
           singleRecipientAvatar = recipient.avatarUrl;
           apkLog(
@@ -2663,6 +2857,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
     return null;
   }
+
   Widget _buildUnsavedProfileActions() {
     return ClipRRect(
       borderRadius: BorderRadius.circular(22),
@@ -2728,9 +2923,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildBlockUserCard() {
     return GestureDetector(
-      onTap: _isProfileUserBlocked
-          ? _unblockProfileUser
-          : _blockProfileUser,
+      onTap: _isProfileUserBlocked ? _unblockProfileUser : _blockProfileUser,
       child: Container(
         height: 44,
         padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -2742,28 +2935,26 @@ class _ProfileScreenState extends State<ProfileScreen>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-          SvgPicture.asset(
-            'assets/images/Block user.svg',
-            width: 24,
-            height: 24,
-            colorFilter: ColorFilter.mode(
-              _isProfileUserBlocked
-                  ? Colors.white
-                  : const Color(0xFFFF5C52),
-              BlendMode.srcIn,
+            SvgPicture.asset(
+              'assets/images/Block user.svg',
+              width: 24,
+              height: 24,
+              colorFilter: ColorFilter.mode(
+                _isProfileUserBlocked ? Colors.white : const Color(0xFFFF5C52),
+                BlendMode.srcIn,
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            _isProfileUserBlocked ? 'Unblock user' : 'Block user',
-            style: TextStyle(
-              color: _isProfileUserBlocked
-                  ? Colors.white
-                  : const Color(0xFFFF5C52),
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
+            const SizedBox(width: 8),
+            Text(
+              _isProfileUserBlocked ? 'Unblock user' : 'Block user',
+              style: TextStyle(
+                color: _isProfileUserBlocked
+                    ? Colors.white
+                    : const Color(0xFFFF5C52),
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+              ),
             ),
-          ),
           ],
         ),
       ),
@@ -2795,9 +2986,16 @@ class _ProfileScreenState extends State<ProfileScreen>
                     padding: EdgeInsets.symmetric(horizontal: 28, vertical: 10),
                     child: Row(
                       children: [
-                        Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+                        Icon(
+                          Icons.arrow_back_ios_new,
+                          color: Colors.white,
+                          size: 20,
+                        ),
                         SizedBox(width: 24),
-                        Text('Back', style: TextStyle(color: Colors.white, fontSize: 16)),
+                        Text(
+                          'Back',
+                          style: TextStyle(color: Colors.white, fontSize: 16),
+                        ),
                       ],
                     ),
                   ),
@@ -2841,7 +3039,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                   }),
                   child: const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-                    child: Text('Cancel', style: TextStyle(color: Colors.white, fontSize: 16)),
+                    child: Text(
+                      'Cancel',
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                    ),
                   ),
                 ),
               ],
@@ -2856,17 +3057,17 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (_blockActionInFlight) return;
     _blockActionInFlight = true;
     try {
-    final userId = _profileTargetUserId;
-    final roomId = widget.conversationId?.trim() ?? '';
-    if (userId == null || roomId.isEmpty) return;
-    await BlockStateService.instance.addBlock(userId: userId, roomId: roomId);
-    if (mounted) {
-      setState(() {
-        _showBlockConfirmation = false;
-        _showUnblockConfirmation = false;
-        _showBlockUserCard = false;
-      });
-    }
+      final userId = _profileTargetUserId;
+      final roomId = widget.conversationId?.trim() ?? '';
+      if (userId == null || roomId.isEmpty) return;
+      await BlockStateService.instance.addBlock(userId: userId, roomId: roomId);
+      if (mounted) {
+        setState(() {
+          _showBlockConfirmation = false;
+          _showUnblockConfirmation = false;
+          _showBlockUserCard = false;
+        });
+      }
     } finally {
       _blockActionInFlight = false;
     }
@@ -2876,17 +3077,20 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (_blockActionInFlight) return;
     _blockActionInFlight = true;
     try {
-    final userId = _profileTargetUserId;
-    final roomId = widget.conversationId?.trim() ?? '';
-    if (userId == null || roomId.isEmpty) return;
-    await BlockStateService.instance.removeBlock(userId: userId, roomId: roomId);
-    if (mounted) {
-      setState(() {
-        _showBlockConfirmation = false;
-        _showUnblockConfirmation = false;
-        _showBlockUserCard = false;
-      });
-    }
+      final userId = _profileTargetUserId;
+      final roomId = widget.conversationId?.trim() ?? '';
+      if (userId == null || roomId.isEmpty) return;
+      await BlockStateService.instance.removeBlock(
+        userId: userId,
+        roomId: roomId,
+      );
+      if (mounted) {
+        setState(() {
+          _showBlockConfirmation = false;
+          _showUnblockConfirmation = false;
+          _showBlockUserCard = false;
+        });
+      }
     } finally {
       _blockActionInFlight = false;
     }
@@ -2914,10 +3118,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             decoration: BoxDecoration(
               color: const Color(0xFF08090B),
               borderRadius: BorderRadius.circular(28),
-              border: Border.all(
-                color: const Color(0xFF23262C),
-                width: 1,
-              ),
+              border: Border.all(color: const Color(0xFF23262C), width: 1),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.25),
@@ -2929,38 +3130,32 @@ class _ProfileScreenState extends State<ProfileScreen>
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-
-          SizedBox(
-            height: 30,
-            child: Center(
-              child:
-                  iconAsset != null
-                      ? SvgPicture.asset(
-                          iconAsset,
-                          width: iconSize,
-                          height: iconSize,
-                          colorFilter: ColorFilter.mode(
-                            actionColor,
-                            BlendMode.srcIn,
-                          ),
-                        )
-                      : Icon(
-                          icon,
-                          color: actionColor,
-                          size: iconSize,
-                        ),
-            ),
-          ),
-          const SizedBox(height: 1),
-          Text(
-            label,
-            style: TextStyle(
-              color: _showMoreOptions && label != 'More'
-                  ? Colors.white38
-                  : Colors.white.withValues(alpha: 0.75),
-              fontSize: 12,
-            ),
-          ),
+                SizedBox(
+                  height: 30,
+                  child: Center(
+                    child: iconAsset != null
+                        ? SvgPicture.asset(
+                            iconAsset,
+                            width: iconSize,
+                            height: iconSize,
+                            colorFilter: ColorFilter.mode(
+                              actionColor,
+                              BlendMode.srcIn,
+                            ),
+                          )
+                        : Icon(icon, color: actionColor, size: iconSize),
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: _showMoreOptions && label != 'More'
+                        ? Colors.white38
+                        : Colors.white.withValues(alpha: 0.75),
+                    fontSize: 12,
+                  ),
+                ),
               ],
             ),
           ),
@@ -3062,10 +3257,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             decoration: BoxDecoration(
               color: const Color(0xFF249FF0),
               borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: const Color(0xFF249FF0),
-                width: 1,
-              ),
+              border: Border.all(color: const Color(0xFF249FF0), width: 1),
             ),
             child: SizedBox.expand(
               child: FilledButton(
@@ -3074,10 +3266,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                   backgroundColor: const Color(0xFF249FF0),
                   foregroundColor: Colors.white,
                   elevation: 0,
-                  side: const BorderSide(
-                    color: Color(0xFF249FF0),
-                    width: 1,
-                  ),
+                  side: const BorderSide(color: Color(0xFF249FF0), width: 1),
                   padding: EdgeInsets.zero,
                   shape: const StadiumBorder(),
                   textStyle: const TextStyle(
@@ -3441,7 +3630,10 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   String _displayProfileLink(String value) {
     var display = value.trim();
-    display = display.replaceFirst(RegExp(r'^https?://', caseSensitive: false), '');
+    display = display.replaceFirst(
+      RegExp(r'^https?://', caseSensitive: false),
+      '',
+    );
     display = display.replaceFirst(RegExp(r'^www\.', caseSensitive: false), '');
     if (display.length <= 33) return display;
     return '${display.substring(0, 30)}...';
@@ -3459,7 +3651,6 @@ class _ProfileScreenState extends State<ProfileScreen>
           onTap: () => _launchLink(firstLink),
           child: Row(
             children: [
-
               SizedBox(
                 width: 12,
                 height: 12,
@@ -3475,10 +3666,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               Expanded(
                 child: Text(
                   _displayProfileLink(firstLink),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                  ),
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
                 ),
@@ -3489,10 +3677,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                   onTap: () => setState(() => _linksExpanded = true),
                   child: Text(
                     '$remainingCount more',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                    ),
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
                   ),
                 ),
               ],
@@ -3511,10 +3696,26 @@ class _ProfileScreenState extends State<ProfileScreen>
                       children: [
                         ColorFiltered(
                           colorFilter: const ColorFilter.matrix([
-                            0, 0, 0, 0, 255,
-                            0, 0, 0, 0, 255,
-                            0, 0, 0, 0, 255,
-                            1, 0, 0, 0, 0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            255,
+                            0,
+                            0,
+                            0,
+                            0,
+                            255,
+                            0,
+                            0,
+                            0,
+                            0,
+                            255,
+                            1,
+                            0,
+                            0,
+                            0,
+                            0,
                           ]),
                           child: SizedBox(
                             width: 22,
@@ -3568,19 +3769,17 @@ class _ProfileScreenState extends State<ProfileScreen>
     required MatrixPublicGroup? room,
     required bool isChannel,
   }) {
-    final title =
-        room?.name.trim().isNotEmpty == true
-            ? room?.name.trim() ?? label
-            : reference.startsWith('!')
-            ? label
-            : reference;
+    final title = room?.name.trim().isNotEmpty == true
+        ? room?.name.trim() ?? label
+        : reference.startsWith('!')
+        ? label
+        : reference;
     final count = room?.memberCount;
-    final countLabel =
-        count == null
-            ? ''
-            : isChannel
-            ? '$count ${count == 1 ? 'subscriber' : 'subscribers'}'
-            : '$count ${count == 1 ? 'member' : 'members'}';
+    final countLabel = count == null
+        ? ''
+        : isChannel
+        ? '$count ${count == 1 ? 'subscriber' : 'subscribers'}'
+        : '$count ${count == 1 ? 'member' : 'members'}';
     return InkWell(
       onTap: () => _openProfileRoom(reference, isChannel: isChannel),
       borderRadius: BorderRadius.circular(10),
@@ -3592,10 +3791,9 @@ class _ProfileScreenState extends State<ProfileScreen>
               size: 42,
               imageUrl: room?.avatarUrl,
               name: title,
-              cacheIdentity:
-                  room == null
-                      ? null
-                      : 'room:${room.roomId}:${room.profileVersionFingerprint}',
+              cacheIdentity: room == null
+                  ? null
+                  : 'room:${room.roomId}:${room.profileVersionFingerprint}',
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -3659,11 +3857,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           child: Center(
             child: GestureDetector(
               onTap: onTap,
-              child: Icon(
-                icon,
-                color: Colors.white,
-                size: 20,
-              ),
+              child: Icon(icon, color: Colors.white, size: 20),
             ),
           ),
         ),
@@ -3689,10 +3883,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             child: Center(
               child: Text(
                 text,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                ),
+                style: const TextStyle(color: Colors.white, fontSize: 16),
               ),
             ),
           ),
@@ -3713,7 +3904,8 @@ class ShareContactPickerSheet extends StatefulWidget {
   final Future<void> Function(Contact contact) onSend;
 
   @override
-  State<ShareContactPickerSheet> createState() => _ShareContactPickerSheetState();
+  State<ShareContactPickerSheet> createState() =>
+      _ShareContactPickerSheetState();
 }
 
 class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
@@ -3737,7 +3929,9 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
     }).toList();
     contacts.sort((a, b) {
       if (a.isRecent != b.isRecent) return a.isRecent ? -1 : 1;
-      return a.formattedName.toLowerCase().compareTo(b.formattedName.toLowerCase());
+      return a.formattedName.toLowerCase().compareTo(
+        b.formattedName.toLowerCase(),
+      );
     });
     return contacts;
   }
@@ -3748,8 +3942,14 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
     final recent = markedRecent.isNotEmpty
         ? markedRecent
         : _filtered.take(2).toList();
-    final recentKeys = recent.map((c) => '${c.formattedName}|${c.primaryPhone}').toSet();
-    final others = _filtered.where((c) => !recentKeys.contains('${c.formattedName}|${c.primaryPhone}')).toList();
+    final recentKeys = recent
+        .map((c) => '${c.formattedName}|${c.primaryPhone}')
+        .toSet();
+    final others = _filtered
+        .where(
+          (c) => !recentKeys.contains('${c.formattedName}|${c.primaryPhone}'),
+        )
+        .toList();
     return FractionallySizedBox(
       heightFactor: .82,
       child: Material(
@@ -3764,7 +3964,16 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
                   children: [
                     _roundAction(Icons.close, () => Navigator.pop(context)),
                     const Expanded(
-                      child: Center(child: Text('Share contact', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700))),
+                      child: Center(
+                        child: Text(
+                          'Share contact',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                     ),
                     _sendAction(),
                   ],
@@ -3777,7 +3986,8 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
                   onChanged: (value) => setState(() => _query = value),
                   style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
-                    hintText: 'Search', hintStyle: const TextStyle(color: Color(0xFF9A9DA4)),
+                    hintText: 'Search',
+                    hintStyle: const TextStyle(color: Color(0xFF9A9DA4)),
                     prefixIcon: Padding(
                       padding: const EdgeInsets.all(14),
                       child: SvgPicture.asset(
@@ -3790,22 +4000,40 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
                         ),
                       ),
                     ),
-                    filled: true, fillColor: const Color(0xFF25282E),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+                    filled: true,
+                    fillColor: const Color(0xFF25282E),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(28),
+                      borderSide: BorderSide.none,
+                    ),
                   ),
                 ),
               ),
-              Expanded(child: ListView(
-                padding: const EdgeInsets.fromLTRB(24, 18, 24, 32),
-                children: [
-                  if (recent.isNotEmpty) ...[_section('Recent chats'), ...recent.map(_contactRow)],
-                  if (others.isNotEmpty) ...[
-                    _section('Contacts'),
-                    ..._alphabeticalRows(others),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(24, 18, 24, 32),
+                  children: [
+                    if (recent.isNotEmpty) ...[
+                      _section('Recent chats'),
+                      ...recent.map(_contactRow),
+                    ],
+                    if (others.isNotEmpty) ...[
+                      _section('Contacts'),
+                      ..._alphabeticalRows(others),
+                    ],
+                    if (_filtered.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Center(
+                          child: Text(
+                            'No contacts found',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      ),
                   ],
-                  if (_filtered.isEmpty) const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('No contacts found', style: TextStyle(color: Colors.grey)))),
-                ],
-              )),
+                ),
+              ),
             ],
           ),
         ),
@@ -3813,7 +4041,13 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
     );
   }
 
-  Widget _section(String title) => Padding(padding: const EdgeInsets.only(top: 4, bottom: 8), child: Text(title, style: const TextStyle(color: Color(0xFF9A9DA4), fontSize: 16)));
+  Widget _section(String title) => Padding(
+    padding: const EdgeInsets.only(top: 4, bottom: 8),
+    child: Text(
+      title,
+      style: const TextStyle(color: Color(0xFF9A9DA4), fontSize: 16),
+    ),
+  );
 
   List<Widget> _alphabeticalRows(List<Contact> contacts) {
     final rows = <Widget>[];
@@ -3823,10 +4057,15 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
           ? '#'
           : contact.formattedName.trim()[0].toUpperCase();
       if (initial != previous) {
-        rows.add(Padding(
-          padding: const EdgeInsets.only(top: 12, bottom: 4),
-          child: Text(initial, style: const TextStyle(color: Color(0xFF9A9DA4), fontSize: 16)),
-        ));
+        rows.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 4),
+            child: Text(
+              initial,
+              style: const TextStyle(color: Color(0xFF9A9DA4), fontSize: 16),
+            ),
+          ),
+        );
         previous = initial;
       }
       rows.add(_contactRow(contact));
@@ -3838,15 +4077,43 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
     final key = '${contact.formattedName}|${contact.primaryPhone}';
     final selected = _selected.contains(key);
     return InkWell(
-      onTap: () => setState(() => selected ? _selected.remove(key) : _selected.add(key)),
+      onTap: () =>
+          setState(() => selected ? _selected.remove(key) : _selected.add(key)),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Row(children: [
-          UserAvatar(imageUrl: contact.avatarUrl, size: 54, name: contact.formattedName),
-          const SizedBox(width: 14),
-          Expanded(child: Text(contact.formattedName, style: const TextStyle(color: Colors.white, fontSize: 17))),
-          Container(width: 24, height: 24, decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: selected ? Colors.lightBlueAccent : const Color(0xFF555960), width: 1.5), color: selected ? Colors.lightBlueAccent : Colors.transparent), child: selected ? const Icon(Icons.check, size: 16, color: Colors.white) : null),
-        ]),
+        child: Row(
+          children: [
+            UserAvatar(
+              imageUrl: contact.avatarUrl,
+              size: 54,
+              name: contact.formattedName,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                contact.formattedName,
+                style: const TextStyle(color: Colors.white, fontSize: 17),
+              ),
+            ),
+            Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected
+                      ? Colors.lightBlueAccent
+                      : const Color(0xFF555960),
+                  width: 1.5,
+                ),
+                color: selected ? Colors.lightBlueAccent : Colors.transparent,
+              ),
+              child: selected
+                  ? const Icon(Icons.check, size: 16, color: Colors.white)
+                  : null,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -3878,44 +4145,51 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
       'building selected=${_selected.length} sending=$_sending asset=assets/images/Send icon.svg',
     );
     return IconButton(
-    onPressed: _selected.isEmpty || _sending
-        ? null
-        : () {
-            apkLog(
-              'ShareContact.sendButton',
-              'tapped selected=${_selected.length} sending=$_sending',
-            );
-            _sendSelected();
-          },
-    icon: _sending
-        ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-        : ClipRRect(
-            borderRadius: BorderRadius.circular(18),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-              child: Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF10A9F0),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF10A9F0)),
-                ),
-                child: Center(
-                  child: SvgPicture.asset(
-                    'assets/images/Send icon.svg',
-                    width: 20,
-                    height: 20,
-                    fit: BoxFit.contain,
-                    colorFilter: const ColorFilter.mode(
-                      Colors.white,
-                      BlendMode.srcIn,
+      onPressed: _selected.isEmpty || _sending
+          ? null
+          : () {
+              apkLog(
+                'ShareContact.sendButton',
+                'tapped selected=${_selected.length} sending=$_sending',
+              );
+              _sendSelected();
+            },
+      icon: _sending
+          ? const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            )
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10A9F0),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xFF10A9F0)),
+                  ),
+                  child: Center(
+                    child: SvgPicture.asset(
+                      'assets/images/Send icon.svg',
+                      width: 20,
+                      height: 20,
+                      fit: BoxFit.contain,
+                      colorFilter: const ColorFilter.mode(
+                        Colors.white,
+                        BlendMode.srcIn,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
     );
   }
 
@@ -3932,9 +4206,9 @@ class _ShareContactPickerSheetState extends State<ShareContactPickerSheet> {
     } catch (_) {
       if (mounted) {
         setState(() => _sending = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Unable to send contact')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Unable to send contact')));
       }
     }
   }
@@ -3987,14 +4261,9 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
           child: Container(
             decoration: const BoxDecoration(
               color: Color(0x4D23262C),
-              borderRadius: BorderRadius.vertical(
-                top: Radius.circular(28),
-              ),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
               border: Border(
-                top: BorderSide(
-                  color: Color(0xFF23262C),
-                  width: 1,
-                ),
+                top: BorderSide(color: Color(0xFF23262C), width: 1),
               ),
             ),
             child: SafeArea(
@@ -4008,133 +4277,140 @@ class _ProfileAddContactSheetState extends State<_ProfileAddContactSheet> {
                 ),
                 child: Column(
                   children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _sheetCircleButton(
-                    icon: Icons.close,
-                    onTap: () => Navigator.pop(context),
-                  ),
-                  AnimatedBuilder(
-                    animation: _nameController,
-                    builder: (context, _) {
-                      final hasName = _nameController.text.trim().isNotEmpty;
-                      return GestureDetector(
-                        onTap: hasName
-                            ? () async {
-                                await widget.onSave(_nameController.text);
-                                if (context.mounted) {
-                                  Navigator.pop(context, true);
-                                }
-                              }
-                            : null,
-                        child: Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: hasName
-                                ? const Color(0xFF249FF0)
-                                : const Color(0xFF3A3D44),
-                            shape: BoxShape.circle,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        _sheetCircleButton(
+                          icon: Icons.close,
+                          onTap: () => Navigator.pop(context),
+                        ),
+                        AnimatedBuilder(
+                          animation: _nameController,
+                          builder: (context, _) {
+                            final hasName = _nameController.text
+                                .trim()
+                                .isNotEmpty;
+                            return GestureDetector(
+                              onTap: hasName
+                                  ? () async {
+                                      await widget.onSave(_nameController.text);
+                                      if (context.mounted) {
+                                        Navigator.pop(context, true);
+                                      }
+                                    }
+                                  : null,
+                              child: Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: hasName
+                                      ? const Color(0xFF249FF0)
+                                      : const Color(0xFF3A3D44),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.check,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    _sheetField(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _nameController,
+                              autofocus: true,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                              ),
+                              textAlignVertical: TextAlignVertical.center,
+                              decoration: const InputDecoration(
+                                border: InputBorder.none,
+                                hintText: 'Name',
+                                hintStyle: TextStyle(color: Colors.white70),
+                                isCollapsed: true,
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
                           ),
-                          child: const Icon(
-                            Icons.check,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              _sheetField(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _nameController,
-                        autofocus: true,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                        ),
-                        textAlignVertical: TextAlignVertical.center,
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          hintText: 'Name',
-                          hintStyle: TextStyle(color: Colors.white70),
-                          isCollapsed: true,
-                          contentPadding: EdgeInsets.zero,
-                        ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-              _sheetField(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        widget.phone,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                        ),
+                    const SizedBox(height: 24),
+                    _sheetField(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              widget.phone,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                              ),
+                            ),
+                          ),
+                          const WrytteIdCheckmark(),
+                        ],
                       ),
                     ),
-                    const WrytteIdCheckmark(),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 5),
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Sync contact to phone',
-                      style: TextStyle(color: Colors.white, fontSize: 17),
+                    const SizedBox(height: 5),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Sync contact to phone',
+                            style: TextStyle(color: Colors.white, fontSize: 17),
+                          ),
+                        ),
+                        SyncContactsSwitch(
+                          value: _syncToPhone,
+                          onChanged: (value) =>
+                              setState(() => _syncToPhone = value),
+                        ),
+                      ],
                     ),
-                  ),
-                  SyncContactsSwitch(
-                    value: _syncToPhone,
-                    onChanged: (value) => setState(() => _syncToPhone = value),
-                  ),
-                ],
-              ),
-              if (widget.showDeleteContact) ...[
-                const SizedBox(height: 5),
-                GestureDetector(
-                  onTap: widget.onDeleteContact,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(24),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                      child: Container(
-                        width: double.infinity,
-                        height: 48,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF23262C).withValues(alpha: 0.30),
+                    if (widget.showDeleteContact) ...[
+                      const SizedBox(height: 5),
+                      GestureDetector(
+                        onTap: widget.onDeleteContact,
+                        child: ClipRRect(
                           borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: const Color(0xFF23262C)),
-                        ),
-                        child: const Text(
-                          'Delete contact',
-                          style: TextStyle(
-                            color: Color(0xFFFF6B6B),
-                            fontSize: 17,
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                            child: Container(
+                              width: double.infinity,
+                              height: 48,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: const Color(
+                                  0xFF23262C,
+                                ).withValues(alpha: 0.30),
+                                borderRadius: BorderRadius.circular(24),
+                                border: Border.all(
+                                  color: const Color(0xFF23262C),
+                                ),
+                              ),
+                              child: const Text(
+                                'Delete contact',
+                                style: TextStyle(
+                                  color: Color(0xFFFF6B6B),
+                                  fontSize: 17,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
-                ),
-              ],
+                    ],
                   ],
                 ),
               ),

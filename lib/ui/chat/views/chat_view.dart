@@ -3327,19 +3327,20 @@ class _ChatViewState extends State<ChatView>
                                               'avatar="${model.config.avatarAsset}"',
                                             );
                                             Navigator.of(context).push(
-                                                MaterialPageRoute<void>(
-                                                  builder: (_) => ProfileScreen(
-                                                    conversationId:
-                                                        model.config.id,
-                                                    savedNameHint:
-                                                        model.config.title,
-                                                    initialProfileName:
-                                                        model.config.title,
-                                                    initialAvatarUrl:
-                                                        model.config.avatarAsset,
-                                                  ),
+                                              MaterialPageRoute<void>(
+                                                builder: (_) => ProfileScreen(
+                                                  uid: model.config.receiverId,
+                                                  conversationId:
+                                                      model.config.id,
+                                                  savedNameHint:
+                                                      model.config.title,
+                                                  initialProfileName:
+                                                      model.config.title,
+                                                  initialAvatarUrl:
+                                                      model.config.avatarAsset,
                                                 ),
-                                              );
+                                              ),
+                                            );
                                           },
                                         ),
                                 ),

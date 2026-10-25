@@ -21,7 +21,8 @@ class BlockStateService {
   static const unblockedEventType = 'com.wrytte.user.unblocked';
 
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
-  final StreamController<({String blockedBy, String roomId})> _unblockController =
+  final StreamController<({String blockedBy, String roomId})>
+  _unblockController =
       StreamController<({String blockedBy, String roomId})>.broadcast();
   Map<String, dynamic> _blocklist = <String, dynamic>{};
   Map<String, dynamic> _bbb = <String, dynamic>{};
@@ -125,7 +126,9 @@ class BlockStateService {
 
     final latestEvents = latestByRoom.entries.toList()
       ..sort((a, b) {
-        final timestamp = a.value.originServerTs.compareTo(b.value.originServerTs);
+        final timestamp = a.value.originServerTs.compareTo(
+          b.value.originServerTs,
+        );
         return timestamp != 0
             ? timestamp
             : a.value.eventId.compareTo(b.value.eventId);
@@ -142,8 +145,8 @@ class BlockStateService {
         final type = matrixEvent.type;
         final content = Map<String, dynamic>.from(matrixEvent.content);
         final eventRoom = latest.key;
-        final blockedBy = content['blocked_by']?.toString() ??
-            matrixEvent.senderId;
+        final blockedBy =
+            content['blocked_by']?.toString() ?? matrixEvent.senderId;
         if (blockedBy.isEmpty) continue;
         debugPrint(
           '[BlockState] backfill event type="$type" receiver="$userId" '
@@ -156,18 +159,20 @@ class BlockStateService {
               blockedUser != userId) {
             continue;
           }
-          await _applyBlockEvent(() => recordBlockedBy({
-            'blocked_by': blockedBy,
-            'blocked_user_id': userId,
-            'room_id': eventRoom,
-            'blocked_at': content['timestamp']?.toString() ??
-                matrixEvent.originServerTs.toUtc().toIso8601String(),
-          }));
+          await _applyBlockEvent(
+            () => recordBlockedBy({
+              'blocked_by': blockedBy,
+              'blocked_user_id': userId,
+              'room_id': eventRoom,
+              'blocked_at':
+                  content['timestamp']?.toString() ??
+                  matrixEvent.originServerTs.toUtc().toIso8601String(),
+            }),
+          );
         } else {
-          await _applyBlockEvent(() => removeBlockedBy(
-                blockedBy: blockedBy,
-                roomId: eventRoom,
-              ));
+          await _applyBlockEvent(
+            () => removeBlockedBy(blockedBy: blockedBy, roomId: eventRoom),
+          );
         }
       } catch (error) {
         debugPrint('[BlockState] backfill event apply failed error=$error');
@@ -191,19 +196,22 @@ class BlockStateService {
       'joined_rooms=${update.rooms?.join?.length ?? 0}',
     );
     if (update.accountData?.any(
-          (event) => event.type == blocklistType ||
+          (event) =>
+              event.type == blocklistType ||
               event.type == bbbType ||
               event.type == blockedMessagesType,
         ) ??
         false) {
       unawaited(load());
     }
-    for (final entry in
-        update.rooms?.join?.entries ??
-        const <String, mx.JoinedRoomUpdate>{}.entries) {
+    for (final entry
+        in update.rooms?.join?.entries ??
+            const <String, mx.JoinedRoomUpdate>{}.entries) {
       final roomId = entry.key;
-      for (final event in entry.value.timeline?.events ?? const <mx.MatrixEvent>[]) {
-        if (event.type == blockedEventType || event.type == unblockedEventType) {
+      for (final event
+          in entry.value.timeline?.events ?? const <mx.MatrixEvent>[]) {
+        if (event.type == blockedEventType ||
+            event.type == unblockedEventType) {
           debugPrint(
             '[BlockState] block event received type="${event.type}" '
             'receiver="${_client.userID}" sender="${event.senderId}" '
@@ -211,18 +219,25 @@ class BlockStateService {
           );
         }
         if (event.type == blockedEventType) {
-          unawaited(_applyBlockEvent(() => recordBlockedBy({
-            'blocked_by': event.content['blocked_by']?.toString() ?? event.senderId,
-            'blocked_user_id': _client.userID,
-            'room_id': event.content['room_id']?.toString() ?? roomId,
-            'blocked_at': event.content['timestamp']?.toString() ??
-                event.originServerTs.toUtc().toIso8601String(),
-          })));
+          unawaited(
+            _applyBlockEvent(
+              () => recordBlockedBy({
+                'blocked_by':
+                    event.content['blocked_by']?.toString() ?? event.senderId,
+                'blocked_user_id': _client.userID,
+                'room_id': event.content['room_id']?.toString() ?? roomId,
+                'blocked_at':
+                    event.content['timestamp']?.toString() ??
+                    event.originServerTs.toUtc().toIso8601String(),
+              }),
+            ),
+          );
         } else if (event.type == unblockedEventType) {
-          unawaited(_applyBlockEvent(() => removeBlockedBy(
-                blockedBy: event.senderId,
-                roomId: roomId,
-              )));
+          unawaited(
+            _applyBlockEvent(
+              () => removeBlockedBy(blockedBy: event.senderId, roomId: roomId),
+            ),
+          );
         }
       }
     }
@@ -232,9 +247,9 @@ class BlockStateService {
     final room = roomId.trim();
     final peer = peerId?.trim();
     return _entries(_blocklist).any((entry) {
-      return entry['room_id']?.toString() == room ||
-          (peer != null && entry['user_id']?.toString() == peer);
-    }) ||
+          return entry['room_id']?.toString() == room ||
+              (peer != null && entry['user_id']?.toString() == peer);
+        }) ||
         _entries(_bbb).any((entry) {
           return entry['room_id']?.toString() == room ||
               (peer != null && entry['blocked_by']?.toString() == peer);
@@ -246,7 +261,9 @@ class BlockStateService {
     final peer = peerId?.trim();
     return _entries(_blocklist).any((entry) {
       return (room.isNotEmpty && entry['room_id']?.toString() == room) ||
-          (peer != null && peer.isNotEmpty && entry['user_id']?.toString() == peer);
+          (peer != null &&
+              peer.isNotEmpty &&
+              entry['user_id']?.toString() == peer);
     });
   }
 
@@ -262,6 +279,7 @@ class BlockStateService {
       final separator = withoutAt.indexOf(':');
       return separator == -1 ? withoutAt : withoutAt.substring(0, separator);
     }
+
     final target = localpart(peer);
     final matched = _entries(_bbb).any((entry) {
       final blockedBy = localpart(entry['blocked_by']?.toString() ?? '');
@@ -279,13 +297,17 @@ class BlockStateService {
     return matched;
   }
 
-  /// Privacy-safe decision for profile/avatar consumers. Unknown state must
-  /// fail closed until account data and event backfill have completed.
+  /// Privacy-safe decision for profile/avatar consumers.
+  ///
+  /// Loading is not the same as redaction. Consumers must be able to render
+  /// already-cached profile data while the block state is being hydrated. A
+  /// real BBB match is still fail-closed and suppresses the profile/avatar.
   bool isRedactedByBbb(String userId, {String? roomId}) {
-    final result = !_ready || isBlockedByBbb(userId, roomId: roomId);
+    final matched = isBlockedByBbb(userId, roomId: roomId);
+    final result = matched;
     debugPrint(
       '[BlockState][DIAG] isRedactedByBbb peer="$userId" room="${roomId ?? ''}" '
-      'ready=$_ready result=$result',
+      'ready=$_ready matched=$matched action=${result ? 'suppress' : 'allow_cached'}',
     );
     return result;
   }
@@ -297,22 +319,25 @@ class BlockStateService {
     return !_ready || isRoomBlocked(roomId ?? '', peerId: userId);
   }
 
-  bool isBlockedBy(String userId, {String? roomId}) => isRoomBlocked(
-    roomId ?? '',
-    peerId: userId,
-  );
+  bool isBlockedBy(String userId, {String? roomId}) =>
+      isRoomBlocked(roomId ?? '', peerId: userId);
 
   List<Map<String, dynamic>> get blocklist => _entries(_blocklist);
   List<Map<String, dynamic>> get bbb => _entries(_bbb);
   List<Map<String, dynamic>> get blockedMessages => _entries(_blockedMessages);
 
-  Future<void> addBlock({required String userId, required String roomId}) async {
+  Future<void> addBlock({
+    required String userId,
+    required String roomId,
+  }) async {
     debugPrint(
       '[BlockState][DIAG] addBlock user="$userId" room="$roomId" '
       'self="${_client.userID}"',
     );
     await _update(blocklistType, _blocklist, (entries) {
-      entries.removeWhere((e) => e['user_id'] == userId || e['room_id'] == roomId);
+      entries.removeWhere(
+        (e) => e['user_id'] == userId || e['room_id'] == roomId,
+      );
       entries.add({
         'user_id': userId,
         'room_id': roomId,
@@ -327,9 +352,13 @@ class BlockStateService {
     });
   }
 
-  Future<void> removeBlock({required String userId, required String roomId}) async {
+  Future<void> removeBlock({
+    required String userId,
+    required String roomId,
+  }) async {
     final exists = _entries(_blocklist).any(
-      (entry) => entry['user_id']?.toString() == userId ||
+      (entry) =>
+          entry['user_id']?.toString() == userId ||
           entry['room_id']?.toString() == roomId,
     );
     if (!exists) {
@@ -339,11 +368,11 @@ class BlockStateService {
       );
       return;
     }
-    debugPrint(
-      '[BlockState][DIAG] removeBlock user="$userId" room="$roomId"',
-    );
+    debugPrint('[BlockState][DIAG] removeBlock user="$userId" room="$roomId"');
     await _update(blocklistType, _blocklist, (entries) {
-      entries.removeWhere((e) => e['user_id'] == userId || e['room_id'] == roomId);
+      entries.removeWhere(
+        (e) => e['user_id'] == userId || e['room_id'] == roomId,
+      );
     });
     await _sendRoomNotice(roomId, unblockedEventType, {
       'blocked_by': _client.userID,
@@ -353,10 +382,9 @@ class BlockStateService {
   }
 
   Future<void> recordBlockedBy(Map<String, dynamic> entry) async {
-    final blockedBy = entry['blocked_by']?.toString().trim().toLowerCase() ?? '';
-    final blockedAt = DateTime.tryParse(
-      entry['blocked_at']?.toString() ?? '',
-    );
+    final blockedBy =
+        entry['blocked_by']?.toString().trim().toLowerCase() ?? '';
+    final blockedAt = DateTime.tryParse(entry['blocked_at']?.toString() ?? '');
     final unblockedAt = _profileUnblockedAt[blockedBy];
     if (blockedAt != null &&
         unblockedAt != null &&
@@ -371,9 +399,11 @@ class BlockStateService {
       '[BlockState] persisting BBB receiver="${_client.userID}" entry=$entry',
     );
     await _update(bbbType, _bbb, (entries) {
-      entries.removeWhere((e) =>
-          e['blocked_by'] == entry['blocked_by'] &&
-          e['room_id'] == entry['room_id']);
+      entries.removeWhere(
+        (e) =>
+            e['blocked_by'] == entry['blocked_by'] &&
+            e['room_id'] == entry['room_id'],
+      );
       entries.add(entry);
     });
     debugPrint(
@@ -382,13 +412,17 @@ class BlockStateService {
     );
   }
 
-  Future<void> removeBlockedBy({required String blockedBy, required String roomId}) async {
+  Future<void> removeBlockedBy({
+    required String blockedBy,
+    required String roomId,
+  }) async {
     debugPrint(
       '[BlockState][DIAG] removeBlockedBy blockedBy="$blockedBy" room="$roomId"',
     );
     await _update(bbbType, _bbb, (entries) {
-      entries.removeWhere((e) =>
-          e['blocked_by'] == blockedBy && e['room_id'] == roomId);
+      entries.removeWhere(
+        (e) => e['blocked_by'] == blockedBy && e['room_id'] == roomId,
+      );
     });
     _unblockController.add((blockedBy: blockedBy, roomId: roomId));
   }
@@ -425,11 +459,15 @@ class BlockStateService {
     required DateTime time,
   }) async {
     await _update(blockedMessagesType, _blockedMessages, (entries) {
-      final nextSequence = entries.fold<int>(0, (max, entry) {
-        final value = entry['sequence'];
-        final sequence = value is num ? value.toInt() : int.tryParse('$value') ?? 0;
-        return sequence > max ? sequence : max;
-      }) + 1;
+      final nextSequence =
+          entries.fold<int>(0, (max, entry) {
+            final value = entry['sequence'];
+            final sequence = value is num
+                ? value.toInt()
+                : int.tryParse('$value') ?? 0;
+            return sequence > max ? sequence : max;
+          }) +
+          1;
       entries.add({
         'room_id': roomId,
         'event_id': eventId,
@@ -444,7 +482,8 @@ class BlockStateService {
   }
 
   Map<String, dynamic> _content(String type) => Map<String, dynamic>.from(
-      _client.accountData[type]?.content ?? const <String, dynamic>{});
+    _client.accountData[type]?.content ?? const <String, dynamic>{},
+  );
 
   List<Map<String, dynamic>> _entries(Map<String, dynamic> content) {
     final raw = content['entries'];
@@ -467,8 +506,8 @@ class BlockStateService {
       final source = type == blocklistType
           ? _blocklist
           : type == bbbType
-              ? _bbb
-              : _blockedMessages;
+          ? _bbb
+          : _blockedMessages;
       final entries = _entries(source.isEmpty ? current : source);
       change(entries);
       final next = <String, dynamic>{'entries': entries};
@@ -479,7 +518,9 @@ class BlockStateService {
       revision.value++;
     });
     _writeQueue = write.catchError((Object error) {
-      debugPrint('[BlockState] account data update failed type=$type error=$error');
+      debugPrint(
+        '[BlockState] account data update failed type=$type error=$error',
+      );
     });
     await write;
   }

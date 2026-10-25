@@ -49,10 +49,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final CallListenerService _callListener = CallListenerService();
   final ActiveDeviceChallengeService _activeDeviceChallenges =
       ActiveDeviceChallengeService();
+  final Stopwatch _homeStartupClock = Stopwatch();
 
   @override
   void initState() {
     super.initState();
+    _homeStartupClock.start();
+    debugPrint('[HomeAvatar] home_init user="${widget.currentUserId}"');
     UserProfileService.instance.setFirstSignupMode(widget.isFirstSignup);
     WidgetsBinding.instance.addObserver(this);
     if (widget.isFirstSignup) {
@@ -92,9 +95,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _primeBottomNavProfile() async {
+    debugPrint(
+      '[HomeAvatar] prime_start t_ms=${_homeStartupClock.elapsedMilliseconds} '
+      'source=local_first',
+    );
     if (!widget.isFirstSignup) {
+      final localProfile = await UserProfileService.instance
+          .getCurrentUserProfileLocalOnly();
+      if (mounted && _isDisplayReadyProfile(localProfile)) {
+        setState(() => _bottomNavProfile = localProfile);
+        debugPrint(
+          '[HomeAvatar] local_ready t_ms=${_homeStartupClock.elapsedMilliseconds} '
+          'uid="${localProfile!.uid}" has_avatar=${localProfile.hasProfileImage} '
+          'url="${localProfile.profileImage}"',
+        );
+        if (localProfile.hasProfileImage) {
+          unawaited(
+            AvatarPreloadService.warm(
+              localProfile.profileImage,
+              cacheIdentity:
+                  'account:${localProfile.uid.trim().toLowerCase()}'
+                  '|avatar:v${localProfile.avatarVersion}',
+            ),
+          );
+        }
+      }
+
+      final refreshed = await UserProfileService.instance
+          .getCurrentUserProfileForLogin();
+      final localAvatar = localProfile?.profileImage.trim() ?? '';
       final profile =
-          await UserProfileService.instance.getCurrentUserProfileForLogin();
+          refreshed != null &&
+              !refreshed.hasProfileImage &&
+              localAvatar.isNotEmpty
+          ? refreshed.copyWith(
+              profileImage: localAvatar,
+              localProfileImagePath: localProfile?.localProfileImagePath,
+            )
+          : refreshed;
+      debugPrint(
+        '[HomeAvatar] profile_ready t_ms=${_homeStartupClock.elapsedMilliseconds} '
+        'uid="${profile?.uid ?? ''}" has_avatar=${profile?.hasProfileImage ?? false} '
+        'url="${profile?.profileImage ?? ''}" local="${profile?.localProfileImagePath ?? ''}"',
+      );
       if (profile?.hasProfileImage == true) {
         final preloadStarted = DateTime.now();
         await AvatarPreloadService.warm(
@@ -104,7 +147,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               '|avatar:v${profile.avatarVersion}',
         );
         debugPrint(
-          '[HomeScreen] navbar avatar ready '
+          '[HomeAvatar] preload_done t_ms=${_homeStartupClock.elapsedMilliseconds} '
           'user_id="${profile.uid}" version=${profile.avatarVersion} '
           'elapsed_ms=${DateTime.now().difference(preloadStarted).inMilliseconds}',
         );
@@ -113,6 +156,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _bottomNavProfile = _isDisplayReadyProfile(profile) ? profile : null;
       });
+      debugPrint(
+        '[HomeAvatar] navbar_state t_ms=${_homeStartupClock.elapsedMilliseconds} '
+        'display=${_bottomNavProfile != null}',
+      );
       return;
     }
 
@@ -204,12 +251,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
 
     final now = DateTime.now();
-    final delay =
-        expiresAt == null
-            ? _fallbackBackendRefreshInterval
-            : expiresAt.isAfter(now)
-            ? expiresAt.difference(now) + const Duration(seconds: 1)
-            : const Duration(minutes: 1);
+    final delay = expiresAt == null
+        ? _fallbackBackendRefreshInterval
+        : expiresAt.isAfter(now)
+        ? expiresAt.difference(now) + const Duration(seconds: 1)
+        : const Duration(minutes: 1);
 
     _backendTokenTimer = Timer(delay, _refreshBackendTokenIfNeeded);
   }

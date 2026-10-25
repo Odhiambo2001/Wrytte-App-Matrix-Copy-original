@@ -200,10 +200,9 @@ class _ForwardPickerPage extends StatefulWidget {
 class _ForwardPickerPageState extends State<_ForwardPickerPage> {
   final Set<String> _selectedReceiverIds = {};
 
-  List<_ForwardTarget> get _selectedTargets =>
-      widget.targets
-          .where((target) => _selectedReceiverIds.contains(target.receiverId))
-          .toList();
+  List<_ForwardTarget> get _selectedTargets => widget.targets
+      .where((target) => _selectedReceiverIds.contains(target.receiverId))
+      .toList();
 
   void _toggle(_ForwardTarget target) {
     setState(() {
@@ -215,10 +214,12 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final savedTargets =
-        widget.targets.where((target) => target.isSavedContact).toList();
-    final recentTargets =
-        widget.targets.where((target) => !target.isSavedContact).toList();
+    final savedTargets = widget.targets
+        .where((target) => target.isSavedContact)
+        .toList();
+    final recentTargets = widget.targets
+        .where((target) => !target.isSavedContact)
+        .toList();
     final selectedTargets = _selectedTargets;
 
     return Scaffold(
@@ -356,17 +357,15 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
                 color: selected ? const Color(0xFF20C768) : Colors.transparent,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color:
-                      selected
-                          ? const Color(0xFF20C768)
-                          : Colors.white.withValues(alpha: 0.42),
+                  color: selected
+                      ? const Color(0xFF20C768)
+                      : Colors.white.withValues(alpha: 0.42),
                   width: 2,
                 ),
               ),
-              child:
-                  selected
-                      ? const Icon(Icons.check, color: Colors.black, size: 19)
-                      : null,
+              child: selected
+                  ? const Icon(Icons.check, color: Colors.black, size: 19)
+                  : null,
             ),
           ],
         ),
@@ -392,16 +391,12 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
               width: 54,
               height: 54,
               color: const Color(0xFF1B2028),
-              child:
-                  widget.previewAvatarUrl?.isNotEmpty == true
-                      ? Image.network(
-                        widget.previewAvatarUrl!,
-                        fit: BoxFit.cover,
-                      )
-                      : const Icon(
-                        Icons.chat_bubble_outline,
-                        color: Colors.white54,
-                      ),
+              child: widget.previewAvatarUrl?.isNotEmpty == true
+                  ? Image.network(widget.previewAvatarUrl!, fit: BoxFit.cover)
+                  : const Icon(
+                      Icons.chat_bubble_outline,
+                      color: Colors.white54,
+                    ),
             ),
           ),
           const SizedBox(width: 12),
@@ -517,7 +512,6 @@ class _ChatScreenState extends State<ChatScreen> {
   static const double _kHeaderPillH = 48.0;
   static const double _kInputPillH = 40.0;
 
-
   ChatRecordMode _recordMode = ChatRecordMode.audio;
 
   void _toggleRecordMode() {
@@ -607,7 +601,11 @@ class _ChatScreenState extends State<ChatScreen> {
     for (final asset in result.assets) {
       final path = await media.loadFilePath(asset.id);
       if (path != null) {
-        await _sendPickedAttachment(path, asset.kind.name, caption: result.caption);
+        await _sendPickedAttachment(
+          path,
+          asset.kind.name,
+          caption: result.caption,
+        );
       }
     }
     for (final file in result.files) {
@@ -754,7 +752,6 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-
   void _onBlockStateChanged() {
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -767,10 +764,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
     final peerId = (_profilePeerId() ?? widget.receiverId).trim();
     if (roomId.isEmpty || peerId.isEmpty) return false;
-    return BlockStateService.instance.isBlocklisted(
-      roomId,
-      peerId: peerId,
-    );
+    return BlockStateService.instance.isBlocklisted(roomId, peerId: peerId);
   }
 
   Future<void> _unblockFromChat() async {
@@ -827,11 +821,10 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (room == null) return;
       final currentUserId = MatrixClientService.instance.userId;
-      final typingUserIds =
-          room.typingUsers
-              .where((user) => user.id != currentUserId)
-              .map((user) => user.id)
-              .toSet();
+      final typingUserIds = room.typingUsers
+          .where((user) => user.id != currentUserId)
+          .map((user) => user.id)
+          .toSet();
       final typingUsersChanged =
           typingUserIds.length != _typingUserIds.length ||
           !typingUserIds.containsAll(_typingUserIds);
@@ -849,10 +842,9 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       if (_pinUpdatesInFlight.isEmpty) {
         final pinned = room.pinnedEventIds.toList();
-        final pinnedForMe =
-            _isGroupChat
-                ? const <String>[]
-                : _chat.pinnedForMeEventIdsForRoom(room.id);
+        final pinnedForMe = _isGroupChat
+            ? const <String>[]
+            : _chat.pinnedForMeEventIdsForRoom(room.id);
         if (!listEquals(pinned, _pinnedEventIds) ||
             !listEquals(pinnedForMe, _pinnedForMeEventIds)) {
           setState(() {
@@ -924,8 +916,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() {
         _receiverOnline = presence.presence == mx.PresenceType.online;
-        _peerLastActiveAt =
-            presence.lastActiveTimestamp ?? _peerLastActiveAt;
+        _peerLastActiveAt = presence.lastActiveTimestamp ?? _peerLastActiveAt;
       });
       apkLog(
         'Matrix.presence',
@@ -968,10 +959,9 @@ class _ChatScreenState extends State<ChatScreen> {
         break;
       }
       cachedLastActiveAt ??= MatrixClientService.instance.lastSeenAtFor(peerId);
-      final lastActiveAt =
-          lastActiveAgo == null
-              ? cachedLastActiveAt
-              : DateTime.now().subtract(Duration(milliseconds: lastActiveAgo));
+      final lastActiveAt = lastActiveAgo == null
+          ? cachedLastActiveAt
+          : DateTime.now().subtract(Duration(milliseconds: lastActiveAgo));
       if (isOnline == _receiverOnline && lastActiveAt == _peerLastActiveAt) {
         continue;
       }
@@ -1051,7 +1041,10 @@ class _ChatScreenState extends State<ChatScreen> {
       } else {
         // Profile 2 saves must update an already-open direct-chat header
         // immediately when returning from the profile screen.
-        apkLog('Profile2.chatTrace', 'refreshing direct chat receiver identity');
+        apkLog(
+          'Profile2.chatTrace',
+          'refreshing direct chat receiver identity',
+        );
         unawaited(_loadReceiverProfile(forceRefresh: true));
       }
     });
@@ -1389,10 +1382,9 @@ class _ChatScreenState extends State<ChatScreen> {
     await _restoreBlockedMessages(realConvId);
     await _refreshPeerPresence();
     _pinnedEventIds = _chat.pinnedEventIdsForRoom(realConvId);
-    _pinnedForMeEventIds =
-        _isGroupChat
-            ? <String>[]
-            : _chat.pinnedForMeEventIdsForRoom(realConvId);
+    _pinnedForMeEventIds = _isGroupChat
+        ? <String>[]
+        : _chat.pinnedForMeEventIdsForRoom(realConvId);
     apkLog('ChatScreen._loadInitial', 'realConvId="$realConvId"');
     if (realConvId != widget.conversationId) {
       if (widget.conversationId.startsWith('!')) {
@@ -1547,29 +1539,30 @@ class _ChatScreenState extends State<ChatScreen> {
     if (roomId == widget.conversationId) return;
     final combined = <ChatMessage>[..._messages, ...roomCached]
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    final latest =
-        combined.isNotEmpty
-            ? combined.last
-            : ChatMessage(
-              id: 'empty_$roomId',
-              conversationId: roomId,
-              senderId: '',
-              receiverId: widget.receiverId,
-              content: '',
-              timestamp: DateTime.now(),
-              status: MessageStatus.sent,
-            );
-    final roomConversation = ChatConversation.fromMessage(
-      latest.copyWith(conversationId: roomId),
-      widget.currentUserId,
-    ).copyWith(
-      otherUserName: widget.title,
-      otherUserAvatar: widget.avatarUrl,
-      conversationKind:
-          _isGroupChat ? ConversationKind.group : ConversationKind.direct,
-      otherUserId: _isGroupChat ? roomId : null,
-      lastMessageType: _isGroupChat ? 'group' : null,
-    );
+    final latest = combined.isNotEmpty
+        ? combined.last
+        : ChatMessage(
+            id: 'empty_$roomId',
+            conversationId: roomId,
+            senderId: '',
+            receiverId: widget.receiverId,
+            content: '',
+            timestamp: DateTime.now(),
+            status: MessageStatus.sent,
+          );
+    final roomConversation =
+        ChatConversation.fromMessage(
+          latest.copyWith(conversationId: roomId),
+          widget.currentUserId,
+        ).copyWith(
+          otherUserName: widget.title,
+          otherUserAvatar: widget.avatarUrl,
+          conversationKind: _isGroupChat
+              ? ConversationKind.group
+              : ConversationKind.direct,
+          otherUserId: _isGroupChat ? roomId : null,
+          lastMessageType: _isGroupChat ? 'group' : null,
+        );
 
     await ChatLocalDb.instance.migrateConversationId(
       oldConversationId: widget.conversationId,
@@ -1584,37 +1577,49 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _restoreBlockedMessages(String roomId) async {
     final state = BlockStateService.instance;
     await state.load();
-    final entries = state.blockedMessages
-        .where((entry) => entry['room_id']?.toString() == roomId)
-        .toList()
-      ..sort((a, b) {
-        final aSequence = int.tryParse('${a['sequence'] ?? ''}') ?? 0;
-        final bSequence = int.tryParse('${b['sequence'] ?? ''}') ?? 0;
-        if (aSequence != bSequence) return aSequence.compareTo(bSequence);
-        final aTime = DateTime.tryParse('${a['time'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bTime = DateTime.tryParse('${b['time'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return aTime.compareTo(bTime);
-      });
+    final entries =
+        state.blockedMessages
+            .where((entry) => entry['room_id']?.toString() == roomId)
+            .toList()
+          ..sort((a, b) {
+            final aSequence = int.tryParse('${a['sequence'] ?? ''}') ?? 0;
+            final bSequence = int.tryParse('${b['sequence'] ?? ''}') ?? 0;
+            if (aSequence != bSequence) return aSequence.compareTo(bSequence);
+            final aTime =
+                DateTime.tryParse('${a['time'] ?? ''}') ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            final bTime =
+                DateTime.tryParse('${b['time'] ?? ''}') ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            return aTime.compareTo(bTime);
+          });
     if (entries.isEmpty) return;
     final restored = <ChatMessage>[];
     for (final entry in entries) {
-      final id = (entry['blocked_message_id'] ?? entry['event_id'])
-          ?.toString()
-          .trim() ?? '';
+      final id =
+          (entry['blocked_message_id'] ?? entry['event_id'])
+              ?.toString()
+              .trim() ??
+          '';
       final text = entry['text']?.toString() ?? '';
-      final time = DateTime.tryParse(entry['time']?.toString() ?? '') ?? DateTime.now();
-      if (id.isEmpty || text.isEmpty || _messages.any((message) => message.id == id)) {
+      final time =
+          DateTime.tryParse(entry['time']?.toString() ?? '') ?? DateTime.now();
+      if (id.isEmpty ||
+          text.isEmpty ||
+          _messages.any((message) => message.id == id)) {
         continue;
       }
-      restored.add(ChatMessage(
-        id: id,
-        conversationId: roomId,
-        senderId: widget.currentUserId,
-        receiverId: _normaliseId(widget.receiverId),
-        content: text,
-        timestamp: time,
-        status: MessageStatus.sent,
-      ));
+      restored.add(
+        ChatMessage(
+          id: id,
+          conversationId: roomId,
+          senderId: widget.currentUserId,
+          receiverId: _normaliseId(widget.receiverId),
+          content: text,
+          timestamp: time,
+          status: MessageStatus.sent,
+        ),
+      );
     }
     if (restored.isNotEmpty && mounted) {
       setState(() => _messages.addAll(restored));
@@ -1644,28 +1649,26 @@ class _ChatScreenState extends State<ChatScreen> {
       forceRefresh: forceRefresh,
     );
 
-    final matrixProfile =
-        profile?.moduleProfileLoaded == true
-            ? null
-            : await _loadMatrixProfile(profileUid);
-    final saved =
-        ownerUserId == null || ownerUserId.isEmpty
-            ? null
-            : await _findSavedContact(
-              ownerUserId,
-              profileUid,
-              phone: fallbackPhone,
-            );
-    var identity =
-        ownerUserId == null || ownerUserId.isEmpty
-            ? null
-            : await ContactIdentityCache.instance.findByMatrixId(
-              ownerUserId: ownerUserId,
-              matrixUserId: profileUid,
-            );
+    final matrixProfile = profile?.moduleProfileLoaded == true
+        ? null
+        : await _loadMatrixProfile(profileUid);
+    final saved = ownerUserId == null || ownerUserId.isEmpty
+        ? null
+        : await _findSavedContact(
+            ownerUserId,
+            profileUid,
+            phone: fallbackPhone,
+          );
+    var identity = ownerUserId == null || ownerUserId.isEmpty
+        ? null
+        : await ContactIdentityCache.instance.findByMatrixId(
+            ownerUserId: ownerUserId,
+            matrixUserId: profileUid,
+          );
 
-    final hasCachedSavedName =
-        _cleanDisplayName(identity?.savedName).isNotEmpty;
+    final hasCachedSavedName = _cleanDisplayName(
+      identity?.savedName,
+    ).isNotEmpty;
     if (ownerUserId != null &&
         ownerUserId.isNotEmpty &&
         saved == null &&
@@ -1686,12 +1689,11 @@ class _ChatScreenState extends State<ChatScreen> {
         'receiver resolved profileUid="$profileUid" owner="$ownerUserId" saved="${saved?.formattedName}" identitySaved="${identity?.savedName}" fallbackPhone="$fallbackPhone"',
       );
       if (saved != null && profile != null) {
-        final nextAvatar =
-            profile.moduleProfileLoaded
-                ? (profile.hasProfileImage ? profile.profileImage : null)
-                : profile.hasProfileImage
-                ? profile.profileImage
-                : matrixProfile?.$2 ?? widget.avatarUrl;
+        final nextAvatar = profile.moduleProfileLoaded
+            ? (profile.hasProfileImage ? profile.profileImage : null)
+            : profile.hasProfileImage
+            ? profile.profileImage
+            : matrixProfile?.$2 ?? widget.avatarUrl;
         if (nextAvatar?.trim().isNotEmpty == true &&
             nextAvatar?.trim() != widget.avatarUrl?.trim()) {
           unawaited(
@@ -1706,8 +1708,9 @@ class _ChatScreenState extends State<ChatScreen> {
               ownerUserId: ownerUserId,
               wrytteUserId: profileUid,
               phone: profile.phone.isNotEmpty ? profile.phone : fallbackPhone,
-              avatarUrl:
-                  profile.moduleProfileLoaded ? (nextAvatar ?? '') : nextAvatar,
+              avatarUrl: profile.moduleProfileLoaded
+                  ? (nextAvatar ?? '')
+                  : nextAvatar,
               bio: profile.bio,
             );
         if (refreshedContact != null) {
@@ -1718,17 +1721,15 @@ class _ChatScreenState extends State<ChatScreen> {
         ownerUserId: ownerUserId,
         matrixUserId: profileUid,
         phone: profile?.phone ?? fallbackPhone,
-        profileName:
-            _cleanDisplayName(profile?.displayName).isNotEmpty
-                ? profile?.displayName
-                : matrixProfile?.$1,
+        profileName: _cleanDisplayName(profile?.displayName).isNotEmpty
+            ? profile?.displayName
+            : matrixProfile?.$1,
         savedName: saved?.formattedName,
-        avatarUrl:
-            profile?.moduleProfileLoaded == true
-                ? (profile!.hasProfileImage ? profile.profileImage : '')
-                : profile?.hasProfileImage == true
-                ? profile!.profileImage
-                : matrixProfile?.$2 ?? widget.avatarUrl,
+        avatarUrl: profile?.moduleProfileLoaded == true
+            ? (profile!.hasProfileImage ? profile.profileImage : '')
+            : profile?.hasProfileImage == true
+            ? profile!.profileImage
+            : matrixProfile?.$2 ?? widget.avatarUrl,
         bio: profile?.bio,
         clearAvatar:
             profile?.moduleProfileLoaded == true &&
@@ -1741,12 +1742,11 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
 
-    final nextAvatar =
-        profile?.moduleProfileLoaded == true
-            ? (profile!.hasProfileImage ? profile.profileImage : null)
-            : profile?.hasProfileImage == true
-            ? profile!.profileImage
-            : identity?.avatarUrl ?? widget.avatarUrl;
+    final nextAvatar = profile?.moduleProfileLoaded == true
+        ? (profile!.hasProfileImage ? profile.profileImage : null)
+        : profile?.hasProfileImage == true
+        ? profile!.profileImage
+        : identity?.avatarUrl ?? widget.avatarUrl;
     await AvatarPreloadService.warm(
       nextAvatar,
       cacheIdentity: 'user:${profileUid.trim().toLowerCase()}',
@@ -1905,14 +1905,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _persistResolvedReceiverInfo() async {
     final name = _resolvedHeaderName.trim();
-    final avatar =
-        _isGroupChat
-            ? _safeGroupRoomAvatarUrl(
-              MatrixChatService.instance.getRoomById(_activeConversationId),
-            )
-            : _receiverProfile?.hasProfileImage == true
-            ? _receiverProfile!.profileImage
-            : _receiverIdentity?.avatarUrl ?? widget.avatarUrl;
+    final avatar = _isGroupChat
+        ? _safeGroupRoomAvatarUrl(
+            MatrixChatService.instance.getRoomById(_activeConversationId),
+          )
+        : _receiverProfile?.hasProfileImage == true
+        ? _receiverProfile!.profileImage
+        : _receiverIdentity?.avatarUrl ?? widget.avatarUrl;
     if (name.isEmpty && (avatar ?? '').trim().isEmpty) return;
     try {
       await ChatLocalDb.instance.updateConversationUserInfo(
@@ -2188,8 +2187,9 @@ class _ChatScreenState extends State<ChatScreen> {
       ChatConversation.fromMessage(message, widget.currentUserId).copyWith(
         otherUserName: widget.title,
         otherUserAvatar: _isGroupChat ? null : widget.avatarUrl,
-        conversationKind:
-            _isGroupChat ? ConversationKind.group : ConversationKind.direct,
+        conversationKind: _isGroupChat
+            ? ConversationKind.group
+            : ConversationKind.direct,
         otherUserId: _isGroupChat ? message.conversationId : null,
         lastMessageType: _isGroupChat ? 'group' : null,
       ),
@@ -2306,10 +2306,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isDeletedConversation) return;
     final result = await Navigator.of(context).push<VideoMessageResult>(
       MaterialPageRoute(
-        builder:
-            (_) => const VideoMessageRecorderScreen(
-              maxDuration: Duration(seconds: 60),
-            ),
+        builder: (_) => const VideoMessageRecorderScreen(
+          maxDuration: Duration(seconds: 60),
+        ),
       ),
     );
     if (!mounted || result == null) return;
@@ -2399,37 +2398,32 @@ class _ChatScreenState extends State<ChatScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
-      builder:
-          (context) => SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                _messageActionTile(
-                  icon: Icons.image_outlined,
-                  label: 'Photo',
-                  onTap: () => Navigator.pop(context, 'image'),
-                ),
-                _messageActionTile(
-                  icon: Icons.videocam_outlined,
-                  label: 'Video',
-                  onTap: () => Navigator.pop(context, 'video'),
-                ),
-                const SizedBox(height: 8),
-              ],
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _messageActionTile(
+              icon: Icons.image_outlined,
+              label: 'Photo',
+              onTap: () => Navigator.pop(context, 'image'),
             ),
-          ),
+            _messageActionTile(
+              icon: Icons.videocam_outlined,
+              label: 'Video',
+              onTap: () => Navigator.pop(context, 'video'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
     );
     if (!mounted || choice == null) return;
 
     final picker = ImagePicker();
-    final picked =
-        choice == 'video'
-            ? await picker.pickVideo(source: ImageSource.gallery)
-            : await picker.pickImage(
-              source: ImageSource.gallery,
-              imageQuality: 92,
-            );
+    final picked = choice == 'video'
+        ? await picker.pickVideo(source: ImageSource.gallery)
+        : await picker.pickImage(source: ImageSource.gallery, imageQuality: 92);
     if (!mounted || picked == null) return;
     await _sendPickedAttachment(picked.path, choice);
   }
@@ -2478,7 +2472,8 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     if (_isDeletedConversation) return;
-    if (await _storeBlockedOutgoingMessage(_attachmentLabelForType(type))) return;
+    if (await _storeBlockedOutgoingMessage(_attachmentLabelForType(type)))
+      return;
     if (!await File(filePath).exists()) return;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
@@ -2583,8 +2578,8 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder:
-              (_) => LiveKitCallScreen(call: liveKitCall, title: displayName),
+          builder: (_) =>
+              LiveKitCallScreen(call: liveKitCall, title: displayName),
         ),
       );
     } catch (e) {
@@ -2778,10 +2773,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _removeDuplicateOutgoingEchoes() {
-    final canonicalOutgoing =
-        _messages
-            .where((m) => _isMine(m) && !_isLocalOutgoingEchoId(m.id))
-            .toList();
+    final canonicalOutgoing = _messages
+        .where((m) => _isMine(m) && !_isLocalOutgoingEchoId(m.id))
+        .toList();
     if (canonicalOutgoing.isEmpty) return;
     _messages.removeWhere(
       (candidate) => canonicalOutgoing.any(
@@ -2932,14 +2926,12 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   if (canPin)
                     _messageActionTile(
-                      icon:
-                          isPinnedForEveryone
-                              ? Icons.push_pin
-                              : Icons.push_pin_outlined,
-                      label:
-                          isPinnedForEveryone
-                              ? (_isGroupChat ? 'Unpin' : 'Unpin for everyone')
-                              : (_isGroupChat ? 'Pin' : 'Pin for everyone'),
+                      icon: isPinnedForEveryone
+                          ? Icons.push_pin
+                          : Icons.push_pin_outlined,
+                      label: isPinnedForEveryone
+                          ? (_isGroupChat ? 'Unpin' : 'Unpin for everyone')
+                          : (_isGroupChat ? 'Pin' : 'Pin for everyone'),
                       onTap: () {
                         Navigator.pop(context);
                         _setMessagePinned(
@@ -2950,10 +2942,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   if (canPinForMe)
                     _messageActionTile(
-                      icon:
-                          isPinnedForMe
-                              ? Icons.push_pin
-                              : Icons.push_pin_outlined,
+                      icon: isPinnedForMe
+                          ? Icons.push_pin
+                          : Icons.push_pin_outlined,
                       label: isPinnedForMe ? 'Unpin for me' : 'Pin for me',
                       onTap: () {
                         Navigator.pop(context);
@@ -3035,10 +3026,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           setState(() {
                             _upsertMessage(
                               message.copyWith(
-                                content:
-                                    isMine
-                                        ? 'This message was deleted'
-                                        : 'This message was deleted by admin',
+                                content: isMine
+                                    ? 'This message was deleted'
+                                    : 'This message was deleted by admin',
                                 isDeletedForEveryone: true,
                               ),
                             );
@@ -3158,8 +3148,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _pinnedEventIds = optimisticIds;
       if (pinned) {
         _latestPinActivityNotice = 'You pinned a message';
-        _pinActivityAnchorEventId =
-            _messages.isEmpty ? null : _messages.last.id;
+        _pinActivityAnchorEventId = _messages.isEmpty
+            ? null
+            : _messages.last.id;
       } else {
         _latestPinActivityNotice = null;
         _pinActivityAnchorEventId = null;
@@ -3195,38 +3186,37 @@ class _ChatScreenState extends State<ChatScreen> {
     final reasonController = TextEditingController();
     final reason = await showDialog<String>(
       context: context,
-      builder:
-          (dialogContext) => AlertDialog(
-            backgroundColor: const Color(0xFF23262C),
-            title: const Text(
-              'Report message',
-              style: TextStyle(color: Colors.white),
-            ),
-            content: TextField(
-              controller: reasonController,
-              autofocus: true,
-              maxLines: 3,
-              maxLength: 500,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                hintText: 'Why are you reporting this message?',
-                hintStyle: TextStyle(color: Colors.white54),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () {
-                  final value = reasonController.text.trim();
-                  if (value.isNotEmpty) Navigator.pop(dialogContext, value);
-                },
-                child: const Text('Report'),
-              ),
-            ],
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF23262C),
+        title: const Text(
+          'Report message',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: TextField(
+          controller: reasonController,
+          autofocus: true,
+          maxLines: 3,
+          maxLength: 500,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'Why are you reporting this message?',
+            hintStyle: TextStyle(color: Colors.white54),
           ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final value = reasonController.text.trim();
+              if (value.isNotEmpty) Navigator.pop(dialogContext, value);
+            },
+            child: const Text('Report'),
+          ),
+        ],
+      ),
     );
     reasonController.dispose();
     if (reason == null || reason.trim().isEmpty || !mounted) return;
@@ -3256,31 +3246,30 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _removeMessageSenderFromGroup(ChatMessage message) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder:
-          (dialogContext) => AlertDialog(
-            backgroundColor: const Color(0xFF23262C),
-            title: const Text(
-              'Remove member',
-              style: TextStyle(color: Colors.white),
-            ),
-            content: const Text(
-              'Remove this member from the group?',
-              style: TextStyle(color: Colors.white70),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                child: const Text(
-                  'Remove',
-                  style: TextStyle(color: Colors.redAccent),
-                ),
-              ),
-            ],
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF23262C),
+        title: const Text(
+          'Remove member',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'Remove this member from the group?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
           ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text(
+              'Remove',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
     );
     if (confirmed != true || !mounted) return;
 
@@ -3348,8 +3337,9 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       await AttachmentLocalStore.instance.ensureComplete(
         source: path,
-        fileName:
-            message.content.trim().isEmpty ? 'attachment' : message.content,
+        fileName: message.content.trim().isEmpty
+            ? 'attachment'
+            : message.content,
       );
     } catch (error) {
       if (!mounted) return;
@@ -3370,10 +3360,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _openLink(String link) async {
-    final normalised =
-        link.startsWith('http://') || link.startsWith('https://')
-            ? link
-            : 'https://$link';
+    final normalised = link.startsWith('http://') || link.startsWith('https://')
+        ? link
+        : 'https://$link';
     final uri = Uri.tryParse(normalised);
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -3396,12 +3385,11 @@ class _ChatScreenState extends State<ChatScreen> {
     required VoidCallback? onTap,
     bool destructive = false,
   }) {
-    final color =
-        onTap == null
-            ? Colors.white38
-            : destructive
-            ? const Color(0xFFFF6B6B)
-            : Colors.white;
+    final color = onTap == null
+        ? Colors.white38
+        : destructive
+        ? const Color(0xFFFF6B6B)
+        : Colors.white;
     return ListTile(
       leading: Icon(icon, color: color),
       title: Text(label, style: TextStyle(color: color)),
@@ -3423,12 +3411,11 @@ class _ChatScreenState extends State<ChatScreen> {
       context,
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder:
-            (_) => _ForwardPickerPage(
-              targets: targets,
-              previewText: _replyPreviewForMessage(message) ?? 'Message',
-              previewAvatarUrl: widget.avatarUrl,
-            ),
+        builder: (_) => _ForwardPickerPage(
+          targets: targets,
+          previewText: _replyPreviewForMessage(message) ?? 'Message',
+          previewAvatarUrl: widget.avatarUrl,
+        ),
       ),
     );
     if (selectedTargets == null || selectedTargets.isEmpty) return;
@@ -3458,8 +3445,9 @@ class _ChatScreenState extends State<ChatScreen> {
               ? 'Message forwarded'
               : 'Forwarded to $sent of ${selectedTargets.length}',
         ),
-        backgroundColor:
-            sent == selectedTargets.length ? null : Colors.redAccent,
+        backgroundColor: sent == selectedTargets.length
+            ? null
+            : Colors.redAccent,
       ),
     );
   }
@@ -3476,12 +3464,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final ownerUserId =
         (await AuthService.instance.getCurrentUserId())?.trim() ??
         widget.currentUserId.trim();
-    final identities =
-        ownerUserId.isEmpty
-            ? <String, ContactIdentity>{}
-            : await ContactIdentityCache.instance.loadAll(
-              ownerUserId: ownerUserId,
-            );
+    final identities = ownerUserId.isEmpty
+        ? <String, ContactIdentity>{}
+        : await ContactIdentityCache.instance.loadAll(ownerUserId: ownerUserId);
     final byKey = <String, _ForwardTarget>{};
     final canonicalKeyByAlias = <String, String>{};
     var order = 0;
@@ -3508,31 +3493,26 @@ class _ChatScreenState extends State<ChatScreen> {
         byKey[key] = existing.copyWith(
           conversationId: target.conversationId,
           receiverId: target.receiverId,
-          subtitle:
-              existing.subtitle?.trim().isNotEmpty == true
-                  ? existing.subtitle
-                  : target.subtitle,
-          avatarUrl:
-              existing.avatarUrl?.trim().isNotEmpty == true
-                  ? existing.avatarUrl
-                  : target.avatarUrl,
+          subtitle: existing.subtitle?.trim().isNotEmpty == true
+              ? existing.subtitle
+              : target.subtitle,
+          avatarUrl: existing.avatarUrl?.trim().isNotEmpty == true
+              ? existing.avatarUrl
+              : target.avatarUrl,
         );
       }
       if (!existing.isSavedContact && target.isSavedContact) {
         byKey[key] = target.copyWith(
           conversationId: existing.conversationId ?? target.conversationId,
-          receiverId:
-              existing.conversationId != null
-                  ? existing.receiverId
-                  : target.receiverId,
-          subtitle:
-              existing.subtitle?.trim().isNotEmpty == true
-                  ? existing.subtitle
-                  : target.subtitle,
-          avatarUrl:
-              target.avatarUrl?.trim().isNotEmpty == true
-                  ? target.avatarUrl
-                  : existing.avatarUrl,
+          receiverId: existing.conversationId != null
+              ? existing.receiverId
+              : target.receiverId,
+          subtitle: existing.subtitle?.trim().isNotEmpty == true
+              ? existing.subtitle
+              : target.subtitle,
+          avatarUrl: target.avatarUrl?.trim().isNotEmpty == true
+              ? target.avatarUrl
+              : existing.avatarUrl,
           sortOrder: existing.sortOrder,
         );
       }
@@ -3546,21 +3526,19 @@ class _ChatScreenState extends State<ChatScreen> {
         ownerUserId: ownerUserId,
       );
       for (final contact in contacts) {
-        final receiverId =
-            contact.wrytteUserId?.trim().isNotEmpty == true
-                ? contact.wrytteUserId!.trim()
-                : contact.primaryPhone.trim();
+        final receiverId = contact.wrytteUserId?.trim().isNotEmpty == true
+            ? contact.wrytteUserId!.trim()
+            : contact.primaryPhone.trim();
         final name = _cleanDisplayName(contact.displayName);
         final phone = _firstPhoneFrom(contact.phones);
         addTarget(
           _ForwardTarget(
             receiverId: receiverId,
-            title:
-                name.isNotEmpty
-                    ? name
-                    : phone.isNotEmpty
-                    ? phone
-                    : receiverId,
+            title: name.isNotEmpty
+                ? name
+                : phone.isNotEmpty
+                ? phone
+                : receiverId,
             subtitle: phone,
             avatarUrl: contact.avatarUrl,
             phone: phone,
@@ -3604,12 +3582,11 @@ class _ChatScreenState extends State<ChatScreen> {
         _ForwardTarget(
           conversationId: conversation.id,
           receiverId: receiverId,
-          title:
-              name.isNotEmpty
-                  ? name
-                  : phone.isNotEmpty
-                  ? phone
-                  : _matrixLocalpart(receiverId),
+          title: name.isNotEmpty
+              ? name
+              : phone.isNotEmpty
+              ? phone
+              : _matrixLocalpart(receiverId),
           subtitle: '',
           avatarUrl: identity?.avatarUrl ?? conversation.otherUserAvatar,
           phone: phone,
@@ -3618,13 +3595,13 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
 
-    final targets =
-        byKey.values.toList()..sort((a, b) {
-          if (a.isSavedContact != b.isSavedContact) {
-            return a.isSavedContact ? -1 : 1;
-          }
-          return a.sortOrder.compareTo(b.sortOrder);
-        });
+    final targets = byKey.values.toList()
+      ..sort((a, b) {
+        if (a.isSavedContact != b.isSavedContact) {
+          return a.isSavedContact ? -1 : 1;
+        }
+        return a.sortOrder.compareTo(b.sortOrder);
+      });
     return targets;
   }
 
@@ -3663,8 +3640,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final mediaQuery = MediaQuery.of(context);
     final double statusBarH = _stableStatusBarH ?? mediaQuery.viewPadding.top;
     final double appBarH = statusBarH + kToolbarHeight;
-    final double keyboardInset =
-        _focusNode.hasFocus ? mediaQuery.viewInsets.bottom : 0.0;
+    final double keyboardInset = _focusNode.hasFocus
+        ? mediaQuery.viewInsets.bottom
+        : 0.0;
 
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
@@ -3706,7 +3684,8 @@ class _ChatScreenState extends State<ChatScreen> {
                             MultiProvider(
                               providers: [
                                 Provider<AudioRecordingRepository>(
-                                  create: (_) => SourceComposerAudioRepository(),
+                                  create: (_) =>
+                                      SourceComposerAudioRepository(),
                                 ),
                                 Provider<CameraRepository>(
                                   create: (_) => CameraRepositoryImpl(
@@ -3738,7 +3717,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                 onExpressPressed: () {},
                                 replySender: _replyingTo == null
                                     ? null
-                                    : (_isMine(_replyingTo!) ? 'You' : widget.title),
+                                    : (_isMine(_replyingTo!)
+                                          ? 'You'
+                                          : widget.title),
                                 replyPreview: _replyingTo == null
                                     ? null
                                     : _replyPreviewForMessage(_replyingTo!),
@@ -3755,28 +3736,34 @@ class _ChatScreenState extends State<ChatScreen> {
                                         _controller.clear();
                                       },
                                 onVoiceRecorded: (recording) {
-                                  unawaited(_sendVoiceNote(
-                                    recording.path,
-                                    recording.trimRange.duration.inSeconds.clamp(1, 3600),
-                                  ));
+                                  unawaited(
+                                    _sendVoiceNote(
+                                      recording.path,
+                                      recording.trimRange.duration.inSeconds
+                                          .clamp(1, 3600),
+                                    ),
+                                  );
                                 },
                                 onRoundVideoRecorded: (recording) {
-                                  unawaited(_sendVideoNote(
-                                    recording.path,
-                                    (recording.duration ?? const Duration(seconds: 1))
-                                        .inSeconds
-                                        .clamp(1, 60),
-                                  ));
+                                  unawaited(
+                                    _sendVideoNote(
+                                      recording.path,
+                                      (recording.duration ??
+                                              const Duration(seconds: 1))
+                                          .inSeconds
+                                          .clamp(1, 60),
+                                    ),
+                                  );
                                 },
                                 onRecordingFailure: (msg) {
                                   if (!mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(msg)),
-                                  );
+                                  ScaffoldMessenger.of(
+                                    context,
+                                  ).showSnackBar(SnackBar(content: Text(msg)));
                                 },
                                 onRecordingActiveChanged: (_) {},
                               ),
-                            )
+                            ),
                         ],
                       ),
                     ),
@@ -3797,10 +3784,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     width: 36,
                     height: 36,
                     decoration: BoxDecoration(
-                      color:
-                          _showDebug
-                              ? Colors.orangeAccent
-                              : Colors.grey.withValues(alpha: 0.6),
+                      color: _showDebug
+                          ? Colors.orangeAccent
+                          : Colors.grey.withValues(alpha: 0.6),
                       shape: BoxShape.circle,
                     ),
                     child: const Center(
@@ -3820,14 +3806,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final roomId = _resolvedConversationId ?? widget.conversationId;
     final enabledBy = AutoDeleteService.instance.enabledByForRoom(roomId);
     final currentUserId = MatrixClientService.instance.client.userID;
-    final enabledByCurrentUser = enabledBy != null &&
-        enabledBy.isNotEmpty &&
-        enabledBy == currentUserId;
+    final enabledByCurrentUser =
+        enabledBy != null && enabledBy.isNotEmpty && enabledBy == currentUserId;
     final receiverName = _resolvedHeaderName.trim();
     final noticeText = enabledByCurrentUser
         ? 'You turned on auto-delete messages. '
         : '${receiverName.isEmpty ? 'This user' : receiverName} '
-            'turned on auto-delete messages. ';
+              'turned on auto-delete messages. ';
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
       child: Row(
@@ -3851,9 +3836,7 @@ class _ChatScreenState extends State<ChatScreen> {
               TextSpan(
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
                 children: [
-                  TextSpan(
-                    text: noticeText,
-                  ),
+                  TextSpan(text: noticeText),
                   TextSpan(
                     text:
                         'New messages will disappear from this chat '
@@ -3887,10 +3870,15 @@ class _ChatScreenState extends State<ChatScreen> {
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ProfileScreen(
-          uid: _receiverProfile?.uid ?? _receiverIdentity?.matrixUserId ?? widget.receiverId,
+          uid:
+              _receiverProfile?.uid ??
+              _receiverIdentity?.matrixUserId ??
+              widget.receiverId,
           conversationId: _resolvedConversationId ?? widget.conversationId,
           savedNameHint: _resolvedHeaderName,
-          contactStatus: ProfileContactStatus.unsaved,
+          contactStatus: _receiverIsSavedContact
+              ? ProfileContactStatus.saved
+              : ProfileContactStatus.unsaved,
           initialAvatarUrl: _stableHeaderAvatarUrl,
           initialProfileName: _resolvedHeaderName,
           openAutoDeleteOptions: true,
@@ -3992,53 +3980,51 @@ class _ChatScreenState extends State<ChatScreen> {
 
             // ── log lines ────────────────────────────────────────────────────
             Expanded(
-              child:
-                  lines.isEmpty
-                      ? const Center(
-                        child: Text(
-                          'No logs yet.\nTry sending a message.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.white38, fontSize: 12),
-                        ),
-                      )
-                      : ListView.builder(
-                        controller: _debugScrollCtrl,
-                        padding: const EdgeInsets.all(6),
-                        itemCount: lines.length,
-                        itemBuilder: (_, i) {
-                          final line = lines[i];
-                          // Colour-code by severity
-                          Color c = Colors.white70;
-                          if (line.contains('❌') ||
-                              line.contains('🚨') ||
-                              line.contains('FAIL') ||
-                              line.contains('ERROR') ||
-                              line.contains('TIMEOUT')) {
-                            c = const Color(0xFFFF6B6B);
-                          } else if (line.contains('⚠️') ||
-                              line.contains('WARN') ||
-                              line.contains('MISMATCH')) {
-                            c = const Color(0xFFFFD93D);
-                          } else if (line.contains('✅')) {
-                            c = const Color(0xFF6BCB77);
-                          } else if (line.contains('🔄') ||
-                              line.contains('⏳')) {
-                            c = const Color(0xFF4DA3FF);
-                          }
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 2),
-                            child: SelectableText(
-                              line,
-                              style: TextStyle(
-                                color: c,
-                                fontSize: 10,
-                                fontFamily: 'monospace',
-                                height: 1.35,
-                              ),
-                            ),
-                          );
-                        },
+              child: lines.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No logs yet.\nTry sending a message.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white38, fontSize: 12),
                       ),
+                    )
+                  : ListView.builder(
+                      controller: _debugScrollCtrl,
+                      padding: const EdgeInsets.all(6),
+                      itemCount: lines.length,
+                      itemBuilder: (_, i) {
+                        final line = lines[i];
+                        // Colour-code by severity
+                        Color c = Colors.white70;
+                        if (line.contains('❌') ||
+                            line.contains('🚨') ||
+                            line.contains('FAIL') ||
+                            line.contains('ERROR') ||
+                            line.contains('TIMEOUT')) {
+                          c = const Color(0xFFFF6B6B);
+                        } else if (line.contains('⚠️') ||
+                            line.contains('WARN') ||
+                            line.contains('MISMATCH')) {
+                          c = const Color(0xFFFFD93D);
+                        } else if (line.contains('✅')) {
+                          c = const Color(0xFF6BCB77);
+                        } else if (line.contains('🔄') || line.contains('⏳')) {
+                          c = const Color(0xFF4DA3FF);
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: SelectableText(
+                            line,
+                            style: TextStyle(
+                              color: c,
+                              fontSize: 10,
+                              fontFamily: 'monospace',
+                              height: 1.35,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
             ),
 
             // ── summary bar ──────────────────────────────────────────────────
@@ -4158,147 +4144,150 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               _messages.isEmpty && !_loadingInitial
                   ? Center(
-                    child: Text(
-                      'No messages yet.\nSay hello!',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.3),
-                        fontSize: 15,
-                        height: 1.6,
+                      child: Text(
+                        'No messages yet.\nSay hello!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.3),
+                          fontSize: 15,
+                          height: 1.6,
+                        ),
                       ),
-                    ),
-                  )
+                    )
                   : _messages.isEmpty
                   ? const SizedBox.expand()
                   : ListView.builder(
-                    controller: _scrollCtrl,
-                    reverse: true,
-                    padding: const EdgeInsets.only(top: 150, bottom: 12),
-                    physics: const ClampingScrollPhysics(),
-                    itemCount:
-                        _messages.length +
-                        (liftShortConversation ? 1 : 0) +
-                        (autoDeleteDuration != null ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (liftShortConversation && index == 0) {
-                        debugPrint(
-                          '[AutoDeleteTimeline] room="${widget.conversationId}" '
-                          'index=$index type=short_conversation_spacer',
-                        );
-                        return const SizedBox(height: 96);
-                      }
-
-                      final adjustedIndex =
-                          index - (liftShortConversation ? 1 : 0);
-                      if (autoDeleteDuration != null &&
-                          adjustedIndex == autoDeleteNewCount) {
-                        debugPrint(
-                          '[AutoDeleteTimeline] room="${widget.conversationId}" '
-                          'index=$index type=notice duration="$autoDeleteDuration"',
-                        );
-                        return _buildAutoDeleteBanner(autoDeleteDuration);
-                      }
-
-                      final messageIndex = autoDeleteDuration != null &&
-                              adjustedIndex > autoDeleteNewCount
-                          ? adjustedIndex - 1
-                          : adjustedIndex;
-                      final msgIndex = autoDeleteDuration != null &&
-                              adjustedIndex > autoDeleteNewCount
-                          ? _messages.length - adjustedIndex
-                          : _messages.length - 1 - messageIndex;
-                      if (msgIndex < 0 || msgIndex >= _messages.length) {
-                        debugPrint(
-                          '[AutoDeleteTimeline] room="${widget.conversationId}" '
-                          'index=$index type=invalid adjusted=$adjustedIndex '
-                          'messageIndex=$messageIndex msgIndex=$msgIndex '
-                          'messageCount=${_messages.length}',
-                        );
-                        return const SizedBox.shrink();
-                      }
-                      final msg = _messages[msgIndex];
-                      if (autoDeleteDuration != null) {
-                        debugPrint(
-                          '[AutoDeleteTimeline] room="${widget.conversationId}" '
-                          'index=$index type=message msgIndex=$msgIndex '
-                          'eventId="${msg.id}" newCount=$autoDeleteNewCount',
-                        );
-                      }
-                      final isMine = _isMine(msg);
-                      final previousChronological =
-                          msgIndex > 0 ? _messages[msgIndex - 1] : null;
-                      final nextChronological =
-                          msgIndex + 1 < _messages.length
-                              ? _messages[msgIndex + 1]
-                              : null;
-                      final showDate =
-                          previousChronological == null ||
-                          !_isSameDay(
-                            previousChronological.timestamp,
-                            msg.timestamp,
+                      controller: _scrollCtrl,
+                      reverse: true,
+                      padding: const EdgeInsets.only(top: 150, bottom: 12),
+                      physics: const ClampingScrollPhysics(),
+                      itemCount:
+                          _messages.length +
+                          (liftShortConversation ? 1 : 0) +
+                          (autoDeleteDuration != null ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (liftShortConversation && index == 0) {
+                          debugPrint(
+                            '[AutoDeleteTimeline] room="${widget.conversationId}" '
+                            'index=$index type=short_conversation_spacer',
                           );
+                          return const SizedBox(height: 96);
+                        }
 
-                      final showTail =
-                          nextChronological == null ||
-                          _isMine(nextChronological) != isMine ||
-                          !_isSameDay(
-                            nextChronological.timestamp,
-                            msg.timestamp,
+                        final adjustedIndex =
+                            index - (liftShortConversation ? 1 : 0);
+                        if (autoDeleteDuration != null &&
+                            adjustedIndex == autoDeleteNewCount) {
+                          debugPrint(
+                            '[AutoDeleteTimeline] room="${widget.conversationId}" '
+                            'index=$index type=notice duration="$autoDeleteDuration"',
                           );
+                          return _buildAutoDeleteBanner(autoDeleteDuration);
+                        }
 
+                        final messageIndex =
+                            autoDeleteDuration != null &&
+                                adjustedIndex > autoDeleteNewCount
+                            ? adjustedIndex - 1
+                            : adjustedIndex;
+                        final msgIndex =
+                            autoDeleteDuration != null &&
+                                adjustedIndex > autoDeleteNewCount
+                            ? _messages.length - adjustedIndex
+                            : _messages.length - 1 - messageIndex;
+                        if (msgIndex < 0 || msgIndex >= _messages.length) {
+                          debugPrint(
+                            '[AutoDeleteTimeline] room="${widget.conversationId}" '
+                            'index=$index type=invalid adjusted=$adjustedIndex '
+                            'messageIndex=$messageIndex msgIndex=$msgIndex '
+                            'messageCount=${_messages.length}',
+                          );
+                          return const SizedBox.shrink();
+                        }
+                        final msg = _messages[msgIndex];
+                        if (autoDeleteDuration != null) {
+                          debugPrint(
+                            '[AutoDeleteTimeline] room="${widget.conversationId}" '
+                            'index=$index type=message msgIndex=$msgIndex '
+                            'eventId="${msg.id}" newCount=$autoDeleteNewCount',
+                          );
+                        }
+                        final isMine = _isMine(msg);
+                        final previousChronological = msgIndex > 0
+                            ? _messages[msgIndex - 1]
+                            : null;
+                        final nextChronological =
+                            msgIndex + 1 < _messages.length
+                            ? _messages[msgIndex + 1]
+                            : null;
+                        final showDate =
+                            previousChronological == null ||
+                            !_isSameDay(
+                              previousChronological.timestamp,
+                              msg.timestamp,
+                            );
 
+                        final showTail =
+                            nextChronological == null ||
+                            _isMine(nextChronological) != isMine ||
+                            !_isSameDay(
+                              nextChronological.timestamp,
+                              msg.timestamp,
+                            );
 
-                      final showGroupAvatar =
-                          !_isGroupChat ||
-                          isMine ||
-                          nextChronological == null ||
-                          !_isSameDay(
-                            nextChronological.timestamp,
-                            msg.timestamp,
-                          ) ||
-                          nextChronological.senderId.trim().toLowerCase() !=
-                              msg.senderId.trim().toLowerCase();
-                      final effectiveAttachmentType = _effectiveAttachmentType(
-                        msg,
-                      );
-                      return Column(
-                        key: _messageKeys.putIfAbsent(
-                          msg.id,
-                          () => GlobalKey(debugLabel: 'message:${msg.id}'),
-                        ),
-                        children: [
-                          if (showDate)
-                            _buildDateDivider(
-                              _formatDateDivider(msg.timestamp),
-                            ),
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onLongPress: () => _showMessageActions(msg),
-                            child: _buildGroupAwareMessageBubble(
-                              msg: msg,
-                              isMine: isMine,
-                              showTail: showTail,
-                              showGroupAvatar: showGroupAvatar,
-                              effectiveAttachmentType: effectiveAttachmentType,
-                            ),
+                        final showGroupAvatar =
+                            !_isGroupChat ||
+                            isMine ||
+                            nextChronological == null ||
+                            !_isSameDay(
+                              nextChronological.timestamp,
+                              msg.timestamp,
+                            ) ||
+                            nextChronological.senderId.trim().toLowerCase() !=
+                                msg.senderId.trim().toLowerCase();
+                        final effectiveAttachmentType =
+                            _effectiveAttachmentType(msg);
+                        return Column(
+                          key: _messageKeys.putIfAbsent(
+                            msg.id,
+                            () => GlobalKey(debugLabel: 'message:${msg.id}'),
                           ),
-                          if (nextChronological != null &&
-                              _isSameDay(
-                                nextChronological.timestamp,
-                                msg.timestamp,
-                              ))
-                            SizedBox(
-                              height: _isMine(nextChronological) == isMine
-                                  ? 2
-                                  : 7,
+                          children: [
+                            if (showDate)
+                              _buildDateDivider(
+                                _formatDateDivider(msg.timestamp),
+                              ),
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onLongPress: () => _showMessageActions(msg),
+                              child: _buildGroupAwareMessageBubble(
+                                msg: msg,
+                                isMine: isMine,
+                                showTail: showTail,
+                                showGroupAvatar: showGroupAvatar,
+                                effectiveAttachmentType:
+                                    effectiveAttachmentType,
+                              ),
                             ),
-                          if (msg.id == _pinActivityAnchorEventId &&
-                              _latestPinActivityNotice != null)
-                            _buildPinActivityNotice(_latestPinActivityNotice!),
-                        ],
-                      );
-                    },
-                  ),
+                            if (nextChronological != null &&
+                                _isSameDay(
+                                  nextChronological.timestamp,
+                                  msg.timestamp,
+                                ))
+                              SizedBox(
+                                height: _isMine(nextChronological) == isMine
+                                    ? 2
+                                    : 7,
+                              ),
+                            if (msg.id == _pinActivityAnchorEventId &&
+                                _latestPinActivityNotice != null)
+                              _buildPinActivityNotice(
+                                _latestPinActivityNotice!,
+                              ),
+                          ],
+                        );
+                      },
+                    ),
               if (_loadingOlder)
                 const Positioned(
                   top: 8,
@@ -4363,23 +4352,19 @@ class _ChatScreenState extends State<ChatScreen> {
                 borderRadius: BorderRadius.circular(24),
               ),
             ),
-            child:
-                _joiningSuggestedGroup
-                    ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                    : const Text(
-                      'Join',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                      ),
+            child: _joiningSuggestedGroup
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
                     ),
+                  )
+                : const Text(
+                    'Join',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                  ),
           ),
         ),
       ),
@@ -4387,16 +4372,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildDeletedGroupBottomBar() {
-    final groupName =
-        _resolvedHeaderName.trim().isNotEmpty
-            ? _resolvedHeaderName.trim()
-            : widget.title.trim().isNotEmpty
-            ? widget.title.trim()
-            : 'This';
-    final groupLabel =
-        groupName.toLowerCase().endsWith('group')
-            ? groupName
-            : '$groupName group';
+    final groupName = _resolvedHeaderName.trim().isNotEmpty
+        ? _resolvedHeaderName.trim()
+        : widget.title.trim().isNotEmpty
+        ? widget.title.trim()
+        : 'This';
+    final groupLabel = groupName.toLowerCase().endsWith('group')
+        ? groupName
+        : '$groupName group';
     return SafeArea(
       top: false,
       child: Padding(
@@ -4484,8 +4467,9 @@ class _ChatScreenState extends State<ChatScreen> {
     required bool showGroupAvatar,
     required String? effectiveAttachmentType,
   }) {
-    final senderName =
-        _isGroupChat && !isMine ? _groupSenderName(msg.senderId) : null;
+    final senderName = _isGroupChat && !isMine
+        ? _groupSenderName(msg.senderId)
+        : null;
     final room = MatrixChatService.instance.getRoomById(msg.conversationId);
     final senderIsAdmin =
         _isGroupChat &&
@@ -4494,13 +4478,11 @@ class _ChatScreenState extends State<ChatScreen> {
         MatrixChatService.instance.isGroupAdmin(room, msg.senderId);
     final rawDisplayedContent =
         msg.isDeletedForEveryone &&
-                !msg.content.toLowerCase().startsWith(
-                  'this message was deleted',
-                )
-            ? (isMine
-                ? 'This message was deleted'
-                : 'This message was deleted by admin')
-            : msg.content;
+            !msg.content.toLowerCase().startsWith('this message was deleted')
+        ? (isMine
+              ? 'This message was deleted'
+              : 'This message was deleted by admin')
+        : msg.content;
     // Defensively clean legacy SQLite rows written before edited Matrix reply
     // fallbacks (`* > <@user:server> ...`) were handled by the model parser.
     // This also prevents the quoted homeserver from becoming a link preview.
@@ -4511,7 +4493,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final Widget bubble;
 
     final contactParts = displayedContent.split('\n');
-    final isContactMessage = contactParts.length >= 3 &&
+    final isContactMessage =
+        contactParts.length >= 3 &&
         contactParts.first.trim() == '[wrytte-contact]';
 
     if (isContactMessage) {
@@ -4530,62 +4513,54 @@ class _ChatScreenState extends State<ChatScreen> {
         message: contactPresentation,
         showTail: showTail,
       );
-    } else
+    } else if (effectiveAttachmentType == 'image') {
+      final presentation = ChatMessagePresentation(
+        id: msg.id,
+        kind: ChatMessageKind.image,
+        isMine: isMine,
+        timeLabel: _formatTime(msg.timestamp),
+        text: _imageCaption(displayedContent), // ← use helper
+        assetPath: msg.attachmentUrl, // raw URL is fine
+        senderName: senderName,
+        deliveryState: _mapDeliveryState(isMine ? msg.status : null),
+        edited: msg.isEdited,
+        pinned: _visiblePinnedEventIds.contains(msg.id),
+      );
 
-
-        if (effectiveAttachmentType == 'image') {
-          final presentation = ChatMessagePresentation(
-            id: msg.id,
-            kind: ChatMessageKind.image,
-            isMine: isMine,
-            timeLabel: _formatTime(msg.timestamp),
-            text: _imageCaption(displayedContent),   // ← use helper
-            assetPath: msg.attachmentUrl,            // raw URL is fine
-            senderName: senderName,
-            deliveryState: _mapDeliveryState(isMine ? msg.status : null),
-            edited: msg.isEdited,
-            pinned: _visiblePinnedEventIds.contains(msg.id),
-          );
-
-          bubble = ImageMessageBubble(
-            message: presentation,
-            showTail: true,
-          );
-        } else {
-          bubble = MessageBubble(
-            content: displayedContent,
-            time: _formatTime(msg.timestamp),
-            isMine: isMine,
-            senderName: senderName,
-            showAdminLabel: senderIsAdmin,
-            showTail: showTail,
-            status: isMine ? msg.status : null,
-            isVoiceNote: msg.isVoiceNote,
-            isVoiceListened: msg.isVoiceListened,
-            onVoiceListened:
-                !_isGroupChat && !isMine
-                    ? () => unawaited(_chat.markVoiceMessageListened(msg))
-                    : null,
-            isVideoNote: effectiveAttachmentType == 'video',
-            voiceDuration: msg.voiceDuration,
-            audioUrl: msg.attachmentUrl,
-            attachmentType: effectiveAttachmentType,
-            attachmentUrl: msg.attachmentUrl,
-            isForwarded: msg.isForwarded,
-            isStarred: msg.isStarred,
-            isPinned: _visiblePinnedEventIds.contains(msg.id),
-            isHighlighted: _highlightedMessageId == msg.id,
-            isDeleted: msg.isDeleted,
-            isEdited: msg.isEdited,
-            replyPreview: _replyPreviewDisplayText(msg.replyPreview),
-            replySender: _replySenderDisplayName(msg),
-            animateOnMount: true,
-            maxWidth:
-                _isGroupChat && !isMine
-                    ? MediaQuery.sizeOf(context).width - 94
-                    : null,
-          );
-        }
+      bubble = ImageMessageBubble(message: presentation, showTail: true);
+    } else {
+      bubble = MessageBubble(
+        content: displayedContent,
+        time: _formatTime(msg.timestamp),
+        isMine: isMine,
+        senderName: senderName,
+        showAdminLabel: senderIsAdmin,
+        showTail: showTail,
+        status: isMine ? msg.status : null,
+        isVoiceNote: msg.isVoiceNote,
+        isVoiceListened: msg.isVoiceListened,
+        onVoiceListened: !_isGroupChat && !isMine
+            ? () => unawaited(_chat.markVoiceMessageListened(msg))
+            : null,
+        isVideoNote: effectiveAttachmentType == 'video',
+        voiceDuration: msg.voiceDuration,
+        audioUrl: msg.attachmentUrl,
+        attachmentType: effectiveAttachmentType,
+        attachmentUrl: msg.attachmentUrl,
+        isForwarded: msg.isForwarded,
+        isStarred: msg.isStarred,
+        isPinned: _visiblePinnedEventIds.contains(msg.id),
+        isHighlighted: _highlightedMessageId == msg.id,
+        isDeleted: msg.isDeleted,
+        isEdited: msg.isEdited,
+        replyPreview: _replyPreviewDisplayText(msg.replyPreview),
+        replySender: _replySenderDisplayName(msg),
+        animateOnMount: true,
+        maxWidth: _isGroupChat && !isMine
+            ? MediaQuery.sizeOf(context).width - 94
+            : null,
+      );
+    }
 
     if (!_isGroupChat || isMine) return bubble;
 
@@ -4597,11 +4572,10 @@ class _ChatScreenState extends State<ChatScreen> {
           if (showGroupAvatar)
             GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap:
-                  () => _openGroupMemberProfile(
-                    msg.senderId,
-                    senderName ?? msg.senderId,
-                  ),
+              onTap: () => _openGroupMemberProfile(
+                msg.senderId,
+                senderName ?? msg.senderId,
+              ),
               child: Padding(
                 padding: const EdgeInsets.all(2),
                 child: UserAvatar(
@@ -4651,13 +4625,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder:
-            (_) => ProfileScreen(
-              uid: userId,
-              conversationId: directConversationId,
-              savedNameHint: savedNameHint,
-              initialAvatarUrl: initialAvatar,
-            ),
+        builder: (_) => ProfileScreen(
+          uid: userId,
+          conversationId: directConversationId,
+          savedNameHint: savedNameHint,
+          initialAvatarUrl: initialAvatar,
+        ),
       ),
     );
   }
@@ -4667,23 +4640,22 @@ class _ChatScreenState extends State<ChatScreen> {
     final room = MatrixChatService.instance.getRoomById(_activeConversationId);
     final isOwner =
         room != null && MatrixChatService.instance.isGroupOwner(room);
-    final items =
-        _isReadOnlySuggestedGroup
-            ? const [
-              (Icons.link_rounded, 'Share link'),
-              (Icons.report_gmailerrorred_outlined, 'Report group'),
-            ]
-            : isOwner
-            ? const [
-              (Icons.edit_outlined, 'Edit'),
-              (Icons.settings_outlined, 'Settings'),
-              (Icons.add_circle_outline_rounded, 'Add Story'),
-            ]
-            : const [
-              (Icons.report_gmailerrorred_outlined, 'Report'),
-              (Icons.search_rounded, 'Search'),
-              (Icons.info_outline_rounded, 'Info'),
-            ];
+    final items = _isReadOnlySuggestedGroup
+        ? const [
+            (Icons.link_rounded, 'Share link'),
+            (Icons.report_gmailerrorred_outlined, 'Report group'),
+          ]
+        : isOwner
+        ? const [
+            (Icons.edit_outlined, 'Edit'),
+            (Icons.settings_outlined, 'Settings'),
+            (Icons.add_circle_outline_rounded, 'Add Story'),
+          ]
+        : const [
+            (Icons.report_gmailerrorred_outlined, 'Report'),
+            (Icons.search_rounded, 'Search'),
+            (Icons.info_outline_rounded, 'Info'),
+          ];
     await showMenu<void>(
       context: context,
       color: const Color(0xFF23262C),
@@ -4697,28 +4669,24 @@ class _ChatScreenState extends State<ChatScreen> {
         12,
         0,
       ),
-      items:
-          items
-              .map(
-                (item) => PopupMenuItem<void>(
-                  enabled: false,
-                  height: 58,
-                  child: Row(
-                    children: [
-                      Icon(item.$1, color: Colors.white54, size: 24),
-                      const SizedBox(width: 16),
-                      Text(
-                        item.$2,
-                        style: const TextStyle(
-                          color: Colors.white54,
-                          fontSize: 17,
-                        ),
-                      ),
-                    ],
+      items: items
+          .map(
+            (item) => PopupMenuItem<void>(
+              enabled: false,
+              height: 58,
+              child: Row(
+                children: [
+                  Icon(item.$1, color: Colors.white54, size: 24),
+                  const SizedBox(width: 16),
+                  Text(
+                    item.$2,
+                    style: const TextStyle(color: Colors.white54, fontSize: 17),
                   ),
-                ),
-              )
-              .toList(),
+                ],
+              ),
+            ),
+          )
+          .toList(),
     );
   }
 
@@ -4733,6 +4701,7 @@ class _ChatScreenState extends State<ChatScreen> {
         kind: _isGroupChat
             ? ChatConversationKind.group
             : ChatConversationKind.direct,
+        receiverId: _isGroupChat ? null : _profilePeerId() ?? widget.receiverId,
         callsAvailable: !_isGroupChat && !_isDeletedConversation,
       ),
       onBack: () => Navigator.pop(context),
@@ -4761,16 +4730,17 @@ class _ChatScreenState extends State<ChatScreen> {
             builder: (_) => ProfileScreen(
               // Prefer loaded profile/identity, but always fall back to the
               // route receiver so the profile is never opened without a user id.
-              uid: _receiverProfile?.uid ??
+              uid:
+                  _receiverProfile?.uid ??
                   _receiverIdentity?.matrixUserId ??
                   widget.receiverId,
               conversationId: widget.conversationId,
               savedNameHint: _resolvedHeaderName,
               contactStatus:
-                  (_receiverIdentity?.savedName ?? '').trim().isNotEmpty
-                      == true
-                      ? ProfileContactStatus.saved
-                      : ProfileContactStatus.unsaved,
+                  _receiverIsSavedContact ||
+                      (_receiverIdentity?.savedName ?? '').trim().isNotEmpty
+                  ? ProfileContactStatus.saved
+                  : ProfileContactStatus.unsaved,
               initialAvatarUrl: _safePersonHeaderAvatar(
                 _receiverProfile?.hasProfileImage == true
                     ? _receiverProfile!.profileImage
@@ -4793,36 +4763,48 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       },
 
-
-
       avatarBuilder: (size) => Stack(
         clipBehavior: Clip.none,
         children: [
           UserAvatar(
             size: size,
-              imageUrl: BlockStateService.instance.isRedactedByBbb(
-                    _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
-                    roomId: _resolvedConversationId ?? widget.conversationId,
-                  ) || UserProfileService.instance.isPublicProfileRefreshing(
-                    _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
-                  )
-              ? null
-              : _safePersonHeaderAvatar(
-                  _receiverProfile?.hasProfileImage == true
-                      ? _receiverProfile!.profileImage
-                      : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
-                ),
-        localImagePath: BlockStateService.instance.isRedactedByBbb(
-                  _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
-                  roomId: _resolvedConversationId ?? widget.conversationId,
-                ) || UserProfileService.instance.isPublicProfileRefreshing(
-                  _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
-                )
-            ? null
-            : _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
+            imageUrl:
+                BlockStateService.instance.isRedactedByBbb(
+                      _receiverIdentity?.matrixUserId ??
+                          widget.receiverId ??
+                          '',
+                      roomId: _resolvedConversationId ?? widget.conversationId,
+                    ) ||
+                    UserProfileService.instance.isPublicProfileRefreshing(
+                      _receiverIdentity?.matrixUserId ??
+                          widget.receiverId ??
+                          '',
+                    )
+                ? null
+                : _safePersonHeaderAvatar(
+                    _receiverProfile?.hasProfileImage == true
+                        ? _receiverProfile!.profileImage
+                        : _receiverIdentity?.avatarUrl ??
+                              _stableHeaderAvatarUrl,
+                  ),
+            localImagePath:
+                BlockStateService.instance.isRedactedByBbb(
+                      _receiverIdentity?.matrixUserId ??
+                          widget.receiverId ??
+                          '',
+                      roomId: _resolvedConversationId ?? widget.conversationId,
+                    ) ||
+                    UserProfileService.instance.isPublicProfileRefreshing(
+                      _receiverIdentity?.matrixUserId ??
+                          widget.receiverId ??
+                          '',
+                    )
+                ? null
+                : _receiverProfile?.localProfileImagePath.trim().isNotEmpty ==
+                      true
                 ? _receiverProfile!.localProfileImagePath.trim()
                 : null,
-        name: _resolvedHeaderName,
+            name: _resolvedHeaderName,
             isDeleted: _isDeletedConversation,
           ),
           if (AutoDeleteService.instance.durationForRoom(
@@ -4859,16 +4841,15 @@ class _ChatScreenState extends State<ChatScreen> {
     final groupResult = await Navigator.push<Object?>(
       context,
       MaterialPageRoute(
-        builder:
-            (_) => GroupProfileScreen(
-              roomId: roomId,
-              groupName: _resolvedHeaderName,
-              avatarUrl: _stableHeaderAvatarUrl,
-              alias: widget.groupAlias,
-              initialDescription: widget.groupDescription,
-              initialMemberCount: widget.initialMemberCount,
-              initiallyJoined: !_isReadOnlySuggestedGroup,
-            ),
+        builder: (_) => GroupProfileScreen(
+          roomId: roomId,
+          groupName: _resolvedHeaderName,
+          avatarUrl: _stableHeaderAvatarUrl,
+          alias: widget.groupAlias,
+          initialDescription: widget.groupDescription,
+          initialMemberCount: widget.initialMemberCount,
+          initiallyJoined: !_isReadOnlySuggestedGroup,
+        ),
       ),
     );
     if (groupResult is GroupExitRequest && mounted) {
@@ -4879,27 +4860,26 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildLegacyAppBar(double statusBarH) {
     final isGroupChat = _isGroupChat;
     final displayName = _resolvedHeaderName;
-    final blockedByPeer = !isGroupChat &&
+    final blockedByPeer =
+        !isGroupChat &&
         BlockStateService.instance.isRedactedByBbb(
           _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
           roomId: _resolvedConversationId ?? widget.conversationId,
         );
-    final avatarUrl =
-        isGroupChat
-            ? _stableHeaderAvatarUrl
-            : blockedByPeer
-            ? null
-            : _safePersonHeaderAvatar(
-              _receiverProfile?.hasProfileImage == true
-                  ? _receiverProfile!.profileImage
-                  : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
-            );
-    final localAvatarPath =
-        isGroupChat || blockedByPeer
-            ? null
-            : _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
-            ? _receiverProfile!.localProfileImagePath.trim()
-            : null;
+    final avatarUrl = isGroupChat
+        ? _stableHeaderAvatarUrl
+        : blockedByPeer
+        ? null
+        : _safePersonHeaderAvatar(
+            _receiverProfile?.hasProfileImage == true
+                ? _receiverProfile!.profileImage
+                : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
+          );
+    final localAvatarPath = isGroupChat || blockedByPeer
+        ? null
+        : _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
+        ? _receiverProfile!.localProfileImagePath.trim()
+        : null;
 
     return SizedBox(
       height: statusBarH + kToolbarHeight,
@@ -4939,21 +4919,17 @@ class _ChatScreenState extends State<ChatScreen> {
                             final groupResult = await Navigator.push<Object?>(
                               context,
                               MaterialPageRoute(
-                                builder:
-                                    (_) => GroupProfileScreen(
-                                      roomId:
-                                          _resolvedConversationId ??
-                                          widget.conversationId,
-                                      groupName: displayName,
-                                      avatarUrl: avatarUrl,
-                                      alias: widget.groupAlias,
-                                      initialDescription:
-                                          widget.groupDescription,
-                                      initialMemberCount:
-                                          widget.initialMemberCount,
-                                      initiallyJoined:
-                                          !_isReadOnlySuggestedGroup,
-                                    ),
+                                builder: (_) => GroupProfileScreen(
+                                  roomId:
+                                      _resolvedConversationId ??
+                                      widget.conversationId,
+                                  groupName: displayName,
+                                  avatarUrl: avatarUrl,
+                                  alias: widget.groupAlias,
+                                  initialDescription: widget.groupDescription,
+                                  initialMemberCount: widget.initialMemberCount,
+                                  initiallyJoined: !_isReadOnlySuggestedGroup,
+                                ),
                               ),
                             );
                             if (groupResult is GroupExitRequest && mounted) {
@@ -4967,26 +4943,29 @@ class _ChatScreenState extends State<ChatScreen> {
                                 'receiver_id="${widget.receiverId}" resolved_group=$isGroupChat '
                                 'kind="${widget.conversationKind}"',
                           );
-                          final profileUid = _profilePeerId();
+                          // Always provide a direct peer ID. The room/message
+                          // heuristics are useful fallbacks, but must never
+                          // turn a user profile into the owner's profile.
+                          final profileUid =
+                              _profilePeerId() ?? widget.receiverId;
                           await Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder:
-                                  (_) => ProfileScreen(
-                                    uid: profileUid,
-                                    conversationId:
-                                        _resolvedConversationId ??
-                                        widget.conversationId,
-                                    savedNameHint: _resolvedHeaderName,
-                                    contactStatus:
+                              builder: (_) => ProfileScreen(
+                                uid: profileUid,
+                                conversationId:
+                                    _resolvedConversationId ??
+                                    widget.conversationId,
+                                savedNameHint: _resolvedHeaderName,
+                                contactStatus:
+                                    _receiverIsSavedContact ||
                                         (_receiverIdentity?.savedName ?? '')
                                             .trim()
                                             .isNotEmpty
-                                    == true
-                                            ? ProfileContactStatus.saved
-                                            : ProfileContactStatus.unsaved,
-                                    initialAvatarUrl: avatarUrl,
-                                  ),
+                                    ? ProfileContactStatus.saved
+                                    : ProfileContactStatus.unsaved,
+                                initialAvatarUrl: avatarUrl,
+                              ),
                             ),
                           );
                           if (mounted) _loadReceiverProfile();
@@ -5011,28 +4990,26 @@ class _ChatScreenState extends State<ChatScreen> {
                                     child: UserAvatar(
                                       size: _kHeaderPillH,
                                       imageUrl: avatarUrl,
-                                      cacheIdentity:
-                                          isGroupChat
-                                              ? MatrixChatService.instance
-                                                  .roomProfileCacheIdentity(
-                                                    accountId:
-                                                        widget.currentUserId,
-                                                    roomId:
+                                      cacheIdentity: isGroupChat
+                                          ? MatrixChatService.instance
+                                                .roomProfileCacheIdentity(
+                                                  accountId:
+                                                      widget.currentUserId,
+                                                  roomId:
+                                                      _resolvedConversationId ??
+                                                      widget.conversationId,
+                                                  avatarUrl: avatarUrl,
+                                                  room: MatrixChatService
+                                                      .instance
+                                                      .getRoomById(
                                                         _resolvedConversationId ??
-                                                        widget.conversationId,
-                                                    avatarUrl: avatarUrl,
-                                                    room: MatrixChatService
-                                                        .instance
-                                                        .getRoomById(
-                                                          _resolvedConversationId ??
-                                                              widget
-                                                                  .conversationId,
-                                                        ),
-                                                    profileVersion:
-                                                        widget
-                                                            .initialRoomProfileVersion,
-                                                  )
-                                              : 'user:${(_profilePeerId() ?? widget.receiverId).trim().toLowerCase()}',
+                                                            widget
+                                                                .conversationId,
+                                                      ),
+                                                  profileVersion: widget
+                                                      .initialRoomProfileVersion,
+                                                )
+                                          : 'user:${(_profilePeerId() ?? widget.receiverId).trim().toLowerCase()}',
                                       localImagePath: localAvatarPath,
                                       name: displayName,
                                       isDeleted: _isDeletedConversation,
@@ -5157,33 +5134,31 @@ class _ChatScreenState extends State<ChatScreen> {
       return widget.initialMemberCount!;
     }
     final room = MatrixChatService.instance.getRoomById(_activeConversationId);
-    final roomCount =
-        _groupMembers.isNotEmpty
-            ? _groupMembers
-                .where((member) => member.membership == mx.Membership.join)
-                .map((member) => member.id)
-                .toSet()
-                .length
-            : room == null
-            ? 0
-            : MatrixChatService.instance.groupMemberCount(room);
+    final roomCount = _groupMembers.isNotEmpty
+        ? _groupMembers
+              .where((member) => member.membership == mx.Membership.join)
+              .map((member) => member.id)
+              .toSet()
+              .length
+        : room == null
+        ? 0
+        : MatrixChatService.instance.groupMemberCount(room);
     if (roomCount > 0) return roomCount;
 
     final cachedConversation = _chat.cachedConversationsSnapshot.firstWhere(
       (conversation) =>
           conversation.id == _activeConversationId ||
           conversation.id == widget.conversationId,
-      orElse:
-          () => ChatConversation(
-            id: '',
-            participants: const [],
-            otherUserId: '',
-            lastMessage: '',
-            lastMessageSenderId: '',
-            lastMessageTime: DateTime.fromMillisecondsSinceEpoch(0),
-            unreadCount: 0,
-            lastMessageType: 'group',
-          ),
+      orElse: () => ChatConversation(
+        id: '',
+        participants: const [],
+        otherUserId: '',
+        lastMessage: '',
+        lastMessageSenderId: '',
+        lastMessageTime: DateTime.fromMillisecondsSinceEpoch(0),
+        unreadCount: 0,
+        lastMessageType: 'group',
+      ),
     );
     if (cachedConversation.participants.length > 1) {
       return cachedConversation.participants.length;
@@ -5258,12 +5233,11 @@ class _ChatScreenState extends State<ChatScreen> {
     // Unjoined suggested rooms are not present in the client's synced room
     // list. Their public-directory avatar is still room-owned and arrives
     // already scoped to widget.conversationId by the discovery result.
-    final avatar =
-        stateAvatar.isNotEmpty
-            ? stateAvatar
-            : _isReadOnlySuggestedGroup
-            ? widget.avatarUrl?.trim() ?? ''
-            : '';
+    final avatar = stateAvatar.isNotEmpty
+        ? stateAvatar
+        : _isReadOnlySuggestedGroup
+        ? widget.avatarUrl?.trim() ?? ''
+        : '';
     if (avatar.isEmpty || _matchesGroupParticipantAvatar(room, avatar)) {
       return null;
     }
@@ -5357,8 +5331,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String get _activeConversationId =>
       (_resolvedConversationId?.trim().isNotEmpty == true)
-          ? _resolvedConversationId!.trim()
-          : widget.conversationId.trim();
+      ? _resolvedConversationId!.trim()
+      : widget.conversationId.trim();
 
   static const List<mx.Membership> _groupMemberships = [mx.Membership.join];
 
@@ -5465,14 +5439,9 @@ class _ChatScreenState extends State<ChatScreen> {
       if (isMe) return;
 
       final ownerUserId = current?.trim() ?? '';
-      final savedContact =
-          ownerUserId.isEmpty
-              ? null
-              : await _findSavedContact(
-                ownerUserId,
-                senderId,
-                phone: phoneHint,
-              );
+      final savedContact = ownerUserId.isEmpty
+          ? null
+          : await _findSavedContact(ownerUserId, senderId, phone: phoneHint);
       if (savedContact != null && !forceRefresh) {
         final name = _cleanDisplayName(savedContact.formattedName);
         final avatar = savedContact.avatarUrl?.trim() ?? '';
@@ -5484,13 +5453,12 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
 
-      final localProfile1 =
-          ownerUserId.isEmpty
-              ? null
-              : await ContactIdentityCache.instance.findByMatrixId(
-                ownerUserId: ownerUserId,
-                matrixUserId: senderId,
-              );
+      final localProfile1 = ownerUserId.isEmpty
+          ? null
+          : await ContactIdentityCache.instance.findByMatrixId(
+              ownerUserId: ownerUserId,
+              matrixUserId: senderId,
+            );
       if (localProfile1 != null && !forceRefresh) {
         final name = _cleanDisplayName(localProfile1.profileName);
         final avatar = localProfile1.avatarUrl?.trim() ?? '';
@@ -5512,14 +5480,12 @@ class _ChatScreenState extends State<ChatScreen> {
           savedContact == null) {
         _groupMemberNames.remove(senderId);
       }
-      final name =
-          forceRefresh && savedContact != null
-              ? _cleanDisplayName(savedContact.formattedName)
-              : _cleanDisplayName(profile?.displayName);
-      final avatar =
-          profile?.moduleProfileLoaded == true
-              ? (profile!.hasProfileImage ? profile.profileImage : '')
-              : profile?.profileImage.trim() ?? '';
+      final name = forceRefresh && savedContact != null
+          ? _cleanDisplayName(savedContact.formattedName)
+          : _cleanDisplayName(profile?.displayName);
+      final avatar = profile?.moduleProfileLoaded == true
+          ? (profile!.hasProfileImage ? profile.profileImage : '')
+          : profile?.profileImage.trim() ?? '';
       if (savedContact != null && profile?.moduleProfileLoaded == true) {
         final refreshedContact =
             await ContactLocalDb.refreshPublicProfileFields(
@@ -5594,10 +5560,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String? _replySenderDisplayName(ChatMessage message) {
-    final rawSender =
-        message.replyToSenderId?.trim().isNotEmpty == true
-            ? message.replyToSenderId!.trim()
-            : _replySenderIdFromQuotedMessage(message);
+    final rawSender = message.replyToSenderId?.trim().isNotEmpty == true
+        ? message.replyToSenderId!.trim()
+        : _replySenderIdFromQuotedMessage(message);
     if (rawSender == null || rawSender.isEmpty) return null;
 
     if (_matrixLocalpart(rawSender) == _matrixLocalpart(widget.currentUserId)) {
@@ -5663,8 +5628,9 @@ class _ChatScreenState extends State<ChatScreen> {
     var text = preview?.trim() ?? '';
     if (text.isEmpty) return null;
     text = text.replaceFirst(RegExp(r'^<[^>]+>\s*'), '').trim();
-    text =
-        text.replaceFirst(RegExp(r'^@[A-Za-z0-9._=-]+:[^\s]+\s*'), '').trim();
+    text = text
+        .replaceFirst(RegExp(r'^@[A-Za-z0-9._=-]+:[^\s]+\s*'), '')
+        .trim();
     return text.isEmpty ? null : text;
   }
 
@@ -5777,8 +5743,12 @@ class _ChatScreenState extends State<ChatScreen> {
     if (value.isEmpty) return null;
 
     final lower = value.toLowerCase();
-    if (const {'photo', 'image', 'attachment', 'photo message'}
-        .contains(lower)) {
+    if (const {
+      'photo',
+      'image',
+      'attachment',
+      'photo message',
+    }.contains(lower)) {
       return null;
     }
     if (RegExp(
@@ -5789,12 +5759,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     return value;
   }
-
-
-
-
-
-
 
   Widget _buildReplyComposerBanner() {
     final message = _replyingTo!;
@@ -5919,11 +5883,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final explicit = message.attachmentType?.trim().toLowerCase();
     if (explicit?.isNotEmpty == true) return explicit;
 
-    final value =
-        [
-          message.attachmentUrl,
-          message.content,
-        ].whereType<String>().join(' ').toLowerCase();
+    final value = [
+      message.attachmentUrl,
+      message.content,
+    ].whereType<String>().join(' ').toLowerCase();
     if (value.isEmpty) return null;
 
     if (RegExp(
@@ -6046,11 +6009,8 @@ class _TypingIndicatorState extends State<_TypingIndicator>
             );
             return AnimatedBuilder(
               animation: animation,
-              builder:
-                  (context, child) => Opacity(
-                    opacity: 0.35 + animation.value * 0.65,
-                    child: child,
-                  ),
+              builder: (context, child) =>
+                  Opacity(opacity: 0.35 + animation.value * 0.65, child: child),
               child: Container(
                 width: 6,
                 height: 6,

@@ -45,6 +45,11 @@ class _BottomNavBarState extends State<BottomNavBar> {
             ? null
             : UserProfileService.instance.cachedProfile);
     _profile = _isDisplayReadyProfile(initial) ? initial : null;
+    debugPrint(
+      '[BottomNavAvatar] init display=${_profile != null} '
+      'uid="${_profile?.uid ?? ''}" has_avatar=${_profile?.hasProfileImage ?? false} '
+      'url="${_profile?.profileImage ?? ''}"',
+    );
 
     _profileSub = UserProfileService.instance
         .getCurrentUserProfileStream(
@@ -52,6 +57,12 @@ class _BottomNavBarState extends State<BottomNavBar> {
           refreshFromBackend: widget.fetchProfileFromBackend,
         )
         .listen((profile) {
+          debugPrint(
+            '[BottomNavAvatar] stream profile=${profile != null} '
+            'uid="${profile?.uid ?? ''}" has_avatar=${profile?.hasProfileImage ?? false} '
+            'url="${profile?.profileImage ?? ''}" '
+            'display_ready=${_isDisplayReadyProfile(profile)}',
+          );
           if (mounted && _isDisplayReadyProfile(profile)) {
             setState(() => _profile = profile);
           }
@@ -83,6 +94,11 @@ class _BottomNavBarState extends State<BottomNavBar> {
   @override
   Widget build(BuildContext context) {
     final current = widget.currentIndex;
+    debugPrint(
+      '[BottomNavAvatar] build uid="${_profile?.uid ?? ''}" '
+      'source=${_profile?.hasProfileImage == true ? 'profile_url' : (_profile?.localProfileImagePath.isNotEmpty == true ? 'local_file' : 'initials')} '
+      'url="${_profile?.profileImage ?? ''}"',
+    );
 
     return Stack(
       children: [
@@ -244,11 +260,15 @@ class _BottomNavBarState extends State<BottomNavBar> {
                                   ? _profile!.profileImage
                                   : null,
                               localImagePath: _profile?.localProfileImagePath,
-                              name: _profileNameForAvatar(),
+                              // Do not flash the owner's initials while the
+                              // locally cached avatar is still hydrating.
+                              // Once the profile arrives, the real avatar is
+                              // rendered through imageUrl/localImagePath.
+                              name: null,
                               cacheIdentity: _profile == null
                                   ? null
                                   : 'account:${_profile!.uid.trim().toLowerCase()}'
-                                      '|avatar:v${_profile!.avatarVersion}',
+                                        '|avatar:v${_profile!.avatarVersion}',
                             ),
                           ),
                         ),
@@ -262,11 +282,6 @@ class _BottomNavBarState extends State<BottomNavBar> {
         ),
       ],
     );
-  }
-
-  String? _profileNameForAvatar() {
-    final name = _profileDisplayName();
-    return name.isEmpty ? null : name;
   }
 
   String _profileDisplayName() {
@@ -290,7 +305,6 @@ class _BottomNavBarState extends State<BottomNavBar> {
         localAvatar.isNotEmpty;
   }
 }
-
 
 /// One tab. Takes an equal share of the row width (Expanded).
 /// The active pill is switcher_icon.svg, stretched behind the icon + label.
@@ -370,8 +384,9 @@ class _NavItem extends StatelessWidget {
                             style: TextStyle(
                               fontFamily: 'Inter',
                               fontSize: 10,
-                              fontWeight:
-                                  isActive ? FontWeight.w600 : FontWeight.w400,
+                              fontWeight: isActive
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
                               color: isActive
                                   ? Colors.white
                                   : const Color(0xFF7A7A7A),
@@ -390,5 +405,3 @@ class _NavItem extends StatelessWidget {
     );
   }
 }
-
-

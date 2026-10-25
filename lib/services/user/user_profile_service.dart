@@ -24,6 +24,7 @@ import 'package:wrytte/utils/apk_debug_logger.dart';
 /// Source of truth is FlutterSecureStorage via AuthService.
 class UserProfileService {
   UserProfileService._() {
+    _publicProfileDiskReady = _hydratePublicProfileDiskCache();
     MatrixClientService.instance.profileUpdateStream.listen(
       _handlePublicProfileUpdated,
     );
@@ -56,7 +57,11 @@ class UserProfileService {
   final Map<String, Future<UserProfile?>> _publicProfileInFlight = {};
   final Map<String, String> _publicProfilePreviousAvatarUrls = {};
   final Map<String, int> _publicProfileRevisions = {};
-  final Set<String> _publicProfileMisses = {};
+  // Avoid retrying a known-missing profile on every chat-list repaint, while
+  // allowing newly-created profiles to appear after the TTL expires.
+  final Map<String, DateTime> _publicProfileMisses = {};
+  Future<void>? _publicProfileDiskReady;
+  static const _publicProfileDiskCacheKey = 'public_profile_disk_cache_v1';
   Future<UserProfile?>? _loginProfileInFlight;
   DateTime? _currentProfileBackendFetchedAt;
   int _sessionGeneration = 0;
@@ -77,8 +82,8 @@ class UserProfileService {
   Stream<String> get publicProfileUpdateStream =>
       _publicProfileUpdateController.stream;
 
-  bool isPublicProfileRefreshing(String userId) =>
-      _publicProfileRefreshInFlight.contains(_matrixLocalpart(userId).toLowerCase());
+  bool isPublicProfileRefreshing(String userId) => _publicProfileRefreshInFlight
+      .contains(_matrixLocalpart(userId).toLowerCase());
 
   void _handlePublicProfileUpdated(String userId) {
     final localpart = _matrixLocalpart(userId).toLowerCase();
@@ -113,7 +118,7 @@ class UserProfileService {
       (key, _) => _profileCacheLocalpart(key) == localpart,
     );
     _publicProfileMisses.removeWhere(
-      (key) => _profileCacheLocalpart(key) == localpart,
+      (key, _) => _profileCacheLocalpart(key) == localpart,
     );
     _publicProfileUpdateController.add(userId);
     unawaited(_refreshOwnerProfileIfChanged(userId));
@@ -141,7 +146,7 @@ class UserProfileService {
         (key, _) => _profileCacheLocalpart(key) == localpart,
       );
       _publicProfileMisses.removeWhere(
-        (key) => _profileCacheLocalpart(key) == localpart,
+        (key, _) => _profileCacheLocalpart(key) == localpart,
       );
       await getProfileByUid(normalized, forceRefresh: true);
       debugPrint(
@@ -420,15 +425,14 @@ class UserProfileService {
   }) async {
     final backendFields = <String, String>{};
     String? previousAvatarForEviction;
-    final String? displayNameToSave =
-        name != null
-            ? name.trim()
-            : (firstName != null || lastName != null)
-            ? [
-              firstName?.trim() ?? '',
-              lastName?.trim() ?? '',
-            ].where((part) => part.isNotEmpty).join(' ')
-            : null;
+    final String? displayNameToSave = name != null
+        ? name.trim()
+        : (firstName != null || lastName != null)
+        ? [
+            firstName?.trim() ?? '',
+            lastName?.trim() ?? '',
+          ].where((part) => part.isNotEmpty).join(' ')
+        : null;
     if (displayNameToSave != null) {
       final uid = await AuthService.instance.getCurrentUserId();
       if (uid == null || uid.trim().isEmpty) {
@@ -548,8 +552,13 @@ class UserProfileService {
     String? phone,
     bool forceRefresh = false,
   }) async {
+    await (_publicProfileDiskReady ??= _hydratePublicProfileDiskCache());
     final requestedUid = uid.trim();
     final cacheKey = _publicProfileCacheKey(requestedUid, phone);
+    apkLog(
+      'ProfileCache',
+      'lookup uid="$requestedUid" force=$forceRefresh phone="${phone ?? ''}"',
+    );
     if (requestedUid.isEmpty ||
         requestedUid.startsWith('!') ||
         requestedUid.startsWith('@!')) {
@@ -561,6 +570,15 @@ class UserProfileService {
     // If it's the current user, use the full local profile
     final ownerProfile = await _publicProfileForOwner(uid);
     if (ownerProfile != null) {
+      apkLog(
+        'ProfileCache',
+        'hit source=owner_local uid="$requestedUid" '
+            'bio=${ownerProfile.bio.isNotEmpty} '
+            'avatar=${ownerProfile.profileImage.isNotEmpty} '
+            'links=${ownerProfile.links.length} '
+            'channel="${ownerProfile.channelAlias}" '
+            'group="${ownerProfile.groupAlias}"',
+      );
       debugPrint(
         '[UserProfileService] profile source=owner_profile user_id="$requestedUid"',
       );
@@ -574,14 +592,31 @@ class UserProfileService {
           _publicProfileCache[cacheKey] ??
           cachedPublicProfileByUid(requestedUid);
       if (cached != null) {
+        apkLog(
+          'ProfileCache',
+          'hit source=public_memory uid="$requestedUid" '
+              'bio=${cached.bio.isNotEmpty} '
+              'avatar=${cached.profileImage.isNotEmpty} '
+              'links=${cached.links.length} '
+              'channel="${cached.channelAlias}" '
+              'group="${cached.groupAlias}"',
+        );
         return cached;
       }
-      if (_publicProfileMisses.contains(cacheKey)) {
+      final missAt = _publicProfileMisses[cacheKey];
+      if (missAt != null &&
+          DateTime.now().difference(missAt) < const Duration(minutes: 5)) {
+        apkLog(
+          'ProfileCache',
+          'negative_hit uid="$requestedUid" reason=previous_404_or_empty',
+        );
         return null;
       }
+      if (missAt != null) _publicProfileMisses.remove(cacheKey);
 
       final pending = _publicProfileInFlight[cacheKey];
       if (pending != null) {
+        apkLog('ProfileCache', 'in_flight_reuse uid="$requestedUid"');
         return pending;
       }
     } else {
@@ -595,6 +630,10 @@ class UserProfileService {
 
     debugPrint(
       '[UserProfileService] profile source=module_api user_id="$requestedUid"',
+    );
+    apkLog(
+      'ProfileCache',
+      'miss remote_start uid="$requestedUid" force=$forceRefresh',
     );
     final future = _getProfileByUidRemote(uid, phone: phone);
     _publicProfileInFlight[cacheKey] = future;
@@ -622,14 +661,20 @@ class UserProfileService {
       );
     }
     final remote = await _readPublicBackendProfileBestEffort(uid, phone: phone);
+    apkLog(
+      'ProfileCache',
+      'remote_done uid="$uid" found=${remote != null} '
+          'fields=${remote?.keys.toList() ?? const []}',
+    );
     if (generation != _sessionGeneration) return null;
     if ((_publicProfileRevisions[localpart] ?? 0) != profileRevision) {
       return _getProfileByUidRemote(uid, phone: phone);
     }
     if (remote == null) {
       // A network/module failure is not a successful empty profile. Keep
-      // existing UI/cache values and allow a later retry instead of clearing
-      // identity fields on transient errors.
+      // existing UI/cache values. Bound retries so a missing profile cannot
+      // trigger a request on every list repaint.
+      _publicProfileMisses[cacheKey] = DateTime.now();
       return null;
     }
     final hasUnblockedPrivateFields = <String>{
@@ -684,7 +729,68 @@ class UserProfileService {
     // CachedNetworkImage when rendered. Eager file downloads here duplicated
     // that cache and repeatedly timed out for profiles not on screen.
     _publicProfileCache[cacheKey] = profile;
+    unawaited(_persistPublicProfile(profile));
     return profile;
+  }
+
+  Future<void> _hydratePublicProfileDiskCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_publicProfileDiskCacheKey);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      for (final entry in decoded.entries) {
+        if (entry.value is! Map) continue;
+        final profile = UserProfile.fromMap(
+          entry.key.toString(),
+          Map<String, dynamic>.from(entry.value as Map),
+        );
+        if (profile.uid.trim().isNotEmpty) {
+          _publicProfileCache[_publicProfileCacheKey(profile.uid, null)] =
+              profile;
+        }
+      }
+      apkLog(
+        'ProfileCache',
+        'disk_hydrate profiles=${_publicProfileCache.length}',
+      );
+    } catch (error) {
+      debugPrint(
+        '[UserProfileService] public profile disk hydrate skipped: $error',
+      );
+    }
+  }
+
+  Future<void> _persistPublicProfile(UserProfile profile) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_publicProfileDiskCacheKey);
+      final decoded = raw == null || raw.isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(raw);
+      final profiles = decoded is Map
+          ? Map<String, dynamic>.from(decoded)
+          : <String, dynamic>{};
+      profiles[_matrixLocalpart(profile.uid).toLowerCase()] = profile.toMap();
+      // Keep the persistent cache bounded like a messaging app cache.
+      final keys = profiles.keys.toList();
+      if (keys.length > 500) {
+        for (final key in keys.take(keys.length - 500)) {
+          profiles.remove(key);
+        }
+      }
+      await prefs.setString(_publicProfileDiskCacheKey, jsonEncode(profiles));
+      apkLog(
+        'ProfileCache',
+        'disk_write uid="${profile.uid}" avatar=${profile.hasProfileImage} '
+            'bio=${profile.bio.isNotEmpty} links=${profile.links.length}',
+      );
+    } catch (error) {
+      debugPrint(
+        '[UserProfileService] public profile disk write skipped: $error',
+      );
+    }
   }
 
   /// Wipe cache on logout.
@@ -723,7 +829,8 @@ class UserProfileService {
     if (localpart.isEmpty) return null;
 
     final cacheKey = _publicProfileCacheKey(uid, phone);
-    return _publicProfileCache[cacheKey];
+    return _publicProfileCache[cacheKey] ??
+        _publicProfileCache[_publicProfileCacheKey(uid, null)];
   }
 
   Future<UserProfile?> _publicProfileForOwner(String uid) async {
@@ -756,14 +863,15 @@ class UserProfileService {
       if (_logoutInProgress || !_isActiveSession(generation, uid)) return null;
 
       var phone = _normalizePhone(await _storage.read(key: _phoneKey) ?? '');
-      var name =
-          ignoreStoredProfile ? '' : await _storage.read(key: _nameKey) ?? '';
-      var bio =
-          ignoreStoredProfile ? '' : await _storage.read(key: _bioKey) ?? '';
-      final linksRaw =
-          ignoreStoredProfile
-              ? ''
-              : await _storage.read(key: 'user_links') ?? '';
+      var name = ignoreStoredProfile
+          ? ''
+          : await _storage.read(key: _nameKey) ?? '';
+      var bio = ignoreStoredProfile
+          ? ''
+          : await _storage.read(key: _bioKey) ?? '';
+      final linksRaw = ignoreStoredProfile
+          ? ''
+          : await _storage.read(key: 'user_links') ?? '';
       var moduleProfileLoaded = false;
       var channelAlias = '';
       var groupAlias = '';
@@ -787,18 +895,15 @@ class UserProfileService {
               'channel="$channelAlias" group="$groupAlias"',
         );
       }
-      var profileImage =
-          ignoreStoredAvatar || ignoreStoredProfile
-              ? ''
-              : await _storage.read(key: _profileImageKey) ?? '';
-      var localProfileImagePath =
-          ignoreStoredAvatar || ignoreStoredProfile
-              ? ''
-              : await _readLocalProfileImagePath(uid);
-      var avatarVersion =
-          ignoreStoredAvatar || ignoreStoredProfile
-              ? 0
-              : await _readAvatarVersion(uid);
+      var profileImage = ignoreStoredAvatar || ignoreStoredProfile
+          ? ''
+          : await _storage.read(key: _profileImageKey) ?? '';
+      var localProfileImagePath = ignoreStoredAvatar || ignoreStoredProfile
+          ? ''
+          : await _readLocalProfileImagePath(uid);
+      var avatarVersion = ignoreStoredAvatar || ignoreStoredProfile
+          ? 0
+          : await _readAvatarVersion(uid);
       var matrixDisplayNameLoaded = false;
 
       if (forceRefresh && !ignoreStoredProfile) {
@@ -814,7 +919,7 @@ class UserProfileService {
           (forceRefresh || !_hasRealName(name) || profileImage.isEmpty)) {
         final remote = await _readBackendProfileBestEffort();
         if (!_isActiveSession(generation, uid) ||
-            readRevision != _profileReadRevision) {
+            (allowBackendRefresh && readRevision != _profileReadRevision)) {
           return null;
         }
         if (remote.isNotEmpty) {
@@ -976,23 +1081,31 @@ class UserProfileService {
         avatarVersion: avatarVersion,
         moduleProfileLoaded: moduleProfileLoaded,
         localProfileImagePath: localProfileImagePath,
-        links:
-            linksRaw
-                .split('\n')
-                .map((link) => link.trim())
-                .where((link) => link.isNotEmpty)
-                .toList(),
+        links: linksRaw
+            .split('\n')
+            .map((link) => link.trim())
+            .where((link) => link.isNotEmpty)
+            .toList(),
       );
 
       // A logout/account switch may finish while a backend request from the
       // previous screen is still in flight. Never allow that stale completion
       // to repopulate the process-wide profile cache for the next account.
-      if (!_isActiveSession(generation, uid) ||
-          readRevision != _profileReadRevision) {
+      if (!_isActiveSession(generation, uid)) {
         return null;
       }
-      _cache = profile;
-      _profileController.add(profile);
+      // A local-only read is still useful when a concurrent backend refresh
+      // advanced the read revision. Return it to the caller immediately, but
+      // do not let that older read replace the newer shared cache value.
+      if (readRevision == _profileReadRevision) {
+        _cache = profile;
+        _profileController.add(profile);
+      } else if (!allowBackendRefresh) {
+        debugPrint(
+          '[UserProfileService] local profile returned during concurrent '
+          'refresh uid="$uid"',
+        );
+      }
       return profile;
     } catch (e) {
       debugPrint('[UserProfileService] _readFromStorage error: $e');
@@ -1099,10 +1212,9 @@ class UserProfileService {
       return false;
     }
     if (_looksLikePhone(trimmed)) return false;
-    final localpart =
-        trimmed.startsWith('@')
-            ? trimmed.substring(1).split(':').first
-            : trimmed.split(':').first;
+    final localpart = trimmed.startsWith('@')
+        ? trimmed.substring(1).split(':').first
+        : trimmed.split(':').first;
     return !RegExp(
       r'^[a-f0-9]{24,}$',
       caseSensitive: false,
@@ -1357,17 +1469,18 @@ class UserProfileService {
       visibilitySettings: visibilitySettings,
       avatarVersion: _avatarVersionFromFields(fields),
       moduleProfileLoaded: true,
-      links: [
-        _field(fields, 'Link'),
-        _field(fields, 'link'),
-        _field(fields, 'Website'),
-        _field(fields, 'website'),
-      ]
-          .whereType<String>()
-          .map((link) => link.trim())
-          .where((link) => link.isNotEmpty)
-          .toSet()
-          .toList(),
+      links:
+          [
+                _field(fields, 'Link'),
+                _field(fields, 'link'),
+                _field(fields, 'Website'),
+                _field(fields, 'website'),
+              ]
+              .whereType<String>()
+              .map((link) => link.trim())
+              .where((link) => link.isNotEmpty)
+              .toSet()
+              .toList(),
     );
   }
 
@@ -1381,10 +1494,9 @@ class UserProfileService {
     if (freshAvatar.isEmpty) {
       return fresh.copyWith(
         profileImage: cachedAvatar.isNotEmpty ? cachedAvatar : null,
-        localProfileImagePath:
-            cached.localProfileImagePath.trim().isNotEmpty
-                ? cached.localProfileImagePath
-                : null,
+        localProfileImagePath: cached.localProfileImagePath.trim().isNotEmpty
+            ? cached.localProfileImagePath
+            : null,
       );
     }
 
@@ -1394,10 +1506,9 @@ class UserProfileService {
         // Keep the fresh fetch version so CachedNetworkImage cannot serve an
         // older file merely because the base path did not change.
         profileImage: freshAvatar,
-        localProfileImagePath:
-            cached.localProfileImagePath.trim().isNotEmpty
-                ? cached.localProfileImagePath
-                : null,
+        localProfileImagePath: cached.localProfileImagePath.trim().isNotEmpty
+            ? cached.localProfileImagePath
+            : null,
       );
     }
 
