@@ -868,7 +868,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _isPeerPresenceRedacted() {
     if (_isGroupChat) return false;
-    final peerId = (_profilePeerId() ?? widget.receiverId).trim();
+    final peerId = (_canonicalDirectPeerId() ?? widget.receiverId).trim();
     final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
     if (peerId.isEmpty) return false;
     return BlockStateService.instance.isRedactedByBbb(
@@ -881,9 +881,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isGroupChat || !MatrixClientService.instance.isInitialized) {
       return false;
     }
-    final peerId = _profilePeerId();
+    final peerId = _canonicalDirectPeerId();
     if (peerId == null || peerId.trim().isEmpty) return false;
-    if (!_hasLocalPeerRoom(peerId)) return false;
     final peerLocalpart = _matrixLocalpart(peerId).toLowerCase();
     final client = MatrixClientService.instance.client;
     _peerLastActiveAt =
@@ -908,7 +907,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _refreshPeerPresence() async {
     if (_isPeerPresenceRedacted()) return;
     if (_isGroupChat || !MatrixClientService.instance.isInitialized) return;
-    final peerId = _profilePeerId();
+    final peerId = _canonicalDirectPeerId();
     if (peerId == null || peerId.trim().isEmpty) return;
     try {
       final presence = await MatrixClientService.instance.client
@@ -932,9 +931,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void _applyPeerPresenceUpdate(mx.SyncUpdate update) {
     if (_isPeerPresenceRedacted()) return;
     if (_isGroupChat) return;
-    final peerId = _profilePeerId();
+    final peerId = _canonicalDirectPeerId();
     if (peerId == null || peerId.trim().isEmpty) return;
-    if (!_hasLocalPeerRoom(peerId)) return;
     final peerLocalpart = _matrixLocalpart(peerId).toLowerCase();
     for (final presence in update.presence ?? const []) {
       if (_matrixLocalpart(presence.senderId).toLowerCase() != peerLocalpart) {
@@ -1120,7 +1118,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String _peerPresenceLabel() {
     // Person B must not see Person A's online / last-seen when A blocked B.
     if (!_isGroupChat) {
-      final peerId = (_profilePeerId() ?? widget.receiverId).trim();
+      final peerId = (_canonicalDirectPeerId() ?? widget.receiverId).trim();
       final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
       if (peerId.isNotEmpty &&
           BlockStateService.instance.isRedactedByBbb(
@@ -1163,6 +1161,21 @@ class _ChatScreenState extends State<ChatScreen> {
       return 'Last seen ${DateFormat('MMM d').format(localLastActive)} at $time';
     }
     return 'Last seen ${DateFormat('MM/dd/yy').format(localLastActive)}';
+  }
+
+  /// Canonical peer identity for all direct-chat presence/profile surfaces.
+  /// Cached identities and message-derived IDs are fallbacks only; they can
+  /// belong to a previous contact mapping or another room participant.
+  String? _canonicalDirectPeerId() {
+    if (_isGroupChat) return null;
+    final receiver = widget.receiverId.trim();
+    if (receiver.isNotEmpty &&
+        !receiver.startsWith('!') &&
+        !receiver.startsWith('@!') &&
+        _matrixLocalpart(receiver) != _matrixLocalpart(widget.currentUserId)) {
+      return receiver;
+    }
+    return _profilePeerId();
   }
 
   void _onNewLog() {
@@ -4700,7 +4713,9 @@ class _ChatScreenState extends State<ChatScreen> {
         kind: _isGroupChat
             ? ChatConversationKind.group
             : ChatConversationKind.direct,
-        receiverId: _isGroupChat ? null : _profilePeerId() ?? widget.receiverId,
+        receiverId: _isGroupChat
+            ? null
+            : _canonicalDirectPeerId() ?? widget.receiverId,
         callsAvailable: !_isGroupChat && !_isDeletedConversation,
       ),
       onBack: () => Navigator.pop(context),

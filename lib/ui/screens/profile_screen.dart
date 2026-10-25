@@ -94,6 +94,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _showBlockConfirmation = false;
   bool _showUnblockConfirmation = false;
   bool _profile2Saved = false;
+  bool _savedContactLookupComplete = false;
   bool _showMoreOptions = false;
   bool _showMuteOptions = false;
   bool _showClearChatConfirmation = false;
@@ -162,6 +163,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   bool get _showUnsavedProfileActions =>
       _isOtherUser &&
+      _savedContactLookupComplete &&
       widget.contactStatus != ProfileContactStatus.saved &&
       (widget.contactStatus == ProfileContactStatus.unsaved ||
           !_hasSavedContactHint) &&
@@ -370,6 +372,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       );
     }
     savedContact ??= uid != null ? await _findSavedContact(uid) : null;
+    _savedContactLookupComplete = !_isOtherUser || uid != null;
     apkLog(
       'Profile2.trace',
       'resolved uid="$uid" identitySaved="${identity?.savedName}" savedContact="${savedContact?.formattedName}"',
@@ -1708,7 +1711,11 @@ class _ProfileScreenState extends State<ProfileScreen>
     debugPrint(
       '[ProfileActions] build: loading=$_profileLoading '
       'other=$_isOtherUser saved=${_savedContact != null} '
-      'rendered=${_profileLoading && !_hasSavedContactHint && widget.contactStatus != ProfileContactStatus.unsaved ? 'none' : (_showUnsavedProfileActions ? 'Block/Add' : 'Edit')}',
+      'contactStatus=${widget.contactStatus?.name ?? 'null'} '
+      'lookupComplete=$_savedContactLookupComplete '
+      'identitySaved=${_cleanName(_identity?.savedName).isNotEmpty} '
+      'profile2Saved=$_profile2Saved '
+      'rendered=${_isOtherUser && (!_savedContactLookupComplete || (_profileLoading && widget.contactStatus == null)) ? 'hidden_waiting_for_contact_lookup' : (_showUnsavedProfileActions ? 'Block/Add' : 'Edit')}',
     );
     final theme = Theme.of(context);
     final double statusBarHeight = MediaQuery.of(context).padding.top;
@@ -2071,7 +2078,10 @@ class _ProfileScreenState extends State<ProfileScreen>
 
                         Expanded(child: const SizedBox.shrink()),
 
-                        _isOtherUser && _profileLoading
+                        _isOtherUser &&
+                                (!_savedContactLookupComplete ||
+                                    (_profileLoading &&
+                                        widget.contactStatus == null))
                             ? const SizedBox(width: 84, height: 44)
                             : _isOtherUser
                             ? _showUnsavedProfileActions
