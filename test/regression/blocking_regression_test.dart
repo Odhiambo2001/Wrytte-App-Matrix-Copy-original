@@ -298,6 +298,27 @@ void main() {
       expect(visible.single['id'], '\$after');
     });
   });
+
+  test('auto-delete keeps the original notification wording and adds off', () async {
+    await runLogged('auto-delete notification contract', () async {
+      final service = await File('lib/services/matrix/auto_delete_service.dart')
+          .readAsString();
+      final screen = await File('lib/ui/screens/chats/chat_screen.dart')
+          .readAsString();
+
+      expect(service, contains("'duration': duration"));
+      expect(service, contains("'duration': duration == 'Off' ? null : duration"));
+      expect(service, contains("'duration': duration == null || duration.isEmpty ? 'Off' : duration"));
+      expect(screen, contains('You turned on auto-delete messages.'));
+      expect(screen, contains('You turned off auto-delete messages.'));
+      expect(screen, contains("autoDeleteChange?['duration'] == 'Off'"));
+      expect(screen, contains('autoDeleteDuration ?? \'Off\''));
+      expect(
+        screen,
+        contains('New messages will disappear from this chat'),
+      );
+    });
+  });
 }
 
 Future<void> _log(File file, String message) async {

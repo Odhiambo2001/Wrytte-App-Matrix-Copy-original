@@ -3887,11 +3887,17 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildAutoDeleteBanner(String duration) {
     final roomId = _resolvedConversationId ?? widget.conversationId;
     final enabledBy = AutoDeleteService.instance.enabledByForRoom(roomId);
+    final isOff = duration == 'Off';
     final currentUserId = MatrixClientService.instance.client.userID;
     final enabledByCurrentUser =
         enabledBy != null && enabledBy.isNotEmpty && enabledBy == currentUserId;
     final receiverName = _resolvedHeaderName.trim();
-    final noticeText = enabledByCurrentUser
+    final noticeText = isOff
+        ? (enabledByCurrentUser
+            ? 'You turned off auto-delete messages. '
+            : '${receiverName.isEmpty ? 'This user' : receiverName} '
+                  'turned off auto-delete messages. ')
+        : enabledByCurrentUser
         ? 'You turned on auto-delete messages. '
         : '${receiverName.isEmpty ? 'This user' : receiverName} '
               'turned on auto-delete messages. ';
@@ -3919,11 +3925,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
                 children: [
                   TextSpan(text: noticeText),
-                  TextSpan(
-                    text:
-                        'New messages will disappear from this chat '
-                        '$duration after they\'re sent. ',
-                  ),
+                  if (!isOff)
+                    TextSpan(
+                      text:
+                          'New messages will disappear from this chat '
+                          '$duration after they\'re sent. ',
+                    ),
                   if (enabledByCurrentUser)
                     WidgetSpan(
                       alignment: PlaceholderAlignment.baseline,
@@ -4203,6 +4210,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final autoDeleteEnabledAt = AutoDeleteService.instance.enabledAtForRoom(
       _resolvedConversationId ?? widget.conversationId,
     );
+    final autoDeleteChange = AutoDeleteService.instance.lastChangeForRoom(
+      _resolvedConversationId ?? widget.conversationId,
+    );
+    final showAutoDeleteNotice =
+        autoDeleteDuration != null || autoDeleteChange?['duration'] == 'Off';
     final autoDeleteNewCount = autoDeleteDuration == null
         ? 0
         : _messages.where((message) {
@@ -4223,7 +4235,7 @@ class _ChatScreenState extends State<ChatScreen> {
         Expanded(
           child: Stack(
             children: [
-              _messages.isEmpty && !_loadingInitial
+              _messages.isEmpty && !_loadingInitial && !showAutoDeleteNotice
                   ? Center(
                       child: Text(
                         'No messages yet.\nSay hello!',
@@ -4245,7 +4257,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       itemCount:
                           _messages.length +
                           (liftShortConversation ? 1 : 0) +
-                          (autoDeleteDuration != null ? 1 : 0),
+                          (showAutoDeleteNotice ? 1 : 0),
                       itemBuilder: (context, index) {
                         if (liftShortConversation && index == 0) {
                           debugPrint(
@@ -4257,13 +4269,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
                         final adjustedIndex =
                             index - (liftShortConversation ? 1 : 0);
-                        if (autoDeleteDuration != null &&
+                        if (showAutoDeleteNotice &&
                             adjustedIndex == autoDeleteNewCount) {
                           debugPrint(
                             '[AutoDeleteTimeline] room="${widget.conversationId}" '
                             'index=$index type=notice duration="$autoDeleteDuration"',
                           );
-                          return _buildAutoDeleteBanner(autoDeleteDuration);
+                          return _buildAutoDeleteBanner(
+                            autoDeleteDuration ?? 'Off',
+                          );
                         }
 
                         final messageIndex =

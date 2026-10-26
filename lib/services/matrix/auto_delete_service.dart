@@ -17,6 +17,7 @@ class AutoDeleteService {
   static const roomEventType = 'com.wrytte.auto_delete';
   static const registerPath = '/api/matrix/auto-delete/register';
   Map<String, dynamic>? _localRooms;
+  final Map<String, Map<String, String>> _lastChanges = {};
   final ValueNotifier<int> changes = ValueNotifier<int>(0);
   static const _outboxKey = 'wrytte.auto_delete.registration_outbox';
   final Map<String, Map<String, String>> _outbox = {};
@@ -67,6 +68,15 @@ class AutoDeleteService {
     return sender == null || sender.isEmpty ? null : sender;
   }
 
+  Map<String, String>? lastChangeForRoom(String roomId) {
+    final id = roomId.trim();
+    final change = _lastChanges[id] ?? _roomState(id);
+    if (change == null) return null;
+    return change.map(
+      (key, value) => MapEntry(key, value?.toString() ?? ''),
+    );
+  }
+
   Future<void> setDuration(
     String roomId,
     String duration, {
@@ -77,6 +87,11 @@ class AutoDeleteService {
     final client = MatrixClientService.instance.client;
     final userId = client.userID;
     if (id.isEmpty || userId == null || userId.isEmpty) return;
+
+    _lastChanges[id] = {
+      'duration': duration,
+      'enabledBy': enabledBy ?? userId,
+    };
 
     final rooms = _rooms();
     if (duration == 'Off') {
@@ -286,9 +301,8 @@ class AutoDeleteService {
     final state = room?.getState(roomEventType)?.content;
     if (state == null || state.isEmpty) return null;
     final duration = state['duration']?.toString().trim();
-    if (duration == null || duration.isEmpty || duration == 'Off') return null;
     return {
-      'duration': duration,
+      'duration': duration == null || duration.isEmpty ? 'Off' : duration,
       'enabledAt': state['enabled_at'],
       'enabledBy': state['sender'],
     };
