@@ -782,10 +782,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _isBlockedByCurrentUser() {
     if (_isGroupChat) return false;
-    final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
+
     final peerId = (_profilePeerId() ?? widget.receiverId).trim();
-    if (roomId.isEmpty || peerId.isEmpty) return false;
-    return BlockStateService.instance.isBlocklisted(roomId, peerId: peerId);
+    if (peerId.isEmpty) return false;
+
+    return BlockStateService.instance.hasExplicitlyBlockedUser(peerId);
   }
 
   Future<void> _unblockFromChat() async {
@@ -894,7 +895,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final peerId = (_canonicalDirectPeerId() ?? widget.receiverId).trim();
     final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
     if (peerId.isEmpty) return false;
-    return BlockStateService.instance.isRedactedByBbb(
+    return BlockStateService.instance.shouldHidePeerAvatar(
       peerId,
       roomId: roomId.isEmpty ? null : roomId,
     );
@@ -1163,7 +1164,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final peerId = (_canonicalDirectPeerId() ?? widget.receiverId).trim();
       final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
       if (peerId.isNotEmpty &&
-          BlockStateService.instance.isRedactedByBbb(
+          BlockStateService.instance.shouldHidePeerAvatar(
             peerId,
             roomId: roomId.isEmpty ? null : roomId,
           )) {
@@ -1671,31 +1672,42 @@ class _ChatScreenState extends State<ChatScreen> {
     if (entries.isEmpty) return;
     final restored = <ChatMessage>[];
     for (final entry in entries) {
-      final id =
-          (entry['blocked_message_id'] ?? entry['event_id'])
-              ?.toString()
-              .trim() ??
-          '';
-      final text = entry['text']?.toString() ?? '';
-      final time =
-          DateTime.tryParse(entry['time']?.toString() ?? '') ?? DateTime.now();
-      if (id.isEmpty ||
-          text.isEmpty ||
-          _messages.any((message) => message.id == id)) {
-        continue;
-      }
-      restored.add(
-        ChatMessage(
-          id: id,
-          conversationId: roomId,
-          senderId: widget.currentUserId,
-          receiverId: _normaliseId(widget.receiverId),
-          content: text,
-          timestamp: time,
-          status: MessageStatus.sent,
-        ),
-      );
+    final eventId = entry['event_id']?.toString().trim() ?? '';
+    final blockedMessageId =
+        entry['blocked_message_id']?.toString().trim() ?? '';
+
+    // Prefer the event ID as the canonical message ID.
+    final id = eventId.isNotEmpty ? eventId : blockedMessageId;
+
+    final text = entry['text']?.toString() ?? '';
+    final time =
+        DateTime.tryParse(entry['time']?.toString() ?? '') ?? DateTime.now();
+
+    final alreadyExists = _messages.any(
+      (message) =>
+          message.id == eventId ||
+          message.id == blockedMessageId,
+    );
+
+    if (id.isEmpty || text.isEmpty || alreadyExists) {
+      continue;
     }
+
+    restored.add(
+      ChatMessage(
+        id: id,
+        conversationId: roomId,
+        senderId: widget.currentUserId,
+        receiverId: _normaliseId(widget.receiverId),
+        content: text,
+        timestamp: time,
+        status: MessageStatus.sent,
+      ),
+    );
+  }
+
+
+
     if (restored.isNotEmpty && mounted) {
       setState(() => _messages.addAll(restored));
       await Future.wait(restored.map(_saveLocalMessage));
@@ -2099,31 +2111,6 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    final roomId = _resolvedConversationId ?? widget.conversationId;
-    final blockState = BlockStateService.instance;
-    await blockState.load();
-    if (blockState.isRoomBlocked(roomId, peerId: _profilePeerId())) {
-      final blocked = ChatMessage(
-        id: 'blocked_${DateTime.now().microsecondsSinceEpoch}',
-        conversationId: roomId,
-        senderId: widget.currentUserId,
-        receiverId: _normaliseId(widget.receiverId),
-        content: text,
-        timestamp: DateTime.now(),
-        status: MessageStatus.sent,
-      );
-      await blockState.recordBlockedMessage(
-        roomId: roomId,
-        eventId: blocked.id,
-        text: text,
-        time: blocked.timestamp,
-      );
-      await _saveLocalMessage(blocked);
-      if (mounted) setState(() => _messages.add(blocked));
-      _controller.clear();
-      return;
-    }
-
     _controller.clear();
     final reply = _replyingTo;
     setState(() {
@@ -2162,31 +2149,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final outbound = optimistic.copyWith(
       conversationId: realConvId ?? optimistic.conversationId,
     );
-
-    // Blocking can change while room resolution is in flight. Re-check before
-    // publishing so a message cannot race a newly-blocked conversation.
-    await blockState.load();
-    if (realConvId != null &&
-        blockState.isRoomBlocked(realConvId, peerId: _profilePeerId())) {
-      final blocked = outbound.copyWith(
-        id: 'blocked_${DateTime.now().microsecondsSinceEpoch}',
-        status: MessageStatus.sent,
-      );
-      await blockState.recordBlockedMessage(
-        roomId: realConvId,
-        eventId: blocked.id,
-        text: blocked.content,
-        time: blocked.timestamp,
-      );
-      await _saveLocalMessage(blocked);
-      if (mounted) {
-        setState(() {
-          _replaceOptimisticMessage(optimistic.id, blocked);
-          _isSending = false;
-        });
-      }
-      return;
-    }
 
     if (!_matrixAvailable || realConvId == null) {
       final local = outbound.copyWith(status: MessageStatus.failed);
@@ -3125,7 +3087,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       !message.isDeleted &&
                       message.status != MessageStatus.sending &&
                       message.status != MessageStatus.failed &&
-                      !message.id.startsWith('opt_'))
+                      !message.id.startsWith('opt_') &&
+                      !message.id.startsWith('blocked_'))
                     _messageActionTile(
                       icon: Icons.delete_forever_outlined,
                       label: 'Delete for everyone',
@@ -4883,7 +4846,7 @@ class _ChatScreenState extends State<ChatScreen> {
           UserAvatar(
             size: size,
             imageUrl:
-                BlockStateService.instance.isRedactedByBbb(
+                BlockStateService.instance.shouldHidePeerAvatar(
                       _receiverIdentity?.matrixUserId ??
                           widget.receiverId ??
                           '',
@@ -4902,7 +4865,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               _stableHeaderAvatarUrl,
                   ),
             localImagePath:
-                BlockStateService.instance.isRedactedByBbb(
+                BlockStateService.instance.shouldHidePeerAvatar(
                       _receiverIdentity?.matrixUserId ??
                           widget.receiverId ??
                           '',
@@ -4976,7 +4939,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final displayName = _resolvedHeaderName;
     final blockedByPeer =
         !isGroupChat &&
-        BlockStateService.instance.isRedactedByBbb(
+        BlockStateService.instance.shouldHidePeerAvatar(
           _receiverIdentity?.matrixUserId ?? widget.receiverId ?? '',
           roomId: _resolvedConversationId ?? widget.conversationId,
         );

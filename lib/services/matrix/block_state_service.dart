@@ -304,6 +304,15 @@ class BlockStateService {
     });
   }
 
+  bool hasExplicitlyBlockedUser(String userId) {
+    final peer = userId.trim();
+    if (peer.isEmpty) return false;
+
+    return _entries(_blocklist).any(
+      (entry) => entry['user_id']?.toString().trim() == peer,
+    );
+  }
+
   bool isBlockedByBbb(String userId, {String? roomId}) {
     final peer = userId.trim();
     final room = roomId?.trim() ?? '';
@@ -346,6 +355,19 @@ class BlockStateService {
       'ready=$_ready matched=$matched action=${result ? 'suppress' : 'allow_cached'}',
     );
     return result;
+  }
+
+  /// Returns whether a peer's avatar/profile data must be hidden from the
+  /// current user because that peer blocked the current user.
+  ///
+  /// This is the single directional predicate used by avatar surfaces. It
+  /// deliberately uses the normalized BBB check and fails closed while block
+  /// state is still being hydrated.
+  bool shouldHidePeerAvatar(String userId, {String? roomId}) {
+    final peer = userId.trim();
+    if (peer.isEmpty) return false;
+    if (!_ready) return true;
+    return isBlockedByBbb(peer, roomId: roomId);
   }
 
   /// Privacy-safe decision for every profile surface. This covers both
@@ -571,27 +593,48 @@ class BlockStateService {
     required DateTime time,
   }) async {
     await _update(blockedMessagesType, _blockedMessages, (entries) {
-      final nextSequence =
-          entries.fold<int>(0, (max, entry) {
-            final value = entry['sequence'];
-            final sequence = value is num
-                ? value.toInt()
-                : int.tryParse('$value') ?? 0;
-            return sequence > max ? sequence : max;
-          }) +
-          1;
+      final alreadyExists = entries.any(
+        (entry) =>
+            entry['event_id']?.toString() == eventId ||
+            entry['blocked_message_id']?.toString() == eventId,
+      );
+
+      if (alreadyExists) return;
+
       entries.add({
         'room_id': roomId,
         'event_id': eventId,
-        'blocked_message_id': 'blocked_$nextSequence',
+        'blocked_message_id': eventId,
         'text': text,
         'time': time.toUtc().toIso8601String(),
-        'sequence': nextSequence,
         'status': 'sent',
         'recovery_status': 'pending',
       });
     });
   }
+
+  Future<void> removeBlockedMessage({
+    required String roomId,
+    required String messageId,
+  }) async {
+    final targetRoomId = roomId.trim();
+    final targetMessageId = messageId.trim();
+    if (targetRoomId.isEmpty || targetMessageId.isEmpty) return;
+
+    await _update(blockedMessagesType, _blockedMessages, (entries) {
+      entries.removeWhere((entry) {
+        final entryRoomId = entry['room_id']?.toString().trim() ?? '';
+        final eventId = entry['event_id']?.toString().trim() ?? '';
+        final blockedMessageId =
+            entry['blocked_message_id']?.toString().trim() ?? '';
+        return entryRoomId == targetRoomId &&
+            (eventId == targetMessageId ||
+                blockedMessageId == targetMessageId);
+      });
+    });
+  }
+
+
 
   Map<String, dynamic> _content(String type) => Map<String, dynamic>.from(
     _client.accountData[type]?.content ?? const <String, dynamic>{},

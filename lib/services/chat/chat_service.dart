@@ -3488,6 +3488,20 @@ class ChatService {
   }
 
   Future<void> deleteMessageForMe(ChatMessage message) async {
+    if (message.id.startsWith('blocked_')) {
+      await BlockStateService.instance.removeBlockedMessage(
+        roomId: message.conversationId,
+        messageId: message.id,
+      );
+      await ChatLocalDb.instance.deleteMessageForMe(message.id);
+      _messagesCache[message.conversationId]?.removeWhere(
+        (item) => item.id == message.id,
+      );
+      _emitRoomMessages(message.conversationId);
+      _emitConversations();
+      return;
+    }
+
     final room = _roomById(message.conversationId);
     if (room != null && MatrixChatService.instance.isMatrixGroupRoom(room)) {
       throw StateError('Delete for me is not available in group chats');
@@ -3557,6 +3571,12 @@ class ChatService {
   }
 
   Future<void> deleteMessageForEveryone(ChatMessage message) async {
+    if (message.id.startsWith('blocked_')) {
+      throw StateError(
+        'Blocked local messages can only be deleted for me',
+      );
+    }
+
     await _withMatrixTokenRetry('deleteMessageForEveryone', () async {
       await _waitForConnection();
       final room = _roomById(message.conversationId);
@@ -5775,7 +5795,10 @@ class ChatService {
     final cached = _messagesCache[conversationId];
     if (cached == null || cached.isEmpty) return null;
     for (final message in cached.reversed) {
-      if (!_isHiddenForMe(message) && _isDisplayableMessage(message)) {
+
+      if (!_isHiddenForMe(message) &&
+          _isDisplayableMessage(message) &&
+          !message.id.startsWith('blocked_')) {
         return message.id;
       }
     }
@@ -6315,31 +6338,54 @@ class ChatService {
     var changed = false;
     for (var i = 0; i < messages.length; i++) {
       final message = messages[i];
+
+      // Blocked messages never became Matrix events.
+      // Keep them permanently at one checkmark.
+      if (message.id.startsWith('blocked_')) {
+        if (message.status != MessageStatus.sent) {
+          messages[i] = message.copyWith(status: MessageStatus.sent);
+          _messageController.add(messages[i]);
+          changed = true;
+        }
+        continue;
+      }
+
       if (!_isOwnMessage(message, currentUser) ||
           message.status == MessageStatus.failed ||
           message.status == MessageStatus.sending) {
         continue;
       }
+
       final next =
           readIndex >= i
               ? MessageStatus.read
               : deliveredIndex >= i
               ? MessageStatus.delivered
               : MessageStatus.sent;
+
       if (message.status == next ||
           message.status == MessageStatus.read ||
           (message.status == MessageStatus.delivered &&
               next == MessageStatus.sent)) {
         continue;
       }
+
       messages[i] = message.copyWith(status: next);
       _messageController.add(messages[i]);
       changed = true;
     }
+
     if (!changed && !voiceChanged) return;
-    if (changed) unawaited(ChatLocalDb.instance.saveMessages(messages));
+
+    if (changed) {
+      unawaited(ChatLocalDb.instance.saveMessages(messages));
+    }
+
     _emitRoomMessages(room.id);
-    if (changed) _emitConversations();
+
+    if (changed) {
+      _emitConversations();
+    }
   }
 
   bool _isOwnMessage(ChatMessage message, String currentMatrixUserId) {

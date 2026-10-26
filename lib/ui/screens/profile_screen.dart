@@ -159,7 +159,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     final effectiveRoom = roomId ?? widget.conversationId;
     // BBB is directional: it is recorded on the blocked user's account.
     // The blocker must continue seeing the other user's complete profile.
-    return BlockStateService.instance.isRedactedByBbb(
+    return BlockStateService.instance.shouldHidePeerAvatar(
       userId!,
       roomId: effectiveRoom,
     );
@@ -368,7 +368,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       // Do not publish or render any peer profile fields until the directional
       // block state has been hydrated. This prevents cached avatar/bio/link
       // data from flashing before BBB/blocklist privacy is known.
-      _redactedByBlock = blockState.isRedactedForViewer(
+      _redactedByBlock = blockState.shouldHidePeerAvatar(
         uid,
         roomId: widget.conversationId,
       );

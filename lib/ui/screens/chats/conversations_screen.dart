@@ -1618,7 +1618,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final matrixAvatar = _safeDirectAvatarUrl(matrixProfile?.$2);
     // A profile refresh must never hide an avatar that is already available
     // locally. Only an actual BBB match is a suppression decision.
-    final blockedByPeer = BlockStateService.instance.isRedactedByBbb(
+    final blockedByPeer = BlockStateService.instance.shouldHidePeerAvatar(
       profileUid,
       roomId: conv.id,
     );
@@ -2064,8 +2064,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // hydrated. Otherwise a cached/contact avatar can briefly leak the
     // blocker’s profile to the blocked user on a cold start.
     final blockedByPeer = directPeer &&
-        (!blockState.isReady ||
-            blockState.isRedactedForViewer(peerId!, roomId: conv.id));
+        blockState.shouldHidePeerAvatar(peerId!, roomId: conv.id);
     debugPrint(
       '[ConversationAvatar][DIAG] tile room="${conv.id}" peer="${peerId ?? ''}" '
       'ready=${blockState.isReady} '
@@ -2207,7 +2206,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final fallbackPhone = _fallbackPhoneForConversation(conv);
     final uid = _profileUidForConversation(conv);
     if (uid == null) return null;
-    final blockedByPeer = BlockStateService.instance.isRedactedByBbb(
+    final blockedByPeer = BlockStateService.instance.shouldHidePeerAvatar(
       uid,
       roomId: conv.id,
     );
