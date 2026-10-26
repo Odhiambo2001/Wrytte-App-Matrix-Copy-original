@@ -59,7 +59,21 @@ class BlockStateService {
       // hydrate BBB from it during the initial load; later sync notifications
       // must not replace the authoritative in-memory state with that stale
       // snapshot while event backfill is still running.
-      _blocklist = _content(blocklistType);
+      final storedBlocklist = _content(blocklistType);
+      _blocklist = _sanitizeBlocklist(storedBlocklist);
+      if (_entries(storedBlocklist).length != _entries(_blocklist).length) {
+        // Migrate stale self-block records produced by the old flow instead
+        // of merely hiding them in memory; otherwise they return on the next
+        // sync/login and can corrupt directional block decisions again.
+        await _update(blocklistType, _blocklist, (entries) {
+          entries.removeWhere(
+            (entry) => _sameUser(
+              entry['user_id']?.toString() ?? '',
+              _client.userID?.toString() ?? '',
+            ),
+          );
+        });
+      }
       // Matrix account-data can briefly return a stale snapshot after a
       // successful write. Preserve explicit local block/unblock decisions
       // until the server catches up or the user changes the decision again.
@@ -81,7 +95,7 @@ class BlockStateService {
       }
       _blocklist = <String, dynamic>{'entries': loadedBlocks};
       if (!_ready) {
-        _bbb = _content(bbbType);
+        _bbb = _sanitizeBbb(_content(bbbType));
       }
       _blockedMessages = _content(blockedMessagesType);
       if (!_eventBackfillCompleted) {
@@ -306,11 +320,10 @@ class BlockStateService {
     final target = localpart(peer);
     final matched = _entries(_bbb).any((entry) {
       final blockedBy = localpart(entry['blocked_by']?.toString() ?? '');
-      final entryRoom = entry['room_id']?.toString().trim() ?? '';
-      // Match by peer localpart always; room narrows when provided.
+      // The relationship is user-scoped. Room IDs are event context only;
+      // direct rooms can be recreated or differ across delivery paths.
       final peerMatch = blockedBy == target;
-      final roomMatch = room.isEmpty || entryRoom == room || entryRoom.isEmpty;
-      return peerMatch && roomMatch;
+      return peerMatch;
     });
     debugPrint(
       '[BlockState][DIAG] BBB lookup peer="$userId" room="$room" '
@@ -353,31 +366,40 @@ class BlockStateService {
     required String userId,
     required String roomId,
   }) async {
-    final key = _blockKey(userId, roomId);
+    final targetUserId = userId.trim();
+    final targetRoomId = roomId.trim();
+    final blockerUserId = _client.userID?.trim() ?? '';
+    if (targetUserId.isEmpty || targetRoomId.isEmpty) {
+      throw ArgumentError('Block requires a target user and room');
+    }
+    if (_sameUser(targetUserId, blockerUserId)) {
+      throw StateError('Refusing to block the signed-in user');
+    }
+    final key = _blockKey(targetUserId, targetRoomId);
     _optimisticUnblocks.remove(key);
     _optimisticBlocks[key] = {
-      'user_id': userId,
-      'room_id': roomId,
+      'user_id': targetUserId,
+      'room_id': targetRoomId,
       'blocked_at': DateTime.now().toUtc().toIso8601String(),
     };
     debugPrint(
-      '[BlockState][DIAG] addBlock user="$userId" room="$roomId" '
-      'self="${_client.userID}"',
+      '[BlockState][DIAG] addBlock blocker="$blockerUserId" '
+      'blocked_user="$targetUserId" room="$targetRoomId"',
     );
     await _update(blocklistType, _blocklist, (entries) {
       entries.removeWhere(
-        (e) => e['user_id'] == userId || e['room_id'] == roomId,
+        (e) => e['user_id'] == targetUserId || e['room_id'] == targetRoomId,
       );
       entries.add({
-        'user_id': userId,
-        'room_id': roomId,
+        'user_id': targetUserId,
+        'room_id': targetRoomId,
         'blocked_at': DateTime.now().toUtc().toIso8601String(),
       });
     });
-    await _sendRoomNotice(roomId, blockedEventType, {
-      'blocked_by': _client.userID,
-      'blocked_user_id': userId,
-      'room_id': roomId,
+    await _sendRoomNotice(targetRoomId, blockedEventType, {
+      'blocked_by': blockerUserId,
+      'blocked_user_id': targetUserId,
+      'room_id': targetRoomId,
       'timestamp': DateTime.now().toUtc().toIso8601String(),
     });
   }
@@ -417,9 +439,63 @@ class BlockStateService {
   String _blockKey(String userId, String roomId) =>
       '${userId.trim()}|${roomId.trim()}';
 
+  bool _sameUser(String left, String right) {
+    String localpart(String value) {
+      final normalized = value.trim().toLowerCase();
+      final withoutAt = normalized.startsWith('@')
+          ? normalized.substring(1)
+          : normalized;
+      final separator = withoutAt.indexOf(':');
+      return separator == -1 ? withoutAt : withoutAt.substring(0, separator);
+    }
+
+    final a = localpart(left);
+    final b = localpart(right);
+    return a.isNotEmpty && a == b;
+  }
+
+  Map<String, dynamic> _sanitizeBbb(Map<String, dynamic> content) {
+    final receiver = _client.userID?.trim() ?? '';
+    final valid = _entries(content).where((entry) {
+      final blockedBy = entry['blocked_by']?.toString() ?? '';
+      final blockedUser = entry['blocked_user_id']?.toString() ?? '';
+      return blockedBy.isNotEmpty &&
+          _sameUser(blockedUser, receiver) &&
+          !_sameUser(blockedBy, blockedUser);
+    }).toList();
+    return <String, dynamic>{'entries': valid};
+  }
+
+  Map<String, dynamic> _sanitizeBlocklist(Map<String, dynamic> content) {
+    final localUserId = _client.userID?.trim() ?? '';
+    final valid = _entries(content).where((entry) {
+      final target = entry['user_id']?.toString().trim() ?? '';
+      final room = entry['room_id']?.toString().trim() ?? '';
+      // A blocklist entry is always authored by the signed-in user. A record
+      // targeting that same user is stale/corrupt data from the old flow and
+      // must never affect privacy decisions.
+      return target.isNotEmpty &&
+          room.isNotEmpty &&
+          !_sameUser(target, localUserId);
+    }).toList();
+    return <String, dynamic>{'entries': valid};
+  }
+
   Future<void> recordBlockedBy(Map<String, dynamic> entry) async {
     final blockedBy =
         entry['blocked_by']?.toString().trim().toLowerCase() ?? '';
+    final blockedUserId = entry['blocked_user_id']?.toString().trim() ?? '';
+    final localUserId = _client.userID?.trim() ?? '';
+    if (blockedBy.isEmpty ||
+        blockedUserId.isEmpty ||
+        !_sameUser(blockedUserId, localUserId) ||
+        _sameUser(blockedBy, blockedUserId)) {
+      debugPrint(
+        '[BlockState] rejected invalid BBB entry blocked_by="$blockedBy" '
+        'blocked_user_id="$blockedUserId" receiver="$localUserId"',
+      );
+      return;
+    }
     final blockedAt = DateTime.tryParse(entry['blocked_at']?.toString() ?? '');
     final unblockedAt = _profileUnblockedAt[blockedBy];
     if (blockedAt != null &&
