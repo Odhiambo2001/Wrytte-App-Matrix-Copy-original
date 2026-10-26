@@ -229,6 +229,75 @@ void main() {
       );
     });
   });
+
+  test('clear-message flow has local and account-data cleanup', () async {
+    await runLogged('clear-message flow source contract', () async {
+      final chatSource = await File('lib/services/chat/chat_service.dart')
+          .readAsString();
+      final blockSource =
+          await File('lib/services/matrix/block_state_service.dart')
+              .readAsString();
+      final contactSource =
+          await File('lib/ui/screens/select_contact_screen.dart')
+              .readAsString();
+
+      expect(chatSource, contains('deleteConversationMessages(id)'));
+      expect(chatSource, contains("_messagesCache[id] = <ChatMessage>[]"));
+      expect(
+        chatSource,
+        contains('removeBlockedMessagesForRoom(id)'),
+      );
+      expect(chatSource, contains("'hidden_event_ids': <String>[]"));
+      expect(chatSource, contains('_clearedThroughEventIdKey: last.id'));
+      expect(
+        chatSource,
+        contains('client.getRoomEvents(\n        room.id,\n        mx.Direction.f,'),
+      );
+      expect(
+        chatSource,
+        contains('client.getEventContext(\n      room.id,\n      boundaryId,'),
+      );
+      expect(
+        chatSource,
+        contains('_restoreRoomEventsAfterBoundary'),
+      );
+      expect(chatSource, contains('final matrixLast = room?.lastEvent'));
+      expect(
+        chatSource,
+        contains('if (current == null || clearedTimestamp.isAfter(current))'),
+      );
+      expect(
+        blockSource,
+        contains('Future<void> removeBlockedMessagesForRoom(String roomId)'),
+      );
+      expect(
+        contactSource,
+        contains('final hasRoomCandidate = candidateIds.any'),
+      );
+      expect(
+        contactSource,
+        contains('if (hasRoomCandidate && !candidateId.startsWith(\'!\'))'),
+      );
+    });
+  });
+
+  test('clear boundary hides the boundary event and all earlier events', () async {
+    await runLogged('clear boundary semantics', () async {
+      final boundary = DateTime.utc(2026, 10, 27, 12, 0);
+      final events = <Map<String, dynamic>>[
+        {'id': '\$before', 'time': boundary.subtract(const Duration(seconds: 1))},
+        {'id': '\$boundary', 'time': boundary},
+        {'id': '\$after', 'time': boundary.add(const Duration(seconds: 1))},
+      ];
+
+      final visible = events
+          .where((event) => (event['time'] as DateTime).isAfter(boundary))
+          .toList();
+
+      expect(visible, hasLength(1));
+      expect(visible.single['id'], '\$after');
+    });
+  });
 }
 
 Future<void> _log(File file, String message) async {

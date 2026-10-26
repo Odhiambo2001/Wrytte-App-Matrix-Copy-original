@@ -118,6 +118,7 @@ class ChatService {
   final Map<String, List<ChatMessage>> _messagesCache = {};
   final Map<String, Set<String>> _hiddenEventIdsByRoom = {};
   final Map<String, DateTime> _clearedThroughByRoom = {};
+  final Map<String, String> _clearedThroughEventIdByRoom = {};
   final Set<String> _clearMarkerLoadedRooms = {};
   final Map<String, List<String>> _pinnedForMeEventIdsByRoom = {};
   final Map<String, List<String>> _pendingPinnedForMeEventIdsByRoom = {};
@@ -1107,6 +1108,17 @@ class ChatService {
   }) async {
     mx.Timeline? timeline;
     try {
+      // Load the per-room clear boundary before choosing a recovery strategy.
+      // A fresh login may not have populated room account data yet.
+      await _loadClearMarkerForRoom(room.id);
+      final boundaryId = _clearedThroughEventIdByRoom[room.id];
+      if (boundaryId != null && boundaryId.isNotEmpty) {
+        return _restoreRoomEventsAfterBoundary(
+          room,
+          boundaryId: boundaryId,
+          runtimeGeneration: runtimeGeneration,
+        );
+      }
       timeline = await room.getTimeline(limit: null);
       if (!_isConnected || runtimeGeneration != _runtimeGeneration) {
         return const <ChatMessage>[];
@@ -1279,6 +1291,84 @@ class ChatService {
     } finally {
       timeline?.cancelSubscriptions();
     }
+  }
+
+  Future<List<ChatMessage>> _restoreRoomEventsAfterBoundary(
+    mx.Room room, {
+    required String boundaryId,
+    required int runtimeGeneration,
+  }) async {
+    final client = room.client;
+    final context = await client.getEventContext(
+      room.id,
+      boundaryId,
+      limit: 0,
+    );
+    var token = context.end;
+    if (token == null || token.isEmpty) return const <ChatMessage>[];
+
+    final localById = {
+      for (final message in await ChatLocalDb.instance.loadMessages(room.id))
+        message.id: message,
+    };
+    final hiddenIds = _hiddenEventIdsForRoom(room.id, room: room);
+    final events = <mx.Event>[];
+    const pageSize = 100;
+
+    while (token != null && token.isNotEmpty) {
+      if (!_isConnected || runtimeGeneration != _runtimeGeneration) {
+        return const <ChatMessage>[];
+      }
+      final response = await client.getRoomEvents(
+        room.id,
+        mx.Direction.f,
+        from: token,
+        limit: pageSize,
+      );
+      for (final raw in response.chunk) {
+        var event = mx.Event.fromMatrixEvent(raw, room);
+        final encryption = client.encryption;
+        if (event.type == mx.EventTypes.Encrypted &&
+            room.encrypted &&
+            client.encryptionEnabled &&
+            encryption != null) {
+          try {
+            event = await encryption.decryptRoomEvent(event);
+          } catch (error) {
+            apkLog(
+              'Matrix.history',
+              'forward decrypt failed room_id="${room.id}" '
+                  'event_id="${event.eventId}" error="$error"',
+            );
+          }
+        }
+        if (event.eventId != boundaryId) events.add(event);
+      }
+      final next = response.end;
+      if (response.chunk.isEmpty || next == token) break;
+      token = next;
+      if (response.chunk.length < pageSize) break;
+    }
+
+    final messages = _messagesFromMatrixEvents(
+      events,
+      localById: localById,
+      hiddenIds: hiddenIds,
+      groupJoinCutoff: _groupJoinCutoffForRoom(room),
+    );
+    for (final message in messages) {
+      _cacheMessage(message, countUnread: false, publish: false);
+    }
+    await ChatLocalDb.instance.saveMessages(messages);
+    _refreshMessageStatusesForRoom(room);
+    _emitRoomMessages(room.id);
+    _emitConversations();
+    apkLog(
+      'Matrix.history',
+      'forward restore room_id="${room.id}" boundary="$boundaryId" '
+          'messages=${messages.length}',
+    );
+    return messages;
   }
 
   Future<void> _waitForConnection() async {
@@ -1529,6 +1619,10 @@ class ChatService {
       final current = _clearedThroughByRoom[room.id];
       if (current == null || clearedTimestamp.isAfter(current)) {
         _clearedThroughByRoom[room.id] = clearedTimestamp;
+        final eventId = content[_clearedThroughEventIdKey]?.toString().trim();
+        if (eventId != null && eventId.isNotEmpty) {
+          _clearedThroughEventIdByRoom[room.id] = eventId;
+        }
       }
     }
     final rawIds = content['hidden_event_ids'];
@@ -1562,6 +1656,10 @@ class ChatService {
       );
       if (marker != null) {
         _clearedThroughByRoom[id] = marker;
+        final eventId = content[_clearedThroughEventIdKey]?.toString().trim();
+        if (eventId != null && eventId.isNotEmpty) {
+          _clearedThroughEventIdByRoom[id] = eventId;
+        }
         apkLog(
           'ChatService.clearForMe',
           'recovery_marker_loaded room_id="$id" '
@@ -1631,6 +1729,7 @@ class ChatService {
           ? last.timestamp
           : existingMarker;
       _clearedThroughByRoom[id] = boundary;
+      _clearedThroughEventIdByRoom[id] = last.id;
       final client = MatrixClientService.instance.client;
       final userId = client.userID;
       if (userId != null && userId.isNotEmpty) {
@@ -4042,6 +4141,7 @@ class ChatService {
     _roomHistoryInFlight.clear();
     _suggestedPreviewInFlight.clear();
     _clearMarkerLoadedRooms.clear();
+    _clearedThroughEventIdByRoom.clear();
     _attachmentPrefetchInFlight.clear();
     for (final timer in _attachmentCacheSummaryTimers.values) {
       timer.cancel();
