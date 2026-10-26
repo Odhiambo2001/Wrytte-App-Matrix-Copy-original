@@ -304,7 +304,20 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
       }
     }
 
-    var selectedConversationId = localConversationId;
+    // Prefer the real Matrix room when one is known. This ensures the chat
+    // screen loads that room's clear-for-me marker instead of opening through
+    // the synthetic `si_...` contact conversation key.
+    var selectedConversationId =
+        directId?.trim().isNotEmpty == true && directId!.startsWith('!')
+        ? directId
+        : localConversationId;
+    if (!selectedConversationId.startsWith('!')) {
+      final roomCandidate = candidateIds.firstWhere(
+        (id) => id.startsWith('!'),
+        orElse: () => '',
+      );
+      if (roomCandidate.isNotEmpty) selectedConversationId = roomCandidate;
+    }
     var selectedMessages = const <ChatMessage>[];
     DateTime? selectedLatest;
 

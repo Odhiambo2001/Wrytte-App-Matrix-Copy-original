@@ -4890,6 +4890,27 @@ class ChatService {
         conversationKind: ConversationKind.group,
       );
     }
+    // A clear-for-me marker hides the old Matrix timeline locally. Do not let
+    // a later room refresh restore the room's old last event as the preview.
+    // A genuinely newer event is allowed to become the new preview.
+    final clearedThrough = _clearedThroughByRoom[incoming.id];
+    if (clearedThrough != null &&
+        !incoming.lastMessageTime.isAfter(clearedThrough)) {
+      return incoming.copyWith(
+        lastMessage: '',
+        lastMessageSenderId: '',
+        unreadCount: 0,
+        lastMessageType: cached.lastMessageType,
+        otherUserName: _preferCachedDisplayValue(
+          cached.otherUserName,
+          incoming.otherUserName,
+        ),
+        otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
+        conversationKind: cached.hasExplicitKind
+            ? cached.conversationKind
+            : incoming.conversationKind,
+      );
+    }
     if (cached.lastMessageType == groupDeletedMessageType ||
         cached.deletedAt != null) {
       return cached.copyWith(
