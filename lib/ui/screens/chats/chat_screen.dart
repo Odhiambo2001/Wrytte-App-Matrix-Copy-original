@@ -482,6 +482,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _groupProfilesReady = false;
 
   bool _isSending = false;
+  bool _blockStateReady = false;
   bool _matrixAvailable = false;
   bool _joinedSuggestedGroup = false;
   bool _joiningSuggestedGroup = false;
@@ -651,6 +652,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     BlockStateService.instance.revision.addListener(_onBlockStateChanged);
+    unawaited(_hydrateBlockState());
     _chat.activateConversationRead(widget.conversationId);
     _receiverOnline = _currentPeerPresenceIsOnline();
     if (!_isGroupChat) {
@@ -728,6 +730,14 @@ class _ChatScreenState extends State<ChatScreen> {
     _controller.addListener(_onComposerChanged);
     _loadInitial();
     _scrollCtrl.addListener(_onScroll);
+  }
+
+  Future<void> _hydrateBlockState() async {
+    try {
+      await BlockStateService.instance.load();
+    } finally {
+      if (mounted) setState(() => _blockStateReady = true);
+    }
   }
 
   @override
@@ -832,10 +842,12 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (room == null) return;
       final currentUserId = MatrixClientService.instance.userId;
-      final typingUserIds = room.typingUsers
-          .where((user) => user.id != currentUserId)
-          .map((user) => user.id)
-          .toSet();
+      final typingUserIds = _isPeerTypingRedacted()
+          ? <String>{}
+          : room.typingUsers
+              .where((user) => user.id != currentUserId)
+              .map((user) => user.id)
+              .toSet();
       final typingUsersChanged =
           typingUserIds.length != _typingUserIds.length ||
           !typingUserIds.containsAll(_typingUserIds);
@@ -886,6 +898,25 @@ class _ChatScreenState extends State<ChatScreen> {
       peerId,
       roomId: roomId.isEmpty ? null : roomId,
     );
+  }
+
+  /// Typing indicators are private conversation metadata and are suppressed
+  /// in both directions of a block relationship.
+  bool _isPeerTypingRedacted() {
+    if (_isGroupChat) return false;
+    final peerId = (_canonicalDirectPeerId() ?? widget.receiverId).trim();
+    final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
+    if (peerId.isEmpty) return false;
+
+    final blockState = BlockStateService.instance;
+    // Do not expose a typing event while the directional block state is
+    // still being hydrated.
+    if (!blockState.isReady) return true;
+    return blockState.isBlocklisted(roomId, peerId: peerId) ||
+        blockState.isBlockedByBbb(
+          peerId,
+          roomId: roomId.isEmpty ? null : roomId,
+        );
   }
 
   bool _currentPeerPresenceIsOnline() {
@@ -3755,7 +3786,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           Expanded(child: _buildMessageList()),
                           if (_someoneElseTyping) const _TypingIndicator(),
 
-                          if (_isBlockedByCurrentUser())
+                          if (!_blockStateReady)
+                            const SizedBox(height: 72)
+                          else if (_isBlockedByCurrentUser())
                             _buildUnblockBottomBar()
                           else if (_isReadOnlySuggestedGroup)
                             _buildJoinGroupBottomBar()
