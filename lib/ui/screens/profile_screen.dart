@@ -365,7 +365,13 @@ class _ProfileScreenState extends State<ProfileScreen>
       final blockState = BlockStateService.instance;
       await blockState.load();
       if (!isCurrentLoad()) return;
-      _redactedByBlock = _isBlockedByBbb(uid);
+      // Do not publish or render any peer profile fields until the directional
+      // block state has been hydrated. This prevents cached avatar/bio/link
+      // data from flashing before BBB/blocklist privacy is known.
+      _redactedByBlock = blockState.isRedactedForViewer(
+        uid,
+        roomId: widget.conversationId,
+      );
       debugPrint(
         '[ProfileScreen][DIAG] load uid="$uid" room="${widget.conversationId}" '
         'ready=${blockState.isReady} redacted=$_redactedByBlock '

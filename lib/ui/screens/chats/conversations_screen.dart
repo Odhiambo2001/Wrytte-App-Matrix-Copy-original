@@ -2058,14 +2058,17 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     }
 
     final peerId = _profileUidForConversation(conv);
-    // Keep rendering cached/contact avatars while profile data refreshes in
-    // the background. Suppress only when the block state explicitly matches.
-    final blockedByPeer =
-        peerId != null &&
-        BlockStateService.instance.isRedactedByBbb(peerId, roomId: conv.id);
+    final blockState = BlockStateService.instance;
+    final directPeer = peerId != null && !_isGroupConversation(conv);
+    // Direct-user avatars must fail closed while block account-data is being
+    // hydrated. Otherwise a cached/contact avatar can briefly leak the
+    // blocker’s profile to the blocked user on a cold start.
+    final blockedByPeer = directPeer &&
+        (!blockState.isReady ||
+            blockState.isRedactedForViewer(peerId!, roomId: conv.id));
     debugPrint(
       '[ConversationAvatar][DIAG] tile room="${conv.id}" peer="${peerId ?? ''}" '
-      'ready=${BlockStateService.instance.isReady} '
+      'ready=${blockState.isReady} '
       'redactedByBbb=${peerId != null ? BlockStateService.instance.isBlockedByBbb(peerId, roomId: conv.id) : false} '
       'blockedByPeer=$blockedByPeer '
       'stored="${conv.otherUserAvatar ?? ''}" '
