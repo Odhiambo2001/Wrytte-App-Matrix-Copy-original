@@ -211,6 +211,24 @@ void main() {
       );
     });
   });
+
+  test('chat screen preserves ready local messages during empty hydration', () async {
+    await runLogged('chat local-first rendering contract', () async {
+      final source = await File('lib/ui/screens/chats/chat_screen.dart')
+          .readAsString();
+
+      expect(
+        source,
+        contains("if (_messages.isNotEmpty) {\n          apkLog(\n            'ChatScreen.roomStream',"),
+        reason: 'an empty Matrix stream must not clear ready local messages',
+      );
+      expect(
+        source,
+        contains('if (_messages.isEmpty) {'),
+        reason: 'room mismatch must not erase supplied local messages',
+      );
+    });
+  });
 }
 
 Future<void> _log(File file, String message) async {

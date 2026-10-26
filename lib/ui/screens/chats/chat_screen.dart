@@ -1446,8 +1446,12 @@ class _ChatScreenState extends State<ChatScreen> {
       if (widget.conversationId.startsWith('!')) {
         // A different Matrix room can never be migrated into this one. In
         // particular, never move group history into a newly resolved DM.
-        if (!mounted) return;
-        setState(() => _messages.clear());
+        // However, never erase messages already supplied from local storage
+        // just because Matrix temporarily resolved a different room.
+        if (_messages.isEmpty) {
+          if (!mounted) return;
+          setState(() => _messages.clear());
+        }
       } else {
         await _migrateLocalConversationToRoom(realConvId, const []);
         if (!mounted) return;
@@ -1559,7 +1563,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _lastRoomStreamFingerprint = fingerprint;
       apkLog('ChatScreen.roomStream', 'room="$convId" msgs=${messages.length}');
       if (messages.isEmpty) {
-        if (_loadingInitial && _messages.isNotEmpty) {
+        if (_messages.isNotEmpty) {
           apkLog(
             'ChatScreen.roomStream',
             'ignored_empty_snapshot room="$convId" '
@@ -3749,9 +3753,10 @@ class _ChatScreenState extends State<ChatScreen> {
                           Expanded(child: _buildMessageList()),
                           if (_someoneElseTyping) const _TypingIndicator(),
 
-                          if (!_blockStateReady)
-                            const SizedBox(height: 72)
-                          else if (_isBlockedByCurrentUser())
+                          // Render the composer immediately. Block state is
+                          // hydrated asynchronously; the send service still
+                          // performs the authoritative blocked-room check.
+                          if (_blockStateReady && _isBlockedByCurrentUser())
                             _buildUnblockBottomBar()
                           else if (_isReadOnlySuggestedGroup)
                             _buildJoinGroupBottomBar()
