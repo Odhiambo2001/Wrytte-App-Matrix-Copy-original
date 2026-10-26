@@ -2745,10 +2745,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                       await ChatService().clearConversationForMe(roomId);
                     }
                     if (!mounted) return;
-                    setState(() {
-                      _conversationCleared = true;
-                      _showClearChatConfirmation = false;
-                    });
+                    // Return to the already-open chat. ChatScreen handles
+                    // the successful result by clearing its visible timeline
+                    // and showing the empty conversation immediately.
+                    Navigator.of(context).pop(true);
                   },
                   child: _clearChatConfirmationRow(
                     child: const Text(

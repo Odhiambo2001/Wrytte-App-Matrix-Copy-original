@@ -320,8 +320,12 @@ class _SelectContactScreenState extends State<SelectContactScreen> {
     }
     var selectedMessages = const <ChatMessage>[];
     DateTime? selectedLatest;
+    final hasRoomCandidate = candidateIds.any((id) => id.startsWith('!'));
 
     for (final candidateId in candidateIds) {
+      // Once a real DM room is known, never fall back to a legacy `si_...`
+      // conversation whose messages may predate a room-level clear marker.
+      if (hasRoomCandidate && !candidateId.startsWith('!')) continue;
       final messages = await ChatService().loadCachedMessages(candidateId);
       final latest = messages.isEmpty ? null : messages.last.timestamp;
       final shouldSelect =

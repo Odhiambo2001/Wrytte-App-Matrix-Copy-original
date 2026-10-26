@@ -634,6 +634,19 @@ class BlockStateService {
     });
   }
 
+  /// Removes every locally held blocked-message entry for one room. Clearing
+  /// a conversation must also clear messages that never became Matrix events.
+  Future<void> removeBlockedMessagesForRoom(String roomId) async {
+    final targetRoomId = roomId.trim();
+    if (targetRoomId.isEmpty) return;
+
+    await _update(blockedMessagesType, _blockedMessages, (entries) {
+      entries.removeWhere(
+        (entry) => entry['room_id']?.toString().trim() == targetRoomId,
+      );
+    });
+  }
+
 
 
   Map<String, dynamic> _content(String type) => Map<String, dynamic>.from(

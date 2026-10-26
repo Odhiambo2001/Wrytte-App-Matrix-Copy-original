@@ -1526,7 +1526,10 @@ class ChatService {
       content[_clearedThroughTimestampKey]?.toString() ?? '',
     );
     if (clearedTimestamp != null) {
-      _clearedThroughByRoom[room.id] = clearedTimestamp;
+      final current = _clearedThroughByRoom[room.id];
+      if (current == null || clearedTimestamp.isAfter(current)) {
+        _clearedThroughByRoom[room.id] = clearedTimestamp;
+      }
     }
     final rawIds = content['hidden_event_ids'];
     if (rawIds is! Iterable) return;
@@ -1609,7 +1612,11 @@ class ChatService {
       for (final message in messages) message.id: message,
       for (final message in cached) message.id: message,
     }.values.toList()..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    final last = all.isEmpty ? null : all.last;
+    final room = _roomById(id);
+    final matrixLast = room?.lastEvent == null
+        ? null
+        : ChatMessage.fromMatrixEvent(room!.lastEvent!);
+    final last = matrixLast ?? (all.isEmpty ? null : all.last);
     apkLog(
       'ChatService.clearForMe',
       'loaded room_id="$id" persisted=${messages.length} '
@@ -1618,15 +1625,21 @@ class ChatService {
           'last_timestamp="${last?.timestamp.toUtc().toIso8601String() ?? ''}"',
     );
     if (last != null) {
-      _clearedThroughByRoom[id] = last.timestamp;
-      final room = _roomById(id);
+      final existingMarker = _clearedThroughByRoom[id];
+      final boundary = existingMarker == null ||
+              last.timestamp.isAfter(existingMarker)
+          ? last.timestamp
+          : existingMarker;
+      _clearedThroughByRoom[id] = boundary;
       final client = MatrixClientService.instance.client;
       final userId = client.userID;
       if (userId != null && userId.isNotEmpty) {
         final content = {
-          'hidden_event_ids': _hiddenEventIdsForRoom(id).toList()..add(last.id),
+          // The boundary is the single source of truth for clear-all. Older
+          // individual hidden IDs are redundant and can grow indefinitely.
+          'hidden_event_ids': <String>[],
           _clearedThroughEventIdKey: last.id,
-          _clearedThroughTimestampKey: last.timestamp.toUtc().toIso8601String(),
+          _clearedThroughTimestampKey: boundary.toUtc().toIso8601String(),
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         };
         apkLog(
@@ -1657,6 +1670,7 @@ class ChatService {
       apkLog('ChatService.clearForMe', 'no messages found; no marker written room_id="$id"');
     }
     await ChatLocalDb.instance.deleteConversationMessages(id);
+    await BlockStateService.instance.removeBlockedMessagesForRoom(id);
     apkLog('ChatService.clearForMe', 'local_messages_deleted room_id="$id"');
     _messagesCache[id] = <ChatMessage>[];
     final current = _conversationsMap[id];
