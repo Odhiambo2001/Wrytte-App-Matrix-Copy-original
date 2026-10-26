@@ -174,6 +174,43 @@ void main() {
       expect(stateSource, contains('isBlockedByBbb(peer'));
     });
   });
+
+  test('chat navigation does not await avatar downloads', () async {
+    await runLogged('chat navigation avatar warm is non-blocking', () async {
+      final source =
+          await File('lib/ui/screens/chats/conversations_screen.dart')
+              .readAsString();
+
+      expect(
+        source,
+        contains('unawaited(\n            AvatarPreloadService.warm('),
+        reason: 'avatar warming must run after navigation is allowed to start',
+      );
+      expect(
+        source,
+        isNot(contains('await AvatarPreloadService.warm(')),
+        reason: 'a slow avatar download must not delay Navigator.push',
+      );
+    });
+  });
+
+  test('clear-marker loading is cached and bounded', () async {
+    await runLogged('chat navigation clear marker contract', () async {
+      final source = await File('lib/services/chat/chat_service.dart')
+          .readAsString();
+
+      expect(source, contains('final Set<String> _clearMarkerLoadedRooms'));
+      expect(source, contains('_clearMarkerLoadedRooms.contains(id)'));
+      expect(source, contains('_clearMarkerLoadedRooms.add(id)'));
+      expect(source, contains('_loadClearMarkerForRoom(roomId).timeout('));
+      expect(source, contains('const Duration(milliseconds: 600)'));
+      expect(source, contains('_clearMarkerLoadedRooms.clear()'));
+      expect(
+        source,
+        contains('await _loadClearMarkerBounded(conversationId);'),
+      );
+    });
+  });
 }
 
 Future<void> _log(File file, String message) async {

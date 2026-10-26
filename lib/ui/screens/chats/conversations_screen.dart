@@ -2816,9 +2816,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
               'resolved_group=$isGroup resolved_channel=$isChannel',
         );
         if (!isGroup) {
-          await AvatarPreloadService.warm(
-            avatar,
-            cacheIdentity: _directAvatarCacheIdentity(conv),
+          unawaited(
+            AvatarPreloadService.warm(
+              avatar,
+              cacheIdentity: _directAvatarCacheIdentity(conv),
+            ),
           );
           apkLog(
             'Identity.display',
@@ -2826,7 +2828,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                 'name="$name" avatar=${(avatar ?? '').trim().isNotEmpty} '
                 'avatar_url="${avatar ?? ''}"',
           );
-          if (!mounted) return;
         }
 
         final groupResult = await Navigator.push<Object?>(

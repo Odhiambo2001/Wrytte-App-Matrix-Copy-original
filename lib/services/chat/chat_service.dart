@@ -118,6 +118,7 @@ class ChatService {
   final Map<String, List<ChatMessage>> _messagesCache = {};
   final Map<String, Set<String>> _hiddenEventIdsByRoom = {};
   final Map<String, DateTime> _clearedThroughByRoom = {};
+  final Set<String> _clearMarkerLoadedRooms = {};
   final Map<String, List<String>> _pinnedForMeEventIdsByRoom = {};
   final Map<String, List<String>> _pendingPinnedForMeEventIdsByRoom = {};
   final Map<String, DateTime> _groupJoinCutoffsByRoom = {};
@@ -1542,6 +1543,7 @@ class ChatService {
   Future<void> _loadClearMarkerForRoom(String roomId) async {
     final id = roomId.trim();
     if (id.isEmpty || !MatrixClientService.instance.isInitialized) return;
+    if (_clearMarkerLoadedRooms.contains(id)) return;
     final client = MatrixClientService.instance.client;
     final userId = client.userID;
     if (userId == null || userId.isEmpty) return;
@@ -1551,6 +1553,7 @@ class ChatService {
         id,
         _hiddenEventsAccountDataType,
       );
+      _clearMarkerLoadedRooms.add(id);
       final marker = DateTime.tryParse(
         content[_clearedThroughTimestampKey]?.toString() ?? '',
       );
@@ -1571,11 +1574,24 @@ class ChatService {
         };
       }
     } catch (error) {
+      // A missing marker is a valid state. Do not repeat the request every
+      // time the user opens the same conversation.
+      if (error.toString().contains('M_NOT_FOUND')) {
+        _clearMarkerLoadedRooms.add(id);
+        return;
+      }
       apkLog(
         'ChatService.clearForMe',
         'recovery_marker_load_failed room_id="$id" error="$error"',
       );
     }
+  }
+
+  Future<void> _loadClearMarkerBounded(String roomId) async {
+    await _loadClearMarkerForRoom(roomId).timeout(
+      const Duration(milliseconds: 600),
+      onTimeout: () {},
+    );
   }
 
   /// Clears this user's local view while preserving the conversation shell.
@@ -2965,7 +2981,7 @@ class ChatService {
   }
 
   Future<List<ChatMessage>> loadCachedMessages(String conversationId) async {
-    await _loadClearMarkerForRoom(conversationId);
+    await _loadClearMarkerBounded(conversationId);
     final cached = await ChatLocalDb.instance.loadMessages(conversationId);
     final hiddenIds = _hiddenEventIdsForRoom(conversationId);
     final visible =
@@ -2994,7 +3010,7 @@ class ChatService {
   Future<List<ChatMessage>> hydrateConversation(String conversationId) async {
     // Load the delete-for-me boundary before consulting the in-memory cache.
     // Otherwise a previously restored timeline can briefly bypass filtering.
-    await _loadClearMarkerForRoom(conversationId);
+    await _loadClearMarkerBounded(conversationId);
     final memory = getConversationMessages(conversationId);
     if (memory.isNotEmpty) {
       _emitRoomMessages(conversationId);
@@ -4011,6 +4027,7 @@ class ChatService {
     _historyRestoreFuture = null;
     _roomHistoryInFlight.clear();
     _suggestedPreviewInFlight.clear();
+    _clearMarkerLoadedRooms.clear();
     _attachmentPrefetchInFlight.clear();
     for (final timer in _attachmentCacheSummaryTimers.values) {
       timer.cancel();
