@@ -337,8 +337,16 @@ class MatrixAuthService {
       apkLog('Matrix.auth', 'token validation failed error="$e"');
       if (isUnknownToken(e)) {
         await clearLocalSession();
+        return false;
       }
-      return false;
+      // A timeout, DNS failure, or other transport error does not prove that
+      // the access token is invalid. Keep the existing session so local data
+      // remains usable while the network is unavailable.
+      apkLog(
+        'Matrix.auth',
+        'token validation inconclusive; retaining current session',
+      );
+      return true;
     }
   }
 

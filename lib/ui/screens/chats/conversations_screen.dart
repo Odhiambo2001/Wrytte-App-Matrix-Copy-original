@@ -1530,9 +1530,12 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         return false;
       }
       // Saving or merely opening a contact must not create a visible chat
-      // row. Direct chats appear after their first sent/received message.
+      // row. A persisted Matrix-room conversation is a real local chat even
+      // when its preview is temporarily empty (for example before history is
+      // loaded or while Matrix is offline).
       if (!_isGroupConversation(conversation) &&
-          conversation.lastMessage.trim().isEmpty) {
+          conversation.lastMessage.trim().isEmpty &&
+          !conversation.id.trim().startsWith('!')) {
         return false;
       }
       return true;

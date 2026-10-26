@@ -4827,6 +4827,13 @@ class ChatService {
     }
     final visible = getConversationMessages(conversation.id);
     if (visible.isEmpty) {
+      // An empty in-memory cache does not mean that the conversation is empty.
+      // It can happen before local history has been loaded, or while Matrix is
+      // unavailable. Preserve the locally persisted preview in that case.
+      // Only a clear-for-me marker authorizes removing the preview.
+      if (!_clearedThroughByRoom.containsKey(conversation.id)) {
+        return conversation;
+      }
       if (conversation.lastMessage.trim().isEmpty &&
           conversation.lastMessageSenderId.trim().isEmpty) {
         return conversation;
