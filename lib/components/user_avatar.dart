@@ -107,6 +107,7 @@ class _UserAvatarState extends State<UserAvatar> {
   String? _backendToken;
   String? _lastGoodImageUrl;
   String? _lastGoodLocalImagePath;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -132,6 +133,8 @@ class _UserAvatarState extends State<UserAvatar> {
   void didUpdateWidget(covariant UserAvatar oldWidget) {
     super.didUpdateWidget(oldWidget);
 
+    _loadGeneration++;
+
     final identityChanged = oldWidget.cacheIdentity != widget.cacheIdentity;
     final oldImageUrl = oldWidget.imageUrl?.trim() ?? '';
     final newImageUrl = widget.imageUrl?.trim() ?? '';
@@ -141,10 +144,10 @@ class _UserAvatarState extends State<UserAvatar> {
     // Keep the last good source during ordinary rebuilds, but an explicit
     // transition to an empty source means the profile owner removed the
     // avatar. Do not let _effectiveImageUrl/_localImageFile resurrect it.
-    if (identityChanged || (oldImageUrl.isNotEmpty && newImageUrl.isEmpty)) {
+    if (identityChanged || newImageUrl.isEmpty) {
       _lastGoodImageUrl = null;
     }
-    if (identityChanged || (oldLocalPath.isNotEmpty && newLocalPath.isEmpty)) {
+    if (identityChanged || newLocalPath.isEmpty) {
       _lastGoodLocalImagePath = null;
     }
     _rememberStableSources();
@@ -197,6 +200,7 @@ class _UserAvatarState extends State<UserAvatar> {
 
   Future<void> _loadPersistentAvatar() async {
     final rawUrl = widget.imageUrl?.trim() ?? '';
+    final generation = _loadGeneration;
     if (rawUrl.isEmpty || widget.localImagePath?.trim().isNotEmpty == true) {
       return;
     }
@@ -208,7 +212,14 @@ class _UserAvatarState extends State<UserAvatar> {
       );
       path = await AvatarPreloadService.localPathFor(rawUrl);
     }
-    if (!mounted || path == null || path == _lastGoodLocalImagePath) return;
+    if (!mounted ||
+        generation != _loadGeneration ||
+        widget.imageUrl?.trim() != rawUrl ||
+        widget.imageUrl?.trim().isEmpty == true ||
+        path == null ||
+        path == _lastGoodLocalImagePath) {
+      return;
+    }
     _knownGoodLocalPaths.add(path);
     setState(() => _lastGoodLocalImagePath = path);
     apkLog(
@@ -350,6 +361,9 @@ class _UserAvatarState extends State<UserAvatar> {
         imageUrl: url,
         cacheKey: providerKey,
         imageBuilder: (context, imageProvider) {
+          if (!mounted || widget.imageUrl?.trim() != rawUrl) {
+            return _buildPlaceholder();
+          }
           _lastGoodImageUrl = rawUrl;
           // Remember this provider so every future build (including in
           // other UserAvatar instances for the same URL — other screens,

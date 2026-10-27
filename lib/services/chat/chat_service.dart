@@ -5115,6 +5115,31 @@ class ChatService {
                 : ConversationKind.group,
       );
     }
+    // Blocked outgoing messages are intentionally local-only: they never
+    // become Matrix room events, so room.lastEvent is older than the local
+    // preview. Preserve that newer local message during every room refresh.
+    final localMessages = getConversationMessages(cached.id)
+        .where((message) => !_isHiddenForMe(message))
+        .toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final localLast = localMessages.isEmpty ? null : localMessages.last;
+    if (localLast != null &&
+        localLast.id.startsWith('blocked_') &&
+        localLast.timestamp.isAfter(incoming.lastMessageTime)) {
+      return cached.copyWith(
+        unreadCount: unreadCount,
+        otherUserId: incoming.otherUserId,
+        participants: incoming.participants.isNotEmpty
+            ? incoming.participants
+            : cached.participants,
+        otherUserName: _preferCachedDisplayValue(
+          cached.otherUserName,
+          incoming.otherUserName,
+        ),
+        otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar,
+        conversationKind: explicitKind,
+      );
+    }
     return incoming.copyWith(
       unreadCount: unreadCount,
       otherUserId: incoming.otherUserId,

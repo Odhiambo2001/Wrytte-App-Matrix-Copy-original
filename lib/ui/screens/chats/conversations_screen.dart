@@ -2143,6 +2143,14 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       if (roomAvatar?.trim().isNotEmpty == true) return roomAvatar!.trim();
       return null;
     }
+    final peerId = _profileUidForConversation(conv);
+    if (peerId != null &&
+        BlockStateService.instance.shouldHidePeerAvatar(
+          peerId,
+          roomId: conv.id,
+        )) {
+      return null;
+    }
     final contactAvatar = _safeDirectAvatarUrl(
       contactKey == null ? null : _contactAvatarCache[contactKey],
       rejectPlaceholderVersion: true,

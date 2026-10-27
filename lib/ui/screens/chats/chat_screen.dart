@@ -780,6 +780,17 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  bool _peerIsRedacted() {
+    if (_isGroupChat) return false;
+    final peerId = (_canonicalDirectPeerId() ?? widget.receiverId).trim();
+    final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
+    if (peerId.isEmpty) return false;
+    return BlockStateService.instance.shouldHidePeerAvatar(
+      peerId,
+      roomId: roomId.isEmpty ? null : roomId,
+    );
+  }
+
   bool _isBlockedByCurrentUser() {
     if (_isGroupChat) return false;
 
@@ -891,14 +902,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool _isPeerPresenceRedacted() {
-    if (_isGroupChat) return false;
-    final peerId = (_canonicalDirectPeerId() ?? widget.receiverId).trim();
-    final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
-    if (peerId.isEmpty) return false;
-    return BlockStateService.instance.shouldHidePeerAvatar(
-      peerId,
-      roomId: roomId.isEmpty ? null : roomId,
-    );
+    return _peerIsRedacted();
   }
 
   /// Typing indicators are private conversation metadata and are suppressed
@@ -1160,17 +1164,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _peerPresenceLabel() {
     // Person B must not see Person A's online / last-seen when A blocked B.
-    if (!_isGroupChat) {
-      final peerId = (_canonicalDirectPeerId() ?? widget.receiverId).trim();
-      final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
-      if (peerId.isNotEmpty &&
-          BlockStateService.instance.shouldHidePeerAvatar(
-            peerId,
-            roomId: roomId.isEmpty ? null : roomId,
-          )) {
-        return '';
-      }
-    }
+    if (_peerIsRedacted()) return '';
 
     if (_receiverOnline) return 'Online';
     final lastActiveAt = _peerLastActiveAt;
@@ -4865,12 +4859,7 @@ class _ChatScreenState extends State<ChatScreen> {
           UserAvatar(
             size: size,
             imageUrl:
-                BlockStateService.instance.shouldHidePeerAvatar(
-                      _receiverIdentity?.matrixUserId ??
-                          widget.receiverId ??
-                          '',
-                      roomId: _resolvedConversationId ?? widget.conversationId,
-                    ) ||
+                _peerIsRedacted() ||
                     UserProfileService.instance.isPublicProfileRefreshing(
                       _receiverIdentity?.matrixUserId ??
                           widget.receiverId ??
@@ -4884,12 +4873,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               _stableHeaderAvatarUrl,
                   ),
             localImagePath:
-                BlockStateService.instance.shouldHidePeerAvatar(
-                      _receiverIdentity?.matrixUserId ??
-                          widget.receiverId ??
-                          '',
-                      roomId: _resolvedConversationId ?? widget.conversationId,
-                    ) ||
+                _peerIsRedacted() ||
                     UserProfileService.instance.isPublicProfileRefreshing(
                       _receiverIdentity?.matrixUserId ??
                           widget.receiverId ??
@@ -6003,40 +5987,55 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildDateDivider(String label) {
+    const height = 23.0;
+    const horizontalPadding = 12.0;
+    const radius = 11.5;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: Divider(
-              color: Colors.white.withValues(alpha: 0.08),
-              height: 1,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFF23262C).withValues(alpha: 0.60),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.5),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
+      padding: const EdgeInsets.symmetric(vertical: 11.5),
+      child: Center(
+        child: RepaintBoundary(
+          child: SizedBox(
+            height: height,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(radius),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                child: Container(
+                  height: height,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: horizontalPadding,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1C222C).withValues(alpha: 0.70),
+                    borderRadius: BorderRadius.circular(radius),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.055),
+                      width: 0.7,
+                    ),
+                  ),
+                  child: Align(
+                    alignment: Alignment.center,
+                    widthFactor: 1,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.fade,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.58),
+                        fontSize: 10.75,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0,
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Divider(
-              color: Colors.white.withValues(alpha: 0.08),
-              height: 1,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

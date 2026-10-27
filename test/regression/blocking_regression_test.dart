@@ -175,6 +175,49 @@ void main() {
     });
   });
 
+  test('avatar loading cannot resurrect a blocked avatar', () async {
+    await runLogged('stale avatar load protection', () async {
+      final source = await File('lib/components/user_avatar.dart').readAsString();
+
+      expect(source, contains('int _loadGeneration = 0;'));
+      expect(source, contains('_loadGeneration++;'));
+      expect(source, contains('generation != _loadGeneration'));
+      expect(source, contains('widget.imageUrl?.trim() != rawUrl'));
+      expect(source, contains('widget.imageUrl?.trim().isEmpty == true'));
+      expect(
+        source,
+        contains('if (!mounted || widget.imageUrl?.trim() != rawUrl)'),
+      );
+    });
+  });
+
+  test('chat header uses one redaction decision for presence and avatar', () async {
+    await runLogged('chat header redaction consistency', () async {
+      final source = await File('lib/ui/screens/chats/chat_screen.dart')
+          .readAsString();
+
+      expect(source, contains('bool _peerIsRedacted()'));
+      expect(source, contains('return _peerIsRedacted();'));
+      expect(source, contains('if (_peerIsRedacted()) return'));
+      expect(source, contains('_peerIsRedacted() ||'));
+    });
+  });
+
+  test('homepage preserves a newer local blocked-message preview', () async {
+    await runLogged('blocked homepage preview preservation', () async {
+      final source = await File('lib/services/chat/chat_service.dart')
+          .readAsString();
+
+      expect(source, contains("localLast.id.startsWith('blocked_')"));
+      expect(source, contains('localLast.timestamp.isAfter(incoming.lastMessageTime)'));
+      expect(
+        source,
+        contains('return cached.copyWith(\n        unreadCount: unreadCount,'),
+      );
+      expect(source, contains('otherUserAvatar: cached.otherUserAvatar ?? incoming.otherUserAvatar'));
+    });
+  });
+
   test('chat navigation does not await avatar downloads', () async {
     await runLogged('chat navigation avatar warm is non-blocking', () async {
       final source =
