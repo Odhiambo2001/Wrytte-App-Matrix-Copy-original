@@ -79,6 +79,29 @@ class AutoDeleteService {
     return sender == null || sender.isEmpty ? null : sender;
   }
 
+  /// The disappearing-message icon is local UI state: only the user who
+  /// enabled the timer should see it. The timer itself remains shared so the
+  /// other participant can still render the remote notification and expire
+  /// messages correctly.
+  bool showIconForRoom(String roomId) {
+    final currentUserId = MatrixClientService.instance.client.userID?.trim();
+    final enabledBy = enabledByForRoom(roomId)?.trim();
+    if (currentUserId == null || currentUserId.isEmpty ||
+        enabledBy == null || enabledBy.isEmpty) {
+      return false;
+    }
+    return durationForRoom(roomId) != null &&
+        _matrixLocalpart(enabledBy) == _matrixLocalpart(currentUserId);
+  }
+
+  String _matrixLocalpart(String value) {
+    final trimmed = value.trim();
+    if (trimmed.startsWith('@') && trimmed.contains(':')) {
+      return trimmed.substring(1, trimmed.indexOf(':')).toLowerCase();
+    }
+    return trimmed.toLowerCase();
+  }
+
   Map<String, String>? lastChangeForRoom(String roomId) {
     final id = roomId.trim();
     final change = _lastChanges[id] ?? _roomState(id);

@@ -83,6 +83,37 @@ void main() {
     });
   });
 
+  test('clear-for-me clears duplicate direct room records for the same peer', () async {
+    await runLogged('duplicate direct-room clear invariant', () async {
+      final source = await File('lib/services/chat/chat_service.dart').readAsString();
+      expect(source, contains('duplicate_direct_rooms'));
+      expect(source, contains('for (final target in ids)'));
+      expect(source, contains('_clearSingleConversationForMe(target)'));
+      expect(source, contains("conversation.id.startsWith('!')"));
+    });
+  });
+
+  test('auto-delete icon is restricted to the user who enabled the timer', () async {
+    await runLogged('auto-delete icon actor invariant', () async {
+      final service = await File('lib/services/matrix/auto_delete_service.dart')
+          .readAsString();
+      final chat = await File('lib/ui/screens/chats/chat_screen.dart')
+          .readAsString();
+      final profile = await File('lib/ui/screens/profile_screen.dart')
+          .readAsString();
+      final conversations = await File(
+        'lib/ui/screens/chats/conversations_screen.dart',
+      ).readAsString();
+
+      expect(service, contains('bool showIconForRoom(String roomId)'));
+      expect(service, contains('enabledByForRoom(roomId)'));
+      expect(service, contains('durationForRoom(roomId) != null'));
+      expect(chat, contains('showIconForRoom('));
+      expect(profile, contains('showIconForRoom('));
+      expect(conversations, contains('showIconForRoom(conv.id)'));
+    });
+  });
+
   test('deleting a blocked message removes its account-data entry', () async {
     await runLogged('blocked delete-for-me contract', () async {
       final entries = <Map<String, dynamic>>[

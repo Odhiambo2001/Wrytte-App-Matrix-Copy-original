@@ -2750,7 +2750,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           ? _channelSubscriberCount(conv)
           : null,
       hasAutoDelete:
-          AutoDeleteService.instance.durationForRoom(conv.id) != null,
+          AutoDeleteService.instance.showIconForRoom(conv.id),
       isMuted: conv.isMuted,
       roomId: conv.id,
       onLongPress: () async {

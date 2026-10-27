@@ -2042,10 +2042,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                                       name: displayName,
                                     ),
                                   ),
-                            if (AutoDeleteService.instance.durationForRoom(
-                                  widget.conversationId ?? '',
-                                ) !=
-                                null)
+                            if (AutoDeleteService.instance.showIconForRoom(
+                              widget.conversationId ?? '',
+                            ))
                               Positioned(
                                 right: -2,
                                 bottom: -2,

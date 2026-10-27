@@ -1700,8 +1700,45 @@ class ChatService {
   }
 
   /// Clears this user's local view while preserving the conversation shell.
-  /// The marker is private room account data and is used as the recovery floor.
+  /// Duplicate direct-room records for the same peer are cleared as well. This
+  /// prevents an old room record from being selected after the visible room
+  /// was cleared.
   Future<void> clearConversationForMe(String roomId) async {
+    final id = roomId.trim();
+    if (id.isEmpty) return;
+
+    final room = _roomById(id);
+    final peerId = room == null
+        ? _conversationsMap[id]?.otherUserId
+        : _roomPeerMatrixId(room, MatrixClientService.instance.userId);
+    final ids = <String>{id};
+    if (peerId != null && peerId.trim().isNotEmpty) {
+      final peerKey = _matrixLocalpart(peerId);
+      for (final conversation in _conversationsMap.values) {
+        if (_matrixLocalpart(conversation.otherUserId) == peerKey &&
+            conversation.id.startsWith('!')) {
+          ids.add(conversation.id);
+        }
+      }
+      final stored = await ChatLocalDb.instance.loadConversations();
+      for (final conversation in stored) {
+        if (_matrixLocalpart(conversation.otherUserId) == peerKey &&
+            conversation.id.startsWith('!')) {
+          ids.add(conversation.id);
+        }
+      }
+      apkLog(
+        'ChatService.clearForMe',
+        'duplicate_direct_rooms peer="$peerId" requested_room="$id" '
+            'rooms="${ids.join(',')}"',
+      );
+    }
+    for (final target in ids) {
+      await _clearSingleConversationForMe(target);
+    }
+  }
+
+  Future<void> _clearSingleConversationForMe(String roomId) async {
     final id = roomId.trim();
     if (id.isEmpty) {
       apkLog('ChatService.clearForMe', 'skipped empty room_id');

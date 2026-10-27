@@ -78,8 +78,11 @@ import 'package:wrytte/utils/wrytte_id.dart';
 
 import 'package:wrytte/ui/chat/models/chat_message_presentation.dart';
 import 'package:wrytte/ui/chat/models/message_action.dart';
+import 'package:wrytte/ui/chat/models/chat_forward_target.dart';
 import 'package:wrytte/ui/chat/widgets/image_message_bubble.dart';
 import 'package:wrytte/ui/chat/widgets/contact_message_bubble.dart';
+import 'package:wrytte/ui/chat/views/chat_forward_sheet.dart';
+import 'package:wrytte/ui/chat/widgets/message_actions/message_swipe_action_target.dart';
 
 class ChatScreen extends StatefulWidget {
   final String conversationId;
@@ -3489,25 +3492,34 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    final selectedTargets = await Navigator.push<List<_ForwardTarget>>(
+    final forwardTargets = targets
+        .map(
+          (target) => ChatForwardTarget(
+            id: target.receiverId,
+            title: target.title,
+            subtitle: target.subtitle ?? '',
+            receiverId: target.receiverId,
+            conversationId: target.conversationId,
+            avatarUrl: target.avatarUrl,
+            isSavedContact: target.isSavedContact,
+          ),
+        )
+        .toList(growable: false);
+    final selectedTargets = await showWrytteChatForwardSheet(
       context,
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (_) => _ForwardPickerPage(
-          targets: targets,
-          previewText: _replyPreviewForMessage(message) ?? 'Message',
-          previewAvatarUrl: widget.avatarUrl,
-        ),
-      ),
+      previewText: _replyPreviewForMessage(message) ?? 'Message',
+      targets: forwardTargets,
     );
     if (selectedTargets == null || selectedTargets.isEmpty) return;
 
     var sent = 0;
     for (final target in selectedTargets) {
       try {
+        final receiverId = target.receiverId ?? '';
+        if (receiverId.isEmpty) continue;
         await _chat.forwardMessage(
           original: message,
-          receiverId: target.receiverId,
+          receiverId: receiverId,
           conversationId: target.conversationId,
         );
         sent++;
@@ -4401,13 +4413,33 @@ class _ChatScreenState extends State<ChatScreen> {
                             GestureDetector(
                               behavior: HitTestBehavior.opaque,
                               onLongPress: () => _showMessageActions(msg),
-                              child: _buildGroupAwareMessageBubble(
-                                msg: msg,
-                                isMine: isMine,
-                                showTail: showTail,
-                                showGroupAvatar: showGroupAvatar,
-                                effectiveAttachmentType:
-                                    effectiveAttachmentType,
+                              child: MessageSwipeActionTarget(
+                                config: MessageActionConfig(
+                                  actions: const [
+                                    MessageAction.reply(),
+                                    MessageAction.forward(),
+                                  ],
+                                  onActionSelected: (action) async {
+                                    switch (action.type) {
+                                      case MessageActionType.reply:
+                                        if (mounted) {
+                                          setState(() => _replyingTo = msg);
+                                        }
+                                      case MessageActionType.forward:
+                                        await _promptForward(msg);
+                                      default:
+                                        break;
+                                    }
+                                  },
+                                ),
+                                child: _buildGroupAwareMessageBubble(
+                                  msg: msg,
+                                  isMine: isMine,
+                                  showTail: showTail,
+                                  showGroupAvatar: showGroupAvatar,
+                                  effectiveAttachmentType:
+                                      effectiveAttachmentType,
+                                ),
                               ),
                             ),
                             if (nextChronological != null &&
@@ -4966,10 +4998,9 @@ class _ChatScreenState extends State<ChatScreen> {
             name: _resolvedHeaderName,
             isDeleted: _isDeletedConversation,
           ),
-          if (AutoDeleteService.instance.durationForRoom(
-                _resolvedConversationId ?? widget.conversationId,
-              ) !=
-              null)
+          if (AutoDeleteService.instance.showIconForRoom(
+            _resolvedConversationId ?? widget.conversationId,
+          ))
             Positioned(
               bottom: -1,
               left: size * .58,
