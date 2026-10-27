@@ -68,6 +68,7 @@ import 'package:wrytte/ui/chat/widgets/chat_layout_metrics.dart';
 import 'package:wrytte/ui/core/widgets/wrytte_glass_icon_button.dart';
 import 'package:wrytte/ui/core/widgets/wrytte_svg_icon.dart';
 import 'package:wrytte/ui/chat/widgets/message_actions/message_action_target.dart';
+import 'package:wrytte/ui/chat/widgets/selection/chat_selection_header.dart';
 import 'package:wrytte/domain/models/voice_recording_result.dart';
 import 'package:wrytte/domain/models/camera_capture_result.dart';
 
@@ -451,6 +452,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
   final ValueNotifier<bool> _scrollToLatestVisible = ValueNotifier<bool>(false);
+  final Set<String> _selectedMessageIds = <String>{};
   final FocusNode _focusNode = FocusNode();
 
   final ChatService _chat = ChatService();
@@ -3299,12 +3301,22 @@ class _ChatScreenState extends State<ChatScreen> {
           setState(() => _messages.removeWhere((item) => item.id == message.id));
         }
       case MessageActionType.select:
+        if (!mounted) return;
+        setState(() => _selectedMessageIds.add(message.id));
         break;
       case MessageActionType.save:
       case MessageActionType.edit:
       case MessageActionType.editMedia:
         break;
     }
+  }
+
+  void _toggleSelectedMessage(String id) {
+    setState(() {
+      if (!_selectedMessageIds.remove(id)) {
+        _selectedMessageIds.add(id);
+      }
+    });
   }
 
   Future<void> _setMessagePinnedForMe(
@@ -4572,7 +4584,24 @@ class _ChatScreenState extends State<ChatScreen> {
                                 useDeleteChoices: true,
                                 canDeleteForEveryone: canDeleteForEveryone,
                               ),
-                              child: MessageSwipeActionTarget(
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  PositionedDirectional(
+                                    start: -10,
+                                    end: -10,
+                                    top: 0,
+                                    bottom: 0,
+                                    child: IgnorePointer(
+                                      child: AnimatedContainer(
+                                        duration: const Duration(milliseconds: 160),
+                                        color: _selectedMessageIds.contains(msg.id)
+                                            ? const Color(0xFF4DA3FF).withValues(alpha: .13)
+                                            : Colors.transparent,
+                                      ),
+                                    ),
+                                  ),
+                                  MessageSwipeActionTarget(
                                 config: MessageActionConfig(
                                   actions: const [
                                     MessageAction.reply(),
@@ -4600,6 +4629,29 @@ class _ChatScreenState extends State<ChatScreen> {
                                   effectiveAttachmentType:
                                       effectiveAttachmentType,
                                 ),
+                                  ),
+                                  if (_selectedMessageIds.contains(msg.id))
+                                    PositionedDirectional(
+                                      start: 2,
+                                      top: 0,
+                                      bottom: 0,
+                                      child: Center(
+                                        child: GestureDetector(
+                                          onTap: () => _toggleSelectedMessage(msg.id),
+                                          child: const SizedBox.square(
+                                            dimension: 24,
+                                            child: DecoratedBox(
+                                              decoration: BoxDecoration(
+                                                color: Color(0xFF4DA3FF),
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: Icon(Icons.check_rounded, size: 17, color: Colors.white),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
                               ),
                             ),
                             if (nextChronological != null &&
