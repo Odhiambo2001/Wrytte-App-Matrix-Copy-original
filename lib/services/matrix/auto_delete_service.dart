@@ -18,6 +18,7 @@ class AutoDeleteService {
   static const registerPath = '/api/matrix/auto-delete/register';
   Map<String, dynamic>? _localRooms;
   final Map<String, Map<String, String>> _lastChanges = {};
+  final Map<String, List<Map<String, String>>> _changeHistory = {};
   final ValueNotifier<int> changes = ValueNotifier<int>(0);
   static const _outboxKey = 'wrytte.auto_delete.registration_outbox';
   final Map<String, Map<String, String>> _outbox = {};
@@ -26,7 +27,17 @@ class AutoDeleteService {
 
   Future<void> initialize() async {
     await _ensureOutboxLoaded();
+    await _loadChangeHistory();
+    changes.value++;
     if (_outbox.isNotEmpty) unawaited(_retryOutbox());
+  }
+
+  List<Map<String, String>> changesForRoom(String roomId) {
+    final id = roomId.trim();
+    final values = _changeHistory[id] ?? const <Map<String, String>>[];
+    return List<Map<String, String>>.unmodifiable(
+      values.map((value) => Map<String, String>.from(value)),
+    );
   }
 
   String? durationForRoom(String roomId) {
@@ -82,16 +93,22 @@ class AutoDeleteService {
     String duration, {
     bool broadcast = true,
     String? enabledBy,
+    DateTime? changedAt,
+    bool recordHistory = true,
   }) async {
     final id = roomId.trim();
     final client = MatrixClientService.instance.client;
     final userId = client.userID;
     if (id.isEmpty || userId == null || userId.isEmpty) return;
 
-    _lastChanges[id] = {
+    final effectiveChangedAt = (changedAt ?? DateTime.now()).toUtc();
+    final change = <String, String>{
       'duration': duration,
       'enabledBy': enabledBy ?? userId,
+      'changedAt': effectiveChangedAt.toIso8601String(),
     };
+    _lastChanges[id] = change;
+    if (recordHistory) await _appendChange(id, change);
 
     final rooms = _rooms();
     if (duration == 'Off') {
@@ -114,6 +131,7 @@ class AutoDeleteService {
         'enabled_at': duration == 'Off'
             ? null
             : (rooms[id] is Map ? rooms[id]['enabledAt'] : null),
+        'changed_at': change['changedAt'],
         'sender': userId,
       });
       await room.sendEvent({
@@ -122,6 +140,7 @@ class AutoDeleteService {
         'enabled_at': duration == 'Off'
             ? null
             : (rooms[id] is Map ? rooms[id]['enabledAt'] : null),
+        'changed_at': change['changedAt'],
         'sender': userId,
       }, type: roomEventType);
     }
@@ -131,7 +150,7 @@ class AutoDeleteService {
   Future<void> applyRemoteEvent(
     String roomId,
     Map<String, dynamic> content,
-    {String? senderId}
+    {String? senderId, DateTime? changedAt}
   ) async {
     final duration = content['duration']?.toString() ?? 'Off';
     await setDuration(
@@ -139,7 +158,18 @@ class AutoDeleteService {
       duration,
       broadcast: false,
       enabledBy: senderId ?? content['sender']?.toString(),
+      changedAt: changedAt ?? DateTime.now(),
+      recordHistory: false,
     );
+    final id = roomId.trim();
+    final change = <String, String>{
+      'duration': duration,
+      'enabledBy': senderId ?? content['sender']?.toString() ?? '',
+      'changedAt':
+          (changedAt ?? DateTime.now()).toUtc().toIso8601String(),
+    };
+    _lastChanges[id] = change;
+    await _appendChange(id, change);
     debugPrint('[AutoDelete] remote event applied room="$roomId" duration="$duration"');
   }
 
@@ -260,6 +290,55 @@ class AutoDeleteService {
     } catch (error) {
       debugPrint('[AutoDelete] invalid registration outbox: $error');
     }
+  }
+
+  static const _historyKey = 'wrytte.auto_delete.change_history';
+
+  Future<void> _loadChangeHistory() async {
+    final preferences = await SharedPreferences.getInstance();
+    final raw = preferences.getString(_historyKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      for (final item in decoded.entries) {
+        final values = item.value;
+        if (values is! List) continue;
+        _changeHistory[item.key.toString()] = values
+            .whereType<Map>()
+            .map((value) => value.map(
+                  (key, entry) => MapEntry(key.toString(), entry.toString()),
+                ))
+            .map((value) => Map<String, String>.from(value))
+            .toList();
+      }
+    } catch (error) {
+      debugPrint('[AutoDelete] change history load failed: $error');
+    }
+  }
+
+  Future<void> _appendChange(
+    String roomId,
+    Map<String, String> change,
+  ) async {
+    final history = _changeHistory.putIfAbsent(roomId, () => <Map<String, String>>[]);
+    final timestamp = change['changedAt'] ?? '';
+    final duplicate = history.any(
+      (entry) =>
+          entry['duration'] == change['duration'] &&
+          entry['enabledBy'] == change['enabledBy'] &&
+          entry['changedAt'] == timestamp,
+    );
+    if (duplicate) return;
+    history.add(Map<String, String>.from(change));
+    history.sort(
+      (a, b) => (a['changedAt'] ?? '').compareTo(b['changedAt'] ?? ''),
+    );
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(
+      _historyKey,
+      jsonEncode(_changeHistory),
+    );
   }
 
   Future<void> _saveOutbox() async {

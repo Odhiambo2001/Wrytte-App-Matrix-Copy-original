@@ -654,6 +654,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     BlockStateService.instance.revision.addListener(_onBlockStateChanged);
+    AutoDeleteService.instance.changes.addListener(_onAutoDeleteChanged);
     unawaited(_hydrateBlockState());
     _chat.activateConversationRead(widget.conversationId);
     _receiverOnline = _currentPeerPresenceIsOnline();
@@ -751,6 +752,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     BlockStateService.instance.revision.removeListener(_onBlockStateChanged);
+    AutoDeleteService.instance.changes.removeListener(_onAutoDeleteChanged);
     _chat.deactivateConversationRead(widget.conversationId);
     _roomProfileSyncSub?.cancel();
     _groupContactsChangedSub?.cancel();
@@ -780,6 +782,11 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() {});
     });
+  }
+
+  void _onAutoDeleteChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   bool _peerIsRedacted() {
@@ -3880,9 +3887,13 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildAutoDeleteBanner(String duration) {
+  Widget _buildAutoDeleteBanner(
+    String duration, {
+    String? enabledByOverride,
+  }) {
     final roomId = _resolvedConversationId ?? widget.conversationId;
-    final enabledBy = AutoDeleteService.instance.enabledByForRoom(roomId);
+    final enabledBy = enabledByOverride ??
+        AutoDeleteService.instance.enabledByForRoom(roomId);
     final isOff = duration == 'Off';
     final currentUserId = MatrixClientService.instance.client.userID;
     final enabledByCurrentUser =
@@ -4209,8 +4220,26 @@ class _ChatScreenState extends State<ChatScreen> {
     final autoDeleteChange = AutoDeleteService.instance.lastChangeForRoom(
       _resolvedConversationId ?? widget.conversationId,
     );
-    final showAutoDeleteNotice =
-        autoDeleteDuration != null || autoDeleteChange?['duration'] == 'Off';
+    final autoDeleteChanges = AutoDeleteService.instance.changesForRoom(
+      _resolvedConversationId ?? widget.conversationId,
+    );
+    final noticeChanges = autoDeleteChanges.isNotEmpty
+        ? autoDeleteChanges
+        : autoDeleteChange == null
+        ? (autoDeleteDuration == null
+            ? const <Map<String, String>>[]
+            : <Map<String, String>>[
+                {
+                  'duration': autoDeleteDuration,
+                  'enabledBy':
+                      AutoDeleteService.instance.enabledByForRoom(
+                        _resolvedConversationId ?? widget.conversationId,
+                      ) ??
+                      '',
+                },
+              ])
+        : <Map<String, String>>[autoDeleteChange];
+    final showAutoDeleteNotice = noticeChanges.isNotEmpty;
     final autoDeleteNewCount = autoDeleteDuration == null
         ? 0
         : _messages.where((message) {
@@ -4252,8 +4281,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       physics: const ClampingScrollPhysics(),
                       itemCount:
                           _messages.length +
-                          (liftShortConversation ? 1 : 0) +
-                          (showAutoDeleteNotice ? 1 : 0),
+                          (liftShortConversation ? 1 : 0),
                       itemBuilder: (context, index) {
                         if (liftShortConversation && index == 0) {
                           debugPrint(
@@ -4265,27 +4293,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
                         final adjustedIndex =
                             index - (liftShortConversation ? 1 : 0);
-                        if (showAutoDeleteNotice &&
-                            adjustedIndex == autoDeleteNewCount) {
-                          debugPrint(
-                            '[AutoDeleteTimeline] room="${widget.conversationId}" '
-                            'index=$index type=notice duration="$autoDeleteDuration"',
-                          );
-                          return _buildAutoDeleteBanner(
-                            autoDeleteDuration ?? 'Off',
-                          );
-                        }
-
-                        final messageIndex =
-                            autoDeleteDuration != null &&
-                                adjustedIndex > autoDeleteNewCount
-                            ? adjustedIndex - 1
-                            : adjustedIndex;
-                        final msgIndex =
-                            autoDeleteDuration != null &&
-                                adjustedIndex > autoDeleteNewCount
-                            ? _messages.length - adjustedIndex
-                            : _messages.length - 1 - messageIndex;
+                        final messageIndex = adjustedIndex;
+                        final msgIndex = _messages.length - 1 - messageIndex;
                         if (msgIndex < 0 || msgIndex >= _messages.length) {
                           debugPrint(
                             '[AutoDeleteTimeline] room="${widget.conversationId}" '
@@ -4358,6 +4367,14 @@ class _ChatScreenState extends State<ChatScreen> {
                                   child: ChatEncryptionNotice(),
                                 ),
                               ),
+                            if (msgIndex == 0)
+                              for (final change in noticeChanges)
+                                _buildAutoDeleteBanner(
+                                  change['duration']?.trim().isNotEmpty == true
+                                      ? change['duration']!.trim()
+                                      : 'Off',
+                                  enabledByOverride: change['enabledBy'],
+                                ),
                             GestureDetector(
                               behavior: HitTestBehavior.opaque,
                               onLongPress: () => _showMessageActions(msg),

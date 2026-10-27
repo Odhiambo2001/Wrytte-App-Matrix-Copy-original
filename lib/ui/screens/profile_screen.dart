@@ -2852,6 +2852,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         setState(() {
           _autoDeleteDuration = option;
           _showAutoDeleteOptions = false;
+          _showMoreOptions = false;
         });
         await AutoDeleteService.instance.setDuration(
           widget.conversationId ?? '',

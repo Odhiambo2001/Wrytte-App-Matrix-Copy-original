@@ -237,6 +237,42 @@ void main() {
     });
   });
 
+  test('auto-delete selection closes the submenu and More card', () async {
+    await runLogged('auto-delete menu dismissal contract', () async {
+      final source = await File('lib/ui/screens/profile_screen.dart')
+          .readAsString();
+      expect(source, contains('_showAutoDeleteOptions = false;'));
+      expect(source, contains('_showMoreOptions = false;'));
+    });
+  });
+
+  test('auto-delete notice stays with the encryption notice', () async {
+    await runLogged('auto-delete timeline ordering contract', () async {
+      final serviceSource =
+          await File('lib/services/matrix/auto_delete_service.dart')
+              .readAsString();
+      final source = await File('lib/ui/screens/chats/chat_screen.dart')
+          .readAsString();
+      expect(
+        serviceSource,
+        contains('final Map<String, List<Map<String, String>>> _changeHistory'),
+      );
+      expect(
+        serviceSource,
+        contains('List<Map<String, String>> changesForRoom'),
+      );
+      expect(
+        source,
+        contains('final noticeChanges = autoDeleteChanges.isNotEmpty'),
+      );
+      expect(
+        source,
+        contains("for (final change in noticeChanges)"),
+      );
+      expect(source, contains('enabledByOverride: change[\'enabledBy\']'));
+    });
+  });
+
   test('clear-marker loading is cached and bounded', () async {
     await runLogged('chat navigation clear marker contract', () async {
       final source = await File('lib/services/chat/chat_service.dart')

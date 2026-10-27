@@ -249,6 +249,10 @@ class ChatService {
               event.room.id,
               Map<String, dynamic>.from(event.content),
               senderId: event.senderId,
+              changedAt: DateTime.tryParse(
+                    event.content['changed_at']?.toString() ?? '',
+                  ) ??
+                  event.originServerTs,
             ),
           );
           return;
