@@ -65,6 +65,8 @@ import 'package:wrytte/ui/media/views/attachment_gallery_sheet.dart';
 import 'package:wrytte/ui/screens/chats/widgets/source_composer_audio_repository.dart';
 import 'package:wrytte/ui/chat/view_models/chat_view_model.dart'; // ChatRecordMode
 import 'package:wrytte/ui/chat/widgets/chat_layout_metrics.dart';
+import 'package:wrytte/ui/core/widgets/wrytte_glass_icon_button.dart';
+import 'package:wrytte/ui/core/widgets/wrytte_svg_icon.dart';
 import 'package:wrytte/domain/models/voice_recording_result.dart';
 import 'package:wrytte/domain/models/camera_capture_result.dart';
 
@@ -447,6 +449,7 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
+  final ValueNotifier<bool> _scrollToLatestVisible = ValueNotifier<bool>(false);
   final FocusNode _focusNode = FocusNode();
 
   final ChatService _chat = ChatService();
@@ -754,6 +757,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _scrollToLatestVisible.dispose();
     BlockStateService.instance.revision.removeListener(_onBlockStateChanged);
     AutoDeleteService.instance.changes.removeListener(_onAutoDeleteChanged);
     _chat.deactivateConversationRead(widget.conversationId);
@@ -2066,6 +2070,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;
+    _updateScrollToLatestVisibility(_scrollCtrl.position);
     if (_scrollCtrl.position.maxScrollExtent <= 0) return;
     final nearOldest =
         _scrollCtrl.position.pixels >=
@@ -2073,6 +2078,84 @@ class _ChatScreenState extends State<ChatScreen> {
     if (nearOldest && !_loadingOlder && _hasMoreOlder) {
       _loadOlderMessages();
     }
+  }
+
+  void _updateScrollToLatestVisibility(ScrollMetrics metrics) {
+    const revealDistance = 80.0;
+    const hideDistance = 40.0;
+    final isScrollable = metrics.maxScrollExtent > metrics.minScrollExtent;
+    final distanceFromLatest = metrics.extentBefore;
+    final currentlyVisible = _scrollToLatestVisible.value;
+    final shouldShow = isScrollable &&
+        distanceFromLatest >
+            (currentlyVisible ? hideDistance : revealDistance);
+    if (currentlyVisible != shouldShow) {
+      _scrollToLatestVisible.value = shouldShow;
+    }
+  }
+
+  Future<void> _scrollToLatest() async {
+    if (!_scrollCtrl.hasClients) return;
+    final target = _scrollCtrl.position.minScrollExtent;
+    final distance = (target - _scrollCtrl.position.pixels).abs();
+    await _scrollCtrl.animateTo(
+      target,
+      duration: Duration(
+        milliseconds: (190 + distance * .12).round().clamp(190, 360),
+      ),
+      curve: Curves.easeOutCubic,
+    );
+    if (mounted) _scrollToLatestVisible.value = false;
+  }
+
+  Widget _buildScrollToLatestControl() {
+    final metrics = ChatLayoutMetrics.of(context);
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return ValueListenableBuilder<bool>(
+      valueListenable: _scrollToLatestVisible,
+      child: WrytteGlassIconButton(
+        semanticLabel: 'Scroll to latest message',
+        onPressed: _scrollToLatest,
+        size: ChatComposer.controlSize,
+        child: Transform.translate(
+          offset: Offset(0, metrics.scale),
+          child: RotatedBox(
+            quarterTurns: -1,
+            child: WrytteSvgIcon(
+              asset: 'assets/svg/ic--round-arrow-back-ios.svg',
+              size: 25 * metrics.scale,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+      builder: (context, visible, child) {
+        final duration = reduceMotion
+            ? Duration.zero
+            : const Duration(milliseconds: 150);
+        return IgnorePointer(
+          ignoring: !visible,
+          child: AnimatedOpacity(
+            opacity: visible ? 1 : 0,
+            duration: duration,
+            curve: visible ? Curves.easeOutCubic : Curves.easeInCubic,
+            child: AnimatedSlide(
+              offset: visible ? Offset.zero : const Offset(0, .30),
+              duration: duration,
+              curve: Curves.easeOutCubic,
+              child: AnimatedScale(
+                scale: visible ? 1 : .72,
+                duration: reduceMotion
+                    ? Duration.zero
+                    : const Duration(milliseconds: 180),
+                curve: visible ? Curves.easeOutBack : Curves.easeInCubic,
+                child: child,
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _loadOlderMessages() async {
@@ -6082,6 +6165,11 @@ class _ChatScreenState extends State<ChatScreen> {
               _controller.clear();
             },
           ),
+              PositionedDirectional(
+                end: ChatLayoutMetrics.of(context).horizontalPadding,
+                bottom: 8.0,
+                child: _buildScrollToLatestControl(),
+              ),
         ],
       ),
     );
