@@ -2698,8 +2698,8 @@ class _ProfileScreenState extends State<ProfileScreen>
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
-            width: 400,
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            width: 200,
+            padding: const EdgeInsets.symmetric(vertical: 12),
             decoration: BoxDecoration(
               color: const Color(0xFF23262C).withValues(alpha: 0.30),
               borderRadius: BorderRadius.circular(38),
