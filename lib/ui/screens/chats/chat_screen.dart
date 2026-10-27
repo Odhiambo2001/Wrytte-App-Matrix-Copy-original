@@ -47,6 +47,7 @@ import 'package:wrytte/data/services/device_camera_service.dart';
 import 'package:wrytte/ui/chat/widgets/chat_composer.dart';
 import 'package:wrytte/ui/chat/models/chat_screen_config.dart';
 import 'package:wrytte/ui/chat/widgets/chat_header.dart';
+import 'package:wrytte/ui/chat/widgets/chat_encryption_notice.dart';
 import 'package:wrytte/domain/repositories/audio_recording_repository.dart';
 import 'package:wrytte/domain/repositories/camera_repository.dart';
 import 'package:wrytte/domain/repositories/media_library_repository.dart';
@@ -4318,7 +4319,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
                         final showTail =
                             nextChronological == null ||
-                            _isMine(nextChronological) != isMine ||
+                            !_isSameBubbleAuthor(msg, nextChronological) ||
                             !_isSameDay(
                               nextChronological.timestamp,
                               msg.timestamp,
@@ -4346,6 +4347,16 @@ class _ChatScreenState extends State<ChatScreen> {
                               _buildDateDivider(
                                 _formatDateDivider(msg.timestamp),
                               ),
+                            if (msgIndex == 0)
+                              const Padding(
+                                padding: EdgeInsets.only(
+                                  top: 7,
+                                  bottom: 34,
+                                ),
+                                child: Center(
+                                  child: ChatEncryptionNotice(),
+                                ),
+                              ),
                             GestureDetector(
                               behavior: HitTestBehavior.opaque,
                               onLongPress: () => _showMessageActions(msg),
@@ -4364,7 +4375,10 @@ class _ChatScreenState extends State<ChatScreen> {
                                   msg.timestamp,
                                 ))
                               SizedBox(
-                                height: _isMine(nextChronological) == isMine
+                                height: _isSameBubbleAuthor(
+                                      msg,
+                                      nextChronological,
+                                    )
                                     ? 2
                                     : 7,
                               ),
@@ -4616,7 +4630,7 @@ class _ChatScreenState extends State<ChatScreen> {
         pinned: _visiblePinnedEventIds.contains(msg.id),
       );
 
-      bubble = ImageMessageBubble(message: presentation, showTail: true);
+      bubble = ImageMessageBubble(message: presentation, showTail: showTail);
     } else {
       bubble = MessageBubble(
         content: displayedContent,
@@ -5762,6 +5776,22 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
+
+  bool _isSameBubbleAuthor(ChatMessage first, ChatMessage second) {
+    final firstIsMine = _isMine(first);
+    final secondIsMine = _isMine(second);
+    if (firstIsMine != secondIsMine) return false;
+
+    // Every outgoing message belongs to the current user. A direct chat also
+    // has only one possible incoming participant.
+    if (firstIsMine || !_isGroupChat) return true;
+
+    // In groups, incoming messages only join when their explicit sender
+    // identities match. Missing identities stay separate.
+    final firstSender = first.senderId.trim();
+    final secondSender = second.senderId.trim();
+    return firstSender.isNotEmpty && firstSender == secondSender;
+  }
 
   String _formatDateDivider(DateTime dt) {
     final now = DateTime.now();

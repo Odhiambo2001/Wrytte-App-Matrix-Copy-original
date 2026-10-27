@@ -543,7 +543,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
       // Only the sender may delete the media. Other viewers retain all
       // viewer actions, but must not see the delete control.
-      allowDelete: actionHandler != null && widget.message.isMine,
+      allowDelete: actionHandler != null,
 
     );
 
@@ -679,10 +679,30 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
         // ---------------------------------------------------------------------
 
-        // Keep the media surface aligned to the image width. The caption
-        // wraps inside that same surface instead of widening it and creating
-        // blurred side-fill panels around portrait images.
-        final double bubbleBodyWidth = imageWidth;
+        final double maximumCaptionBubbleWidth = math
+            .min(
+              availableBodyWidth,
+              math.min(
+                _maximumBubbleWidth,
+                screenSize.width * _captionWidthFactor,
+              ),
+            )
+            .toDouble();
+
+        final double metadataWidth = _measureMediaMetadataWidth(context);
+        final double captionDrivenWidth = _hasCaption
+            ? _measureCaptionBubbleWidth(
+                context,
+                _caption!,
+                metadataWidth,
+                maximumCaptionBubbleWidth,
+              )
+            : 0.0;
+
+        // Caption is allowed to widen the bubble.
+        final double bubbleBodyWidth = _hasCaption
+            ? math.max(imageWidth, captionDrivenWidth).toDouble()
+            : imageWidth;
 
         final double bubbleSurfaceWidth = bubbleBodyWidth + tailExtent;
 

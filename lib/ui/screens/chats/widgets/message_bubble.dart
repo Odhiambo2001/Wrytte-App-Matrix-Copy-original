@@ -18,6 +18,7 @@ import 'package:wrytte/ui/widgets/wrytte_link_preview.dart';
 import 'package:wrytte/ui/widgets/wrytte_persistent_image.dart';
 import 'package:wrytte/ui/widgets/wrytte_video_thumbnail.dart';
 import 'package:wrytte/ui/core/themes/wrytte_theme.dart';
+import 'package:wrytte/ui/chat/widgets/message_bubble_surface.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MessageBubble
@@ -92,28 +93,19 @@ class MessageBubble extends StatelessWidget {
     this.maxWidth,
   });
 
-  static const double _tailW = 8.0;
-  static const double _tailH = 10.0;
-
   @override
   Widget build(BuildContext context) {
     final Color bubbleColor = isMine ? _blue : _incoming;
     final Widget timeWidget = _buildTimeRow();
     final bubble = Container(
-      margin: EdgeInsets.only(top: showTail ? 6 : 2, bottom: 2),
-      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+      margin: EdgeInsets.zero,
+      padding: const EdgeInsets.fromLTRB(12, 7, 12, 6),
       decoration: BoxDecoration(
         color: bubbleColor,
         border:
             isHighlighted
                 ? Border.all(color: const Color(0xFF90CAF9), width: 2)
                 : null,
-        borderRadius: BorderRadius.only(
-          topLeft: const Radius.circular(18),
-          topRight: const Radius.circular(18),
-          bottomLeft: Radius.circular(isMine ? 18 : (showTail ? 2 : 18)),
-          bottomRight: Radius.circular(isMine ? (showTail ? 2 : 18) : 18),
-        ),
       ),
       child: IntrinsicWidth(
         child: Column(
@@ -201,14 +193,24 @@ class MessageBubble extends StatelessWidget {
       ),
     );
 
-    final maxBubbleWidth = maxWidth ?? MediaQuery.sizeOf(context).width * 0.78;
-    final tail =
-        showTail
-            ? _buildTail(bubbleColor, incoming: !isMine)
-            : const SizedBox(width: _tailW, height: _tailH);
+    final viewportWidth = MediaQuery.sizeOf(context).width;
+    final maxBubbleWidth = math.min(
+      maxWidth ?? viewportWidth * 0.80,
+      math.min(viewportWidth * 0.80, 420.0),
+    );
+    final bubbleWidthBudget = math.max(
+      0.0,
+      maxBubbleWidth -
+          (showTail ? MessageBubbleSurface.tailExtent : 0),
+    );
     final constrainedBubble = ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxBubbleWidth),
-      child: bubble,
+      constraints: BoxConstraints(maxWidth: bubbleWidthBudget),
+      child: MessageBubbleSurface(
+        isMine: isMine,
+        showTail: showTail,
+        color: bubbleColor,
+        child: bubble,
+      ),
     );
 
     final messageRow = SizedBox(
@@ -219,8 +221,8 @@ class MessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.end,
           children:
               isMine
-                  ? [const Spacer(), constrainedBubble, tail]
-                  : [tail, constrainedBubble, const Spacer()],
+                  ? [const Spacer(), constrainedBubble]
+                  : [constrainedBubble, const Spacer()],
         ),
       ),
     );
@@ -244,12 +246,6 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  Widget _buildTail(Color color, {required bool incoming}) {
-    return ClipPath(
-      clipper: _TailClipper(incoming: incoming),
-      child: Container(width: _tailW, height: _tailH, color: color),
-    );
-  }
 
   Widget _buildTimeRow() {
     return Row(
@@ -325,7 +321,6 @@ class MessageBubble extends StatelessWidget {
     }
   }
 }
-
 class _VideoMessageBubble extends StatelessWidget {
   final String videoUrl;
   final int totalSeconds;
@@ -404,7 +399,6 @@ class _VideoMessageBubble extends StatelessWidget {
     );
   }
 }
-
 class _ImageMessageBubble extends StatefulWidget {
   final String imageUrl;
   final String caption;
@@ -1211,31 +1205,4 @@ class _LinkedMessageTextState extends State<_LinkedMessageText> {
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
-}
-
-// ── Tail clipper (unchanged from original) ────────────────────────────────────
-
-class _TailClipper extends CustomClipper<Path> {
-  final bool incoming;
-  const _TailClipper({required this.incoming});
-
-  @override
-  Path getClip(Size size) {
-    final path = Path();
-    if (incoming) {
-      path.moveTo(size.width, 0);
-      path.lineTo(size.width, size.height);
-      path.lineTo(0, size.height);
-      path.close();
-    } else {
-      path.moveTo(0, 0);
-      path.lineTo(0, size.height);
-      path.lineTo(size.width, size.height);
-      path.close();
-    }
-    return path;
-  }
-
-  @override
-  bool shouldReclip(_TailClipper old) => old.incoming != incoming;
 }
