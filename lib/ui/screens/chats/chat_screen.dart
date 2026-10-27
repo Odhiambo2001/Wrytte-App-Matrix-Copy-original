@@ -67,6 +67,7 @@ import 'package:wrytte/ui/chat/view_models/chat_view_model.dart'; // ChatRecordM
 import 'package:wrytte/ui/chat/widgets/chat_layout_metrics.dart';
 import 'package:wrytte/ui/core/widgets/wrytte_glass_icon_button.dart';
 import 'package:wrytte/ui/core/widgets/wrytte_svg_icon.dart';
+import 'package:wrytte/ui/chat/widgets/message_actions/message_action_target.dart';
 import 'package:wrytte/domain/models/voice_recording_result.dart';
 import 'package:wrytte/domain/models/camera_capture_result.dart';
 
@@ -3265,6 +3266,47 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _handleFloatingMessageAction(
+    ChatMessage message,
+    MessageAction action,
+  ) async {
+    switch (action.type) {
+      case MessageActionType.reply:
+        if (!mounted) return;
+        setState(() => _replyingTo = message);
+        await _focusComposer();
+      case MessageActionType.copy:
+        await Clipboard.setData(ClipboardData(text: message.content));
+      case MessageActionType.forward:
+        await _promptForward(message);
+      case MessageActionType.pin:
+        if (action.label == 'Cancel') return;
+        await _setMessagePinned(message, pinned: !_pinnedEventIds.contains(message.id));
+      case MessageActionType.delete:
+        if (action.label == 'Cancel') return;
+        if (action.label == 'Delete for everyone') {
+          await _chat.deleteMessageForEveryone(message);
+          if (!mounted) return;
+          setState(() => _upsertMessage(message.copyWith(
+            content: _isMine(message)
+                ? 'This message was deleted'
+                : 'This message was deleted by admin',
+            isDeletedForEveryone: true,
+          )));
+        } else if (action.label == 'Delete for me') {
+          await _chat.deleteMessageForMe(message);
+          if (!mounted) return;
+          setState(() => _messages.removeWhere((item) => item.id == message.id));
+        }
+      case MessageActionType.select:
+        break;
+      case MessageActionType.save:
+      case MessageActionType.edit:
+      case MessageActionType.editMedia:
+        break;
+    }
+  }
+
   Future<void> _setMessagePinnedForMe(
     ChatMessage message, {
     required bool pinned,
@@ -4449,6 +4491,25 @@ class _ChatScreenState extends State<ChatScreen> {
                           );
                         }
                         final isMine = _isMine(msg);
+                        final actionRoom = MatrixChatService.instance
+                            .getRoomById(msg.conversationId);
+                        final isActionAdmin =
+                            _isGroupChat &&
+                            actionRoom != null &&
+                            MatrixChatService.instance.isGroupAdmin(
+                              actionRoom,
+                              actionRoom.client.userID ?? '',
+                            );
+                        final canDeleteForEveryone =
+                            isMine || (isActionAdmin && actionRoom?.canRedact == true);
+                        final canPin =
+                            !_isReadOnlySuggestedGroup &&
+                            actionRoom != null &&
+                            actionRoom.canChangeStateEvent(
+                              mx.EventTypes.RoomPinnedEvents,
+                            ) &&
+                            msg.id.startsWith(r'\$') &&
+                            !_pinUpdatesInFlight.contains(msg.id);
                         final previousChronological = msgIndex > 0
                             ? _messages[msgIndex - 1]
                             : null;
@@ -4493,9 +4554,24 @@ class _ChatScreenState extends State<ChatScreen> {
                               _buildDateDivider(
                                 _formatDateDivider(msg.timestamp),
                               ),
-                            GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onLongPress: () => _showMessageActions(msg),
+                            MessageActionTarget(
+                              config: MessageActionConfig(
+                                actions: <MessageAction>[
+                                  if (!_isReadOnlySuggestedGroup)
+                                    const MessageAction.reply(),
+                                  const MessageAction.copy(),
+                                  const MessageAction.forward(),
+                                  if (canPin) const MessageAction.pin(),
+                                  if (!_isReadOnlySuggestedGroup &&
+                                      (isMine || !_isGroupChat || canDeleteForEveryone))
+                                    const MessageAction.delete(),
+                                  const MessageAction.select(),
+                                ],
+                                onActionSelected: (action) =>
+                                    _handleFloatingMessageAction(msg, action),
+                                useDeleteChoices: true,
+                                canDeleteForEveryone: canDeleteForEveryone,
+                              ),
                               child: MessageSwipeActionTarget(
                                 config: MessageActionConfig(
                                   actions: const [
