@@ -77,6 +77,7 @@ import 'package:wrytte/utils/country_phone_number.dart';
 import 'package:wrytte/utils/wrytte_id.dart';
 
 import 'package:wrytte/ui/chat/models/chat_message_presentation.dart';
+import 'package:wrytte/ui/chat/models/message_action.dart';
 import 'package:wrytte/ui/chat/widgets/image_message_bubble.dart';
 import 'package:wrytte/ui/chat/widgets/contact_message_bubble.dart';
 
@@ -4630,7 +4631,31 @@ class _ChatScreenState extends State<ChatScreen> {
         pinned: _visiblePinnedEventIds.contains(msg.id),
       );
 
-      bubble = ImageMessageBubble(message: presentation, showTail: showTail);
+      bubble = ImageMessageBubble(
+        message: presentation,
+        showTail: showTail,
+        actionConfig: MessageActionConfig(
+          actions: const <MessageAction>[],
+          onActionSelected: (action) async {
+            switch (action.type) {
+              case MessageActionType.forward:
+                await _promptForward(msg);
+              case MessageActionType.save:
+                await _saveAttachmentToDevice(msg);
+              case MessageActionType.editMedia:
+                _showMessageActions(msg);
+              case MessageActionType.delete:
+                await _chat.deleteMessageForMe(msg);
+                if (!mounted) return;
+                setState(() {
+                  _messages.removeWhere((candidate) => candidate.id == msg.id);
+                });
+              default:
+                break;
+            }
+          },
+        ),
+      );
     } else {
       bubble = MessageBubble(
         content: displayedContent,
