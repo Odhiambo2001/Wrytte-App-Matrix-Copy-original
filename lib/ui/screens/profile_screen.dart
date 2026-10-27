@@ -3309,7 +3309,12 @@ class _ProfileScreenState extends State<ProfileScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 InkWell(
-                  onTap: () => setState(() => _showBlockConfirmation = false),
+                  onTap: () => setState(() {
+                    _showBlockConfirmation = false;
+                    _showUnblockConfirmation = false;
+                    _showBlockUserCard = false;
+                    _showMoreOptions = true;
+                  }),
                   child: const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 28, vertical: 10),
                     child: Row(
