@@ -4005,6 +4005,21 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
 
+              if (_selectedMessageIds.isNotEmpty)
+                PositionedDirectional(
+                  start: 0,
+                  end: 0,
+                  top: 0,
+                  child: ChatSelectionHeader(
+                    selectedCount: _selectedMessageIds.length,
+                    onClose: () => setState(_selectedMessageIds.clear),
+                    onPin: () {},
+                    onCopy: () {},
+                    onForward: () {},
+                    onDelete: () {},
+                  ),
+                ),
+
               // ── debug overlay ─────────────────────────────────────────────
               if (_showDebug) _buildDebugOverlay(appBarH),
 
