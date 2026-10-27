@@ -4424,6 +4424,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                       case MessageActionType.reply:
                                         if (mounted) {
                                           setState(() => _replyingTo = msg);
+                                          unawaited(_focusComposer());
                                         }
                                       case MessageActionType.forward:
                                         await _promptForward(msg);
