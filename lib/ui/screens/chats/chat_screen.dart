@@ -4240,6 +4240,36 @@ class _ChatScreenState extends State<ChatScreen> {
               ])
         : <Map<String, String>>[autoDeleteChange];
     final showAutoDeleteNotice = noticeChanges.isNotEmpty;
+    final timelineItems = <({
+      ChatMessage? message,
+      Map<String, String>? change,
+      DateTime timestamp,
+      bool encryption,
+    })>[
+      if (_messages.isNotEmpty)
+        (
+          message: null,
+          change: null,
+          timestamp: DateTime.fromMillisecondsSinceEpoch(0),
+          encryption: true,
+        ),
+      for (final message in _messages)
+        (
+          message: message,
+          change: null,
+          timestamp: message.timestamp,
+          encryption: false,
+        ),
+      for (final change in noticeChanges)
+        (
+          message: null,
+          change: change,
+          timestamp:
+              DateTime.tryParse(change['changedAt'] ?? '') ??
+              DateTime.now(),
+          encryption: false,
+        ),
+    ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     final autoDeleteNewCount = autoDeleteDuration == null
         ? 0
         : _messages.where((message) {
@@ -4280,7 +4310,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       padding: const EdgeInsets.only(top: 150, bottom: 12),
                       physics: const ClampingScrollPhysics(),
                       itemCount:
-                          _messages.length +
+                          timelineItems.length +
                           (liftShortConversation ? 1 : 0),
                       itemBuilder: (context, index) {
                         if (liftShortConversation && index == 0) {
@@ -4293,18 +4323,29 @@ class _ChatScreenState extends State<ChatScreen> {
 
                         final adjustedIndex =
                             index - (liftShortConversation ? 1 : 0);
-                        final messageIndex = adjustedIndex;
-                        final msgIndex = _messages.length - 1 - messageIndex;
-                        if (msgIndex < 0 || msgIndex >= _messages.length) {
-                          debugPrint(
-                            '[AutoDeleteTimeline] room="${widget.conversationId}" '
-                            'index=$index type=invalid adjusted=$adjustedIndex '
-                            'messageIndex=$messageIndex msgIndex=$msgIndex '
-                            'messageCount=${_messages.length}',
+                        final entry =
+                            timelineItems[timelineItems.length -
+                                1 -
+                                adjustedIndex];
+                        if (entry.encryption) {
+                          return const Padding(
+                            padding: EdgeInsets.only(top: 7, bottom: 34),
+                            child: Center(child: ChatEncryptionNotice()),
                           );
-                          return const SizedBox.shrink();
                         }
-                        final msg = _messages[msgIndex];
+                        if (entry.change case final change?) {
+                          return _buildAutoDeleteBanner(
+                            change['duration']?.trim().isNotEmpty == true
+                                ? change['duration']!.trim()
+                                : 'Off',
+                            enabledByOverride: change['enabledBy'],
+                          );
+                        }
+                        final msg = entry.message!;
+                        final msgIndex = _messages.indexWhere(
+                          (candidate) => candidate.id == msg.id,
+                        );
+                        if (msgIndex < 0) return const SizedBox.shrink();
                         if (autoDeleteDuration != null) {
                           debugPrint(
                             '[AutoDeleteTimeline] room="${widget.conversationId}" '
@@ -4357,24 +4398,6 @@ class _ChatScreenState extends State<ChatScreen> {
                               _buildDateDivider(
                                 _formatDateDivider(msg.timestamp),
                               ),
-                            if (msgIndex == 0)
-                              const Padding(
-                                padding: EdgeInsets.only(
-                                  top: 7,
-                                  bottom: 34,
-                                ),
-                                child: Center(
-                                  child: ChatEncryptionNotice(),
-                                ),
-                              ),
-                            if (msgIndex == 0)
-                              for (final change in noticeChanges)
-                                _buildAutoDeleteBanner(
-                                  change['duration']?.trim().isNotEmpty == true
-                                      ? change['duration']!.trim()
-                                      : 'Off',
-                                  enabledByOverride: change['enabledBy'],
-                                ),
                             GestureDetector(
                               behavior: HitTestBehavior.opaque,
                               onLongPress: () => _showMessageActions(msg),

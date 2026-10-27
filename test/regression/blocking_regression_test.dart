@@ -267,8 +267,10 @@ void main() {
       );
       expect(
         source,
-        contains("for (final change in noticeChanges)"),
+        contains('final timelineItems = <({'),
       );
+      expect(source, contains('DateTime.tryParse(change[\'changedAt\']'));
+      expect(source, contains('if (entry.encryption)'));
       expect(source, contains('enabledByOverride: change[\'enabledBy\']'));
     });
   });
