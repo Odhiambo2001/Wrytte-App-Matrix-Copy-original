@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:wrytte/services/attachment_local_store.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/ui/core/models/expanding_surface_origin.dart';
 import 'package:wrytte/ui/core/routing/expanding_surface_route.dart';
 import 'package:wrytte/ui/core/themes/wrytte_theme.dart';
@@ -13,6 +15,7 @@ enum FullScreenImageResult { closed, deleteRequested }
 Future<FullScreenImageResult?> showWrytteImageViewer(
   BuildContext context, {
   required ImageProvider image,
+  String? mediaSource,
   ExpandingSurfaceOrigin? origin,
   double? imageAspectRatio,
   String? title,
@@ -26,13 +29,47 @@ Future<FullScreenImageResult?> showWrytteImageViewer(
   bool allowDelete = false,
   bool showHeaderLabel = true,
   bool enableVerticalDragDismiss = false,
-}) => Navigator.of(context, rootNavigator: true).push<FullScreenImageResult>(
-  ExpandingSurfaceRoute<FullScreenImageResult>(
+}) async {
+  var resolvedImage = image;
+  final source = mediaSource?.trim() ?? '';
+  if (source.startsWith('mxc://') || _isMatrixMediaUrl(source)) {
+    final uri = Uri.tryParse(source);
+    if (uri != null && uri.host.isNotEmpty) {
+      final downloadUrl = source.startsWith('mxc://')
+          ? Uri.parse(MatrixConfig.homeserver).replace(
+              path: '/_matrix/client/v1/media/download/${Uri.encodeComponent(uri.host)}/${Uri.encodeComponent(uri.pathSegments.join('/'))}',
+            ).toString()
+          : source;
+      try {
+        final cached = await AttachmentLocalStore.instance.existingComplete(
+          source: source,
+          fileName: 'image',
+        ) ??
+            await AttachmentLocalStore.instance.existingComplete(
+              source: downloadUrl,
+              fileName: 'image',
+            );
+        if (cached != null) {
+          resolvedImage = FileImage(cached);
+        } else {
+          final copy = await AttachmentLocalStore.instance.ensureComplete(
+            source: downloadUrl,
+            fileName: 'image',
+          );
+          resolvedImage = FileImage(copy.file);
+        }
+      } catch (_) {
+        // Keep the supplied provider as the viewer fallback.
+      }
+    }
+  }
+  return Navigator.of(context, rootNavigator: true).push<FullScreenImageResult>(
+    ExpandingSurfaceRoute<FullScreenImageResult>(
     origin: origin,
     animationsDisabled: MediaQuery.disableAnimationsOf(context),
     keepUnderlyingVisible: enableVerticalDragDismiss,
     builder: (context, animation) => FullScreenImageView(
-      image: image,
+      image: resolvedImage,
       imageAspectRatio: imageAspectRatio,
       routeAnimation: animation,
       title: title,
@@ -47,8 +84,19 @@ Future<FullScreenImageResult?> showWrytteImageViewer(
       showHeaderLabel: showHeaderLabel,
       enableVerticalDragDismiss: enableVerticalDragDismiss,
     ),
-  ),
-);
+    ),
+  );
+}
+
+bool _isMatrixMediaUrl(String source) {
+  final uri = Uri.tryParse(source);
+  final homeserver = Uri.tryParse(MatrixConfig.homeserver);
+  return uri != null &&
+      homeserver != null &&
+      uri.origin == homeserver.origin &&
+      uri.path.contains('/_matrix/client/') &&
+      uri.path.contains('/media/');
+}
 
 class FullScreenImageView extends StatefulWidget {
   const FullScreenImageView({

@@ -4,7 +4,9 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart'
+    show ErrorWidgetBuilder, FlutterExceptionHandler, listEquals,
+        visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
@@ -68,7 +70,9 @@ import 'package:wrytte/ui/chat/widgets/chat_layout_metrics.dart';
 import 'package:wrytte/ui/core/widgets/wrytte_glass_icon_button.dart';
 import 'package:wrytte/ui/core/widgets/wrytte_svg_icon.dart';
 import 'package:wrytte/ui/chat/widgets/message_actions/message_action_target.dart';
+import 'package:wrytte/ui/chat/widgets/message_actions/message_action_menu.dart';
 import 'package:wrytte/ui/chat/widgets/selection/chat_selection_header.dart';
+import 'package:wrytte/ui/chat/widgets/selection/chat_message_selection_badge.dart';
 import 'package:wrytte/domain/models/voice_recording_result.dart';
 import 'package:wrytte/domain/models/camera_capture_result.dart';
 
@@ -87,6 +91,16 @@ import 'package:wrytte/ui/chat/widgets/image_message_bubble.dart';
 import 'package:wrytte/ui/chat/widgets/contact_message_bubble.dart';
 import 'package:wrytte/ui/chat/views/chat_forward_sheet.dart';
 import 'package:wrytte/ui/chat/widgets/message_actions/message_swipe_action_target.dart';
+
+void _dbg(String tag, String msg) => debugPrint('[CHATDBG][$tag] $msg');
+
+@visibleForTesting
+List<String> duplicateMessageIds(Iterable<ChatMessage> messages) {
+  final seen = <String>{};
+  return messages.where((m) => !seen.add(m.id)).map((m) => m.id).toList();
+}
+
+enum _SelectionActionMenu { none, pin, delete }
 
 class ChatScreen extends StatefulWidget {
   final String conversationId;
@@ -449,10 +463,13 @@ class _ForwardPickerPageState extends State<_ForwardPickerPage> {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  FlutterExceptionHandler? _prevOnError;
+  late ErrorWidgetBuilder _prevErrorWidgetBuilder;
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
   final ValueNotifier<bool> _scrollToLatestVisible = ValueNotifier<bool>(false);
   final Set<String> _selectedMessageIds = <String>{};
+  _SelectionActionMenu _selectionActionMenu = _SelectionActionMenu.none;
   final FocusNode _focusNode = FocusNode();
 
   final ChatService _chat = ChatService();
@@ -662,6 +679,19 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _prevOnError = FlutterError.onError;
+    FlutterError.onError = (details) {
+      _dbg('FlutterError', '${details.exceptionAsString()}\n${details.stack}');
+      _prevOnError?.call(details);
+    };
+    _prevErrorWidgetBuilder = ErrorWidget.builder;
+    ErrorWidget.builder = (details) {
+      _dbg(
+        'ErrorWidget',
+        '${details.exceptionAsString()}\n${details.stack}',
+      );
+      return _prevErrorWidgetBuilder(details);
+    };
     BlockStateService.instance.revision.addListener(_onBlockStateChanged);
     AutoDeleteService.instance.changes.addListener(_onAutoDeleteChanged);
     unawaited(_hydrateBlockState());
@@ -784,6 +814,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollCtrl.dispose();
     _debugScrollCtrl.dispose();
     _focusNode.dispose();
+    FlutterError.onError = _prevOnError;
+    ErrorWidget.builder = _prevErrorWidgetBuilder;
     super.dispose();
   }
 
@@ -1726,7 +1758,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
 
     if (restored.isNotEmpty && mounted) {
-      setState(() => _messages.addAll(restored));
+      setState(() => _mergeMessages(restored));
       await Future.wait(restored.map(_saveLocalMessage));
     }
   }
@@ -2624,26 +2656,70 @@ class _ChatScreenState extends State<ChatScreen> {
     String type, {
     String? caption,
   }) async {
+    final lowerPath = filePath.toLowerCase();
+    if (type == 'file' &&
+        RegExp(r'\.(png|jpe?g|gif|webp|bmp|heic|heif)(?:$|[?#])')
+            .hasMatch(lowerPath)) {
+      type = 'image';
+      apkLog(
+        'ChatScreen._sendAttachment',
+        'normalized image attachment path="$filePath"',
+      );
+    }
     if (_isSelfConversation) {
       _logSelfConversationBlocked('send attachment');
       _showSelfConversationError();
       return;
     }
     if (_isDeletedConversation) return;
-    if (await _storeBlockedOutgoingMessage(_attachmentLabelForType(type)))
-      return;
-    if (!await File(filePath).exists()) return;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
+    final placeholderId = 'attach_${DateTime.now().millisecondsSinceEpoch}';
+    final placeholder = ChatMessage(
+      id: placeholderId,
+      conversationId: _resolvedConversationId ?? widget.conversationId,
+      senderId: widget.currentUserId,
+      receiverId: normalisedReceiverId,
+      content: caption?.trim().isNotEmpty == true
+          ? caption!.trim()
+          : _attachmentLabelForType(type),
+      timestamp: DateTime.now(),
+      status: MessageStatus.sending,
+      attachmentUrl: filePath,
+      attachmentType: type,
+    );
+
+    if (mounted) {
+      setState(() => _messages.add(placeholder));
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    }
+
+    if (await _storeBlockedOutgoingMessage(_attachmentLabelForType(type))) {
+      if (mounted) {
+        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
+      }
+      return;
+    }
+    if (!await File(filePath).exists()) {
+      _dbg(
+        'Attachment.localFileError',
+        'type=$type path=$filePath error=file_not_found',
+      );
+      if (mounted) {
+        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
+      }
+      return;
+    }
+
     final realConvId = await _resolveMatrixConversationIdForSend();
     if (realConvId == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not send attachment: room unavailable'),
-          backgroundColor: Colors.redAccent,
-        ),
+      _dbg(
+        'Attachment.roomError',
+        'type=$type path=$filePath error=room_unavailable',
       );
+      if (mounted) {
+        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
+      }
       return;
     }
 
@@ -2656,38 +2732,20 @@ class _ChatScreenState extends State<ChatScreen> {
         conversationId: realConvId,
         filePath: filePath,
       );
-    } catch (e) {
+    } catch (e, stackTrace) {
       await _chat.removeFailedAttachmentAttempts(
         conversationId: realConvId,
         filePath: filePath,
       );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Cannot send attachment: $e'),
-          backgroundColor: Colors.redAccent,
-        ),
+      _dbg(
+        'Attachment.validateError',
+        'type=$type path=$filePath error=$e\n$stackTrace',
       );
+      if (mounted) {
+        setState(() => _messages.removeWhere((m) => m.id == placeholderId));
+      }
       return;
     }
-
-    final placeholderId = 'attach_${DateTime.now().millisecondsSinceEpoch}';
-    final placeholder = ChatMessage(
-      id: placeholderId,
-      conversationId: realConvId,
-      senderId: widget.currentUserId,
-      receiverId: normalisedReceiverId,
-      content: caption?.trim().isNotEmpty == true
-          ? caption!.trim()
-          : _attachmentLabelForType(type),
-      timestamp: DateTime.now(),
-      status: MessageStatus.sending,
-      attachmentUrl: filePath,
-      attachmentType: type,
-    );
-
-    setState(() => _messages.add(placeholder));
-    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
 
     try {
       final sent = await _chat.sendAttachmentMessage(
@@ -2701,19 +2759,16 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) {
         setState(() => _replaceOptimisticMessage(placeholderId, sent));
       }
-    } catch (e) {
-      apkLog('ChatScreen._sendAttachment', 'ERROR: $e');
+    } catch (e, stackTrace) {
+      _dbg(
+        'Attachment.sendError',
+        'type=$type path=$filePath error=$e\n$stackTrace',
+      );
       if (mounted) {
         setState(() {
           _messages.removeWhere((message) => message.id == placeholderId);
           _optimisticIdByContent.removeWhere((_, id) => id == placeholderId);
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to send attachment: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
       }
     }
   }
@@ -2765,13 +2820,25 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ─── MESSAGE HELPERS ───────────────────────────────────────────────────────
 
+  bool _isInvalidFailedImage(ChatMessage message) {
+    return message.status == MessageStatus.failed &&
+        message.attachmentType?.trim().toLowerCase() == 'image' &&
+        message.attachmentUrl?.trim().isNotEmpty != true;
+  }
+
   void _mergeMessages(List<ChatMessage> incoming) {
+    _messages.removeWhere(_isInvalidFailedImage);
     for (final msg in incoming) {
+      if (_isInvalidFailedImage(msg)) continue;
       _upsertMessage(msg);
     }
     _removeDuplicateOutgoingEchoes();
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     _resolveGroupMessageSenders(incoming);
+    _dbg(
+      'Messages',
+      'count=${_messages.length} dupIds=${duplicateMessageIds(_messages)}',
+    );
   }
 
   void _replaceMessagesFromSharedCache(List<ChatMessage> incoming) {
@@ -2779,6 +2846,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // Matrix echo. Collapse those before replacing the visible list.
     final canonical = <String, ChatMessage>{};
     for (final message in incoming) {
+      if (_isInvalidFailedImage(message)) continue;
       final previous = canonical[message.id];
       if (previous == null ||
           previous.status == MessageStatus.sending ||
@@ -2787,19 +2855,28 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     incoming = canonical.values.toList();
-    final optimistic = _messages.where(_isLocalOutgoingEcho).toList();
+    final incomingIds = incoming.map((message) => message.id).toSet();
+    final optimistic = _messages
+        .where((message) =>
+            _isLocalOutgoingEcho(message) && !_isInvalidFailedImage(message))
+        .toList();
     _messages
       ..clear()
       ..addAll(incoming)
       ..addAll(
         optimistic.where(
           (candidate) =>
+              !incomingIds.contains(candidate.id) &&
               !incoming.any((m) => _isDuplicateOutgoingEcho(candidate, m)),
         ),
       );
     _removeDuplicateOutgoingEchoes();
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     _resolveGroupMessageSenders(incoming);
+    _dbg(
+      'Messages',
+      'count=${_messages.length} dupIds=${duplicateMessageIds(_messages)}',
+    );
   }
 
   void _resolveGroupMessageSenders(Iterable<ChatMessage> messages) {
@@ -2884,7 +2961,10 @@ class _ChatScreenState extends State<ChatScreen> {
       final sameContent = optimistic.content == msg.content;
       final sameAttachment =
           optimistic.attachmentType?.isNotEmpty == true &&
-          optimistic.attachmentType == msg.attachmentType;
+          (optimistic.attachmentType == msg.attachmentType ||
+              (optimistic.attachmentType == 'image' &&
+                  (msg.attachmentType == null ||
+                      msg.attachmentType == 'file')));
       final sameConversation =
           optimistic.conversationId == msg.conversationId ||
           optimistic.conversationId == widget.conversationId ||
@@ -2933,7 +3013,11 @@ class _ChatScreenState extends State<ChatScreen> {
     _messages.removeWhere((m) => m.id == sent.id && m.id != optimisticId);
     final idx = _messages.indexWhere((m) => m.id == optimisticId);
     if (idx != -1) {
-      _messages[idx] = sent;
+      final optimistic = _messages[idx];
+      _messages[idx] = optimistic.attachmentType == 'image' &&
+              sent.attachmentType != 'image'
+          ? sent.copyWith(attachmentType: 'image')
+          : sent;
     } else {
       _upsertMessage(sent);
     }
@@ -3007,8 +3091,7 @@ class _ChatScreenState extends State<ChatScreen> {
         !_pinUpdatesInFlight.contains(message.id) &&
         !message.isDeleted &&
         message.status != MessageStatus.sending &&
-        message.status != MessageStatus.failed &&
-        message.id.startsWith(r'$');
+        message.status != MessageStatus.failed;
     final canPin =
         !_isReadOnlySuggestedGroup &&
         room != null &&
@@ -3283,7 +3366,30 @@ class _ChatScreenState extends State<ChatScreen> {
         await _promptForward(message);
       case MessageActionType.pin:
         if (action.label == 'Cancel') return;
-        await _setMessagePinned(message, pinned: !_pinnedEventIds.contains(message.id));
+        final isPinnedForEveryone = _pinnedEventIds.contains(message.id);
+        final isPinnedForMe = _pinnedForMeEventIds.contains(message.id);
+        if (action.label.startsWith('Unpin') &&
+            !isPinnedForEveryone &&
+            !isPinnedForMe) {
+          return;
+        }
+        if (action.label == 'Unpin' &&
+            !isPinnedForEveryone &&
+            isPinnedForMe) {
+          await _setMessagePinnedForMe(message, pinned: false);
+          return;
+        }
+        if (action.label == 'Pin for me' || action.label == 'Unpin for me') {
+          await _setMessagePinnedForMe(
+            message,
+            pinned: !_pinnedForMeEventIds.contains(message.id),
+          );
+        } else {
+          await _setMessagePinned(
+            message,
+            pinned: !_pinnedEventIds.contains(message.id),
+          );
+        }
       case MessageActionType.delete:
         if (action.label == 'Cancel') return;
         if (action.label == 'Delete for everyone') {
@@ -3317,6 +3423,111 @@ class _ChatScreenState extends State<ChatScreen> {
         _selectedMessageIds.add(id);
       }
     });
+  }
+
+  List<ChatMessage> get _selectedMessages => _messages
+      .where((message) => _selectedMessageIds.contains(message.id))
+      .toList(growable: false);
+
+  Future<void> _copySelectedMessages() async {
+    final selected = _selectedMessages;
+    if (selected.isEmpty) return;
+    await Clipboard.setData(
+      ClipboardData(text: selected.map((message) => message.content).join('\n')),
+    );
+    if (mounted) setState(_selectedMessageIds.clear);
+  }
+
+  Future<void> _pinSelectedMessages() async {
+    final selected = _selectedMessages;
+    for (final message in selected) {
+      await _setMessagePinned(message, pinned: true);
+    }
+    if (mounted) setState(_selectedMessageIds.clear);
+  }
+
+  Future<void> _deleteSelectedMessages() async {
+    final selected = _selectedMessages;
+    for (final message in selected) {
+      await _chat.deleteMessageForMe(message);
+    }
+    if (!mounted) return;
+    setState(() {
+      _messages.removeWhere((message) => _selectedMessageIds.contains(message.id));
+      _selectedMessageIds.clear();
+    });
+  }
+
+  Future<void> _forwardSelectedMessages() async {
+    final selected = _selectedMessages;
+    if (selected.isEmpty) return;
+    await _promptForward(selected.first);
+  }
+
+  List<MessageAction> _selectionPinActions() => const [
+        MessageAction(type: MessageActionType.pin, label: 'Pin for everyone'),
+        MessageAction(type: MessageActionType.pin, label: 'Pin for me'),
+        MessageAction(type: MessageActionType.pin, label: 'Cancel'),
+      ];
+
+  List<MessageAction> _selectionDeleteActions() {
+    final selected = _selectedMessages;
+    final canDeleteForEveryone = selected.isNotEmpty &&
+        selected.every((message) => _isMine(message));
+    return [
+      if (canDeleteForEveryone)
+        const MessageAction(
+          type: MessageActionType.delete,
+          label: 'Delete for everyone',
+          isDestructive: true,
+        ),
+      const MessageAction(
+        type: MessageActionType.delete,
+        label: 'Delete for me',
+        isDestructive: true,
+      ),
+      const MessageAction(type: MessageActionType.delete, label: 'Cancel'),
+    ];
+  }
+
+  Future<void> _handleSelectionMenuAction(MessageAction action) async {
+    if (action.label == 'Cancel') {
+      if (mounted) setState(() => _selectionActionMenu = _SelectionActionMenu.none);
+      return;
+    }
+    final selected = _selectedMessages;
+    if (action.label == 'Pin for everyone') {
+      for (final message in selected) {
+        await _setMessagePinned(message, pinned: true);
+      }
+    } else if (action.label == 'Pin for me') {
+      for (final message in selected) {
+        await _setMessagePinnedForMe(message, pinned: true);
+      }
+    } else if (action.label == 'Delete for me') {
+      await _deleteSelectedMessages();
+      return;
+    } else if (action.label == 'Delete for everyone') {
+      for (final message in selected) {
+        await _chat.deleteMessageForEveryone(message);
+      }
+      if (mounted) {
+        setState(() {
+          for (final message in selected) {
+            _upsertMessage(message.copyWith(
+              content: _isMine(message)
+                  ? 'This message was deleted'
+                  : 'This message was deleted by admin',
+              isDeletedForEveryone: true,
+            ));
+          }
+          _selectedMessageIds.clear();
+          _selectionActionMenu = _SelectionActionMenu.none;
+        });
+      }
+      return;
+    }
+    if (mounted) setState(() => _selectionActionMenu = _SelectionActionMenu.none);
   }
 
   Future<void> _setMessagePinnedForMe(
@@ -3598,6 +3809,14 @@ class _ChatScreenState extends State<ChatScreen> {
     _controller
       ..text = message.content
       ..selection = TextSelection.collapsed(offset: message.content.length);
+    _focusNode.requestFocus();
+  }
+
+  /// Restore focus after reply/selection UI has rebuilt the composer.
+  Future<void> _focusComposer() async {
+    if (!mounted) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
     _focusNode.requestFocus();
   }
 
@@ -3920,6 +4139,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                 Provider<AudioRecordingRepository>(
                                   create: (_) =>
                                       SourceComposerAudioRepository(),
+                                  dispose: (_, repository) =>
+                                      unawaited(repository.dispose()),
                                 ),
                                 Provider<CameraRepository>(
                                   create: (_) => CameraRepositoryImpl(
@@ -4012,11 +4233,48 @@ class _ChatScreenState extends State<ChatScreen> {
                   top: 0,
                   child: ChatSelectionHeader(
                     selectedCount: _selectedMessageIds.length,
-                    onClose: () => setState(_selectedMessageIds.clear),
-                    onPin: () {},
-                    onCopy: () {},
-                    onForward: () {},
-                    onDelete: () {},
+                    onClose: () => setState(() {
+                      _selectedMessageIds.clear();
+                      _selectionActionMenu = _SelectionActionMenu.none;
+                    }),
+                    onPin: () => setState(() {
+                      _selectionActionMenu = _selectionActionMenu == _SelectionActionMenu.pin
+                          ? _SelectionActionMenu.none
+                          : _SelectionActionMenu.pin;
+                    }),
+                    onCopy: () => unawaited(_copySelectedMessages()),
+                    onForward: () => unawaited(_forwardSelectedMessages()),
+                    onDelete: () => setState(() {
+                      _selectionActionMenu = _selectionActionMenu == _SelectionActionMenu.delete
+                          ? _SelectionActionMenu.none
+                          : _SelectionActionMenu.delete;
+                    }),
+                  ),
+                ),
+
+              if (_selectedMessageIds.isNotEmpty &&
+                  _selectionActionMenu != _SelectionActionMenu.none)
+                PositionedDirectional(
+                  top: statusBarH + kToolbarHeight + 8,
+                  end: 12,
+                  width: MessageActionMenu.widthFor(
+                    context,
+                    actions: _selectionActionMenu == _SelectionActionMenu.pin
+                        ? _selectionPinActions()
+                        : _selectionDeleteActions(),
+                    availableWidth: MediaQuery.sizeOf(context).width - 24,
+                  ),
+                  child: MessageActionMenu(
+                    actions: _selectionActionMenu == _SelectionActionMenu.pin
+                        ? _selectionPinActions()
+                        : _selectionDeleteActions(),
+                    maxHeight: MessageActionMenu.naturalHeightFor(
+                      _selectionActionMenu == _SelectionActionMenu.pin
+                          ? 3
+                          : _selectionDeleteActions().length,
+                    ),
+                    onSelected: (action) =>
+                        unawaited(_handleSelectionMenuAction(action)),
                   ),
                 ),
 
@@ -4434,6 +4692,11 @@ class _ChatScreenState extends State<ChatScreen> {
           encryption: false,
         ),
     ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    _dbg(
+      'MessageList',
+      'build msgs=${_messages.length} timeline=${timelineItems.length} '
+      'dupIds=${duplicateMessageIds(_messages)} loadingInitial=$_loadingInitial',
+    );
     final autoDeleteNewCount = autoDeleteDuration == null
         ? 0
         : _messages.where((message) {
@@ -4518,6 +4781,8 @@ class _ChatScreenState extends State<ChatScreen> {
                           );
                         }
                         final isMine = _isMine(msg);
+                        final isPinnedForEveryone = _pinnedEventIds.contains(msg.id);
+                        final isPinnedForMe = _pinnedForMeEventIds.contains(msg.id);
                         final actionRoom = MatrixChatService.instance
                             .getRoomById(msg.conversationId);
                         final isActionAdmin =
@@ -4535,7 +4800,13 @@ class _ChatScreenState extends State<ChatScreen> {
                             actionRoom.canChangeStateEvent(
                               mx.EventTypes.RoomPinnedEvents,
                             ) &&
-                            msg.id.startsWith(r'\$') &&
+                            !_pinUpdatesInFlight.contains(msg.id);
+                        final canPinForMe =
+                            !_isGroupChat &&
+                            actionRoom != null &&
+                            !msg.isDeleted &&
+                            msg.status != MessageStatus.sending &&
+                            msg.status != MessageStatus.failed &&
                             !_pinUpdatesInFlight.contains(msg.id);
                         final previousChronological = msgIndex > 0
                             ? _messages[msgIndex - 1]
@@ -4588,7 +4859,17 @@ class _ChatScreenState extends State<ChatScreen> {
                                     const MessageAction.reply(),
                                   const MessageAction.copy(),
                                   const MessageAction.forward(),
-                                  if (canPin) const MessageAction.pin(),
+                                  if (canPin || canPinForMe)
+                                    MessageAction(
+                                      type: MessageActionType.pin,
+                                      label: isPinnedForEveryone || isPinnedForMe
+                                          ? 'Unpin'
+                                          : 'Pin',
+                                      svgAsset: isPinnedForEveryone || isPinnedForMe
+                                          ? 'assets/svg/Unpin icon .svg'
+                                          : 'assets/svg/Pin icon .svg',
+                                      iconScale: 1.12,
+                                    ),
                                   if (!_isReadOnlySuggestedGroup &&
                                       (isMine || !_isGroupChat || canDeleteForEveryone))
                                     const MessageAction.delete(),
@@ -4596,6 +4877,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ],
                                 onActionSelected: (action) =>
                                     _handleFloatingMessageAction(msg, action),
+                                alignMenuRight: isMine,
+                                usePinChoices: canPinForMe,
                                 useDeleteChoices: true,
                                 canDeleteForEveryone: canDeleteForEveryone,
                               ),
@@ -4616,7 +4899,15 @@ class _ChatScreenState extends State<ChatScreen> {
                                       ),
                                     ),
                                   ),
-                                  MessageSwipeActionTarget(
+                                  AnimatedPadding(
+                                    duration: const Duration(milliseconds: 160),
+                                    curve: Curves.easeOutCubic,
+                                    padding: EdgeInsetsDirectional.only(
+                                      start: _selectedMessageIds.isNotEmpty && !isMine
+                                          ? 38
+                                          : 0,
+                                    ),
+                                    child: MessageSwipeActionTarget(
                                 config: MessageActionConfig(
                                   actions: const [
                                     MessageAction.reply(),
@@ -4636,16 +4927,23 @@ class _ChatScreenState extends State<ChatScreen> {
                                     }
                                   },
                                 ),
-                                child: _buildGroupAwareMessageBubble(
-                                  msg: msg,
-                                  isMine: isMine,
-                                  showTail: showTail,
-                                  showGroupAvatar: showGroupAvatar,
-                                  effectiveAttachmentType:
-                                      effectiveAttachmentType,
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: _selectedMessageIds.isNotEmpty
+                                      ? () => _toggleSelectedMessage(msg.id)
+                                      : null,
+                                  child: _buildGroupAwareMessageBubble(
+                                    msg: msg,
+                                    isMine: isMine,
+                                    showTail: showTail,
+                                    showGroupAvatar: showGroupAvatar,
+                                    effectiveAttachmentType:
+                                        effectiveAttachmentType,
+                                  ),
                                 ),
                                   ),
-                                  if (_selectedMessageIds.contains(msg.id))
+                                  ),
+                                  if (_selectedMessageIds.isNotEmpty)
                                     PositionedDirectional(
                                       start: 2,
                                       top: 0,
@@ -4653,15 +4951,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                       child: Center(
                                         child: GestureDetector(
                                           onTap: () => _toggleSelectedMessage(msg.id),
-                                          child: const SizedBox.square(
-                                            dimension: 24,
-                                            child: DecoratedBox(
-                                              decoration: BoxDecoration(
-                                                color: Color(0xFF4DA3FF),
-                                                shape: BoxShape.circle,
-                                              ),
-                                              child: Icon(Icons.check_rounded, size: 17, color: Colors.white),
-                                            ),
+                                          child: ChatMessageSelectionBadge(
+                                            selected: _selectedMessageIds.contains(msg.id),
                                           ),
                                         ),
                                       ),
@@ -4870,6 +5161,11 @@ class _ChatScreenState extends State<ChatScreen> {
     required bool showGroupAvatar,
     required String? effectiveAttachmentType,
   }) {
+    _dbg(
+      'Bubble',
+      'id=${msg.id} type=$effectiveAttachmentType url=${msg.attachmentUrl} '
+      'mine=$isMine status=${msg.status.name}',
+    );
     final senderName = _isGroupChat && !isMine
         ? _groupSenderName(msg.senderId)
         : null;
@@ -4894,6 +5190,13 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     final Widget bubble;
+    final hasImageSource = msg.attachmentUrl?.trim().isNotEmpty == true;
+    if (effectiveAttachmentType == 'image' && !hasImageSource) {
+      _dbg(
+        'Bubble.image.invalid',
+        'id=${msg.id} status=${msg.status.name} content=$displayedContent',
+      );
+    }
 
     final contactParts = displayedContent.split('\n');
     final isContactMessage =
@@ -4917,6 +5220,10 @@ class _ChatScreenState extends State<ChatScreen> {
         showTail: showTail,
       );
     } else if (effectiveAttachmentType == 'image') {
+      _dbg(
+        'Bubble.image',
+        'assetPath=${msg.attachmentUrl} caption=${_imageCaption(displayedContent)}',
+      );
       final presentation = ChatMessagePresentation(
         id: msg.id,
         kind: ChatMessageKind.image,
@@ -4924,6 +5231,8 @@ class _ChatScreenState extends State<ChatScreen> {
         timeLabel: _formatTime(msg.timestamp),
         text: _imageCaption(displayedContent), // ← use helper
         assetPath: msg.attachmentUrl, // raw URL is fine
+        mediaWidth: msg.mediaWidth,
+        mediaHeight: msg.mediaHeight,
         senderName: senderName,
         deliveryState: _mapDeliveryState(isMine ? msg.status : null),
         edited: msg.isEdited,
@@ -4972,7 +5281,7 @@ class _ChatScreenState extends State<ChatScreen> {
         isVideoNote: effectiveAttachmentType == 'video',
         voiceDuration: msg.voiceDuration,
         audioUrl: msg.attachmentUrl,
-        attachmentType: effectiveAttachmentType,
+        attachmentType: hasImageSource ? effectiveAttachmentType : null,
         attachmentUrl: msg.attachmentUrl,
         isForwarded: msg.isForwarded,
         isStarred: msg.isStarred,
@@ -6320,17 +6629,21 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String? _effectiveAttachmentType(ChatMessage message) {
     final explicit = message.attachmentType?.trim().toLowerCase();
-    if (explicit?.isNotEmpty == true) return explicit;
-
     final value = [
       message.attachmentUrl,
       message.content,
     ].whereType<String>().join(' ').toLowerCase();
+
+    final looksLikeImage = RegExp(
+      r'\.(png|jpe?g|gif|webp|bmp|heic|heif)(?:$|[?#\s])',
+    ).hasMatch(value);
+    if (looksLikeImage && (explicit == null || explicit == 'file')) {
+      return 'image';
+    }
+    if (explicit?.isNotEmpty == true) return explicit;
     if (value.isEmpty) return null;
 
-    if (RegExp(
-      r'\.(png|jpe?g|gif|webp|bmp|heic|heif)(?:$|[?#\s])',
-    ).hasMatch(value)) {
+    if (looksLikeImage) {
       return 'image';
     }
     if (RegExp(r'\.(mp4|mov|m4v|webm|mkv|3gp)(?:$|[?#\s])').hasMatch(value)) {

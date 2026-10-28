@@ -179,7 +179,7 @@ class _MessageActionOverlayState extends State<MessageActionOverlay>
         action.type == MessageActionType.pin &&
         action.label == 'Pin') {
       setState(() {
-        _visibleActions = const <MessageAction>[
+        _visibleActions = <MessageAction>[
           MessageAction(
             type: MessageActionType.pin,
             label: 'Pin for everyone',
@@ -755,9 +755,8 @@ class _MessageActionOverlayState extends State<MessageActionOverlay>
 
     // true  = outgoing / sent / blue
     // false = incoming / received / dark
-    final bool isRightBubble =
-        distanceToRight <
-        distanceToLeft;
+    final bool isRightBubble = widget.config.alignMenuRight ??
+        (distanceToRight < distanceToLeft);
 
     // ========================================================================
     // MENU WIDTH
@@ -938,7 +937,7 @@ class _MessageActionOverlayState extends State<MessageActionOverlay>
             bubbleLeft:
                 bubbleLeft,
           )
-        : bubbleLeft;
+        : edge;
 
     return _MessageOverlayGeometry(
       bubbleLeft: bubbleLeft,

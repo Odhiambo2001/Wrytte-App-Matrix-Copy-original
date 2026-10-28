@@ -1,40 +1,52 @@
+import 'package:wrytte/data/services/device_audio_recording_service.dart';
 import 'package:wrytte/domain/models/media_trim_range.dart';
 import 'package:wrytte/domain/repositories/audio_recording_repository.dart';
 
-/// Safe adapter used while the legacy chat screen adopts the source composer.
+/// The legacy chat screen keeps this provider boundary, but now uses the
+/// complete production recorder from the source composer implementation.
 class SourceComposerAudioRepository implements AudioRecordingRepository {
+  SourceComposerAudioRepository()
+      : _delegate = DeviceAudioRecordingService();
+
+  final DeviceAudioRecordingService _delegate;
+
   @override
-  Stream<double> get captureAmplitudes => const Stream<double>.empty();
+  Stream<double> get captureAmplitudes => _delegate.captureAmplitudes;
   @override
-  Stream<Duration> get previewPositions => const Stream<Duration>.empty();
+  Stream<Duration> get previewPositions => _delegate.previewPositions;
   @override
-  Stream<bool> get previewPlaying => const Stream<bool>.empty();
+  Stream<bool> get previewPlaying => _delegate.previewPlaying;
   @override
-  Future<bool> hasCapturePermission({bool request = true}) async => false;
+  Future<bool> hasCapturePermission({bool request = true}) =>
+      _delegate.hasCapturePermission(request: request);
   @override
-  Future<void> startCapture() async {}
+  Future<void> startCapture() => _delegate.startCapture();
   @override
-  Future<void> pauseCapture() async {}
+  Future<void> pauseCapture() => _delegate.pauseCapture();
   @override
-  Future<void> resumeCapture() async {}
+  Future<void> resumeCapture() => _delegate.resumeCapture();
   @override
-  Future<String?> stopCapture() async => null;
+  Future<String?> stopCapture() => _delegate.stopCapture();
   @override
-  Future<void> cancelCapture() async {}
+  Future<void> cancelCapture() => _delegate.cancelCapture();
   @override
-  Future<String?> createPausedCapturePreview() async => null;
+  Future<String?> createPausedCapturePreview() =>
+      _delegate.createPausedCapturePreview();
   @override
-  Future<void> preparePreview(String path, {required MediaTrimRange range}) async {}
+  Future<void> preparePreview(String path, {required MediaTrimRange range}) =>
+      _delegate.preparePreview(path, range: range);
   @override
-  Future<void> playPreview() async {}
+  Future<void> playPreview() => _delegate.playPreview();
   @override
-  Future<void> pausePreview() async {}
+  Future<void> pausePreview() => _delegate.pausePreview();
   @override
-  Future<void> seekPreview(Duration position) async {}
+  Future<void> seekPreview(Duration position) =>
+      _delegate.seekPreview(position);
   @override
-  Future<void> setPreviewSpeed(double speed) async {}
+  Future<void> setPreviewSpeed(double speed) =>
+      _delegate.setPreviewSpeed(speed);
   @override
-  Future<void> stopPreview() async {}
+  Future<void> stopPreview() => _delegate.stopPreview();
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() => _delegate.dispose();
 }

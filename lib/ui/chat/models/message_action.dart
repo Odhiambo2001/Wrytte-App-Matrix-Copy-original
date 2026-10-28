@@ -139,6 +139,7 @@ class MessageActionConfig {
     this.onActionSelected,
     this.onReactionSelected,
     this.onMoreReactions,
+    this.alignMenuRight,
     this.usePinChoices = false,
     this.useDeleteChoices = true,
     this.canDeleteForEveryone = false,
@@ -149,6 +150,7 @@ class MessageActionConfig {
   final MessageActionHandler? onActionSelected;
   final MessageReactionHandler? onReactionSelected;
   final MessageMoreReactionsHandler? onMoreReactions;
+  final bool? alignMenuRight;
   final bool usePinChoices;
   final bool useDeleteChoices;
   final bool canDeleteForEveryone;

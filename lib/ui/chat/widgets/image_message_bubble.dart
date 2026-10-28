@@ -10,14 +10,15 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import 'package:wrytte/services/attachment_local_store.dart';
-
 import 'package:wrytte/ui/chat/models/chat_message_presentation.dart';
 
 import 'package:wrytte/ui/chat/models/message_action.dart';
 
 import 'package:wrytte/ui/chat/widgets/message_actions/message_action_target.dart';
 import 'package:wrytte/ui/chat/widgets/message_actions/message_swipe_action_target.dart';
+
+import 'package:wrytte/services/attachment_local_store.dart';
+import 'package:wrytte/services/matrix/matrix_config.dart';
 
 import 'package:wrytte/ui/chat/widgets/message_bubble_surface.dart';
 
@@ -126,14 +127,20 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   double _aspectRatio = 4 / 3;
+  bool _aspectRatioLocked = false;
+
+  double? get _metadataAspectRatio {
+    final width = widget.message.mediaWidth;
+    final height = widget.message.mediaHeight;
+    if (width == null || height == null || width <= 0 || height <= 0) {
+      return null;
+    }
+    return width / height;
+  }
 
   ImageStream? _imageStream;
 
   ImageStreamListener? _imageListener;
-
-  String? _resolvedLocalPath;
-
-  bool _resolvingLocal = false;
 
   // ===========================================================================
 
@@ -143,7 +150,24 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   String get _source => widget.message.assetPath?.trim() ?? '';
 
-  String get _paintSource => _resolvedLocalPath ?? _source;
+  String? _authenticatedSource;
+
+  bool get _isProtectedMatrixSource {
+    if (_source.startsWith('mxc://')) return true;
+    final uri = Uri.tryParse(_source);
+    final homeserver = Uri.tryParse(MatrixConfig.homeserver);
+    return uri != null &&
+        uri.hasScheme &&
+        homeserver != null &&
+        homeserver.hasScheme &&
+        uri.origin == homeserver.origin &&
+        uri.path.contains('/_matrix/client/') &&
+        uri.path.contains('/media/');
+  }
+
+  String get _effectiveSource => _isProtectedMatrixSource
+      ? (_authenticatedSource ?? '')
+      : (_authenticatedSource ?? _source);
 
   String? get _caption {
 
@@ -213,9 +237,14 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
     super.didChangeDependencies();
 
-    unawaited(_resolveLocalFile());
+    final metadataRatio = _metadataAspectRatio;
+    if (!_aspectRatioLocked && metadataRatio != null) {
+      _aspectRatio = metadataRatio;
+      _aspectRatioLocked = true;
+    }
 
     _resolveImageDimensions();
+    _prepareAuthenticatedSource();
 
   }
 
@@ -225,13 +254,13 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
     super.didUpdateWidget(oldWidget);
 
-    if (oldWidget.message.assetPath != widget.message.assetPath) {
+    if (oldWidget.message.id != widget.message.id) {
 
-      _aspectRatio = 4 / 3;
-
-      _resolvedLocalPath = null;
+      _aspectRatio = _metadataAspectRatio ?? 4 / 3;
+      _aspectRatioLocked = _metadataAspectRatio != null;
 
       _detachImageListener();
+      _authenticatedSource = null;
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
 
@@ -242,6 +271,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         }
 
         _resolveImageDimensions();
+        _prepareAuthenticatedSource();
 
       });
 
@@ -249,55 +279,41 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   }
 
-  String _fileNameFromSource(String source) {
-    final fromText = widget.message.text?.trim() ?? '';
-    if (fromText.isNotEmpty &&
-        RegExp(r'\.(png|jpe?g|gif|webp|heic|heif)$', caseSensitive: false)
-            .hasMatch(fromText)) {
-      return fromText;
-    }
-    try {
-      final name = Uri.parse(source).pathSegments.last;
-      if (name.isNotEmpty) return name;
-    } catch (_) {}
-    return 'image.jpg';
-  }
-
-  Future<void> _resolveLocalFile() async {
+  Future<void> _prepareAuthenticatedSource() async {
     final source = _source;
-    if (source.isEmpty || _resolvingLocal) return;
-    if (!source.startsWith('http://') &&
-        !source.startsWith('https://') &&
-        !source.startsWith('mxc://')) {
-      final path =
-          source.startsWith('file:') ? Uri.parse(source).toFilePath() : source;
-      if (File(path).existsSync() && mounted) {
-        setState(() => _resolvedLocalPath = path);
-        _resolveImageDimensions();
-        return;
-      }
-    }
-    _resolvingLocal = true;
+    if (source.isEmpty || !_isProtectedMatrixSource) return;
+    if (_authenticatedSource != null) return;
+    final uri = Uri.tryParse(source);
+    if (uri == null || uri.host.isEmpty || uri.pathSegments.isEmpty) return;
+    final downloadUrl = source.startsWith('mxc://')
+        ? Uri.parse(MatrixConfig.homeserver).replace(
+            path: '/_matrix/client/v1/media/download/${Uri.encodeComponent(uri.host)}/${Uri.encodeComponent(uri.pathSegments.join('/'))}',
+          ).toString()
+        : source;
     try {
-      final fileName = _fileNameFromSource(source);
-      final existing = await AttachmentLocalStore.instance.existingComplete(
+      final cached = await AttachmentLocalStore.instance.existingComplete(
         source: source,
-        fileName: fileName,
-      );
-      final file = existing ??
+        fileName: widget.message.fileName ?? 'image',
+      ) ??
+          await AttachmentLocalStore.instance.existingComplete(
+            source: downloadUrl,
+            fileName: widget.message.fileName ?? 'image',
+          );
+      final File localFile = cached ??
           (await AttachmentLocalStore.instance.ensureComplete(
-            source: source,
-            fileName: fileName,
-          ))
-              .file;
-      if (mounted) {
-        setState(() => _resolvedLocalPath = file.path);
-        _resolveImageDimensions();
-      }
-    } catch (_) {
-      // Keep the placeholder if the authenticated local download fails.
-    } finally {
-      _resolvingLocal = false;
+        source: downloadUrl,
+        fileName: widget.message.fileName ?? 'image',
+      )).file;
+      if (!mounted || widget.message.assetPath?.trim() != source) return;
+      setState(() => _authenticatedSource = localFile.path);
+      _resolveImageDimensions();
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[CHATDBG][ImageMessageBubble.download] '
+        'source=$_source error=$error\n$stackTrace',
+      );
+      // Leave the protected source empty so a failed request cannot trigger
+      // another unauthenticated Matrix request from the image widget.
     }
   }
 
@@ -319,7 +335,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   void _resolveImageDimensions() {
 
-    final provider = _imageProviderFor(_paintSource);
+    final provider = _imageProviderFor(_effectiveSource);
 
     if (provider == null) {
 
@@ -351,6 +367,12 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
       final double nextRatio = width / height;
 
+      // Matrix media metadata is the stable layout contract. Decoding the
+      // local file and then the authenticated remote file can briefly report
+      // different dimensions; never let that change the bubble geometry when
+      // metadata is already available.
+      if (_metadataAspectRatio != null || _aspectRatioLocked) return;
+
       if (!mounted) {
 
         return;
@@ -366,10 +388,16 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
       setState(() {
 
         _aspectRatio = nextRatio;
+        _aspectRatioLocked = true;
 
       });
 
-    }, onError: (Object error, StackTrace? stackTrace) {});
+    }, onError: (Object error, StackTrace? stackTrace) {
+      debugPrint(
+        '[CHATDBG][ImageMessageBubble.load] '
+        'source=$_effectiveSource error=$error\n$stackTrace',
+      );
+    });
 
     _imageStream = stream;
 
@@ -437,7 +465,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   Future<void> _openFullScreenImage() async {
 
-    final provider = _imageProviderFor(_paintSource);
+    final provider = _imageProviderFor(_effectiveSource);
 
     if (provider == null) return;
 
@@ -458,6 +486,8 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
       context,
 
       image: provider,
+
+      mediaSource: _source,
 
       origin: origin,
 
@@ -541,8 +571,6 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
       onShowInChat: () => Navigator.of(context, rootNavigator: true).maybePop(),
 
-      // Only the sender may delete the media. Other viewers retain all
-      // viewer actions, but must not see the delete control.
       allowDelete: actionHandler != null,
 
     );
@@ -680,28 +708,53 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         // ---------------------------------------------------------------------
 
         final double maximumCaptionBubbleWidth = math
+
             .min(
+
               availableBodyWidth,
+
               math.min(
+
                 _maximumBubbleWidth,
+
                 screenSize.width * _captionWidthFactor,
+
               ),
+
             )
+
             .toDouble();
 
         final double metadataWidth = _measureMediaMetadataWidth(context);
+
         final double captionDrivenWidth = _hasCaption
+
             ? _measureCaptionBubbleWidth(
+
                 context,
+
                 _caption!,
+
                 metadataWidth,
+
                 maximumCaptionBubbleWidth,
+
               )
+
             : 0.0;
 
         // Caption is allowed to widen the bubble.
+
+        //
+
+        // IMPORTANT:
+
+        // This does NOT stretch the actual image.
+
         final double bubbleBodyWidth = _hasCaption
+
             ? math.max(imageWidth, captionDrivenWidth).toDouble()
+
             : imageWidth;
 
         final double bubbleSurfaceWidth = bubbleBodyWidth + tailExtent;
@@ -1004,7 +1057,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   Widget _buildBaseImage() {
 
-    if (_paintSource.isEmpty) {
+    if (_effectiveSource.isEmpty) {
 
       return _errorImage();
 
@@ -1016,7 +1069,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   Widget _buildForegroundImage() {
 
-    if (_paintSource.isEmpty) {
+    if (_effectiveSource.isEmpty) {
 
       return _errorImage();
 
@@ -1058,7 +1111,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   Widget _buildImageWithFit(BoxFit fit) {
 
-    final source = _paintSource;
+    final source = _effectiveSource;
 
     if (source.isEmpty) {
 
@@ -2415,4 +2468,3 @@ class _MediaBubblePath {
   }
 
 }
-
