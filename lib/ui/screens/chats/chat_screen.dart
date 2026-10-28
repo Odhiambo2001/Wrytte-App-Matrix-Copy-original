@@ -41,6 +41,9 @@ import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/ui/screens/calls/livekit_call_screen.dart';
 import 'package:wrytte/ui/screens/chats/video_message_recorder_screen.dart';
 import 'package:wrytte/ui/screens/chats/widgets/message_bubble.dart';
+import 'package:wrytte/ui/chat/models/chat_message_presentation.dart';
+import 'package:wrytte/ui/chat/view_models/chat_video_playback_view_model.dart';
+import 'package:wrytte/ui/chat/widgets/round_video_message_bubble.dart';
 
 import 'package:wrytte/data/repositories/camera_repository_impl.dart';
 import 'package:wrytte/data/services/camera_capabilities_service.dart';
@@ -473,6 +476,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final FocusNode _focusNode = FocusNode();
 
   final ChatService _chat = ChatService();
+  final ChatVideoPlaybackViewModel _videoPlayback =
+      ChatVideoPlaybackViewModel();
 
   StreamSubscription<List<ChatMessage>>? _messagesSub;
   String? _messagesSubscriptionConversationId;
@@ -813,6 +818,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _focusNode.removeListener(_onInputFocusChanged);
     _scrollCtrl.dispose();
     _debugScrollCtrl.dispose();
+    _videoPlayback.dispose();
     _focusNode.dispose();
     FlutterError.onError = _prevOnError;
     ErrorWidget.builder = _prevErrorWidgetBuilder;
@@ -5263,6 +5269,26 @@ class _ChatScreenState extends State<ChatScreen> {
             }
           },
         ),
+      );
+    } else if (effectiveAttachmentType == 'video' && hasImageSource) {
+      final presentation = ChatMessagePresentation(
+        id: msg.id,
+        kind: ChatMessageKind.video,
+        isMine: isMine,
+        timeLabel: _formatTime(msg.timestamp),
+        videoDurationSeconds: msg.voiceDuration,
+        videoThumbnailUrl: msg.attachmentUrl,
+        assetPath: msg.attachmentUrl,
+        isVideoNote: true,
+        senderName: senderName,
+        deliveryState: _mapDeliveryState(isMine ? msg.status : null),
+        edited: msg.isEdited,
+        pinned: _visiblePinnedEventIds.contains(msg.id),
+      );
+      bubble = RoundVideoMessageBubble(
+        message: presentation,
+        playback: _videoPlayback,
+        actionConfig: const MessageActionConfig(actions: <MessageAction>[]),
       );
     } else {
       bubble = MessageBubble(

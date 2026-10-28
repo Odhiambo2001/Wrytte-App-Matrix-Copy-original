@@ -17,6 +17,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   pdfx
   permission_handler_windows
   pro_video_editor
+  record_windows
   url_launcher_windows
 )
 
