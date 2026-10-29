@@ -168,6 +168,7 @@ class ChatService {
       '@$userId:${MatrixConfig.serverName}';
 
   Future<void> connect() async {
+    final autoDeleteReady = AutoDeleteService.instance.initialize();
     final activeUserId = await AuthService.instance.getCurrentUserId();
     final expectedMatrixUserId =
         activeUserId == null || activeUserId.isEmpty
@@ -178,15 +179,21 @@ class ChatService {
         MatrixClientService.instance.isLoggedIn &&
         MatrixClientService.instance.userId == expectedMatrixUserId;
     if (_isConnected && _currentUserId == activeUserId && matrixSessionReady) {
+      await autoDeleteReady;
       return;
     }
     if (_isConnected && _currentUserId != activeUserId) {
       await reset();
     }
-    if (_connectFuture != null) return _connectFuture;
+    if (_connectFuture != null) {
+      await _connectFuture;
+      await autoDeleteReady;
+      return;
+    }
     _connectFuture = _connect();
     try {
       await _connectFuture;
+      await autoDeleteReady;
     } finally {
       _connectFuture = null;
     }
@@ -241,7 +248,6 @@ class ChatService {
         throw StateError('Matrix session did not match the current user.');
       }
       _loadMdlAccountData(client.accountData[_mdlAccountDataType]?.content);
-      unawaited(AutoDeleteService.instance.initialize());
       _timelineSub ??= client.onTimelineEvent.stream.listen((event) {
         if (event.type == AutoDeleteService.roomEventType) {
           unawaited(

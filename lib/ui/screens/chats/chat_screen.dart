@@ -811,7 +811,9 @@ class _ChatScreenState extends State<ChatScreen> {
             'count=${widget.initialMessages.length}',
       );
       _mergeMessages(widget.initialMessages);
-      _loadingInitial = false;
+      // Keep the first paint gated until ChatService.connect() has awaited
+      // AutoDeleteService initialization, so notices and messages arrive as
+      // one consistent initial state.
     }
     _hasMoreOlder = widget.initialEventsHaveMore;
     _focusNode.addListener(_onInputFocusChanged);

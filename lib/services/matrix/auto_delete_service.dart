@@ -24,8 +24,17 @@ class AutoDeleteService {
   final Map<String, Map<String, String>> _outbox = {};
   Timer? _retryTimer;
   Future<void>? _outboxLoad;
+  Future<void>? _initializeFuture;
 
   Future<void> initialize() async {
+    final existing = _initializeFuture;
+    if (existing != null) return existing;
+    final future = _initializeInternal();
+    _initializeFuture = future;
+    return future;
+  }
+
+  Future<void> _initializeInternal() async {
     await _ensureOutboxLoaded();
     await _loadChangeHistory();
     changes.value++;
@@ -175,24 +184,37 @@ class AutoDeleteService {
     Map<String, dynamic> content,
     {String? senderId, DateTime? changedAt}
   ) async {
-    final duration = content['duration']?.toString() ?? 'Off';
-    await setDuration(
-      roomId,
-      duration,
-      broadcast: false,
-      enabledBy: senderId ?? content['sender']?.toString(),
-      changedAt: changedAt ?? DateTime.now(),
-      recordHistory: false,
-    );
     final id = roomId.trim();
+    if (id.isEmpty) return;
+    final duration = content['duration']?.toString() ?? 'Off';
+    final enabledBy = senderId ?? content['sender']?.toString() ?? '';
+    final eventChangedAt = changedAt ??
+        DateTime.tryParse(content['changed_at']?.toString() ?? '') ??
+        DateTime.now();
+    final enabledAt = DateTime.tryParse(
+      content['enabled_at']?.toString() ?? '',
+    );
     final change = <String, String>{
       'duration': duration,
-      'enabledBy': senderId ?? content['sender']?.toString() ?? '',
-      'changedAt':
-          (changedAt ?? DateTime.now()).toUtc().toIso8601String(),
+      'enabledBy': enabledBy,
+      'changedAt': eventChangedAt.toUtc().toIso8601String(),
+      if (enabledAt != null) 'enabledAt': enabledAt.toUtc().toIso8601String(),
     };
     _lastChanges[id] = change;
+    final rooms = _rooms();
+    if (duration == 'Off') {
+      rooms.remove(id);
+    } else {
+      rooms[id] = {
+        'duration': duration,
+        'enabledAt':
+            (enabledAt ?? eventChangedAt).toUtc().toIso8601String(),
+        'enabledBy': enabledBy,
+      };
+    }
+    _localRooms = rooms;
     await _appendChange(id, change);
+    changes.value++;
     debugPrint('[AutoDelete] remote event applied room="$roomId" duration="$duration"');
   }
 
