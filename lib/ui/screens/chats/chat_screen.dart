@@ -3434,6 +3434,15 @@ class _ChatScreenState extends State<ChatScreen> {
           await _setMessagePinnedForMe(message, pinned: false);
           return;
         }
+        if (action.label == 'Unpin') {
+          if (isPinnedForEveryone) {
+            await _setMessagePinned(message, pinned: false);
+          }
+          if (isPinnedForMe) {
+            await _setMessagePinnedForMe(message, pinned: false);
+          }
+          return;
+        }
         if (action.label == 'Pin for me' || action.label == 'Unpin for me') {
           await _setMessagePinnedForMe(
             message,
@@ -3446,21 +3455,13 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         }
       case MessageActionType.delete:
-        if (action.label == 'Cancel') return;
-        if (action.label == 'Delete for everyone') {
-          await _chat.deleteMessageForEveryone(message);
-          if (!mounted) return;
-          setState(() => _upsertMessage(message.copyWith(
-            content: _isMine(message)
-                ? 'This message was deleted'
-                : 'This message was deleted by admin',
-            isDeletedForEveryone: true,
-          )));
-        } else if (action.label == 'Delete for me') {
-          await _chat.deleteMessageForMe(message);
-          if (!mounted) return;
-          setState(() => _messages.removeWhere((item) => item.id == message.id));
-        }
+        if (!mounted) return;
+        setState(() {
+          _pinnedEventIds.remove(message.id);
+          _pinnedForMeEventIds.remove(message.id);
+          _messages.removeWhere((item) => item.id == message.id);
+        });
+        return;
       case MessageActionType.select:
         if (!mounted) return;
         setState(() => _selectedMessageIds.add(message.id));
@@ -5317,7 +5318,11 @@ class _ChatScreenState extends State<ChatScreen> {
             const MessageAction.save(),
             const MessageAction.forward(),
             if (isMine) const MessageAction.editMedia(),
-            const MessageAction.pin(),
+            if (_pinnedEventIds.contains(msg.id) ||
+                _pinnedForMeEventIds.contains(msg.id))
+              const MessageAction.unpin()
+            else
+              const MessageAction.pin(),
             const MessageAction.delete(),
             const MessageAction.select(),
           ],
