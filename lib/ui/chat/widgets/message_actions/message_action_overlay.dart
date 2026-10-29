@@ -179,7 +179,7 @@ class _MessageActionOverlayState extends State<MessageActionOverlay>
         action.type == MessageActionType.pin &&
         action.label == 'Pin') {
       setState(() {
-        _visibleActions = <MessageAction>[
+        _visibleActions = const <MessageAction>[
           MessageAction(
             type: MessageActionType.pin,
             label: 'Pin for everyone',
@@ -976,7 +976,7 @@ class _MessageActionOverlayState extends State<MessageActionOverlay>
     final double desiredLeft =
         alignRight
         ? bubbleRight - width
-        : bubbleLeft;
+        : edge;
 
     final double maximumLeft =
         math.max(

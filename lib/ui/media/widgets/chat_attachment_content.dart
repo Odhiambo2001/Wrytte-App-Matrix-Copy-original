@@ -320,7 +320,6 @@ class _PollAttachmentContentState extends State<PollAttachmentContent> {
   final _options = [
     TextEditingController(),
     TextEditingController(),
-    TextEditingController(),
   ];
   bool _multiple = true;
 
@@ -504,10 +503,11 @@ class _PollAttachmentContentState extends State<PollAttachmentContent> {
               ),
               if (!isAddField)
                 Divider(
-                  height: 1,
-                  indent: 17,
-                  endIndent: 17,
-                  color: Colors.white.withValues(alpha: .055),
+                  height: .5,
+                  thickness: .5,
+                  indent: 18,
+                  endIndent: 18,
+                  color: const Color(0xFF292D35),
                 ),
             ],
           ),
@@ -541,10 +541,11 @@ class _PollAttachmentContentState extends State<PollAttachmentContent> {
                       onChanged: (_) => _notify(),
                     ),
                     Divider(
-                      height: 1,
-                      indent: 17,
-                      endIndent: 17,
-                      color: Colors.white.withValues(alpha: .055),
+                      height: .5,
+                      thickness: .5,
+                      indent: 18,
+                      endIndent: 18,
+                      color: const Color(0xFF292D35),
                     ),
                     _field(
                       controller: _description,

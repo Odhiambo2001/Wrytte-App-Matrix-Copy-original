@@ -999,6 +999,12 @@ class _AttachmentGallerySheetState extends State<_AttachmentGallerySheet>
 
                                           onClose: _dismissSheet,
 
+                                          showSend: _tab == ChatAttachmentTab.poll,
+
+                                          onSend: _confirm,
+
+                                          sendEnabled: _poll != null,
+
                                           onAlbumPressed:
                                               _tab == ChatAttachmentTab.gallery
                                               ? _toggleAlbumMenu

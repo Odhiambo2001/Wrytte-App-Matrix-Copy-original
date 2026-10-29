@@ -23,6 +23,9 @@ class AttachmentSheetHeader extends StatelessWidget {
     required this.onVerticalDragCancel,
     this.selectedCount = 0,
     this.onMorePressed,
+    this.showSend = false,
+    this.onSend,
+    this.sendEnabled = false,
     this.showSearch = false,
     this.onSearchPressed,
   });
@@ -56,6 +59,9 @@ class AttachmentSheetHeader extends StatelessWidget {
   /// If no action has been connected yet, the button still keeps the old
   /// interaction/haptic instead of doing something unexpected.
   final VoidCallback? onMorePressed;
+  final bool showSend;
+  final VoidCallback? onSend;
+  final bool sendEnabled;
   final bool showSearch;
   final VoidCallback? onSearchPressed;
 
@@ -659,6 +665,9 @@ class AttachmentSheetHeader extends StatelessWidget {
 
                           onMorePressed:
                               onMorePressed,
+                          showSend: showSend,
+                          onSend: onSend,
+                          sendEnabled: sendEnabled,
                           showSearch: showSearch,
                           onSearchPressed: onSearchPressed,
                         ),
@@ -685,6 +694,9 @@ class _SelectionHeaderActions
     required this.selectedCount,
     required this.scale,
     required this.onMorePressed,
+    this.showSend = false,
+    this.onSend,
+    this.sendEnabled = false,
     this.showSearch = false,
     this.onSearchPressed,
   });
@@ -693,11 +705,22 @@ class _SelectionHeaderActions
   final double scale;
 
   final VoidCallback? onMorePressed;
+  final bool showSend;
+  final VoidCallback? onSend;
+  final bool sendEnabled;
   final bool showSearch;
   final VoidCallback? onSearchPressed;
 
   @override
   Widget build(BuildContext context) {
+    if (showSend) {
+      return _HeaderSendButton(
+        enabled: sendEnabled,
+        onPressed: onSend,
+        scale: scale,
+      );
+    }
+
     final reduceMotion =
         MediaQuery.disableAnimationsOf(
       context,
@@ -970,6 +993,45 @@ class _SelectionHeaderActions
             ),
     );
   }
+}
+
+class _HeaderSendButton extends StatelessWidget {
+  const _HeaderSendButton({
+    required this.enabled,
+    required this.onPressed,
+    required this.scale,
+  });
+
+  final bool enabled;
+  final VoidCallback? onPressed;
+  final double scale;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: const Color(0xFF17191E).withValues(alpha: .88),
+    borderRadius: BorderRadius.circular(28),
+    child: InkWell(
+      onTap: enabled ? onPressed : null,
+      borderRadius: BorderRadius.circular(28),
+      child: SizedBox(
+        width: 70,
+        height: 58,
+        child: Center(
+          child: Text(
+            'Send',
+            style: TextStyle(
+              fontFamily: WrytteTypography.primaryFontFamily,
+              color: enabled
+                  ? const Color(0xFFE9EBEF)
+                  : const Color(0xFF5D616A),
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 // =============================================================================

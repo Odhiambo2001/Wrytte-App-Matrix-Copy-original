@@ -5311,25 +5311,20 @@ class _ChatScreenState extends State<ChatScreen> {
         message: presentation,
         showTail: showTail,
         actionConfig: MessageActionConfig(
-          actions: const <MessageAction>[],
-          onActionSelected: (action) async {
-            switch (action.type) {
-              case MessageActionType.forward:
-                await _promptForward(msg);
-              case MessageActionType.save:
-                await _saveAttachmentToDevice(msg);
-              case MessageActionType.editMedia:
-                _showMessageActions(msg);
-              case MessageActionType.delete:
-                await _chat.deleteMessageForMe(msg);
-                if (!mounted) return;
-                setState(() {
-                  _messages.removeWhere((candidate) => candidate.id == msg.id);
-                });
-              default:
-                break;
-            }
-          },
+          actions: <MessageAction>[
+            if (!_isReadOnlySuggestedGroup) const MessageAction.reply(),
+            const MessageAction.copy(),
+            const MessageAction.save(),
+            const MessageAction.forward(),
+            if (isMine) const MessageAction.editMedia(),
+            const MessageAction.pin(),
+            const MessageAction.delete(),
+            const MessageAction.select(),
+          ],
+          onActionSelected: (action) =>
+              _handleFloatingMessageAction(msg, action),
+          usePinChoices: !_isGroupChat,
+          canDeleteForEveryone: isMine,
         ),
       );
     } else if (effectiveAttachmentType == 'video') {
