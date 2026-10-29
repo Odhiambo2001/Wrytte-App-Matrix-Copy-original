@@ -5323,6 +5323,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
           onActionSelected: (action) =>
               _handleFloatingMessageAction(msg, action),
+          alignMenuRight: isMine,
           usePinChoices: !_isGroupChat,
           canDeleteForEveryone: isMine,
         ),
