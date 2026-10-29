@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/ui/chat/models/chat_screen_config.dart';
 import 'package:wrytte/ui/chat/widgets/chat_layout_metrics.dart';
 import 'package:wrytte/ui/core/themes/wrytte_theme.dart';
@@ -13,12 +14,20 @@ class ChatHeader extends StatelessWidget {
     required this.onBack,
     required this.onCallPressed,
     this.onProfilePressed,
+    this.avatarUrl,
+    this.localAvatarPath,
+    this.avatarCacheIdentity,
+    this.isDeleted = false,
   });
 
   final ChatScreenConfig config;
   final VoidCallback onBack;
   final VoidCallback onCallPressed;
   final VoidCallback? onProfilePressed;
+  final String? avatarUrl;
+  final String? localAvatarPath;
+  final String? avatarCacheIdentity;
+  final bool isDeleted;
 
   @override
   Widget build(BuildContext context) {
@@ -57,14 +66,13 @@ class ChatHeader extends StatelessWidget {
                         ),
                         child: Row(
                           children: [
-                            ClipOval(
-                              child: Image.asset(
-                                config.avatarAsset,
-                                width: metrics.controlSize,
-                                height: metrics.controlSize,
-                                fit: BoxFit.cover,
-                                gaplessPlayback: true,
-                              ),
+                            UserAvatar(
+                              size: metrics.controlSize,
+                              imageUrl: avatarUrl,
+                              localImagePath: localAvatarPath,
+                              cacheIdentity: avatarCacheIdentity,
+                              name: config.title,
+                              isDeleted: isDeleted,
                             ),
                             SizedBox(width: 10 * metrics.scale),
                             Expanded(

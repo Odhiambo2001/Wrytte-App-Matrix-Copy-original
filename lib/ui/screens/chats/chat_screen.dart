@@ -5496,6 +5496,39 @@ class _ChatScreenState extends State<ChatScreen> {
   // ─── APP BAR ───────────────────────────────────────────────────────────────
 
   Widget _buildAppBar(double statusBarH) {
+    final isGroupChat = _isGroupChat;
+    final blockedByPeer =
+        !isGroupChat &&
+        BlockStateService.instance.shouldHidePeerAvatar(
+          _receiverIdentity?.matrixUserId ?? widget.receiverId,
+          roomId: _resolvedConversationId ?? widget.conversationId,
+        );
+    final avatarUrl = isGroupChat
+        ? _stableHeaderAvatarUrl
+        : blockedByPeer
+        ? null
+        : _safePersonHeaderAvatar(
+            _receiverProfile?.hasProfileImage == true
+                ? _receiverProfile!.profileImage
+                : _receiverIdentity?.avatarUrl ?? _stableHeaderAvatarUrl,
+          );
+    final localAvatarPath = isGroupChat || blockedByPeer
+        ? null
+        : _receiverProfile?.localProfileImagePath.trim().isNotEmpty == true
+        ? _receiverProfile!.localProfileImagePath.trim()
+        : null;
+    final avatarCacheIdentity = isGroupChat
+        ? MatrixChatService.instance.roomProfileCacheIdentity(
+            accountId: widget.currentUserId,
+            roomId: _resolvedConversationId ?? widget.conversationId,
+            avatarUrl: avatarUrl,
+            room: MatrixChatService.instance.getRoomById(
+              _resolvedConversationId ?? widget.conversationId,
+            ),
+            profileVersion: widget.initialRoomProfileVersion,
+          )
+        : 'user:${(_profilePeerId() ?? widget.receiverId).trim().toLowerCase()}';
+
     return ChatHeader(
       config: ChatScreenConfig(
         id: widget.conversationId,
@@ -5509,6 +5542,10 @@ class _ChatScreenState extends State<ChatScreen> {
             : _canonicalDirectPeerId() ?? widget.receiverId,
         callsAvailable: !_isGroupChat && !_isDeletedConversation,
       ),
+      avatarUrl: avatarUrl,
+      localAvatarPath: localAvatarPath,
+      avatarCacheIdentity: avatarCacheIdentity,
+      isDeleted: _isDeletedConversation,
       onBack: () => Navigator.pop(context),
       onCallPressed: () {
         if (_isGroupChat) {
