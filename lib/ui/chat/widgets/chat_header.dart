@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/ui/chat/models/chat_screen_config.dart';
 import 'package:wrytte/ui/chat/widgets/chat_layout_metrics.dart';
@@ -18,6 +19,7 @@ class ChatHeader extends StatelessWidget {
     this.localAvatarPath,
     this.avatarCacheIdentity,
     this.isDeleted = false,
+    this.hasAutoDelete = false,
   });
 
   final ChatScreenConfig config;
@@ -28,6 +30,7 @@ class ChatHeader extends StatelessWidget {
   final String? localAvatarPath;
   final String? avatarCacheIdentity;
   final bool isDeleted;
+  final bool hasAutoDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -66,13 +69,34 @@ class ChatHeader extends StatelessWidget {
                         ),
                         child: Row(
                           children: [
-                            UserAvatar(
-                              size: metrics.controlSize,
-                              imageUrl: avatarUrl,
-                              localImagePath: localAvatarPath,
-                              cacheIdentity: avatarCacheIdentity,
-                              name: config.title,
-                              isDeleted: isDeleted,
+                            Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                UserAvatar(
+                                  size: metrics.controlSize,
+                                  imageUrl: avatarUrl,
+                                  localImagePath: localAvatarPath,
+                                  cacheIdentity: avatarCacheIdentity,
+                                  name: config.title,
+                                  isDeleted: isDeleted,
+                                ),
+                                if (hasAutoDelete)
+                                  Positioned(
+                                    right: 0,
+                                    bottom: 0,
+                                    child: SizedBox(
+                                      width: metrics.controlSize * 0.4,
+                                      height: metrics.controlSize * 0.4,
+                                      child: SvgPicture.asset(
+                                        'assets/images/Disappearing messages icon.svg',
+                                        colorFilter: const ColorFilter.mode(
+                                          Colors.white,
+                                          BlendMode.srcIn,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                             SizedBox(width: 10 * metrics.scale),
                             Expanded(

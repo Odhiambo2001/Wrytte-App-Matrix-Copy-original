@@ -5546,6 +5546,9 @@ class _ChatScreenState extends State<ChatScreen> {
       localAvatarPath: localAvatarPath,
       avatarCacheIdentity: avatarCacheIdentity,
       isDeleted: _isDeletedConversation,
+      hasAutoDelete: AutoDeleteService.instance.showIconForRoom(
+        _resolvedConversationId ?? widget.conversationId,
+      ),
       onBack: () => Navigator.pop(context),
       onCallPressed: () {
         if (_isGroupChat) {
