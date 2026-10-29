@@ -50,6 +50,7 @@ import 'package:wrytte/data/services/camera_capabilities_service.dart';
 import 'package:wrytte/data/services/camera_session_manager.dart';
 import 'package:wrytte/data/services/device_camera_service.dart';
 import 'package:wrytte/ui/chat/widgets/chat_composer.dart';
+import 'package:wrytte/ui/chat/widgets/chat_action_toast.dart';
 import 'package:wrytte/ui/chat/models/chat_screen_config.dart';
 import 'package:wrytte/ui/chat/widgets/chat_header.dart';
 import 'package:wrytte/ui/chat/widgets/chat_encryption_notice.dart';
@@ -472,6 +473,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollCtrl = ScrollController();
   final ValueNotifier<bool> _scrollToLatestVisible = ValueNotifier<bool>(false);
   final Set<String> _selectedMessageIds = <String>{};
+  OverlayEntry? _actionToastEntry;
   _SelectionActionMenu _selectionActionMenu = _SelectionActionMenu.none;
   final FocusNode _focusNode = FocusNode();
 
@@ -838,6 +840,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _actionToastEntry?.remove();
+    _actionToastEntry = null;
     _scrollToLatestVisible.dispose();
     BlockStateService.instance.revision.removeListener(_onBlockStateChanged);
     AutoDeleteService.instance.changes.removeListener(_onAutoDeleteChanged);
@@ -866,6 +870,43 @@ class _ChatScreenState extends State<ChatScreen> {
     FlutterError.onError = _prevOnError;
     ErrorWidget.builder = _prevErrorWidgetBuilder;
     super.dispose();
+  }
+
+  void _showChatNotice(String message) {
+    _actionToastEntry?.remove();
+
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (overlayContext) {
+        final media = MediaQuery.of(overlayContext);
+        final bottomObstruction = media.viewInsets.bottom >
+                media.viewPadding.bottom
+            ? media.viewInsets.bottom
+            : media.viewPadding.bottom;
+        return IgnorePointer(
+          child: Stack(
+            children: [
+              Positioned(
+                left: 24,
+                right: 24,
+                bottom: 72 + bottomObstruction,
+                child: ChatActionToast(
+                  message: message,
+                  onDismissed: () {
+                    if (_actionToastEntry != entry) return;
+                    entry.remove();
+                    _actionToastEntry = null;
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    _actionToastEntry = entry;
+    Overlay.of(context, rootOverlay: true).insert(entry);
   }
 
   void _onBlockStateChanged() {
@@ -3455,6 +3496,11 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         }
       case MessageActionType.delete:
+        if (action.label == 'Delete for everyone') {
+          await _chat.deleteMessageForEveryone(message);
+        } else {
+          await _chat.deleteMessageForMe(message);
+        }
         if (!mounted) return;
         setState(() {
           _pinnedEventIds.remove(message.id);
@@ -3467,6 +3513,8 @@ class _ChatScreenState extends State<ChatScreen> {
         setState(() => _selectedMessageIds.add(message.id));
         break;
       case MessageActionType.save:
+        _showChatNotice('Saved');
+        return;
       case MessageActionType.edit:
       case MessageActionType.editMedia:
         break;
@@ -5601,7 +5649,8 @@ class _ChatScreenState extends State<ChatScreen> {
               uid: widget.receiverId.trim().isNotEmpty
                   ? widget.receiverId
                   : _receiverProfile?.uid ?? _receiverIdentity?.matrixUserId,
-              conversationId: widget.conversationId,
+              conversationId:
+                  _resolvedConversationId ?? widget.conversationId,
               savedNameHint: _resolvedHeaderName,
               contactStatus:
                   _receiverIsSavedContact ||
