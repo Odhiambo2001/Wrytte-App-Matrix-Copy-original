@@ -388,8 +388,6 @@ class _UserAvatarState extends State<UserAvatar> {
             height: widget.size,
             fit: BoxFit.cover,
             gaplessPlayback: true,
-            cacheWidth: (widget.size * MediaQuery.devicePixelRatioOf(context))
-                .round(),
           );
         },
         httpHeaders: _authHeaders(
