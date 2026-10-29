@@ -619,7 +619,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final text = location.trim();
       if (text.isNotEmpty) {
         final previousText = _controller.text;
-        _controller.text = text;
+        _controller.text = 'Location: $text';
         try {
           await _send();
         } finally {
@@ -643,13 +643,50 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     for (final file in result.files) {
-      await _sendPickedAttachment(file.path, 'file', caption: result.caption);
+      final cleanPath = file.path.trim();
+      if (cleanPath.isEmpty) continue;
+      final preview = ChatMessage(
+        id: 'file_preview_${DateTime.now().microsecondsSinceEpoch}',
+        conversationId: _resolvedConversationId ?? widget.conversationId,
+        senderId: widget.currentUserId,
+        receiverId: _normaliseId(widget.receiverId),
+        content: result.caption?.trim().isNotEmpty == true
+            ? result.caption!.trim()
+            : file.name,
+        timestamp: DateTime.now(),
+        status: MessageStatus.sent,
+        attachmentUrl: cleanPath,
+        attachmentType: 'file',
+      );
+      if (mounted) {
+        setState(() => _messages.add(preview));
+        WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+      }
     }
     for (final contact in result.contacts) {
       await _sendContactAttachment(
         name: contact.displayName,
         phone: contact.phoneNumber,
       );
+    }
+    if (result.poll case final poll?) {
+      final description = poll.description?.trim();
+      final text = 'Poll: ${poll.question}\n'
+          '${description == null || description.isEmpty ? '' : '$description\n'}'
+          '${poll.options.map((option) => '• $option').join('\n')}';
+      final preview = ChatMessage(
+        id: 'poll_preview_${DateTime.now().microsecondsSinceEpoch}',
+        conversationId: _resolvedConversationId ?? widget.conversationId,
+        senderId: widget.currentUserId,
+        receiverId: _normaliseId(widget.receiverId),
+        content: text,
+        timestamp: DateTime.now(),
+        status: MessageStatus.sent,
+      );
+      if (mounted) {
+        setState(() => _messages.add(preview));
+        WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+      }
     }
     if (result.cameraCapture case final capture?) {
       await _sendPickedAttachment(
@@ -668,14 +705,18 @@ class _ChatScreenState extends State<ChatScreen> {
     final cleanPhone = phone.trim();
     if (cleanPhone.isEmpty) return;
 
-    final previousText = _controller.text;
-    _controller.text = '[wrytte-contact]\n$cleanName\n$cleanPhone';
-    try {
-      await _send();
-    } finally {
-      if (mounted && _controller.text.isEmpty) {
-        _controller.text = previousText;
-      }
+    final preview = ChatMessage(
+      id: 'contact_preview_${DateTime.now().microsecondsSinceEpoch}',
+      conversationId: _resolvedConversationId ?? widget.conversationId,
+      senderId: widget.currentUserId,
+      receiverId: _normaliseId(widget.receiverId),
+      content: '[wrytte-contact]\n$cleanName\n$cleanPhone',
+      timestamp: DateTime.now(),
+      status: MessageStatus.sent,
+    );
+    if (mounted) {
+      setState(() => _messages.add(preview));
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
     }
   }
 
@@ -5270,7 +5311,7 @@ class _ChatScreenState extends State<ChatScreen> {
           },
         ),
       );
-    } else if (effectiveAttachmentType == 'video' && hasImageSource) {
+    } else if (effectiveAttachmentType == 'video') {
       final presentation = ChatMessagePresentation(
         id: msg.id,
         kind: ChatMessageKind.video,
@@ -5526,60 +5567,6 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       },
 
-      avatarBuilder: (size) => Stack(
-        clipBehavior: Clip.none,
-        children: [
-          UserAvatar(
-            size: size,
-            imageUrl:
-                _peerIsRedacted() ||
-                    UserProfileService.instance.isPublicProfileRefreshing(
-                      _receiverIdentity?.matrixUserId ??
-                          widget.receiverId ??
-                          '',
-                    )
-                ? null
-                : _safePersonHeaderAvatar(
-                    _receiverProfile?.hasProfileImage == true
-                        ? _receiverProfile!.profileImage
-                        : _receiverIdentity?.avatarUrl ??
-                              _stableHeaderAvatarUrl,
-                  ),
-            localImagePath:
-                _peerIsRedacted() ||
-                    UserProfileService.instance.isPublicProfileRefreshing(
-                      _receiverIdentity?.matrixUserId ??
-                          widget.receiverId ??
-                          '',
-                    )
-                ? null
-                : _receiverProfile?.localProfileImagePath.trim().isNotEmpty ==
-                      true
-                ? _receiverProfile!.localProfileImagePath.trim()
-                : null,
-            name: _resolvedHeaderName,
-            isDeleted: _isDeletedConversation,
-          ),
-          if (AutoDeleteService.instance.showIconForRoom(
-            _resolvedConversationId ?? widget.conversationId,
-          ))
-            Positioned(
-              bottom: -1,
-              left: size * .58,
-              child: SizedBox(
-                width: size * .38,
-                height: size * .38,
-                child: SvgPicture.asset(
-                  'assets/images/Disappearing messages icon.svg',
-                  colorFilter: const ColorFilter.mode(
-                    Colors.white,
-                    BlendMode.srcIn,
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
     );
   }
 

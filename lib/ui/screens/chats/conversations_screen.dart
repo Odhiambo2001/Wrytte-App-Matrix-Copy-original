@@ -119,7 +119,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   List<Contact> _savedContacts = const [];
   bool _initialCacheWarmup = true;
   int _conversationPaintVersion = 0;
-  int _conversationRefreshVersion = 0;
   List<ChatConversation>? _pendingConversationBatch;
   bool _conversationBatchInFlight = false;
   Future<void>? _contactRestoreFuture;
@@ -160,7 +159,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _seedSavedContacts(widget.initialSavedContacts);
-    _seedHydratedConversationSnapshot();
     // Do not synchronously paint cached DM rows here. Even when initial saved
     // contacts are present, backend contact rows can lack the UID-to-phone
     // mapping used by older cached conversations. _initialize first loads the
@@ -1228,43 +1226,67 @@ class _ConversationsScreenState extends State<ConversationsScreen>
   }
 
   Future<void> _rebuildContactNameCaches(List<Contact> contacts) async {
-    // Clear existing cache before reloading so removed/renamed contacts
-    // don't linger.
-    _contactNameCache.clear();
-    _contactAvatarCache.clear();
+    // Build replacement maps off to the side. Clearing the live maps before
+    // the async identity-cache writes complete makes the conversation list
+    // fall back to phone numbers during startup.
+    final names = <String, String>{};
+    final avatars = <String, String?>{};
+    final identityWrites = <Future<void>>[];
+
+    void cacheContact(String? raw, String name, String? avatarUrl) {
+      final avatar = _safeDirectAvatarUrl(avatarUrl);
+      for (final key in _identityKeys(raw)) {
+        names[key] = name;
+        avatars[key] = avatar;
+      }
+    }
 
     for (final c in contacts) {
       final name = c.displayName ?? '';
       // Only cache real human names — skip if it looks like a phone number.
       if (name.isEmpty || _looksLikePhone(name)) continue;
 
-      _cacheContactName(c.wrytteUserId, name, c.avatarUrl);
-      _cacheContactName(_matrixLocalpart(c.wrytteUserId), name, c.avatarUrl);
+      cacheContact(c.wrytteUserId, name, c.avatarUrl);
+      cacheContact(_matrixLocalpart(c.wrytteUserId), name, c.avatarUrl);
       if (c.wrytteUserId != null && c.wrytteUserId!.trim().isNotEmpty) {
-        await ContactIdentityCache.instance.upsert(
+        identityWrites.add(ContactIdentityCache.instance.upsert(
           ownerUserId: _currentUserId,
           matrixUserId: c.wrytteUserId!,
           phone: c.primaryPhone,
           savedName: name,
           avatarUrl: c.avatarUrl,
-        );
+        ));
       }
 
       for (final phone in c.phones) {
-        _cacheContactName(phone, name, c.avatarUrl);
+        cacheContact(phone, name, c.avatarUrl);
       }
     }
-    await _loadIdentityCache();
+    await Future.wait(identityWrites);
+    final freshIdentity = await ContactIdentityCache.instance.loadAll(
+      ownerUserId: _currentUserId,
+    );
+
+    // Synchronous swap: no await between clearing and repopulating the live
+    // maps, so a Matrix batch cannot observe a partially rebuilt cache.
+    _contactNameCache
+      ..clear()
+      ..addAll(names);
+    _contactAvatarCache
+      ..clear()
+      ..addAll(avatars);
+    _identityCache
+      ..clear()
+      ..addAll(freshIdentity);
   }
 
   Future<void> _loadIdentityCache() async {
+    final fresh = await ContactIdentityCache.instance.loadAll(
+      ownerUserId: _currentUserId,
+    );
     _identityCache
       ..clear()
-      ..addAll(
-        await ContactIdentityCache.instance.loadAll(
-          ownerUserId: _currentUserId,
-        ),
-      );
+      ..addAll(fresh);
   }
 
   // ===========================================================================
@@ -1308,13 +1330,13 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     List<ChatConversation> conversations,
   ) async {
     if (!mounted) return;
-    final refreshVersion = ++_conversationRefreshVersion;
+    final paintVersion = ++_conversationPaintVersion;
     var rows = _enrichSavedContactNames(_realConversationRows(conversations));
     if (_hasRowsMissingStableIdentity(rows)) {
       rows = await _enrichNames(rows);
     }
     unawaited(_precacheConversationAvatars(rows));
-    if (!mounted || refreshVersion != _conversationRefreshVersion) return;
+    if (!mounted || paintVersion != _conversationPaintVersion) return;
     setState(() => _conversations = rows);
     _notifyUnread(_conversations);
   }
@@ -1593,9 +1615,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     if (profile == null && matrixProfile == null) return conv;
 
     final contactKey = _contactKeyForConversation(conv);
-    var contactName = contactKey == null
-        ? ''
-        : _cleanHumanName(_contactNameCache[contactKey]);
+    final contactName = _savedNameForConversation(conv);
     final contactAvatar = _safeDirectAvatarUrl(
       contactKey == null ? null : _contactAvatarCache[contactKey],
       rejectPlaceholderVersion: true,
@@ -1675,7 +1695,8 @@ class _ConversationsScreenState extends State<ConversationsScreen>
           refreshedSavedContact.avatarUrl,
         );
       }
-      contactName = _cleanHumanName(refreshedSavedContact.formattedName);
+      // The saved contact cache is updated above; the local saved name remains
+      // authoritative over any profile or phone fallback.
     }
     final resolvedName = contactName.isNotEmpty
         ? contactName
@@ -1701,7 +1722,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         profile?.moduleProfileLoaded == true) {
       await ChatLocalDb.instance.updateConversationUserInfo(
         conversationId: conv.id,
-        name: resolvedName.trim(),
+        // Never persist a phone fallback as the conversation's display name.
+        // The saved contact name is resolved locally and will be reapplied by
+        // _enrichSavedContactNames on the next paint.
+        name: contactName.isNotEmpty ? contactName : null,
         avatar: avatar,
         clearAvatar:
             (profile?.moduleProfileLoaded == true && avatar == null) ||
@@ -1740,6 +1764,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       );
     }
     return enriched;
+  }
+
+  String _savedNameForConversation(ChatConversation conv) {
+    final identityName = _cleanHumanName(
+      _identityForConversation(conv)?.savedName,
+    );
+    if (identityName.isNotEmpty) return identityName;
+    final key = _contactKeyForConversation(conv);
+    if (key == null) return '';
+    return _cleanHumanName(_contactNameCache[key]);
   }
 
   Future<String?> _profileUidFromPhone(String phone) async {

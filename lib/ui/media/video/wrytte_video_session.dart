@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:video_player/video_player.dart';
+import 'package:wrytte/services/attachment_local_store.dart';
 
 enum WrytteVideoPhase {
   idle,
@@ -165,9 +166,30 @@ class WrytteVideoSession extends ChangeNotifier
     VideoPlayerController? controller;
 
     try {
+      // Matrix media download URLs are protected. ExoPlayer's network
+      // controller cannot attach the Matrix access token, so handing the URL
+      // directly to it produces HTTP 401 and a silent full-screen failure.
+      // Resolve remote media through the authenticated attachment store first
+      // and give the native player a local file instead.
+      final playbackSource =
+          cleanSource.startsWith('http')
+              ? (await AttachmentLocalStore.instance
+                    .ensureComplete(
+                      source: cleanSource,
+                      fileName: 'video.mp4',
+                    ))
+                    .file
+                    .path
+              : cleanSource;
+
+      if (_disposed ||
+          requestGeneration != _generation) {
+        return;
+      }
+
       controller =
           _createController(
-        cleanSource,
+        playbackSource,
       );
 
       _controller =

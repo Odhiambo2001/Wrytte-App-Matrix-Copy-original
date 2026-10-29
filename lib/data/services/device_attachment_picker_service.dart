@@ -14,7 +14,7 @@ class DeviceAttachmentPickerService {
       dialogTitle: audioOnly ? 'Choose audio' : 'Choose files',
       type: audioOnly ? FileType.audio : FileType.any,
       allowMultiple: true,
-      withData: true,
+      withData: false,
     );
     final selected = <PickedAttachmentFile>[];
     if (result == null) return selected;
@@ -43,11 +43,21 @@ class DeviceAttachmentPickerService {
     final output = File(
       '${directory.path}${Platform.pathSeparator}wrytte_attachment_${DateTime.now().microsecondsSinceEpoch}_$safeName',
     );
-    final bytes = file.bytes;
-    if (bytes == null) {
-      throw StateError('The selected file could not be read: ${file.name}');
+    final sink = output.openWrite();
+    try {
+      final stream = file.readStream;
+      final bytes = file.bytes;
+      if (stream != null) {
+        await sink.addStream(stream);
+      } else if (bytes != null) {
+        sink.add(bytes);
+      } else {
+        throw StateError('The selected file could not be read: ${file.name}');
+      }
+      await sink.flush();
+    } finally {
+      await sink.close();
     }
-    await output.writeAsBytes(bytes, flush: true);
     return output.path;
   }
 

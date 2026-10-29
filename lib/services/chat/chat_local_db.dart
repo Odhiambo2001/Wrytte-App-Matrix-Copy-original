@@ -1030,18 +1030,23 @@ class ChatLocalDb {
   /// Update name + avatar for a conversation after Matrix contact or profile enrichment.
   Future<void> updateConversationUserInfo({
     required String conversationId,
-    required String name,
+    String? name,
     String? avatar,
     bool clearAvatar = false,
   }) async {
     final database = await db;
-    final values = <String, Object?>{'otherUserName': name};
+    final values = <String, Object?>{};
+    final cleanName = name?.trim() ?? '';
+    if (cleanName.isNotEmpty) {
+      values['otherUserName'] = cleanName;
+    }
     final cleanAvatar = avatar?.trim() ?? '';
     if (cleanAvatar.isNotEmpty) {
       values['otherUserAvatar'] = cleanAvatar;
     } else if (clearAvatar) {
       values['otherUserAvatar'] = null;
     }
+    if (values.isEmpty) return;
     await database.update(
       'conversations',
       values,

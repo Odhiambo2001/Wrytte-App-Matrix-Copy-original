@@ -4611,10 +4611,10 @@ class ChatService {
       lastMessageTime: last?.originServerTs ?? DateTime.now(),
       unreadCount: _displayableUnreadCountForRoom(room, client.userID),
       otherUserName:
-          incomingSenderPhone.isNotEmpty
-              ? incomingSenderPhone
-              : cachedName.isNotEmpty
+          cachedName.isNotEmpty
               ? cachedName
+              : incomingSenderPhone.isNotEmpty
+              ? incomingSenderPhone
               : shouldUseRoomName
               ? cleanRoomName
               : existing?.otherUserName,

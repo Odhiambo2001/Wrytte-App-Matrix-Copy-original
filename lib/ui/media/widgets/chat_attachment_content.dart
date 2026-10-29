@@ -130,7 +130,6 @@ class ContactAttachmentContent extends StatefulWidget {
   State<ContactAttachmentContent> createState() =>
       _ContactAttachmentContentState();
 }
-
 class _ContactAttachmentContentState extends State<ContactAttachmentContent> {
   String _query = '';
 
@@ -242,97 +241,61 @@ class LocationAttachmentContent extends StatelessWidget {
       controller: scrollController,
       slivers: [
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(0, 0, 0, 112),
+          padding: _contentPadding,
           sliver: SliverList.list(
             children: [
-              const _LocationMapUnavailable(),
-              const SizedBox(height: 28),
-              InkWell(
-                onTap: () => onChoose('Current location'),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 36),
-                  child: Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 39,
-                        backgroundColor: Color(0xFF4D8DFF),
-                        child: Icon(Icons.location_on_rounded, color: Colors.white, size: 35),
-                      ),
-                      SizedBox(width: 24),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Send Selected Location', style: TextStyle(fontSize: 23, fontWeight: FontWeight.w600)),
-                          SizedBox(height: 3),
-                          Text('Finding your location...', style: TextStyle(fontSize: 18, color: Color(0xFF9D9EA5))),
-                        ],
-                      ),
-                    ],
+              Container(
+                height: 190,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(24),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF162734), Color(0xFF102019)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
                 ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    CustomPaint(
+                      size: const Size(double.infinity, 190),
+                      painter: _MapPatternPainter(),
+                    ),
+                    const Icon(
+                      Icons.location_on_rounded,
+                      color: WrytteColors.primary,
+                      size: 48,
+                    ),
+                    PositionedDirectional(
+                      end: 12,
+                      bottom: 12,
+                      child: Chip(
+                        avatar: const Icon(Icons.map_outlined, size: 17),
+                        label: const Text('Map coming later'),
+                        side: BorderSide.none,
+                        backgroundColor: Colors.black.withValues(alpha: .45),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 32),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 36),
-                child: Text('OR CHOOSE A PLACE', style: TextStyle(color: Color(0xFF8C8D94), fontSize: 16, letterSpacing: .5)),
+              const SizedBox(height: 14),
+              _ActionRow(
+                icon: Icons.my_location_rounded,
+                title: 'Send current location',
+                subtitle: 'Share your position once',
+                onTap: () => onChoose('Current location'),
               ),
-              const SizedBox(height: 48),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 36),
-                child: Text('Tap anywhere on the map to find places around\nthat point.', style: TextStyle(color: Color(0xFF8C8D94), fontSize: 20, height: 1.4)),
+              _ActionRow(
+                icon: Icons.location_searching_rounded,
+                title: 'Share live location',
+                subtitle: 'Live maps will be connected in a later step',
+                onTap: () => onChoose('Live location'),
               ),
             ],
           ),
         ),
       ],
-    );
-  }
-}
-
-class _LocationMapUnavailable extends StatelessWidget {
-  const _LocationMapUnavailable();
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 555,
-      child: DecoratedBox(
-        decoration: const BoxDecoration(color: Color(0xFF202329)),
-        child: Stack(
-          children: [
-            CustomPaint(size: Size.infinite, painter: _MapPatternPainter()),
-            Positioned.fill(child: ColoredBox(color: Colors.black54)),
-            Align(
-              alignment: Alignment.topCenter,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 18),
-                child: Container(width: 102, height: 6, decoration: BoxDecoration(color: const Color(0xFF8F949A), borderRadius: BorderRadius.circular(8))),
-              ),
-            ),
-            const Align(
-              alignment: Alignment.topCenter,
-              child: Padding(
-                padding: EdgeInsets.only(top: 52),
-                child: Text('Location', style: TextStyle(fontSize: 34, fontWeight: FontWeight.w700)),
-              ),
-            ),
-            Positioned.fill(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(Icons.location_off_rounded, size: 58, color: Color(0xFFCACBD0)),
-                  SizedBox(height: 30),
-                  Text('Location is turned off', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w600)),
-                  SizedBox(height: 12),
-                  Padding(padding: EdgeInsets.symmetric(horizontal: 48), child: Text('Turn on device location to share where you\nare.', textAlign: TextAlign.center, style: TextStyle(fontSize: 20, color: Color(0xFF9C9EA5), height: 1.4))),
-                  SizedBox(height: 56),
-                  Text('Open location settings', style: TextStyle(fontSize: 22, color: Color(0xFF4D8DFF))),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
