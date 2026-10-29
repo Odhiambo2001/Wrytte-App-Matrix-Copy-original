@@ -144,10 +144,10 @@ class _UserAvatarState extends State<UserAvatar> {
     // Keep the last good source during ordinary rebuilds, but an explicit
     // transition to an empty source means the profile owner removed the
     // avatar. Do not let _effectiveImageUrl/_localImageFile resurrect it.
-    if (identityChanged || newImageUrl.isEmpty) {
+    if (identityChanged) {
       _lastGoodImageUrl = null;
     }
-    if (identityChanged || newLocalPath.isEmpty) {
+    if (identityChanged) {
       _lastGoodLocalImagePath = null;
     }
     _rememberStableSources();
@@ -253,6 +253,7 @@ class _UserAvatarState extends State<UserAvatar> {
           width: widget.size,
           height: widget.size,
           fit: BoxFit.cover,
+          gaplessPlayback: true,
           errorBuilder: (context, error, stackTrace) {
             debugPrint(
               '[UserAvatar] local image load failed path="${localFile.path}" error=$error',
@@ -376,6 +377,7 @@ class _UserAvatarState extends State<UserAvatar> {
             width: widget.size,
             height: widget.size,
             fit: BoxFit.cover,
+            gaplessPlayback: true,
           );
         },
         httpHeaders: _authHeaders(

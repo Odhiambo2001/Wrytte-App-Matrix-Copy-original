@@ -1657,13 +1657,16 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     // Prefer the canonical profile/cache avatar whenever available. Contact
     // and room values may be stale and caused the old avatar to render first
     // before the profile refresh replaced it.
-    final avatar = blockedByPeer
-        ? null
-        : profileAvatar ??
-              contactAvatar ??
-              matrixAvatar ??
-              existingAvatar ??
-              identityAvatar;
+    // Keep the canonical avatar separate from the privacy display decision.
+    // Block state can still be hydrating during startup; that must not erase
+    // a valid avatar from the contact, conversation, or identity caches.
+    final storedAvatar =
+        profileAvatar ??
+        contactAvatar ??
+        matrixAvatar ??
+        existingAvatar ??
+        identityAvatar;
+    final avatar = blockedByPeer ? null : storedAvatar;
     if ((avatar ?? '').trim().isNotEmpty &&
         avatar?.trim() != conv.otherUserAvatar?.trim()) {
       unawaited(
@@ -1679,7 +1682,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             ownerUserId: _currentUserId,
             wrytteUserId: profileUid,
             phone: profile.phone.isNotEmpty ? profile.phone : phone,
-            avatarUrl: profile.moduleProfileLoaded ? (avatar ?? '') : avatar,
+            avatarUrl: profile.moduleProfileLoaded
+                ? (storedAvatar ?? '')
+                : storedAvatar,
             bio: profile.bio,
           );
     if (refreshedSavedContact != null) {
@@ -1718,7 +1723,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     );
 
     if (resolvedName.trim().isNotEmpty ||
-        (avatar ?? '').trim().isNotEmpty ||
+        (storedAvatar ?? '').trim().isNotEmpty ||
         profile?.moduleProfileLoaded == true) {
       await ChatLocalDb.instance.updateConversationUserInfo(
         conversationId: conv.id,
@@ -1726,10 +1731,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
         // The saved contact name is resolved locally and will be reapplied by
         // _enrichSavedContactNames on the next paint.
         name: contactName.isNotEmpty ? contactName : null,
-        avatar: avatar,
+        avatar: storedAvatar,
         clearAvatar:
-            (profile?.moduleProfileLoaded == true && avatar == null) ||
-            (avatar == null &&
+            (profile?.moduleProfileLoaded == true && storedAvatar == null) ||
+            (storedAvatar == null &&
                 ContactAvatarSanitizer.sanitizeAvatarUrl(
                       conv.otherUserAvatar,
                     ) ==
@@ -1744,7 +1749,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             : _cleanHumanName(matrixProfile?.$1).isNotEmpty
             ? _cleanHumanName(matrixProfile?.$1)
             : null,
-        avatarUrl: avatar,
+        avatarUrl: storedAvatar,
         bio: profile?.bio,
       );
       _cacheIdentity(identity);
@@ -1757,9 +1762,10 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             : _cleanHumanName(matrixProfile?.$1).isNotEmpty
             ? _cleanHumanName(matrixProfile?.$1)
             : null,
-        avatarUrl: avatar,
+        avatarUrl: storedAvatar,
         bio: profile?.bio,
-        clearAvatar: profile?.moduleProfileLoaded == true && avatar == null,
+        clearAvatar:
+            profile?.moduleProfileLoaded == true && storedAvatar == null,
         clearBio: profile?.moduleProfileLoaded == true,
       );
     }

@@ -234,11 +234,12 @@ class AvatarPreloadService {
     final newResolved = _resolveAvatarUrl(newUrl);
     if (newResolved.isEmpty) return;
 
+    // Evict only the old resource. Evicting the new resource immediately
+    // before warming it creates an avoidable placeholder/download window.
     final evictTargets = <String>{
-      if (oldResolved.isNotEmpty) oldResolved,
-      if (oldResolved.isNotEmpty) _stripVersion(oldResolved),
-      newResolved,
-      _stripVersion(newResolved),
+      if (oldResolved.isNotEmpty && oldResolved != newResolved) oldResolved,
+      if (oldResolved.isNotEmpty && oldResolved != newResolved)
+        _stripVersion(oldResolved),
     }..removeWhere((url) => url.isEmpty);
 
     for (final url in evictTargets) {
