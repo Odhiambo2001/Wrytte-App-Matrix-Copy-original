@@ -257,23 +257,19 @@ class BlockStateService {
         }
         if (event.type == blockedEventType) {
           unawaited(
-            _applyBlockEvent(
-              () => recordBlockedBy({
-                'blocked_by':
-                    event.content['blocked_by']?.toString() ?? event.senderId,
-                'blocked_user_id': _client.userID,
-                'room_id': event.content['room_id']?.toString() ?? roomId,
-                'blocked_at':
-                    event.content['timestamp']?.toString() ??
-                    event.originServerTs.toUtc().toIso8601String(),
-              }),
-            ),
+            recordBlockedBy({
+              'blocked_by':
+                  event.content['blocked_by']?.toString() ?? event.senderId,
+              'blocked_user_id': _client.userID,
+              'room_id': event.content['room_id']?.toString() ?? roomId,
+              'blocked_at':
+                  event.content['timestamp']?.toString() ??
+                  event.originServerTs.toUtc().toIso8601String(),
+            }),
           );
         } else if (event.type == unblockedEventType) {
           unawaited(
-            _applyBlockEvent(
-              () => removeBlockedBy(blockedBy: event.senderId, roomId: roomId),
-            ),
+            removeBlockedBy(blockedBy: event.senderId, roomId: roomId),
           );
         }
       }
@@ -532,6 +528,18 @@ class BlockStateService {
     debugPrint(
       '[BlockState] persisting BBB receiver="${_client.userID}" entry=$entry',
     );
+    // Publish the privacy decision before account-data persistence. The
+    // account-data write is durable storage, not a prerequisite for hiding
+    // private profile data already present in the UI.
+    final currentEntries = _entries(_bbb)
+      ..removeWhere(
+        (e) =>
+            e['blocked_by'] == entry['blocked_by'] &&
+            e['room_id'] == entry['room_id'],
+      )
+      ..add(Map<String, dynamic>.from(entry));
+    _bbb = <String, dynamic>{'entries': currentEntries};
+    revision.value++;
     await _update(bbbType, _bbb, (entries) {
       entries.removeWhere(
         (e) =>
@@ -553,6 +561,15 @@ class BlockStateService {
     debugPrint(
       '[BlockState][DIAG] removeBlockedBy blockedBy="$blockedBy" room="$roomId"',
     );
+    final changed = _entries(_bbb).length;
+    final remaining = _entries(_bbb)
+      ..removeWhere(
+        (e) => e['blocked_by'] == blockedBy && e['room_id'] == roomId,
+      );
+    if (remaining.length != changed) {
+      _bbb = <String, dynamic>{'entries': remaining};
+      revision.value++;
+    }
     await _update(bbbType, _bbb, (entries) {
       entries.removeWhere(
         (e) => e['blocked_by'] == blockedBy && e['room_id'] == roomId,
