@@ -144,6 +144,7 @@ class ChatHeader extends StatelessWidget {
                 ),
               ),
               SizedBox(width: metrics.controlGap),
+              SizedBox(width: metrics.controlGap),
               WrytteGlassIconButton(
                 semanticLabel: config.callsAvailable
                     ? 'Call options'

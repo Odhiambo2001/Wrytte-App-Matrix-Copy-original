@@ -763,6 +763,10 @@ class _ChatComposerState extends State<ChatComposer> {
 
                                             ),
 
+                                        border: InputBorder.none,
+                                        enabledBorder: InputBorder.none,
+                                        focusedBorder: InputBorder.none,
+
                                       ),
 
                                     ),
@@ -880,6 +884,8 @@ class _ChatComposerState extends State<ChatComposer> {
                                     ),
 
                                   ),
+
+
 
                                 ],
 

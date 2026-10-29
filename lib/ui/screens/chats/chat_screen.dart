@@ -51,6 +51,9 @@ import 'package:wrytte/data/services/camera_session_manager.dart';
 import 'package:wrytte/data/services/device_camera_service.dart';
 import 'package:wrytte/ui/chat/widgets/chat_composer.dart';
 import 'package:wrytte/ui/chat/widgets/chat_action_toast.dart';
+import 'package:wrytte/ui/core/routing/expanding_surface_route.dart';
+import 'package:wrytte/ui/media/models/chat_media_editor_result.dart';
+import 'package:wrytte/ui/media/views/chat_media_editor_view.dart';
 import 'package:wrytte/ui/chat/models/chat_screen_config.dart';
 import 'package:wrytte/ui/chat/widgets/chat_header.dart';
 import 'package:wrytte/ui/chat/widgets/chat_encryption_notice.dart';
@@ -528,6 +531,8 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _receiverOnline = false;
   ChatMessage? _replyingTo;
   ChatMessage? _editingMessage;
+  String? _editingMediaPath;
+  bool _editingAsNewMedia = false;
   double? _stableStatusBarH;
   String? _stableHeaderAvatarUrl;
   String? _highlightedMessageId;
@@ -2322,10 +2327,25 @@ class _ChatScreenState extends State<ChatScreen> {
           'textEmpty=${text.isEmpty}',
     );
 
-    if (text.isEmpty || _isSending) return;
+    if ((text.isEmpty &&
+            !(_editingMessage != null &&
+                _editingAsNewMedia &&
+                _editingMediaPath?.isNotEmpty == true)) ||
+        _isSending) {
+      return;
+    }
     if (_isDeletedConversation) return;
     final editing = _editingMessage;
     if (editing != null) {
+      if (_editingAsNewMedia && _editingMediaPath != null) {
+        final path = _editingMediaPath!;
+        _editingMessage = null;
+        _editingMediaPath = null;
+        _editingAsNewMedia = false;
+        _controller.clear();
+        await _sendPickedAttachment(path, 'image', caption: text);
+        return;
+      }
       await _sendEditedMessage(editing, text);
       return;
     }
@@ -3517,7 +3537,69 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       case MessageActionType.edit:
       case MessageActionType.editMedia:
+        if (action.type == MessageActionType.editMedia) {
+          await _editImageAsNewMedia(message);
+        }
         break;
+    }
+  }
+
+  Future<void> _editImageAsNewMedia(ChatMessage message) async {
+    final source = message.attachmentUrl?.trim() ?? '';
+    if (source.isEmpty) {
+      _showChatNotice('Could not open photo editor');
+      return;
+    }
+    try {
+      String? localPath;
+      if (source.startsWith('assets/')) {
+        final data = await rootBundle.load(source);
+        final directory = await Directory.systemTemp.createTemp('wrytte_edit_');
+        final extension = source.split('.').last.toLowerCase();
+        final file = File('${directory.path}/image.$extension');
+        await file.writeAsBytes(data.buffer.asUint8List(), flush: true);
+        localPath = file.path;
+      } else if (await File(source).exists()) {
+        localPath = source;
+      } else {
+        final cached = await AttachmentLocalStore.instance.existingComplete(
+          source: source,
+          fileName: 'image',
+        );
+        final copy = cached ??
+            (await AttachmentLocalStore.instance.ensureComplete(
+              source: source,
+              fileName: 'image',
+            )).file;
+        localPath = copy.path;
+      }
+      if (!await File(localPath!).exists()) {
+        _showChatNotice('Could not open photo editor');
+        return;
+      }
+      final repository = MediaLibraryRepositoryImpl(DeviceMediaLibraryService());
+      final result = await Navigator.of(context, rootNavigator: true)
+          .push<ChatMediaEditorResult>(
+            ExpandingSurfaceRoute<ChatMediaEditorResult>(
+              animationsDisabled: MediaQuery.disableAnimationsOf(context),
+              builder: (context, animation) => ChatMediaEditorView.file(
+                path: localPath!,
+                repository: repository,
+                width: message.mediaWidth ?? 0,
+                height: message.mediaHeight ?? 0,
+              ),
+            ),
+          );
+      if (!mounted || result == null) return;
+      setState(() {
+        _editingMessage = message;
+        _editingMediaPath = result.editedFilePath ?? result.originalFilePath;
+        _editingAsNewMedia = true;
+      });
+    } catch (error, stackTrace) {
+      debugPrint('Could not edit chat photo: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (mounted) _showChatNotice('Could not open photo editor');
     }
   }
 
@@ -3577,15 +3659,7 @@ class _ChatScreenState extends State<ChatScreen> {
   List<MessageAction> _selectionDeleteActions() {
     final selected = _selectedMessages;
     final canDeleteForEveryone = selected.isNotEmpty &&
-        selected.every(
-          (message) =>
-              _isMine(message) &&
-              !message.id.startsWith('blocked_') &&
-              !message.id.startsWith('opt_') &&
-              !message.isDeleted &&
-              message.status != MessageStatus.sending &&
-              message.status != MessageStatus.failed,
-        );
+        selected.every(_isMine);
     return [
       if (canDeleteForEveryone)
         const MessageAction(
@@ -4227,7 +4301,8 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               Column(
                 children: [
-                  _buildAppBar(statusBarH),
+                  if (_selectedMessageIds.isEmpty)
+                    _buildAppBar(statusBarH),
                   PinnedEventsStrip(
                     pinnedEventIds: _visiblePinnedEventIds,
                     events: _messages,
@@ -4299,12 +4374,24 @@ class _ChatScreenState extends State<ChatScreen> {
                                     ? null
                                     : () => setState(() => _replyingTo = null),
                                 isEditing: _editingMessage != null,
-                                editingMediaSource: null,
-                                editingMediaType: null,
+                                editingMediaSource: _editingMediaPath,
+                                editingMediaType: _editingMediaPath == null
+                                    ? null
+                                    : 'image',
+                                onReplaceEditingMedia:
+                                    _editingMessage == null
+                                        ? null
+                                        : () => _editImageAsNewMedia(
+                                            _editingMessage!,
+                                          ),
                                 onCancelEdit: _editingMessage == null
                                     ? null
                                     : () {
-                                        setState(() => _editingMessage = null);
+                                        setState(() {
+                                          _editingMessage = null;
+                                          _editingMediaPath = null;
+                                          _editingAsNewMedia = false;
+                                        });
                                         _controller.clear();
                                       },
                                 onVoiceRecorded: (recording) {
@@ -4372,7 +4459,7 @@ class _ChatScreenState extends State<ChatScreen> {
               if (_selectedMessageIds.isNotEmpty &&
                   _selectionActionMenu != _SelectionActionMenu.none)
                 PositionedDirectional(
-                  top: statusBarH + kToolbarHeight + 8,
+                  top: appBarH + 4,
                   end: 12,
                   width: MessageActionMenu.widthFor(
                     context,
@@ -4394,6 +4481,12 @@ class _ChatScreenState extends State<ChatScreen> {
                         unawaited(_handleSelectionMenuAction(action)),
                   ),
                 ),
+
+              PositionedDirectional(
+                end: ChatLayoutMetrics.of(context).horizontalPadding,
+                bottom: 120 + keyboardInset,
+                child: _buildScrollToLatestControl(),
+              ),
 
               // ── debug overlay ─────────────────────────────────────────────
               if (_showDebug) _buildDebugOverlay(appBarH),
@@ -5329,7 +5422,10 @@ class _ChatScreenState extends State<ChatScreen> {
         contactName: contactParts[1].trim().isEmpty
             ? 'Contact'
             : contactParts[1].trim(),
-        contactPhone: contactParts.sublist(2).join('\n').trim(),
+        contactPhone: contactParts[2].trim(),
+        contactUserId: contactParts.length >= 4 && contactParts[3].trim().isNotEmpty
+            ? contactParts[3].trim()
+            : null,
         deliveryState: _mapDeliveryState(isMine ? msg.status : null),
       );
       bubble = ContactMessageBubble(
@@ -6742,11 +6838,6 @@ class _ChatScreenState extends State<ChatScreen> {
               _controller.clear();
             },
           ),
-              PositionedDirectional(
-                end: ChatLayoutMetrics.of(context).horizontalPadding,
-                bottom: 8.0,
-                child: _buildScrollToLatestControl(),
-              ),
         ],
       ),
     );

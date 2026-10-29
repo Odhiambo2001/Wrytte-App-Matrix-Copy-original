@@ -1115,13 +1115,9 @@ class _ContactActions
 
   Widget build(BuildContext context) {
 
-    final secondaryLabel =
-
-        message.isMine
-
-                          ? 'Add contact'
-
-        : 'Add contact';
+    // A shared profile is already a resolvable Wrytte user. It should not be
+    // treated as an address-book contact on either side of the conversation.
+    final secondaryLabel = 'View profile';
 
     return SizedBox(
 
