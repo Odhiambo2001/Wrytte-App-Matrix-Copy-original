@@ -882,7 +882,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _peerIsRedacted() {
     if (_isGroupChat) return false;
-    final peerId = (_canonicalDirectPeerId() ?? widget.receiverId).trim();
+    // Use the same peer identity as the header avatar redaction decision.
+    // Presence and avatar must switch together when BBB is received.
+    final peerId =
+        (_receiverIdentity?.matrixUserId ??
+                _canonicalDirectPeerId() ??
+                widget.receiverId)
+            .trim();
     final roomId = (_resolvedConversationId ?? widget.conversationId).trim();
     if (peerId.isEmpty) return false;
     return BlockStateService.instance.shouldHidePeerAvatar(
@@ -3522,7 +3528,15 @@ class _ChatScreenState extends State<ChatScreen> {
   List<MessageAction> _selectionDeleteActions() {
     final selected = _selectedMessages;
     final canDeleteForEveryone = selected.isNotEmpty &&
-        selected.every((message) => _isMine(message));
+        selected.every(
+          (message) =>
+              _isMine(message) &&
+              !message.id.startsWith('blocked_') &&
+              !message.id.startsWith('opt_') &&
+              !message.isDeleted &&
+              message.status != MessageStatus.sending &&
+              message.status != MessageStatus.failed,
+        );
     return [
       if (canDeleteForEveryone)
         const MessageAction(
@@ -3557,6 +3571,11 @@ class _ChatScreenState extends State<ChatScreen> {
       await _deleteSelectedMessages();
       return;
     } else if (action.label == 'Delete for everyone') {
+      // Blocked messages are local-only account-data entries. They never
+      // became Matrix events, so they must not be redacted for everyone.
+      if (selected.any((message) => message.id.startsWith('blocked_'))) {
+        return;
+      }
       for (final message in selected) {
         await _chat.deleteMessageForEveryone(message);
       }
@@ -5551,6 +5570,7 @@ class _ChatScreenState extends State<ChatScreen> {
       hasAutoDelete: AutoDeleteService.instance.showIconForRoom(
         _resolvedConversationId ?? widget.conversationId,
       ),
+      suppressAvatar: !isGroupChat && blockedByPeer,
       onBack: () => Navigator.pop(context),
       onCallPressed: () {
         if (_isGroupChat) {

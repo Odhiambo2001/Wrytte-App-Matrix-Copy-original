@@ -20,6 +20,7 @@ class ChatHeader extends StatelessWidget {
     this.avatarCacheIdentity,
     this.isDeleted = false,
     this.hasAutoDelete = false,
+    this.suppressAvatar = false,
   });
 
   final ChatScreenConfig config;
@@ -31,6 +32,7 @@ class ChatHeader extends StatelessWidget {
   final String? avatarCacheIdentity;
   final bool isDeleted;
   final bool hasAutoDelete;
+  final bool suppressAvatar;
 
   @override
   Widget build(BuildContext context) {
@@ -79,6 +81,7 @@ class ChatHeader extends StatelessWidget {
                                   cacheIdentity: avatarCacheIdentity,
                                   name: config.title,
                                   isDeleted: isDeleted,
+                                  suppressAvatar: suppressAvatar,
                                 ),
                                 if (hasAutoDelete)
                                   Positioned(

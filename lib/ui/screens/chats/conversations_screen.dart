@@ -2752,6 +2752,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
     final name = _sanitize(_conversationTitle(conv));
     final avatar = _avatarForConversation(conv);
     final localAvatarPath = _localAvatarPathForConversation(conv);
+    final suppressAvatar = !_isGroupConversation(conv) &&
+        BlockStateService.instance.shouldHidePeerAvatar(
+          _profileUidForConversation(conv) ?? conv.otherUserId,
+          roomId: conv.id,
+        );
     final selected = _selectedIds.contains(conv.id);
     final isDeleted =
         conv.deletedAt != null ||
@@ -2780,6 +2785,7 @@ class _ConversationsScreenState extends State<ConversationsScreen>
             )
           : _directAvatarCacheIdentity(conv),
       localAvatarPath: localAvatarPath,
+      suppressAvatar: suppressAvatar,
       unreadCount: conv.unreadCount,
       isDeleted: isDeleted,
       isSelectionMode: _isSelectionMode,

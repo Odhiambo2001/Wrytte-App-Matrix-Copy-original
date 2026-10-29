@@ -20,6 +20,7 @@ class UserAvatar extends StatefulWidget {
   final String? heroTag;
   final String? cacheIdentity;
   final bool isDeleted;
+  final bool suppressAvatar;
 
   static void clearMemoryCache() => _UserAvatarState.clearMemoryCache();
 
@@ -37,6 +38,7 @@ class UserAvatar extends StatefulWidget {
     this.heroTag,
     this.cacheIdentity,
     this.isDeleted = false,
+    this.suppressAvatar = false,
   });
 
   @override
@@ -134,6 +136,11 @@ class _UserAvatarState extends State<UserAvatar> {
     super.didUpdateWidget(oldWidget);
 
     _loadGeneration++;
+
+    if (widget.suppressAvatar) {
+      _lastGoodImageUrl = null;
+      _lastGoodLocalImagePath = null;
+    }
 
     final identityChanged = oldWidget.cacheIdentity != widget.cacheIdentity;
     final oldImageUrl = oldWidget.imageUrl?.trim() ?? '';
@@ -239,6 +246,10 @@ class _UserAvatarState extends State<UserAvatar> {
   @override
   Widget build(BuildContext context) {
     Widget avatarWidget;
+
+    if (widget.suppressAvatar) {
+      return _wrapAvatar(_buildPlaceholder());
+    }
 
     if (widget.isDeleted) {
       return _wrapAvatar(_buildDeletedGhost());

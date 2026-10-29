@@ -2040,6 +2040,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                                       cacheIdentity:
                                           'user:${(widget.uid ?? _profile?.uid ?? '').trim().toLowerCase()}',
                                       name: displayName,
+                                      suppressAvatar: _redactedByBlock,
                                     ),
                                   ),
                             if (AutoDeleteService.instance.showIconForRoom(
