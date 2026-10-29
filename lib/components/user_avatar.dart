@@ -170,6 +170,14 @@ class _UserAvatarState extends State<UserAvatar> {
         _lastGoodLocalImagePath = localPath;
       }
     }
+
+    if (_lastGoodLocalImagePath == null && imageUrl.isNotEmpty) {
+      final cachedPath = AvatarPreloadService.localPathSync(imageUrl);
+      if (cachedPath != null) {
+        _knownGoodLocalPaths.add(cachedPath);
+        _lastGoodLocalImagePath = cachedPath;
+      }
+    }
   }
 
   void _warmAuthToken() {
@@ -254,6 +262,8 @@ class _UserAvatarState extends State<UserAvatar> {
           height: widget.size,
           fit: BoxFit.cover,
           gaplessPlayback: true,
+          cacheWidth: (widget.size * MediaQuery.devicePixelRatioOf(context))
+              .round(),
           errorBuilder: (context, error, stackTrace) {
             debugPrint(
               '[UserAvatar] local image load failed path="${localFile.path}" error=$error',
@@ -378,6 +388,8 @@ class _UserAvatarState extends State<UserAvatar> {
             height: widget.size,
             fit: BoxFit.cover,
             gaplessPlayback: true,
+            cacheWidth: (widget.size * MediaQuery.devicePixelRatioOf(context))
+                .round(),
           );
         },
         httpHeaders: _authHeaders(

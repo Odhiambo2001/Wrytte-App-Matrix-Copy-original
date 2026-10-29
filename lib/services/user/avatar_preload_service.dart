@@ -26,6 +26,41 @@ class AvatarPreloadService {
   static final Map<String, int> _retryAttempts = {};
   static final Map<String, Timer> _retryTimers = {};
   static const Duration _failureCooldown = Duration(minutes: 5);
+  static String? _persistentCacheDirectory;
+  static final Set<String> _knownPersistentKeys = <String>{};
+
+  /// Restores the persistent avatar index before the first screen paints.
+  /// The index makes the URL -> local-file decision synchronous for cold starts.
+  static Future<void> initialize() async {
+    try {
+      final root = await getApplicationSupportDirectory();
+      final directory = Directory('${root.path}/wrytte_avatar_cache');
+      _persistentCacheDirectory = directory.path;
+      if (!await directory.exists()) return;
+      await for (final entity in directory.list()) {
+        if (entity is! File || !entity.path.endsWith('.avatar')) continue;
+        final name = entity.uri.pathSegments.last;
+        final key = name.substring(0, name.length - '.avatar'.length);
+        if (key.isNotEmpty && await entity.length() > 0) {
+          _knownPersistentKeys.add(key);
+        }
+      }
+      debugPrint(
+        '[AvatarCache] index_ready entries=${_knownPersistentKeys.length}',
+      );
+    } catch (error) {
+      debugPrint('[AvatarCache] index_failed error=$error');
+    }
+  }
+
+  static String? localPathSync(String? rawUrl) {
+    final url = _resolveAvatarUrl(rawUrl);
+    final directory = _persistentCacheDirectory;
+    if (url.isEmpty || directory == null) return null;
+    final key = _cacheKey(url);
+    if (!_knownPersistentKeys.contains(key)) return null;
+    return '$directory/$key.avatar';
+  }
 
   static void clearMemoryCache() {
     _inFlight.clear();
@@ -37,6 +72,9 @@ class AvatarPreloadService {
     _retryAttempts.clear();
     cacheRevision.value++;
   }
+
+  static String _cacheKey(String url) =>
+      sha256.convert(utf8.encode(_stripVersion(url))).toString();
 
   static Future<void> warm(String? rawUrl, {String? cacheIdentity}) async {
     final url = _resolveAvatarUrl(rawUrl);
@@ -101,6 +139,7 @@ class AvatarPreloadService {
     if (url.isEmpty) return null;
     final file = await _cacheFile(url);
     if (await file.exists() && await file.length() > 0) {
+      _rememberPersistentFile(url);
       debugPrint(
         '[AvatarCache] local_hit source=persistent path="${file.path}"',
       );
@@ -122,6 +161,7 @@ class AvatarPreloadService {
   }) async {
     final file = await _cacheFile(url);
     if (await file.exists() && await file.length() > 0) {
+      _rememberPersistentFile(url);
       debugPrint('[AvatarCache] local_hit url="$url" path="${file.path}"');
       return true;
     }
@@ -132,6 +172,7 @@ class AvatarPreloadService {
       await temp.rename(file.path);
       if (!await file.exists() || await file.length() == 0) return false;
       cacheRevision.value++;
+      _rememberPersistentFile(url);
       debugPrint(
         '[AvatarCache] promoted source=flutter_disk path="${file.path}"',
       );
@@ -170,6 +211,7 @@ class AvatarPreloadService {
         return false;
       }
       cacheRevision.value++;
+      _rememberPersistentFile(url);
       debugPrint(
         '[AvatarCache] saved bytes=${response.bodyBytes.length} path="${file.path}"',
       );
@@ -224,6 +266,10 @@ class AvatarPreloadService {
     final directoryPath = Directory('${directory.path}/wrytte_avatar_cache');
     await directoryPath.create(recursive: true);
     return File('${directoryPath.path}/$key.avatar');
+  }
+
+  static void _rememberPersistentFile(String url) {
+    _knownPersistentKeys.add(_cacheKey(url));
   }
 
   static Future<void> replace({

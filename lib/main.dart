@@ -41,6 +41,7 @@ import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
 import 'package:wrytte/services/face/android_tflite_image_session.dart';
 
 import 'firebase_options.dart';
@@ -149,9 +150,10 @@ void _startDeferredWarmups() {
   unawaited(MatrixClientService.instance.ensureInitialized());
 }
 
-void main() {
+Future<void> main() async {
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+  await AvatarPreloadService.initialize();
   unawaited(
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
   );
