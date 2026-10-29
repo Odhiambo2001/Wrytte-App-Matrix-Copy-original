@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:wrytte/services/user/user_profile_service.dart';
 
 import 'package:wrytte/ui/chat/models/chat_message_presentation.dart';
 
@@ -118,6 +119,31 @@ class ContactMessageBubble extends StatelessWidget {
   @override
 
   Widget build(BuildContext context) {
+    final userId = message.contactUserId?.trim() ?? '';
+    if (userId.isEmpty || message.contactAvatarUrl?.trim().isNotEmpty == true) {
+      return _buildBubble(context, message);
+    }
+
+    return FutureBuilder<UserProfile?>(
+      future: UserProfileService.instance.getProfileByUid(userId),
+      builder: (context, snapshot) {
+        final profile = snapshot.data;
+        final avatar = profile?.profileImage.trim();
+        if (avatar == null || avatar.isEmpty) {
+          return _buildBubble(context, message);
+        }
+        return _buildBubble(
+          context,
+          message.copyWith(contactAvatarUrl: avatar),
+        );
+      },
+    );
+  }
+
+  Widget _buildBubble(
+    BuildContext context,
+    ChatMessagePresentation message,
+  ) {
 
     final name = _cleanName(
 

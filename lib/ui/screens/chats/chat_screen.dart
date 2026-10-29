@@ -5426,6 +5426,9 @@ class _ChatScreenState extends State<ChatScreen> {
         contactUserId: contactParts.length >= 4 && contactParts[3].trim().isNotEmpty
             ? contactParts[3].trim()
             : null,
+        contactAvatarUrl: contactParts.length >= 5 && contactParts[4].trim().isNotEmpty
+            ? contactParts[4].trim()
+            : null,
         deliveryState: _mapDeliveryState(isMine ? msg.status : null),
       );
       bubble = ContactMessageBubble(

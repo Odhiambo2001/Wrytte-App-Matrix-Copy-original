@@ -3002,7 +3002,8 @@ class _ProfileScreenState extends State<ProfileScreen>
         '[wrytte-contact]\n'
         '${sharedName.isEmpty ? sharedPhone : sharedName}\n'
         '$sharedPhone\n'
-        '${_profileTargetUserId ?? ''}';
+        '${_profileTargetUserId ?? ''}\n'
+        '${_profileAvatarUrl() ?? ''}';
 
     String? singleRecipientRoomId;
     String? singleRecipientId;
