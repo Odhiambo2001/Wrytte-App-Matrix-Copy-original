@@ -5,6 +5,7 @@ import 'package:wrytte/domain/models/attachment_contact.dart';
 import 'package:wrytte/domain/models/picked_attachment_file.dart';
 import 'package:wrytte/domain/models/poll_attachment_draft.dart';
 import 'package:wrytte/ui/core/themes/wrytte_theme.dart';
+import 'package:wrytte/ui/core/widgets/wrytte_svg_icon.dart';
 
 const _contentPadding = EdgeInsets.fromLTRB(18, 78, 18, 112);
 
@@ -16,6 +17,7 @@ class FileAttachmentContent extends StatelessWidget {
     required this.selectedPaths,
     required this.loading,
     required this.onChooseFiles,
+    required this.onChooseGallery,
     required this.onChooseAudio,
     required this.onToggle,
   });
@@ -25,6 +27,7 @@ class FileAttachmentContent extends StatelessWidget {
   final Set<String> selectedPaths;
   final bool loading;
   final VoidCallback onChooseFiles;
+  final VoidCallback onChooseGallery;
   final VoidCallback onChooseAudio;
   final ValueChanged<PickedAttachmentFile> onToggle;
 
@@ -37,36 +40,41 @@ class FileAttachmentContent extends StatelessWidget {
           padding: _contentPadding,
           sliver: SliverList.list(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: _PickerAction(
-                      icon: Icons.folder_open_rounded,
-                      label: 'Choose files',
-                      onTap: loading ? null : onChooseFiles,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _PickerAction(
-                      icon: Icons.audio_file_rounded,
-                      label: 'Choose audio',
-                      onTap: loading ? null : onChooseAudio,
-                    ),
-                  ),
-                ],
+              _FileSourceRow(
+                asset: 'assets/svg/Storage icon.svg',
+                title: 'Internal storage',
+                subtitle: 'Browse your system files',
+                onTap: loading ? null : onChooseFiles,
               ),
+              _FileSourceRow(
+                asset: 'assets/svg/Gallery icon Blue.svg',
+                title: 'Gallery',
+                subtitle: 'Send original-quality photos or videos',
+                onTap: loading ? null : onChooseGallery,
+              ),
+              _FileSourceRow(
+                asset: 'assets/svg/Audio icon.svg',
+                title: 'Audio',
+                subtitle: 'Select audio or music files',
+                onTap: loading ? null : onChooseAudio,
+              ),
+              const SizedBox(height: 18),
+              const _SectionLabel('Recent files'),
+              const SizedBox(height: 28),
               if (loading) ...[
                 const SizedBox(height: 20),
                 const LinearProgressIndicator(minHeight: 2),
               ],
               if (files.isEmpty && !loading) ...[
-                const SizedBox(height: 56),
-                const _EmptyAttachmentState(
-                  icon: Icons.description_outlined,
-                  title: 'Share a file',
-                  message:
-                      'Choose documents or audio from your device. Files stay local until you send them.',
+                const Center(
+                  child: Text(
+                    'Choose a source above to browse files',
+                    style: TextStyle(
+                      color: WrytteColors.textMuted,
+                      fontFamily: WrytteTypography.primaryFontFamily,
+                      fontSize: 14,
+                    ),
+                  ),
                 ),
               ] else ...[
                 const SizedBox(height: 24),
@@ -152,44 +160,32 @@ class _ContactAttachmentContentState extends State<ContactAttachmentContent> {
           padding: _contentPadding,
           sliver: SliverList.list(
             children: [
-              TextField(
-                onChanged: (value) => setState(() => _query = value),
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  hintText: 'Search contacts',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  filled: true,
-                  fillColor: WrytteColors.surfaceRaised,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(22),
-                    borderSide: BorderSide.none,
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(22),
-                    borderSide: BorderSide(
-                      color: Colors.white.withValues(alpha: .07),
+              if (!widget.accessDenied)
+                TextField(
+                  onChanged: (value) => setState(() => _query = value),
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: 'Search contacts',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    filled: true,
+                    fillColor: WrytteColors.surfaceRaised,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide.none,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: .07),
+                      ),
                     ),
                   ),
                 ),
-              ),
               if (widget.loading) ...[
                 const SizedBox(height: 22),
                 const Center(child: CircularProgressIndicator()),
               ] else if (widget.accessDenied) ...[
-                const SizedBox(height: 44),
-                const _EmptyAttachmentState(
-                  icon: Icons.contacts_outlined,
-                  title: 'Contacts access is off',
-                  message:
-                      'Allow contact access to choose exactly who you want to share.',
-                ),
-                const SizedBox(height: 18),
-                Center(
-                  child: FilledButton.tonal(
-                    onPressed: widget.onOpenSettings,
-                    child: const Text('Open settings'),
-                  ),
-                ),
+                _ContactsPermissionState(onOpenSettings: widget.onOpenSettings),
               ] else if (contacts.isEmpty) ...[
                 const SizedBox(height: 44),
                 _EmptyAttachmentState(
@@ -225,6 +221,57 @@ class _ContactAttachmentContentState extends State<ContactAttachmentContent> {
   }
 }
 
+class _ContactsPermissionState extends StatelessWidget {
+  const _ContactsPermissionState({required this.onOpenSettings});
+
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    return SizedBox(
+      height: 650,
+      child: Row(
+        children: [
+          Expanded(
+            child: Center(
+              child: Text(
+                'Allow contacts access to see people from your\nphone.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: WrytteColors.textSecondary,
+                  fontFamily: WrytteTypography.primaryFontFamily,
+                  fontSize: 16,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 20,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                for (final letter in letters.split(''))
+                  Text(
+                    letter,
+                    style: const TextStyle(
+                      color: WrytteColors.primary,
+                      fontFamily: WrytteTypography.primaryFontFamily,
+                      fontSize: 14,
+                      height: 1.7,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class LocationAttachmentContent extends StatelessWidget {
   const LocationAttachmentContent({
     super.key,
@@ -241,15 +288,19 @@ class LocationAttachmentContent extends StatelessWidget {
       controller: scrollController,
       slivers: [
         SliverPadding(
-          padding: _contentPadding,
+          padding: const EdgeInsets.only(top: 78),
           sliver: SliverList.list(
             children: [
               Container(
                 height: 190,
+                margin: const EdgeInsets.symmetric(horizontal: 18),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(24),
                   gradient: const LinearGradient(
-                    colors: [Color(0xFF162734), Color(0xFF102019)],
+                    colors: [
+                      WrytteColors.surfaceRaised,
+                      WrytteColors.surfaceRaised,
+                    ],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
@@ -257,40 +308,154 @@ class LocationAttachmentContent extends StatelessWidget {
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    CustomPaint(
-                      size: const Size(double.infinity, 190),
-                      painter: _MapPatternPainter(),
-                    ),
-                    const Icon(
-                      Icons.location_on_rounded,
-                      color: WrytteColors.primary,
-                      size: 48,
+                    const PositionedDirectional(
+                      start: 10,
+                      bottom: 10,
+                      child: Text(
+                        'Google',
+                        style: TextStyle(
+                          color: Color(0xFF15191E),
+                          fontFamily: WrytteTypography.primaryFontFamily,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                     PositionedDirectional(
-                      end: 12,
-                      bottom: 12,
-                      child: Chip(
-                        avatar: const Icon(Icons.map_outlined, size: 17),
-                        label: const Text('Map coming later'),
-                        side: BorderSide.none,
-                        backgroundColor: Colors.black.withValues(alpha: .45),
+                      end: 10,
+                      bottom: 10,
+                      child: Container(
+                        width: 54,
+                        height: 118,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF151A20).withValues(alpha: .72),
+                          borderRadius: BorderRadius.circular(28),
+                        ),
+                        child: const Column(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            Icon(
+                              Icons.map_outlined,
+                              color: Color(0xFF202830),
+                              size: 27,
+                            ),
+                            Icon(
+                              Icons.navigation_outlined,
+                              color: Color(0xFF202830),
+                              size: 27,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    ColoredBox(
+                      color: Colors.transparent,
+                      child: SizedBox.expand(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(
+                              Icons.location_off_rounded,
+                              color: Color(0xFFD0D2D6),
+                              size: 38,
+                            ),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'Location is turned off',
+                              style: TextStyle(
+                                fontFamily: WrytteTypography.primaryFontFamily,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                'Turn on device location to share where you are.',
+                                maxLines: 1,
+                                style: TextStyle(
+                                  color: WrytteColors.textMuted,
+                                  fontFamily: WrytteTypography.primaryFontFamily,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {},
+                              child: const Text(
+                                'Open location settings',
+                                style: TextStyle(
+                                  color: WrytteColors.primary,
+                                  fontFamily: WrytteTypography.primaryFontFamily,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 14),
-              _ActionRow(
-                icon: Icons.my_location_rounded,
-                title: 'Send current location',
-                subtitle: 'Share your position once',
+              Container(
+                color: const Color(0xFF07090C),
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 112),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  radius: 28,
+                  backgroundColor: WrytteColors.primary,
+                  child: const Icon(
+                    Icons.location_on_rounded,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                ),
+                title: const Text(
+                  'Send Selected Location',
+                  style: TextStyle(
+                    fontFamily: WrytteTypography.primaryFontFamily,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Finding your location...',
+                  style: TextStyle(
+                    color: WrytteColors.textMuted,
+                    fontFamily: WrytteTypography.primaryFontFamily,
+                    fontSize: 12,
+                  ),
+                ),
                 onTap: () => onChoose('Current location'),
-              ),
-              _ActionRow(
-                icon: Icons.location_searching_rounded,
-                title: 'Share live location',
-                subtitle: 'Live maps will be connected in a later step',
-                onTap: () => onChoose('Live location'),
+                    ),
+                    const SizedBox(height: 18),
+                    const Text(
+                'OR CHOOSE A PLACE',
+                style: TextStyle(
+                  color: WrytteColors.textSecondary,
+                  fontFamily: WrytteTypography.primaryFontFamily,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+                    ),
+                    const SizedBox(height: 48),
+                    const Text(
+                'Tap anywhere on the map to find places around that\npoint.',
+                maxLines: 2,
+                style: TextStyle(
+                  color: WrytteColors.textMuted,
+                  fontFamily: WrytteTypography.primaryFontFamily,
+                  fontSize: 14,
+                  height: 1.4,
+                ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -501,14 +666,6 @@ class _PollAttachmentContentState extends State<PollAttachmentContent> {
                   ),
                 ],
               ),
-              if (!isAddField)
-                Divider(
-                  height: .5,
-                  thickness: .5,
-                  indent: 18,
-                  endIndent: 18,
-                  color: const Color(0xFF292D35),
-                ),
             ],
           ),
         );
@@ -539,13 +696,6 @@ class _PollAttachmentContentState extends State<PollAttachmentContent> {
                       hint: 'Ask question',
                       textInputAction: TextInputAction.next,
                       onChanged: (_) => _notify(),
-                    ),
-                    Divider(
-                      height: .5,
-                      thickness: .5,
-                      indent: 18,
-                      endIndent: 18,
-                      color: const Color(0xFF292D35),
                     ),
                     _field(
                       controller: _description,
@@ -672,6 +822,49 @@ class _PickerAction extends StatelessWidget {
   }
 }
 
+class _FileSourceRow extends StatelessWidget {
+  const _FileSourceRow({
+    required this.asset,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final String asset;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(vertical: 5),
+      leading: WrytteSvgIcon(
+        asset: asset,
+        size: 38,
+        color: WrytteColors.primary,
+      ),
+      title: Text(
+        title,
+        style: const TextStyle(
+          fontFamily: WrytteTypography.primaryFontFamily,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: const TextStyle(
+          color: WrytteColors.textMuted,
+          fontFamily: WrytteTypography.primaryFontFamily,
+          fontSize: 14,
+        ),
+      ),
+      onTap: onTap,
+    );
+  }
+}
+
 class _SelectionRow extends StatelessWidget {
   const _SelectionRow({
     required this.icon,
@@ -716,7 +909,11 @@ class _SelectionRow extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                        fontFamily: WrytteTypography.primaryFontFamily,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 3),
                     Text(
@@ -724,6 +921,7 @@ class _SelectionRow extends StatelessWidget {
                       maxLines: 1,
                       style: const TextStyle(
                         color: WrytteColors.textMuted,
+                        fontFamily: WrytteTypography.primaryFontFamily,
                         fontSize: 12,
                       ),
                     ),
@@ -854,6 +1052,7 @@ class _SectionLabel extends StatelessWidget {
     text,
     style: const TextStyle(
       color: Color(0xFF9A9DA5),
+      fontFamily: WrytteTypography.primaryFontFamily,
       fontSize: 15,
       fontWeight: FontWeight.w500,
     ),
@@ -879,13 +1078,22 @@ class _EmptyAttachmentState extends StatelessWidget {
       Text(
         title,
         textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+        style: const TextStyle(
+          fontFamily: WrytteTypography.primaryFontFamily,
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+        ),
       ),
       const SizedBox(height: 7),
       Text(
         message,
         textAlign: TextAlign.center,
-        style: const TextStyle(color: WrytteColors.textMuted, height: 1.35),
+        style: const TextStyle(
+          color: WrytteColors.textMuted,
+          fontFamily: WrytteTypography.primaryFontFamily,
+          fontSize: 14,
+          height: 1.35,
+        ),
       ),
     ],
   );

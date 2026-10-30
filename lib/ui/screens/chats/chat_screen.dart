@@ -56,6 +56,7 @@ import 'package:wrytte/ui/media/models/chat_media_editor_result.dart';
 import 'package:wrytte/ui/media/views/chat_media_editor_view.dart';
 import 'package:wrytte/ui/chat/models/chat_screen_config.dart';
 import 'package:wrytte/ui/chat/widgets/chat_header.dart';
+import 'package:wrytte/ui/chat/widgets/chat_header_backdrop.dart';
 import 'package:wrytte/ui/chat/widgets/chat_encryption_notice.dart';
 import 'package:wrytte/domain/repositories/audio_recording_repository.dart';
 import 'package:wrytte/domain/repositories/camera_repository.dart';
@@ -95,6 +96,7 @@ import 'package:wrytte/ui/chat/models/chat_message_presentation.dart';
 import 'package:wrytte/ui/chat/models/message_action.dart';
 import 'package:wrytte/ui/chat/models/chat_forward_target.dart';
 import 'package:wrytte/ui/chat/widgets/image_message_bubble.dart';
+import 'package:wrytte/ui/chat/widgets/audio_message_bubble.dart';
 import 'package:wrytte/ui/chat/widgets/contact_message_bubble.dart';
 import 'package:wrytte/ui/chat/views/chat_forward_sheet.dart';
 import 'package:wrytte/ui/chat/widgets/message_actions/message_swipe_action_target.dart';
@@ -479,6 +481,8 @@ class _ChatScreenState extends State<ChatScreen> {
   OverlayEntry? _actionToastEntry;
   _SelectionActionMenu _selectionActionMenu = _SelectionActionMenu.none;
   final FocusNode _focusNode = FocusNode();
+  final GlobalKey _composerKey = GlobalKey();
+  double _composerHeight = 80.0;
 
   final ChatService _chat = ChatService();
   final ChatVideoPlaybackViewModel _videoPlayback =
@@ -2318,8 +2322,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ─── SEND TEXT ─────────────────────────────────────────────────────────────
 
+  bool _handleChatCommand(String text) {
+    final command = text.trim().toLowerCase();
+    if (command != '/logs' && command != '/log') return false;
+
+    _controller.clear();
+    if (mounted) setState(() => _showDebug = true);
+    return true;
+  }
+
   Future<void> _send() async {
     final text = _controller.text.trim();
+    if (_handleChatCommand(text)) return;
+
     apkLog(
       'ChatScreen._send',
       'text="${text.length > 40 ? text.substring(0, 40) : text}"  '
@@ -4281,9 +4296,22 @@ class _ChatScreenState extends State<ChatScreen> {
     final mediaQuery = MediaQuery.of(context);
     final double statusBarH = _stableStatusBarH ?? mediaQuery.viewPadding.top;
     final double appBarH = statusBarH + kToolbarHeight;
+    final double headerPillBottom = appBarH;
+    final double headerOverlayHeight = appBarH + 80;
     final double keyboardInset = _focusNode.hasFocus
         ? mediaQuery.viewInsets.bottom
         : 0.0;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final renderObject = _composerKey.currentContext?.findRenderObject();
+      if (!mounted || renderObject is! RenderBox || !renderObject.hasSize) {
+        return;
+      }
+      final height = renderObject.size.height;
+      if ((height - _composerHeight).abs() > 0.5) {
+        setState(() => _composerHeight = height);
+      }
+    });
 
     return Scaffold(
       backgroundColor: const Color(0xFF08090B),
@@ -4299,21 +4327,46 @@ class _ChatScreenState extends State<ChatScreen> {
           behavior: const _ChatScrollBehavior(),
           child: Stack(
             children: [
-              Column(
-                children: [
-                  if (_selectedMessageIds.isEmpty)
-                    _buildAppBar(statusBarH),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: appBarH + 80,
+                child: ChatHeaderBackdrop(
+                  pillBottom: headerPillBottom,
+                  overlayHeight: headerOverlayHeight,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+              Positioned.fill(
+                child: Stack(
+                  children: [
                   PinnedEventsStrip(
                     pinnedEventIds: _visiblePinnedEventIds,
                     events: _messages,
                     onOpenEvent: _openPinnedMessage,
                   ),
-                  Expanded(
+                  Positioned.fill(
                     child: Padding(
                       padding: EdgeInsets.only(bottom: keyboardInset),
-                      child: Column(
-                        children: [
-                          Expanded(child: _buildMessageList()),
+                      child: _buildMessageList(
+                        topInset: appBarH + 8.0,
+                        bottomInset: _composerHeight + 8.0,
+                      ),
+                    ),
+                  ),
+
+                  if (_selectedMessageIds.isEmpty)
+                    _buildAppBar(statusBarH),
+
+                  PositionedDirectional(
+                    start: 0,
+                    end: 0,
+                    bottom: keyboardInset,
+                    child: Column(
+                      key: _composerKey,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                           if (_someoneElseTyping) const _TypingIndicator(),
 
                           // Render the composer immediately. Block state is
@@ -4423,11 +4476,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                 onRecordingActiveChanged: (_) {},
                               ),
                             ),
-                        ],
-                      ),
+                      ],
                     ),
                   ),
-                ],
+                  ],
+                ),
               ),
 
               if (_selectedMessageIds.isNotEmpty)
@@ -4839,7 +4892,10 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Widget _buildMessageList() {
+  Widget _buildMessageList({
+    required double topInset,
+    required double bottomInset,
+  }) {
     if (_isDeletedConversation) {
       return const SizedBox.expand();
     }
@@ -4944,7 +5000,13 @@ class _ChatScreenState extends State<ChatScreen> {
                   : ListView.builder(
                       controller: _scrollCtrl,
                       reverse: true,
-                      padding: const EdgeInsets.only(top: 150, bottom: 12),
+                      // Keep the newest item above the overlaid translucent
+                      // composer while allowing older content to remain
+                      // visible behind it when scrolling.
+                      padding: EdgeInsets.only(
+                        top: topInset,
+                        bottom: bottomInset,
+                      ),
                       physics: const ClampingScrollPhysics(),
                       itemCount:
                           timelineItems.length +
@@ -5432,6 +5494,7 @@ class _ChatScreenState extends State<ChatScreen> {
         deliveryState: _mapDeliveryState(isMine ? msg.status : null),
       );
       bubble = ContactMessageBubble(
+        key: ValueKey<String>('contact-${msg.id}'),
         message: contactPresentation,
         showTail: showTail,
       );
@@ -5479,6 +5542,27 @@ class _ChatScreenState extends State<ChatScreen> {
           usePinChoices: !_isGroupChat,
           canDeleteForEveryone: isMine,
         ),
+      );
+    } else if (effectiveAttachmentType == 'voice' ||
+        effectiveAttachmentType == 'audio' ||
+        msg.isVoiceNote ||
+        displayedContent.trim().toLowerCase() == 'voice message') {
+      final presentation = ChatMessagePresentation(
+        id: msg.id,
+        kind: ChatMessageKind.audio,
+        isMine: isMine,
+        timeLabel: _formatTime(msg.timestamp),
+        audioDurationSeconds: msg.voiceDuration,
+        assetPath: msg.attachmentUrl,
+        senderName: senderName,
+        deliveryState: _mapDeliveryState(isMine ? msg.status : null),
+        edited: msg.isEdited,
+        pinned: _visiblePinnedEventIds.contains(msg.id),
+      );
+      bubble = AudioMessageBubble(
+        message: presentation,
+        showTail: showTail,
+        actionConfig: const MessageActionConfig(actions: <MessageAction>[]),
       );
     } else if (effectiveAttachmentType == 'video') {
       final presentation = ChatMessagePresentation(

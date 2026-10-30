@@ -576,6 +576,27 @@ class _AttachmentGallerySheetState extends State<_AttachmentGallerySheet>
     }
   }
 
+  Future<void> _pickGallery() async {
+    final picker = widget.pickerRepository;
+    if (picker == null || _pickingFiles) return;
+    setState(() => _pickingFiles = true);
+    try {
+      final picked = await picker.pickGallery();
+      if (!mounted) return;
+      final byPath = {for (final file in _files) file.path: file};
+      for (final file in picked) byPath[file.path] = file;
+      setState(() {
+        _files = byPath.values.toList(growable: false);
+        final room = widget.config.maxSelectionCount - _selectedFilePaths.length;
+        _selectedFilePaths.addAll(
+          picked.take(room.clamp(0, picked.length)).map((file) => file.path),
+        );
+      });
+    } finally {
+      if (mounted) setState(() => _pickingFiles = false);
+    }
+  }
+
   void _toggleFile(PickedAttachmentFile file) {
     setState(() {
       if (!_selectedFilePaths.remove(file.path) &&
@@ -634,6 +655,8 @@ class _AttachmentGallerySheetState extends State<_AttachmentGallerySheet>
         loading: _pickingFiles,
 
         onChooseFiles: () => _pickFiles(audioOnly: false),
+
+        onChooseGallery: _pickGallery,
 
         onChooseAudio: () => _pickFiles(audioOnly: true),
 
@@ -933,6 +956,17 @@ class _AttachmentGallerySheetState extends State<_AttachmentGallerySheet>
 
                       child: Stack(
                         children: [
+                          if (_tab == ChatAttachmentTab.location)
+                            const PositionedDirectional(
+                              start: 0,
+                              end: 0,
+                              bottom: 0,
+                              height: 190,
+                              child: ColoredBox(
+                                color: Color(0xFF07090C),
+                              ),
+                            ),
+
                           Positioned.fill(
                             child: AnimatedSwitcher(
                               duration: MediaQuery.disableAnimationsOf(context)
@@ -1011,10 +1045,14 @@ class _AttachmentGallerySheetState extends State<_AttachmentGallerySheet>
                                               : null,
 
                                           showSearch:
-                                              _tab == ChatAttachmentTab.location,
+                                              _tab == ChatAttachmentTab.location ||
+                                              _tab == ChatAttachmentTab.file ||
+                                              _tab == ChatAttachmentTab.contact,
 
                                           onSearchPressed:
-                                              _tab == ChatAttachmentTab.location
+                                              _tab == ChatAttachmentTab.location ||
+                                              _tab == ChatAttachmentTab.file ||
+                                              _tab == ChatAttachmentTab.contact
                                               ? () {}
                                               : null,
 

@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:wrytte/models/user_models/user_profile_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
+import 'package:wrytte/services/user/avatar_preload_service.dart';
+import 'package:wrytte/components/user_avatar.dart';
 
 import 'package:wrytte/ui/chat/models/chat_message_presentation.dart';
 
@@ -17,6 +21,8 @@ import 'package:wrytte/ui/chat/widgets/message_metadata.dart';
 import 'package:wrytte/ui/core/themes/wrytte_theme.dart';
 
 class ContactMessageBubble extends StatelessWidget {
+
+  static final Map<String, Future<String?>> _avatarPreparation = {};
 
   const ContactMessageBubble({
 
@@ -119,25 +125,47 @@ class ContactMessageBubble extends StatelessWidget {
   @override
 
   Widget build(BuildContext context) {
-    final userId = message.contactUserId?.trim() ?? '';
-    if (userId.isEmpty || message.contactAvatarUrl?.trim().isNotEmpty == true) {
-      return _buildBubble(context, message);
-    }
-
-    return FutureBuilder<UserProfile?>(
-      future: UserProfileService.instance.getProfileByUid(userId),
+    return FutureBuilder<String?>(
+      future: _avatarPreparation.putIfAbsent(
+        message.id,
+        _prepareContactAvatar,
+      ),
       builder: (context, snapshot) {
-        final profile = snapshot.data;
-        final avatar = profile?.profileImage.trim();
-        if (avatar == null || avatar.isEmpty) {
-          return _buildBubble(context, message);
-        }
+        // Keep the card mounted at its final size while the avatar resolves.
+        // UserAvatar owns the stable placeholder/cache transition.
+        final avatar = snapshot.connectionState == ConnectionState.done
+            ? snapshot.data?.trim()
+            : message.contactAvatarUrl?.trim();
         return _buildBubble(
           context,
-          message.copyWith(contactAvatarUrl: avatar),
+          avatar == null || avatar.isEmpty
+              ? message
+              : message.withContactAvatar(avatar),
         );
       },
     );
+  }
+
+  Future<String?> _prepareContactAvatar() async {
+    final embedded = message.contactAvatarUrl?.trim() ?? '';
+    var avatar = embedded;
+    if (avatar.isEmpty) {
+      final userId = message.contactUserId?.trim() ?? '';
+      if (userId.isNotEmpty) {
+        final profile = await UserProfileService.instance.getProfileByUid(
+          userId,
+        );
+        avatar = profile?.profileImage.trim() ?? '';
+      }
+    }
+    if (avatar.isEmpty) return null;
+
+    // Ensure the persistent local file exists before the card is rendered.
+    await AvatarPreloadService.warm(
+      avatar,
+      cacheIdentity: 'contact:${message.contactUserId ?? avatar}',
+    );
+    return avatar;
   }
 
   Widget _buildBubble(
@@ -785,6 +813,8 @@ class _ContactHeader
 
               message.contactAvatarUrl,
 
+          userId: message.contactUserId,
+
         ),
 
         const SizedBox(
@@ -965,20 +995,19 @@ class _ContactAvatar
 
     required this.avatarUrl,
 
+    required this.userId,
+
   });
 
   final String name;
 
   final String? avatarUrl;
 
+  final String? userId;
+
   @override
 
   Widget build(BuildContext context) {
-
-    final source =
-
-        avatarUrl?.trim() ?? '';
-
     return Semantics(
 
       image: true,
@@ -987,22 +1016,13 @@ class _ContactAvatar
 
           '$name contact photo',
 
-      child: ClipOval(
-
-        child: SizedBox.square(
-
-          dimension:
-
-              ContactMessageBubble
-
-                  ._avatarSize,
-
-          child:
-
-              _buildAvatar(source),
-
-        ),
-
+      child: UserAvatar(
+        imageUrl: avatarUrl,
+        cacheIdentity: userId?.trim().isNotEmpty == true
+            ? 'user:${userId!.trim().toLowerCase()}'
+            : null,
+        name: name,
+        size: ContactMessageBubble._avatarSize,
       ),
 
     );
@@ -1019,6 +1039,20 @@ class _ContactAvatar
 
       return _fallbackAvatar();
 
+    }
+
+    // Use the persistent avatar cache synchronously when it is already
+    // indexed. This avoids showing the default avatar for a frame while the
+    // asynchronous cache lookup is running.
+    final cachedPath = AvatarPreloadService.localPathSync(source);
+    if (cachedPath != null) {
+      return Image.file(
+        File(cachedPath),
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (context, error, stackTrace) => _fallbackAvatar(),
+      );
     }
 
     if (source.startsWith(
@@ -1053,6 +1087,25 @@ class _ContactAvatar
 
       );
 
+    }
+
+    if (source.startsWith('mxc://')) {
+      return FutureBuilder<String?>(
+        future: AvatarPreloadService.localPathFor(source),
+        builder: (context, snapshot) {
+          final path = snapshot.data;
+          if (path == null || path.isEmpty) {
+            return const ColoredBox(color: Colors.transparent);
+          }
+          return Image.file(
+            File(path),
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.medium,
+            errorBuilder: (context, error, stackTrace) => _fallbackAvatar(),
+          );
+        },
+      );
     }
 
     return Image.network(

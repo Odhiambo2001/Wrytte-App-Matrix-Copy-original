@@ -13,6 +13,9 @@ class AttachmentPickerRepositoryImpl implements AttachmentPickerRepository {
       _service.pickFiles(audioOnly: audioOnly);
 
   @override
+  Future<List<PickedAttachmentFile>> pickGallery() => _service.pickGallery();
+
+  @override
   Future<AttachmentContactPage> loadContacts() => _service.loadContacts();
 
   @override

@@ -1057,9 +1057,9 @@ class _HeaderCircleButton extends StatelessWidget {
       onTap: onPressed,
       customBorder: const CircleBorder(),
       child: SizedBox(
-        width: 42 * scale,
-        height: 42 * scale,
-        child: Icon(icon, color: Colors.white, size: 25 * scale),
+        width: 42 + (20 * (scale - .9)),
+        height: 42 + (20 * (scale - .9)),
+        child: Icon(icon, color: Colors.white, size: 26 * scale),
       ),
     ),
   );

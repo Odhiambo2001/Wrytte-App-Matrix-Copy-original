@@ -1009,7 +1009,7 @@ class _AudioMessageBubbleState extends State<AudioMessageBubble>
 
               horizontal: 20,
 
-              vertical: 4,
+              vertical: 1,
 
             ),
 

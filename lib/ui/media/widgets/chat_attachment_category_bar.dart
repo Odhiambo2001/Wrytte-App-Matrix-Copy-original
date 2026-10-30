@@ -144,8 +144,7 @@ class ChatAttachmentCategoryBar extends StatelessWidget {
                 _barHeight -
                 (_pillVerticalInset * 2);
 
-            final double pillRadius =
-                pillHeight / 2;
+            final double pillRadius = pillHeight / 2;
 
             return DecoratedBox(
               decoration: BoxDecoration(
@@ -180,10 +179,7 @@ class ChatAttachmentCategoryBar extends StatelessWidget {
 
                 // Same color family as active pill.
                 // Slightly softer so active tab remains visible.
-                color:
-                    WrytteColors.surfaceRaised.withValues(
-                  alpha: .68,
-                ),
+                color: WrytteColors.surfaceRaised.withValues(alpha: .68),
 
                 child: SizedBox(
                   height: _barHeight,

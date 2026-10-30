@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wrytte/domain/models/attachment_contact.dart';
@@ -9,6 +10,20 @@ import 'package:wrytte/domain/models/attachment_contact_page.dart';
 import 'package:wrytte/domain/models/picked_attachment_file.dart';
 
 class DeviceAttachmentPickerService {
+  final ImagePicker _imagePicker = ImagePicker();
+
+  Future<List<PickedAttachmentFile>> pickGallery() async {
+    final media = await _imagePicker.pickMultipleMedia();
+    final selected = <PickedAttachmentFile>[];
+    for (final item in media) {
+      final size = await File(item.path).length();
+      selected.add(
+        PickedAttachmentFile(path: item.path, name: item.name, sizeBytes: size),
+      );
+    }
+    return selected;
+  }
+
   Future<List<PickedAttachmentFile>> pickFiles({bool audioOnly = false}) async {
     final result = await FilePicker.platform.pickFiles(
       dialogTitle: audioOnly ? 'Choose audio' : 'Choose files',

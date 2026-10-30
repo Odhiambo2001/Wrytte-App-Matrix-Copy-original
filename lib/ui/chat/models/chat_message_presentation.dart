@@ -160,6 +160,37 @@ class ChatMessagePresentation {
 
   final ChatDeliveryState deliveryState;
 
+  ChatMessagePresentation withContactAvatar(String? avatar) =>
+      ChatMessagePresentation(
+        id: id,
+        kind: kind,
+        isMine: isMine,
+        timeLabel: timeLabel,
+        dayLabel: dayLabel,
+        text: text,
+        assetPath: assetPath,
+        fileName: fileName,
+        fileDetails: fileDetails,
+        audioDurationSeconds: audioDurationSeconds,
+        audioWaveform: audioWaveform,
+        videoDurationSeconds: videoDurationSeconds,
+        videoThumbnailBytes: videoThumbnailBytes,
+        videoThumbnailUrl: videoThumbnailUrl,
+        mediaWidth: mediaWidth,
+        mediaHeight: mediaHeight,
+        isVideoNote: isVideoNote,
+        senderName: senderName,
+        replySender: replySender,
+        replyPreview: replyPreview,
+        contactName: contactName,
+        contactPhone: contactPhone,
+        contactAvatarUrl: avatar,
+        contactUserId: contactUserId,
+        edited: edited,
+        pinned: pinned,
+        deliveryState: deliveryState,
+      );
+
   ChatMessagePresentation withPinned(bool value) => ChatMessagePresentation(
     id: id,
     kind: kind,

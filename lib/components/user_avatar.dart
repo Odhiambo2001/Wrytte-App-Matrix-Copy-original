@@ -273,6 +273,10 @@ class _UserAvatarState extends State<UserAvatar> {
           height: widget.size,
           fit: BoxFit.cover,
           gaplessPlayback: true,
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+            if (wasSynchronouslyLoaded || frame != null) return child;
+            return _buildPlaceholder();
+          },
           cacheWidth: (widget.size * MediaQuery.devicePixelRatioOf(context))
               .round(),
           errorBuilder: (context, error, stackTrace) {
