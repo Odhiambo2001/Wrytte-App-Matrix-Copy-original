@@ -4932,6 +4932,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         _resolvedConversationId ?? widget.conversationId,
                       ) ??
                       '',
+                  'changedAt':
+                      autoDeleteEnabledAt?.toUtc().toIso8601String() ?? '',
                 },
               ])
         : <Map<String, String>>[autoDeleteChange];
@@ -4957,14 +4959,17 @@ class _ChatScreenState extends State<ChatScreen> {
           encryption: false,
         ),
       for (final change in noticeChanges)
-        (
-          message: null,
-          change: change,
-          timestamp:
-              DateTime.tryParse(change['changedAt'] ?? '') ??
-              DateTime.now(),
-          encryption: false,
-        ),
+        if (DateTime.tryParse(change['changedAt'] ?? '') != null ||
+            DateTime.tryParse(change['enabledAt'] ?? '') != null)
+          (
+            message: null,
+            change: change,
+            timestamp:
+                (DateTime.tryParse(change['changedAt'] ?? '') ??
+                        DateTime.tryParse(change['enabledAt'] ?? ''))!
+                    .toLocal(),
+            encryption: false,
+          ),
     ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     _dbg(
       'MessageList',

@@ -429,6 +429,7 @@ class AutoDeleteService {
       'duration': duration == null || duration.isEmpty ? 'Off' : duration,
       'enabledAt': state['enabled_at'],
       'enabledBy': state['sender'],
+      'changedAt': state['changed_at'],
     };
   }
 }
