@@ -55,6 +55,19 @@ class _WryttePersistentImageState extends State<WryttePersistentImage> {
   Future<File> _resolve(String source) {
     final cleanSource = source.trim();
     return _copies.putIfAbsent(cleanSource, () async {
+      // Optimistic outgoing messages already point at the selected local file.
+      // Use it synchronously instead of routing it through the attachment
+      // store, which otherwise leaves the bubble showing its placeholder for
+      // one or more frames while the cache lookup completes.
+      final localPath = cleanSource.startsWith('file://')
+          ? Uri.parse(cleanSource).toFilePath()
+          : cleanSource;
+      if (!cleanSource.startsWith('http://') &&
+          !cleanSource.startsWith('https://') &&
+          !cleanSource.startsWith('mxc://')) {
+        final localFile = File(localPath);
+        if (localFile.existsSync()) return localFile;
+      }
       final copy = await AttachmentLocalStore.instance.ensureComplete(
         source: cleanSource,
         fileName: 'photo.jpg',
@@ -65,6 +78,23 @@ class _WryttePersistentImageState extends State<WryttePersistentImage> {
 
   @override
   Widget build(BuildContext context) {
+    final source = widget.source.trim();
+    final localPath = source.startsWith('file://')
+        ? Uri.parse(source).toFilePath()
+        : source;
+    if (!source.startsWith('http://') &&
+        !source.startsWith('https://') &&
+        !source.startsWith('mxc://')) {
+      final localFile = File(localPath);
+      if (localFile.existsSync()) {
+        return Image.file(
+          localFile,
+          fit: widget.fit,
+          errorBuilder: (context, error, stackTrace) =>
+              widget.errorWidget ?? const SizedBox.shrink(),
+        );
+      }
+    }
     return FutureBuilder<File>(
       future: _copy,
       builder: (context, snapshot) {

@@ -58,6 +58,8 @@ class ImageMessageBubble extends StatefulWidget {
 
 class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
+  static final Map<String, double> _ratioCache = <String, double>{};
+
   final GlobalKey _imageSurfaceKey = GlobalKey(
 
     debugLabel: 'chat-image-surface',
@@ -142,6 +144,27 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   ImageStreamListener? _imageListener;
 
+  // Keeps the optimistic local file visible while the server's protected
+  // mxc:// source is being authenticated and downloaded.
+  String? _handoffSource;
+  String? _preparedForSource;
+
+  @override
+  void initState() {
+    super.initState();
+    final source = _source;
+    final cachedRatio = _ratioCache[source];
+    if (cachedRatio != null) {
+      _aspectRatio = cachedRatio;
+      _aspectRatioLocked = true;
+    }
+    final cachedPath = AttachmentLocalStore.instance.peekComplete(source);
+    if (cachedPath != null) {
+      _authenticatedSource = cachedPath;
+      _preparedForSource = source;
+    }
+  }
+
   // ===========================================================================
 
   // Message values
@@ -166,7 +189,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   }
 
   String get _effectiveSource => _isProtectedMatrixSource
-      ? (_authenticatedSource ?? '')
+      ? (_authenticatedSource ?? _handoffSource ?? '')
       : (_authenticatedSource ?? _source);
 
   String? get _caption {
@@ -238,7 +261,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     super.didChangeDependencies();
 
     final metadataRatio = _metadataAspectRatio;
-    if (!_aspectRatioLocked && metadataRatio != null) {
+    if (metadataRatio != null) {
       _aspectRatio = metadataRatio;
       _aspectRatioLocked = true;
     }
@@ -254,27 +277,40 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
     super.didUpdateWidget(oldWidget);
 
-    if (oldWidget.message.id != widget.message.id) {
+    final oldSource = oldWidget.message.assetPath?.trim() ?? '';
+    final newSource = widget.message.assetPath?.trim() ?? '';
+    final sourceChanged = oldSource != newSource;
+    final metadataRatio = _metadataAspectRatio;
 
-      _aspectRatio = _metadataAspectRatio ?? 4 / 3;
-      _aspectRatioLocked = _metadataAspectRatio != null;
+    // A local optimistic image is reconciled with a server event using a new
+    // message id. That id change does not mean the image changed. Preserve the
+    // current geometry and adopt dimensions whenever metadata becomes
+    // available, including on a later stream update.
+    if (metadataRatio != null) {
+      _aspectRatio = metadataRatio;
+      _aspectRatioLocked = true;
+    } else if (sourceChanged) {
+      // Only a genuinely different image may reset the layout fallback.
+      _aspectRatio = 4 / 3;
+      _aspectRatioLocked = false;
+    }
 
+    if (sourceChanged) {
+      final previousSource = _effectiveSource;
       _detachImageListener();
       _authenticatedSource = null;
+      _preparedForSource = null;
+      _handoffSource = previousSource.isNotEmpty ? previousSource : null;
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
-
-        if (!mounted) {
-
-          return;
-
+        if (!mounted) return;
+        if (_isProtectedMatrixSource) {
+          _prepareAuthenticatedSource();
+        } else {
+          _handoffSource = null;
+          _resolveImageDimensions();
         }
-
-        _resolveImageDimensions();
-        _prepareAuthenticatedSource();
-
       });
-
     }
 
   }
@@ -282,7 +318,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   Future<void> _prepareAuthenticatedSource() async {
     final source = _source;
     if (source.isEmpty || !_isProtectedMatrixSource) return;
-    if (_authenticatedSource != null) return;
+    if (_preparedForSource == source && _authenticatedSource != null) return;
     final uri = Uri.tryParse(source);
     if (uri == null || uri.host.isEmpty || uri.pathSegments.isEmpty) return;
     final downloadUrl = source.startsWith('mxc://')
@@ -305,7 +341,11 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         fileName: widget.message.fileName ?? 'image',
       )).file;
       if (!mounted || widget.message.assetPath?.trim() != source) return;
-      setState(() => _authenticatedSource = localFile.path);
+      setState(() {
+        _authenticatedSource = localFile.path;
+        _preparedForSource = source;
+        _handoffSource = null;
+      });
       _resolveImageDimensions();
     } catch (error, stackTrace) {
       debugPrint(
@@ -366,6 +406,8 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
       }
 
       final double nextRatio = width / height;
+
+      if (_source.isNotEmpty) _ratioCache[_source] = nextRatio;
 
       // Matrix media metadata is the stable layout contract. Decoding the
       // local file and then the authenticated remote file can briefly report
@@ -590,6 +632,13 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   @override
 
   Widget build(BuildContext context) {
+
+    debugPrint(
+      '[ImageBubble:new] id=${widget.message.id} '
+      'source="${widget.message.assetPath}" '
+      'effective="$_effectiveSource" '
+      'ratio=$_aspectRatio',
+    );
 
     final config = widget.actionConfig;
 
@@ -941,11 +990,12 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
         height: imageHeight,
 
-        child: Stack(
+        child: ColoredBox(
+          color: const Color(0xFF1B1E23),
+          child: Stack(
+            fit: StackFit.expand,
 
-          fit: StackFit.expand,
-
-          children: [
+            children: [
 
             // ===============================================================
 
@@ -1039,7 +1089,8 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
               ),
 
-          ],
+            ],
+          ),
 
         ),
 
@@ -1059,7 +1110,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
     if (_effectiveSource.isEmpty) {
 
-      return _errorImage();
+      return _loadingImage();
 
     }
 
@@ -1071,7 +1122,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
     if (_effectiveSource.isEmpty) {
 
-      return _errorImage();
+      return _loadingImage();
 
     }
 
@@ -1133,6 +1184,8 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
         fit: fit,
 
+        frameBuilder: _fadeInFrame,
+
         alignment: Alignment.center,
 
         gaplessPlayback: true,
@@ -1164,6 +1217,8 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         source,
 
         fit: fit,
+
+        frameBuilder: _fadeInFrame,
 
         alignment: Alignment.center,
 
@@ -1225,6 +1280,8 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
       fit: fit,
 
+      frameBuilder: _fadeInFrame,
+
       alignment: Alignment.center,
 
       gaplessPlayback: true,
@@ -1235,6 +1292,20 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
     );
 
+  }
+
+  Widget _fadeInFrame(
+    BuildContext context,
+    Widget child,
+    int? frame,
+    bool wasSynchronouslyLoaded,
+  ) {
+    if (wasSynchronouslyLoaded) return child;
+    return AnimatedOpacity(
+      opacity: frame == null ? 0 : 1,
+      duration: const Duration(milliseconds: 150),
+      child: child,
+    );
   }
 
   // ===========================================================================
@@ -1265,6 +1336,21 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
     );
 
+  }
+
+  Widget _loadingImage() {
+    return const ColoredBox(
+      color: Color(0xFF1B1E23),
+      child: Center(
+        child: SizedBox.square(
+          dimension: 24.0,
+          child: CircularProgressIndicator(
+            strokeWidth: 2.0,
+            color: WrytteColors.textSecondary,
+          ),
+        ),
+      ),
+    );
   }
 
   // ===========================================================================

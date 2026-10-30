@@ -420,6 +420,10 @@ class _ImageMessageBubble extends StatefulWidget {
 class _ImageMessageBubbleState extends State<_ImageMessageBubble> {
   @override
   Widget build(BuildContext context) {
+    debugPrint(
+      '[ImageBubble:legacy] source="${widget.imageUrl}" '
+      'isMine=${widget.isMine}',
+    );
     final image = _attachmentImage(widget.imageUrl);
     final caption = widget.caption.trim();
     final hasCaption = caption.isNotEmpty &&

@@ -23,7 +23,15 @@ class AttachmentLocalStore {
 
   static const int initialFileBytes = 35 * 1024 * 1024;
   final Map<String, Future<AttachmentLocalCopy>> _inFlight = {};
+  final Map<String, String> _knownCompletePaths = {};
   int _generation = 0;
+
+  String? peekComplete(String source) {
+    final path = _knownCompletePaths[source.trim()];
+    if (path == null) return null;
+    final file = File(path);
+    return file.existsSync() && file.lengthSync() > 0 ? path : null;
+  }
 
   /// Returns an already completed persistent copy without making a network
   /// request. Callers can use this to prefer disk on cold app starts and only
@@ -36,12 +44,16 @@ class AttachmentLocalStore {
     if (cleanSource.isEmpty) return null;
     try {
       final existing = await _existingCompleteForSource(cleanSource);
-      if (existing != null) return existing;
+      if (existing != null) {
+        _knownCompletePaths[cleanSource] = existing.path;
+        return existing;
+      }
       final target = await _targetFile(cleanSource, fileName);
       final marker = File('${target.path}.complete');
       if (await target.exists() &&
           await marker.exists() &&
           await target.length() > 0) {
+        _knownCompletePaths[cleanSource] = target.path;
         return target;
       }
     } catch (_) {}
@@ -56,6 +68,7 @@ class AttachmentLocalStore {
       await directory.delete(recursive: true);
     }
     _inFlight.clear();
+    _knownCompletePaths.clear();
   }
 
   Future<AttachmentLocalCopy> ensureInitial({
@@ -128,6 +141,7 @@ class AttachmentLocalStore {
 
     final existing = await _existingCompleteForSource(cleanSource);
     if (existing != null) {
+      _knownCompletePaths[cleanSource] = existing.path;
       return AttachmentLocalCopy(
         file: existing,
         isComplete: true,
@@ -138,6 +152,7 @@ class AttachmentLocalStore {
     final target = await _targetFile(cleanSource, fileName);
     final completeMarker = File('${target.path}.complete');
     if (await target.exists() && await completeMarker.exists()) {
+      _knownCompletePaths[cleanSource] = target.path;
       return AttachmentLocalCopy(
         file: target,
         isComplete: true,
@@ -151,6 +166,7 @@ class AttachmentLocalStore {
       if (local.path != target.path) await local.copy(target.path);
       final localBytes = await target.length();
       await completeMarker.writeAsString('$localBytes', flush: true);
+      _knownCompletePaths[cleanSource] = target.path;
       return AttachmentLocalCopy(
         file: target,
         isComplete: true,
@@ -223,6 +239,7 @@ class AttachmentLocalStore {
           (totalBytes == null || actualBytes >= totalBytes);
       if (isComplete) {
         await completeMarker.writeAsString('$actualBytes', flush: true);
+        _knownCompletePaths[cleanSource] = target.path;
       } else if (await completeMarker.exists()) {
         await completeMarker.delete();
       }

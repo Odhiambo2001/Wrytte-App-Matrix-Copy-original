@@ -1731,16 +1731,19 @@ class _ChatScreenState extends State<ChatScreen> {
           ..addAll(messages);
         return;
       }
+      // Reconciliation must not yank the user away from the message they are
+      // reading. In this reversed viewport, offset 0 is the latest message.
+      // Capture the position before replacing the list because the rebuild can
+      // temporarily change the scroll metrics.
+      final wasNearLatest = !_scrollCtrl.hasClients ||
+          _scrollCtrl.position.pixels <= 24;
       setState(() => _replaceMessagesFromSharedCache(messages));
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_scrollCtrl.hasClients) return;
-        _scrollCtrl.jumpTo(0);
-        debugPrint(
-          '[AutoDeleteTimeline] room="$convId" '
-          'scroll_to_latest=true pixels=${_scrollCtrl.position.pixels} '
-          'max=${_scrollCtrl.position.maxScrollExtent}',
-        );
-      });
+      if (wasNearLatest) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_scrollCtrl.hasClients) return;
+          _scrollCtrl.jumpTo(0);
+        });
+      }
       final currentConv = _resolvedConversationId ?? widget.conversationId;
       if (convId == currentConv && messages.any((m) => !_isMine(m))) {
         unawaited(_chat.markConversationAsRead(convId));
