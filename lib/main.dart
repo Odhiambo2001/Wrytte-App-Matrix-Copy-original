@@ -44,6 +44,7 @@ import 'package:wrytte/services/matrix/matrix_client.dart';
 import 'package:wrytte/services/notification_service.dart';
 import 'package:wrytte/services/user/user_profile_service.dart';
 import 'package:wrytte/services/user/avatar_preload_service.dart';
+import 'package:wrytte/services/outgoing_media_store.dart';
 import 'package:wrytte/services/face/android_tflite_image_session.dart';
 
 import 'firebase_options.dart';
@@ -156,6 +157,7 @@ Future<void> main() async {
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
   await AvatarPreloadService.initialize();
+  await OutgoingMediaStore.instance.init();
   unawaited(
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
   );

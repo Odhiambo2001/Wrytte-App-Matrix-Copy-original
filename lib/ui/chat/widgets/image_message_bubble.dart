@@ -18,6 +18,7 @@ import 'package:wrytte/ui/chat/widgets/message_actions/message_action_target.dar
 import 'package:wrytte/ui/chat/widgets/message_actions/message_swipe_action_target.dart';
 
 import 'package:wrytte/services/attachment_local_store.dart';
+import 'package:wrytte/services/outgoing_media_store.dart';
 import 'package:wrytte/services/matrix/matrix_config.dart';
 
 import 'package:wrytte/ui/chat/widgets/message_bubble_surface.dart';
@@ -188,9 +189,19 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         uri.path.contains('/media/');
   }
 
-  String get _effectiveSource => _isProtectedMatrixSource
-      ? (_authenticatedSource ?? _handoffSource ?? '')
-      : (_authenticatedSource ?? _source);
+  String get _effectiveSource {
+    if (_isMine) {
+      final staged = OutgoingMediaStore.instance.lookup(_source);
+      if (staged != null) return staged;
+      if (_source.isNotEmpty && ! _source.startsWith('mxc://')) {
+        final localFile = File(_source);
+        if (localFile.existsSync()) return _source;
+      }
+    }
+    return _isProtectedMatrixSource
+        ? (_authenticatedSource ?? _handoffSource ?? '')
+        : (_authenticatedSource ?? _source);
+  }
 
   String? get _caption {
 
@@ -261,7 +272,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     super.didChangeDependencies();
 
     final metadataRatio = _metadataAspectRatio;
-    if (metadataRatio != null) {
+    if (!_aspectRatioLocked && metadataRatio != null) {
       _aspectRatio = metadataRatio;
       _aspectRatioLocked = true;
     }
@@ -286,13 +297,12 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     // message id. That id change does not mean the image changed. Preserve the
     // current geometry and adopt dimensions whenever metadata becomes
     // available, including on a later stream update.
-    if (metadataRatio != null) {
+    if (!_aspectRatioLocked && metadataRatio != null) {
       _aspectRatio = metadataRatio;
       _aspectRatioLocked = true;
-    } else if (sourceChanged) {
+    } else if (sourceChanged && !_aspectRatioLocked) {
       // Only a genuinely different image may reset the layout fallback.
       _aspectRatio = 4 / 3;
-      _aspectRatioLocked = false;
     }
 
     if (sourceChanged) {
@@ -318,6 +328,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   Future<void> _prepareAuthenticatedSource() async {
     final source = _source;
     if (source.isEmpty || !_isProtectedMatrixSource) return;
+    if (_isMine && OutgoingMediaStore.instance.lookup(source) != null) return;
     if (_preparedForSource == source && _authenticatedSource != null) return;
     final uri = Uri.tryParse(source);
     if (uri == null || uri.host.isEmpty || uri.pathSegments.isEmpty) return;

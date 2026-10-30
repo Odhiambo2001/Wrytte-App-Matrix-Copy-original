@@ -26,6 +26,7 @@ import 'package:wrytte/services/chat/chat_local_db.dart';
 import 'package:wrytte/services/chat/chat_service.dart';
 import 'package:wrytte/services/auth/auth_service.dart';
 import 'package:wrytte/services/attachment_local_store.dart';
+import 'package:wrytte/services/outgoing_media_store.dart';
 import 'package:wrytte/services/contacts/contact_identity_cache.dart';
 import 'package:wrytte/services/contacts/contact_local_db.dart';
 import 'package:wrytte/services/contacts/contact_service.dart';
@@ -2811,6 +2812,24 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<Size?> _readImageSize(String path) async {
+    try {
+      final bytes = await File(path).readAsBytes();
+      final codec = await instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final size = Size(
+        frame.image.width.toDouble(),
+        frame.image.height.toDouble(),
+      );
+      frame.image.dispose();
+      codec.dispose();
+      return size;
+    } catch (error) {
+      _dbg('Attachment.imageDimensions', 'path=$path error=$error');
+      return null;
+    }
+  }
+
   Future<void> _sendPickedAttachment(
     String filePath,
     String type, {
@@ -2833,8 +2852,18 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (_isDeletedConversation) return;
 
+    final mediaSize = type == 'image' ? await _readImageSize(filePath) : null;
+
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final placeholderId = 'attach_${DateTime.now().millisecondsSinceEpoch}';
+    StagedMedia? staged;
+    if (type == 'image') {
+      staged = await OutgoingMediaStore.instance.stage(
+        filePath,
+        localId: placeholderId,
+      );
+      if (staged != null) filePath = staged.path;
+    }
     final placeholder = ChatMessage(
       id: placeholderId,
       conversationId: _resolvedConversationId ?? widget.conversationId,
@@ -2847,6 +2876,8 @@ class _ChatScreenState extends State<ChatScreen> {
       status: MessageStatus.sending,
       attachmentUrl: filePath,
       attachmentType: type,
+      mediaWidth: staged?.width ?? mediaSize?.width.round(),
+      mediaHeight: staged?.height ?? mediaSize?.height.round(),
     );
 
     if (mounted) {
@@ -2914,6 +2945,12 @@ class _ChatScreenState extends State<ChatScreen> {
         attachmentType: type,
         conversationId: realConvId,
         caption: caption,
+        mediaWidth: mediaSize?.width.round(),
+        mediaHeight: mediaSize?.height.round(),
+      );
+      OutgoingMediaStore.instance.adopt(
+        placeholderId,
+        <String?>[sent.id, sent.attachmentUrl],
       );
       await _saveCanonicalSentMessage(sent);
       if (mounted) {
@@ -3170,6 +3207,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _replaceOptimisticMessage(String optimisticId, ChatMessage sent) {
+    OutgoingMediaStore.instance.adopt(
+      optimisticId,
+      <String?>[sent.id, sent.attachmentUrl],
+    );
     _messages.removeWhere((m) => m.id == sent.id && m.id != optimisticId);
     final idx = _messages.indexWhere((m) => m.id == optimisticId);
     if (idx != -1) {
@@ -3181,7 +3222,14 @@ class _ChatScreenState extends State<ChatScreen> {
     } else {
       _upsertMessage(sent);
     }
-    _messages.removeWhere((m) => _isDuplicateOutgoingEcho(m, sent));
+    _messages.removeWhere((m) {
+      if (!_isDuplicateOutgoingEcho(m, sent)) return false;
+      OutgoingMediaStore.instance.adopt(
+        m.id,
+        <String?>[sent.id, sent.attachmentUrl, m.attachmentUrl],
+      );
+      return true;
+    });
     _optimisticIdByContent.removeWhere((_, id) => id == optimisticId);
     _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
@@ -3191,11 +3239,17 @@ class _ChatScreenState extends State<ChatScreen> {
         .where((m) => _isMine(m) && !_isLocalOutgoingEchoId(m.id))
         .toList();
     if (canonicalOutgoing.isEmpty) return;
-    _messages.removeWhere(
-      (candidate) => canonicalOutgoing.any(
-        (sent) => _isDuplicateOutgoingEcho(candidate, sent),
-      ),
-    );
+    _messages.removeWhere((candidate) {
+      for (final sent in canonicalOutgoing) {
+        if (!_isDuplicateOutgoingEcho(candidate, sent)) continue;
+        OutgoingMediaStore.instance.adopt(
+          candidate.id,
+          <String?>[sent.id, sent.attachmentUrl, candidate.attachmentUrl],
+        );
+        return true;
+      }
+      return false;
+    });
   }
 
   bool _isDuplicateOutgoingEcho(ChatMessage candidate, ChatMessage sent) {
