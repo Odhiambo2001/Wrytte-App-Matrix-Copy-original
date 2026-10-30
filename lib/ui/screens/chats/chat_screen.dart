@@ -5,7 +5,10 @@ import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'
-    show ErrorWidgetBuilder, FlutterExceptionHandler, listEquals,
+    show
+        ErrorWidgetBuilder,
+        FlutterExceptionHandler,
+        listEquals,
         visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -15,6 +18,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:matrix/matrix.dart' as mx;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'package:wrytte/components/user_avatar.dart';
 import 'package:wrytte/models/chat_models/chat_conversation.dart';
@@ -683,7 +687,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (result.poll case final poll?) {
       final description = poll.description?.trim();
-      final text = 'Poll: ${poll.question}\n'
+      final text =
+          'Poll: ${poll.question}\n'
           '${description == null || description.isEmpty ? '' : '$description\n'}'
           '${poll.options.map((option) => '• $option').join('\n')}';
       final preview = ChatMessage(
@@ -744,10 +749,7 @@ class _ChatScreenState extends State<ChatScreen> {
     };
     _prevErrorWidgetBuilder = ErrorWidget.builder;
     ErrorWidget.builder = (details) {
-      _dbg(
-        'ErrorWidget',
-        '${details.exceptionAsString()}\n${details.stack}',
-      );
+      _dbg('ErrorWidget', '${details.exceptionAsString()}\n${details.stack}');
       return _prevErrorWidgetBuilder(details);
     };
     BlockStateService.instance.revision.addListener(_onBlockStateChanged);
@@ -889,8 +891,8 @@ class _ChatScreenState extends State<ChatScreen> {
     entry = OverlayEntry(
       builder: (overlayContext) {
         final media = MediaQuery.of(overlayContext);
-        final bottomObstruction = media.viewInsets.bottom >
-                media.viewPadding.bottom
+        final bottomObstruction =
+            media.viewInsets.bottom > media.viewPadding.bottom
             ? media.viewInsets.bottom
             : media.viewPadding.bottom;
         return IgnorePointer(
@@ -1014,9 +1016,9 @@ class _ChatScreenState extends State<ChatScreen> {
       final typingUserIds = _isPeerTypingRedacted()
           ? <String>{}
           : room.typingUsers
-              .where((user) => user.id != currentUserId)
-              .map((user) => user.id)
-              .toSet();
+                .where((user) => user.id != currentUserId)
+                .map((user) => user.id)
+                .toSet();
       final typingUsersChanged =
           typingUserIds.length != _typingUserIds.length ||
           !typingUserIds.containsAll(_typingUserIds);
@@ -1744,8 +1746,8 @@ class _ChatScreenState extends State<ChatScreen> {
       // reading. In this reversed viewport, offset 0 is the latest message.
       // Capture the position before replacing the list because the rebuild can
       // temporarily change the scroll metrics.
-      final wasNearLatest = !_scrollCtrl.hasClients ||
-          _scrollCtrl.position.pixels <= 24;
+      final wasNearLatest =
+          !_scrollCtrl.hasClients || _scrollCtrl.position.pixels <= 24;
       setState(() => _replaceMessagesFromSharedCache(messages));
       if (wasNearLatest) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1838,41 +1840,37 @@ class _ChatScreenState extends State<ChatScreen> {
     if (entries.isEmpty) return;
     final restored = <ChatMessage>[];
     for (final entry in entries) {
-    final eventId = entry['event_id']?.toString().trim() ?? '';
-    final blockedMessageId =
-        entry['blocked_message_id']?.toString().trim() ?? '';
+      final eventId = entry['event_id']?.toString().trim() ?? '';
+      final blockedMessageId =
+          entry['blocked_message_id']?.toString().trim() ?? '';
 
-    // Prefer the event ID as the canonical message ID.
-    final id = eventId.isNotEmpty ? eventId : blockedMessageId;
+      // Prefer the event ID as the canonical message ID.
+      final id = eventId.isNotEmpty ? eventId : blockedMessageId;
 
-    final text = entry['text']?.toString() ?? '';
-    final time =
-        DateTime.tryParse(entry['time']?.toString() ?? '') ?? DateTime.now();
+      final text = entry['text']?.toString() ?? '';
+      final time =
+          DateTime.tryParse(entry['time']?.toString() ?? '') ?? DateTime.now();
 
-    final alreadyExists = _messages.any(
-      (message) =>
-          message.id == eventId ||
-          message.id == blockedMessageId,
-    );
+      final alreadyExists = _messages.any(
+        (message) => message.id == eventId || message.id == blockedMessageId,
+      );
 
-    if (id.isEmpty || text.isEmpty || alreadyExists) {
-      continue;
+      if (id.isEmpty || text.isEmpty || alreadyExists) {
+        continue;
+      }
+
+      restored.add(
+        ChatMessage(
+          id: id,
+          conversationId: roomId,
+          senderId: widget.currentUserId,
+          receiverId: _normaliseId(widget.receiverId),
+          content: text,
+          timestamp: time,
+          status: MessageStatus.sent,
+        ),
+      );
     }
-
-    restored.add(
-      ChatMessage(
-        id: id,
-        conversationId: roomId,
-        senderId: widget.currentUserId,
-        receiverId: _normaliseId(widget.receiverId),
-        content: text,
-        timestamp: time,
-        status: MessageStatus.sent,
-      ),
-    );
-  }
-
-
 
     if (restored.isNotEmpty && mounted) {
       setState(() => _mergeMessages(restored));
@@ -2238,9 +2236,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final isScrollable = metrics.maxScrollExtent > metrics.minScrollExtent;
     final distanceFromLatest = metrics.extentBefore;
     final currentlyVisible = _scrollToLatestVisible.value;
-    final shouldShow = isScrollable &&
-        distanceFromLatest >
-            (currentlyVisible ? hideDistance : revealDistance);
+    final shouldShow =
+        isScrollable &&
+        distanceFromLatest > (currentlyVisible ? hideDistance : revealDistance);
     if (currentlyVisible != shouldShow) {
       _scrollToLatestVisible.value = shouldShow;
     }
@@ -2837,8 +2835,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }) async {
     final lowerPath = filePath.toLowerCase();
     if (type == 'file' &&
-        RegExp(r'\.(png|jpe?g|gif|webp|bmp|heic|heif)(?:$|[?#])')
-            .hasMatch(lowerPath)) {
+        RegExp(
+          r'\.(png|jpe?g|gif|webp|bmp|heic|heif)(?:$|[?#])',
+        ).hasMatch(lowerPath)) {
       type = 'image';
       apkLog(
         'ChatScreen._sendAttachment',
@@ -2853,6 +2852,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isDeletedConversation) return;
 
     final mediaSize = type == 'image' ? await _readImageSize(filePath) : null;
+    final uploadPath = filePath;
 
     final normalisedReceiverId = _normaliseId(widget.receiverId);
     final placeholderId = 'attach_${DateTime.now().millisecondsSinceEpoch}';
@@ -2891,10 +2891,10 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       return;
     }
-    if (!await File(filePath).exists()) {
+    if (!await File(uploadPath).exists()) {
       _dbg(
         'Attachment.localFileError',
-        'type=$type path=$filePath error=file_not_found',
+        'type=$type path=$uploadPath error=file_not_found',
       );
       if (mounted) {
         setState(() => _messages.removeWhere((m) => m.id == placeholderId));
@@ -2916,17 +2916,17 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       await _chat.validateAttachmentUpload(
-        filePath: filePath,
+        filePath: uploadPath,
         attachmentType: type,
       );
       await _chat.removeFailedAttachmentAttempts(
         conversationId: realConvId,
-        filePath: filePath,
+        filePath: uploadPath,
       );
     } catch (e, stackTrace) {
       await _chat.removeFailedAttachmentAttempts(
         conversationId: realConvId,
-        filePath: filePath,
+        filePath: uploadPath,
       );
       _dbg(
         'Attachment.validateError',
@@ -2941,17 +2941,17 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final sent = await _chat.sendAttachmentMessage(
         receiverID: normalisedReceiverId,
-        filePath: filePath,
+        filePath: uploadPath,
         attachmentType: type,
         conversationId: realConvId,
         caption: caption,
         mediaWidth: mediaSize?.width.round(),
         mediaHeight: mediaSize?.height.round(),
       );
-      OutgoingMediaStore.instance.adopt(
-        placeholderId,
-        <String?>[sent.id, sent.attachmentUrl],
-      );
+      OutgoingMediaStore.instance.adopt(placeholderId, <String?>[
+        sent.id,
+        sent.attachmentUrl,
+      ]);
       await _saveCanonicalSentMessage(sent);
       if (mounted) {
         setState(() => _replaceOptimisticMessage(placeholderId, sent));
@@ -3054,8 +3054,10 @@ class _ChatScreenState extends State<ChatScreen> {
     incoming = canonical.values.toList();
     final incomingIds = incoming.map((message) => message.id).toSet();
     final optimistic = _messages
-        .where((message) =>
-            _isLocalOutgoingEcho(message) && !_isInvalidFailedImage(message))
+        .where(
+          (message) =>
+              _isLocalOutgoingEcho(message) && !_isInvalidFailedImage(message),
+        )
         .toList();
     _messages
       ..clear()
@@ -3207,16 +3209,16 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _replaceOptimisticMessage(String optimisticId, ChatMessage sent) {
-    OutgoingMediaStore.instance.adopt(
-      optimisticId,
-      <String?>[sent.id, sent.attachmentUrl],
-    );
+    OutgoingMediaStore.instance.adopt(optimisticId, <String?>[
+      sent.id,
+      sent.attachmentUrl,
+    ]);
     _messages.removeWhere((m) => m.id == sent.id && m.id != optimisticId);
     final idx = _messages.indexWhere((m) => m.id == optimisticId);
     if (idx != -1) {
       final optimistic = _messages[idx];
-      _messages[idx] = optimistic.attachmentType == 'image' &&
-              sent.attachmentType != 'image'
+      _messages[idx] =
+          optimistic.attachmentType == 'image' && sent.attachmentType != 'image'
           ? sent.copyWith(attachmentType: 'image')
           : sent;
     } else {
@@ -3224,10 +3226,11 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _messages.removeWhere((m) {
       if (!_isDuplicateOutgoingEcho(m, sent)) return false;
-      OutgoingMediaStore.instance.adopt(
-        m.id,
-        <String?>[sent.id, sent.attachmentUrl, m.attachmentUrl],
-      );
+      OutgoingMediaStore.instance.adopt(m.id, <String?>[
+        sent.id,
+        sent.attachmentUrl,
+        m.attachmentUrl,
+      ]);
       return true;
     });
     _optimisticIdByContent.removeWhere((_, id) => id == optimisticId);
@@ -3242,10 +3245,11 @@ class _ChatScreenState extends State<ChatScreen> {
     _messages.removeWhere((candidate) {
       for (final sent in canonicalOutgoing) {
         if (!_isDuplicateOutgoingEcho(candidate, sent)) continue;
-        OutgoingMediaStore.instance.adopt(
-          candidate.id,
-          <String?>[sent.id, sent.attachmentUrl, candidate.attachmentUrl],
-        );
+        OutgoingMediaStore.instance.adopt(candidate.id, <String?>[
+          sent.id,
+          sent.attachmentUrl,
+          candidate.attachmentUrl,
+        ]);
         return true;
       }
       return false;
@@ -3587,9 +3591,7 @@ class _ChatScreenState extends State<ChatScreen> {
             !isPinnedForMe) {
           return;
         }
-        if (action.label == 'Unpin' &&
-            !isPinnedForEveryone &&
-            isPinnedForMe) {
+        if (action.label == 'Unpin' && !isPinnedForEveryone && isPinnedForMe) {
           await _setMessagePinnedForMe(message, pinned: false);
           return;
         }
@@ -3631,7 +3633,7 @@ class _ChatScreenState extends State<ChatScreen> {
         setState(() => _selectedMessageIds.add(message.id));
         break;
       case MessageActionType.save:
-        _showChatNotice('Saved');
+        await _saveImageMessage(message);
         return;
       case MessageActionType.edit:
       case MessageActionType.editMedia:
@@ -3639,6 +3641,62 @@ class _ChatScreenState extends State<ChatScreen> {
           await _editImageAsNewMedia(message);
         }
         break;
+    }
+  }
+
+  Future<void> _saveImageMessage(ChatMessage message) async {
+    final source = message.attachmentUrl?.trim() ?? '';
+    if (source.isEmpty) {
+      _showChatNotice('Image unavailable');
+      return;
+    }
+    try {
+      final sourceForDownload = source.startsWith('mxc://')
+          ? (() {
+              final uri = Uri.tryParse(source);
+              if (uri == null || uri.host.isEmpty || uri.pathSegments.isEmpty) {
+                return source;
+              }
+              return Uri.parse(MatrixConfig.homeserver)
+                  .replace(
+                    path:
+                        '/_matrix/client/v1/media/download/${Uri.encodeComponent(uri.host)}/${Uri.encodeComponent(uri.pathSegments.join('/'))}',
+                  )
+                  .toString();
+            })()
+          : source;
+      final sourceFile =
+          await AttachmentLocalStore.instance.existingComplete(
+            source: source,
+            fileName: message.content.trim().isEmpty
+                ? 'image'
+                : message.content,
+          ) ??
+          await AttachmentLocalStore.instance.existingComplete(
+            source: sourceForDownload,
+            fileName: message.content.trim().isEmpty
+                ? 'image'
+                : message.content,
+          ) ??
+          (await AttachmentLocalStore.instance.ensureComplete(
+            source: sourceForDownload,
+            fileName: message.content.trim().isEmpty
+                ? 'image'
+                : message.content,
+          )).file;
+      final documents = await getApplicationDocumentsDirectory();
+      final downloads = Directory('${documents.path}/Wrytte Downloads');
+      await downloads.create(recursive: true);
+      final rawName = sourceFile.uri.pathSegments.isNotEmpty
+          ? sourceFile.uri.pathSegments.last
+          : 'image';
+      final name = rawName.contains('.') ? rawName : '$rawName.jpg';
+      final destination = File('${downloads.path}/$name');
+      await sourceFile.copy(destination.path);
+      if (mounted) _showChatNotice('Saved to Wrytte Downloads');
+    } catch (error) {
+      debugPrint('[ChatScreen.saveImage] source=$source error=$error');
+      if (mounted) _showChatNotice('Could not save image');
     }
   }
 
@@ -3664,7 +3722,8 @@ class _ChatScreenState extends State<ChatScreen> {
           source: source,
           fileName: 'image',
         );
-        final copy = cached ??
+        final copy =
+            cached ??
             (await AttachmentLocalStore.instance.ensureComplete(
               source: source,
               fileName: 'image',
@@ -3675,7 +3734,9 @@ class _ChatScreenState extends State<ChatScreen> {
         _showChatNotice('Could not open photo editor');
         return;
       }
-      final repository = MediaLibraryRepositoryImpl(DeviceMediaLibraryService());
+      final repository = MediaLibraryRepositoryImpl(
+        DeviceMediaLibraryService(),
+      );
       final result = await Navigator.of(context, rootNavigator: true)
           .push<ChatMediaEditorResult>(
             ExpandingSurfaceRoute<ChatMediaEditorResult>(
@@ -3717,7 +3778,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final selected = _selectedMessages;
     if (selected.isEmpty) return;
     await Clipboard.setData(
-      ClipboardData(text: selected.map((message) => message.content).join('\n')),
+      ClipboardData(
+        text: selected.map((message) => message.content).join('\n'),
+      ),
     );
     if (mounted) setState(_selectedMessageIds.clear);
   }
@@ -3737,7 +3800,9 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (!mounted) return;
     setState(() {
-      _messages.removeWhere((message) => _selectedMessageIds.contains(message.id));
+      _messages.removeWhere(
+        (message) => _selectedMessageIds.contains(message.id),
+      );
       _selectedMessageIds.clear();
     });
   }
@@ -3749,15 +3814,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   List<MessageAction> _selectionPinActions() => const [
-        MessageAction(type: MessageActionType.pin, label: 'Pin for everyone'),
-        MessageAction(type: MessageActionType.pin, label: 'Pin for me'),
-        MessageAction(type: MessageActionType.pin, label: 'Cancel'),
-      ];
+    MessageAction(type: MessageActionType.pin, label: 'Pin for everyone'),
+    MessageAction(type: MessageActionType.pin, label: 'Pin for me'),
+    MessageAction(type: MessageActionType.pin, label: 'Cancel'),
+  ];
 
   List<MessageAction> _selectionDeleteActions() {
     final selected = _selectedMessages;
-    final canDeleteForEveryone = selected.isNotEmpty &&
-        selected.every(_isMine);
+    final canDeleteForEveryone = selected.isNotEmpty && selected.every(_isMine);
     return [
       if (canDeleteForEveryone)
         const MessageAction(
@@ -3776,7 +3840,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _handleSelectionMenuAction(MessageAction action) async {
     if (action.label == 'Cancel') {
-      if (mounted) setState(() => _selectionActionMenu = _SelectionActionMenu.none);
+      if (mounted)
+        setState(() => _selectionActionMenu = _SelectionActionMenu.none);
       return;
     }
     final selected = _selectedMessages;
@@ -3803,12 +3868,14 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) {
         setState(() {
           for (final message in selected) {
-            _upsertMessage(message.copyWith(
-              content: _isMine(message)
-                  ? 'This message was deleted'
-                  : 'This message was deleted by admin',
-              isDeletedForEveryone: true,
-            ));
+            _upsertMessage(
+              message.copyWith(
+                content: _isMine(message)
+                    ? 'This message was deleted'
+                    : 'This message was deleted by admin',
+                isDeletedForEveryone: true,
+              ),
+            );
           }
           _selectedMessageIds.clear();
           _selectionActionMenu = _SelectionActionMenu.none;
@@ -3816,7 +3883,8 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       return;
     }
-    if (mounted) setState(() => _selectionActionMenu = _SelectionActionMenu.none);
+    if (mounted)
+      setState(() => _selectionActionMenu = _SelectionActionMenu.none);
   }
 
   Future<void> _setMessagePinnedForMe(
@@ -4424,32 +4492,31 @@ class _ChatScreenState extends State<ChatScreen> {
               Positioned.fill(
                 child: Stack(
                   children: [
-                  PinnedEventsStrip(
-                    pinnedEventIds: _visiblePinnedEventIds,
-                    events: _messages,
-                    onOpenEvent: _openPinnedMessage,
-                  ),
-                  Positioned.fill(
-                    child: Padding(
-                      padding: EdgeInsets.only(bottom: keyboardInset),
-                      child: _buildMessageList(
-                        topInset: appBarH + 8.0,
-                        bottomInset: _composerHeight + 8.0,
+                    PinnedEventsStrip(
+                      pinnedEventIds: _visiblePinnedEventIds,
+                      events: _messages,
+                      onOpenEvent: _openPinnedMessage,
+                    ),
+                    Positioned.fill(
+                      child: Padding(
+                        padding: EdgeInsets.only(bottom: keyboardInset),
+                        child: _buildMessageList(
+                          topInset: appBarH + 8.0,
+                          bottomInset: _composerHeight + 8.0,
+                        ),
                       ),
                     ),
-                  ),
 
-                  if (_selectedMessageIds.isEmpty)
-                    _buildAppBar(statusBarH),
+                    if (_selectedMessageIds.isEmpty) _buildAppBar(statusBarH),
 
-                  PositionedDirectional(
-                    start: 0,
-                    end: 0,
-                    bottom: keyboardInset,
-                    child: Column(
-                      key: _composerKey,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
+                    PositionedDirectional(
+                      start: 0,
+                      end: 0,
+                      bottom: keyboardInset,
+                      child: Column(
+                        key: _composerKey,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                           if (_someoneElseTyping) const _TypingIndicator(),
 
                           // Render the composer immediately. Block state is
@@ -4514,12 +4581,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                 editingMediaType: _editingMediaPath == null
                                     ? null
                                     : 'image',
-                                onReplaceEditingMedia:
-                                    _editingMessage == null
-                                        ? null
-                                        : () => _editImageAsNewMedia(
-                                            _editingMessage!,
-                                          ),
+                                onReplaceEditingMedia: _editingMessage == null
+                                    ? null
+                                    : () => _editImageAsNewMedia(
+                                        _editingMessage!,
+                                      ),
                                 onCancelEdit: _editingMessage == null
                                     ? null
                                     : () {
@@ -4559,9 +4625,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                 onRecordingActiveChanged: (_) {},
                               ),
                             ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
                   ],
                 ),
               ),
@@ -4578,14 +4644,16 @@ class _ChatScreenState extends State<ChatScreen> {
                       _selectionActionMenu = _SelectionActionMenu.none;
                     }),
                     onPin: () => setState(() {
-                      _selectionActionMenu = _selectionActionMenu == _SelectionActionMenu.pin
+                      _selectionActionMenu =
+                          _selectionActionMenu == _SelectionActionMenu.pin
                           ? _SelectionActionMenu.none
                           : _SelectionActionMenu.pin;
                     }),
                     onCopy: () => unawaited(_copySelectedMessages()),
                     onForward: () => unawaited(_forwardSelectedMessages()),
                     onDelete: () => setState(() {
-                      _selectionActionMenu = _selectionActionMenu == _SelectionActionMenu.delete
+                      _selectionActionMenu =
+                          _selectionActionMenu == _SelectionActionMenu.delete
                           ? _SelectionActionMenu.none
                           : _SelectionActionMenu.delete;
                     }),
@@ -4626,7 +4694,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
               // ── debug overlay ─────────────────────────────────────────────
               if (_showDebug) _buildDebugOverlay(appBarH),
-
             ],
           ),
         ),
@@ -4634,12 +4701,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildAutoDeleteBanner(
-    String duration, {
-    String? enabledByOverride,
-  }) {
+  Widget _buildAutoDeleteBanner(String duration, {String? enabledByOverride}) {
     final roomId = _resolvedConversationId ?? widget.conversationId;
-    final enabledBy = enabledByOverride ??
+    final enabledBy =
+        enabledByOverride ??
         AutoDeleteService.instance.enabledByForRoom(roomId);
     final isOff = duration == 'Off';
     final currentUserId = MatrixClientService.instance.client.userID;
@@ -4648,9 +4713,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final receiverName = _resolvedHeaderName.trim();
     final noticeText = isOff
         ? (enabledByCurrentUser
-            ? 'You turned off auto-delete messages. '
-            : '${receiverName.isEmpty ? 'This user' : receiverName} '
-                  'turned off auto-delete messages. ')
+              ? 'You turned off auto-delete messages. '
+              : '${receiverName.isEmpty ? 'This user' : receiverName} '
+                    'turned off auto-delete messages. ')
         : enabledByCurrentUser
         ? 'You turned on auto-delete messages. '
         : '${receiverName.isEmpty ? 'This user' : receiverName} '
@@ -4977,58 +5042,62 @@ class _ChatScreenState extends State<ChatScreen> {
         ? autoDeleteChanges
         : autoDeleteChange == null
         ? (autoDeleteDuration == null
-            ? const <Map<String, String>>[]
-            : <Map<String, String>>[
-                {
-                  'duration': autoDeleteDuration,
-                  'enabledBy':
-                      AutoDeleteService.instance.enabledByForRoom(
-                        _resolvedConversationId ?? widget.conversationId,
-                      ) ??
-                      '',
-                  'changedAt':
-                      autoDeleteEnabledAt?.toUtc().toIso8601String() ?? '',
-                },
-              ])
+              ? const <Map<String, String>>[]
+              : <Map<String, String>>[
+                  {
+                    'duration': autoDeleteDuration,
+                    'enabledBy':
+                        AutoDeleteService.instance.enabledByForRoom(
+                          _resolvedConversationId ?? widget.conversationId,
+                        ) ??
+                        '',
+                    'changedAt':
+                        autoDeleteEnabledAt?.toUtc().toIso8601String() ?? '',
+                  },
+                ])
         : <Map<String, String>>[autoDeleteChange];
     final showAutoDeleteNotice = noticeChanges.isNotEmpty;
-    final timelineItems = <({
-      ChatMessage? message,
-      Map<String, String>? change,
-      DateTime timestamp,
-      bool encryption,
-    })>[
-      if (_messages.isNotEmpty)
-        (
-          message: null,
-          change: null,
-          timestamp: DateTime.fromMillisecondsSinceEpoch(0),
-          encryption: true,
-        ),
-      for (final message in _messages)
-        (
-          message: message,
-          change: null,
-          timestamp: message.timestamp,
-          encryption: false,
-        ),
-      for (final change in noticeChanges)
-        if (DateTime.tryParse(change['changedAt'] ?? '') != null ||
-            DateTime.tryParse(change['enabledAt'] ?? '') != null)
-          (
-            message: null,
-            change: change,
-            timestamp:
-                (DateTime.tryParse(change['changedAt'] ?? '') ??
-                        DateTime.tryParse(change['enabledAt'] ?? ''))!
-                    .toLocal(),
-            encryption: false,
-          ),
-    ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final timelineItems =
+        <
+            ({
+              ChatMessage? message,
+              Map<String, String>? change,
+              DateTime timestamp,
+              bool encryption,
+            })
+          >[
+            if (_messages.isNotEmpty)
+              (
+                message: null,
+                change: null,
+                timestamp: DateTime.fromMillisecondsSinceEpoch(0),
+                encryption: true,
+              ),
+            for (final message in _messages)
+              (
+                message: message,
+                change: null,
+                timestamp: message.timestamp,
+                encryption: false,
+              ),
+            for (final change in noticeChanges)
+              if (DateTime.tryParse(change['changedAt'] ?? '') != null ||
+                  DateTime.tryParse(change['enabledAt'] ?? '') != null)
+                (
+                  message: null,
+                  change: change,
+                  timestamp:
+                      (DateTime.tryParse(change['changedAt'] ?? '') ??
+                              DateTime.tryParse(change['enabledAt'] ?? ''))!
+                          .toLocal(),
+                  encryption: false,
+                ),
+          ]
+          ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     _dbg(
       'MessageList',
       'build msgs=${_messages.length} timeline=${timelineItems.length} '
-      'dupIds=${duplicateMessageIds(_messages)} loadingInitial=$_loadingInitial',
+          'dupIds=${duplicateMessageIds(_messages)} loadingInitial=$_loadingInitial',
     );
     final autoDeleteNewCount = autoDeleteDuration == null
         ? 0
@@ -5120,8 +5189,12 @@ class _ChatScreenState extends State<ChatScreen> {
                           );
                         }
                         final isMine = _isMine(msg);
-                        final isPinnedForEveryone = _pinnedEventIds.contains(msg.id);
-                        final isPinnedForMe = _pinnedForMeEventIds.contains(msg.id);
+                        final isPinnedForEveryone = _pinnedEventIds.contains(
+                          msg.id,
+                        );
+                        final isPinnedForMe = _pinnedForMeEventIds.contains(
+                          msg.id,
+                        );
                         final actionRoom = MatrixChatService.instance
                             .getRoomById(msg.conversationId);
                         final isActionAdmin =
@@ -5132,7 +5205,8 @@ class _ChatScreenState extends State<ChatScreen> {
                               actionRoom.client.userID ?? '',
                             );
                         final canDeleteForEveryone =
-                            isMine || (isActionAdmin && actionRoom?.canRedact == true);
+                            isMine ||
+                            (isActionAdmin && actionRoom?.canRedact == true);
                         final canPin =
                             !_isReadOnlySuggestedGroup &&
                             actionRoom != null &&
@@ -5201,16 +5275,20 @@ class _ChatScreenState extends State<ChatScreen> {
                                   if (canPin || canPinForMe)
                                     MessageAction(
                                       type: MessageActionType.pin,
-                                      label: isPinnedForEveryone || isPinnedForMe
+                                      label:
+                                          isPinnedForEveryone || isPinnedForMe
                                           ? 'Unpin'
                                           : 'Pin',
-                                      svgAsset: isPinnedForEveryone || isPinnedForMe
+                                      svgAsset:
+                                          isPinnedForEveryone || isPinnedForMe
                                           ? 'assets/svg/Unpin icon .svg'
                                           : 'assets/svg/Pin icon .svg',
                                       iconScale: 1.12,
                                     ),
                                   if (!_isReadOnlySuggestedGroup &&
-                                      (isMine || !_isGroupChat || canDeleteForEveryone))
+                                      (isMine ||
+                                          !_isGroupChat ||
+                                          canDeleteForEveryone))
                                     const MessageAction.delete(),
                                   const MessageAction.select(),
                                 ],
@@ -5231,9 +5309,14 @@ class _ChatScreenState extends State<ChatScreen> {
                                     bottom: 0,
                                     child: IgnorePointer(
                                       child: AnimatedContainer(
-                                        duration: const Duration(milliseconds: 160),
-                                        color: _selectedMessageIds.contains(msg.id)
-                                            ? const Color(0xFF4DA3FF).withValues(alpha: .13)
+                                        duration: const Duration(
+                                          milliseconds: 160,
+                                        ),
+                                        color:
+                                            _selectedMessageIds.contains(msg.id)
+                                            ? const Color(
+                                                0xFF4DA3FF,
+                                              ).withValues(alpha: .13)
                                             : Colors.transparent,
                                       ),
                                     ),
@@ -5242,45 +5325,50 @@ class _ChatScreenState extends State<ChatScreen> {
                                     duration: const Duration(milliseconds: 160),
                                     curve: Curves.easeOutCubic,
                                     padding: EdgeInsetsDirectional.only(
-                                      start: _selectedMessageIds.isNotEmpty && !isMine
+                                      start:
+                                          _selectedMessageIds.isNotEmpty &&
+                                              !isMine
                                           ? 38
                                           : 0,
                                     ),
                                     child: MessageSwipeActionTarget(
-                                config: MessageActionConfig(
-                                  actions: const [
-                                    MessageAction.reply(),
-                                    MessageAction.forward(),
-                                  ],
-                                  onActionSelected: (action) async {
-                                    switch (action.type) {
-                                      case MessageActionType.reply:
-                                        if (mounted) {
-                                          setState(() => _replyingTo = msg);
-                                          unawaited(_focusComposer());
-                                        }
-                                      case MessageActionType.forward:
-                                        await _promptForward(msg);
-                                      default:
-                                        break;
-                                    }
-                                  },
-                                ),
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: _selectedMessageIds.isNotEmpty
-                                      ? () => _toggleSelectedMessage(msg.id)
-                                      : null,
-                                  child: _buildGroupAwareMessageBubble(
-                                    msg: msg,
-                                    isMine: isMine,
-                                    showTail: showTail,
-                                    showGroupAvatar: showGroupAvatar,
-                                    effectiveAttachmentType:
-                                        effectiveAttachmentType,
-                                  ),
-                                ),
-                                  ),
+                                      config: MessageActionConfig(
+                                        actions: const [
+                                          MessageAction.reply(),
+                                          MessageAction.forward(),
+                                        ],
+                                        onActionSelected: (action) async {
+                                          switch (action.type) {
+                                            case MessageActionType.reply:
+                                              if (mounted) {
+                                                setState(
+                                                  () => _replyingTo = msg,
+                                                );
+                                                unawaited(_focusComposer());
+                                              }
+                                            case MessageActionType.forward:
+                                              await _promptForward(msg);
+                                            default:
+                                              break;
+                                          }
+                                        },
+                                      ),
+                                      child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: _selectedMessageIds.isNotEmpty
+                                            ? () =>
+                                                  _toggleSelectedMessage(msg.id)
+                                            : null,
+                                        child: _buildGroupAwareMessageBubble(
+                                          msg: msg,
+                                          isMine: isMine,
+                                          showTail: showTail,
+                                          showGroupAvatar: showGroupAvatar,
+                                          effectiveAttachmentType:
+                                              effectiveAttachmentType,
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                   if (_selectedMessageIds.isNotEmpty)
                                     PositionedDirectional(
@@ -5289,9 +5377,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                       bottom: 0,
                                       child: Center(
                                         child: GestureDetector(
-                                          onTap: () => _toggleSelectedMessage(msg.id),
+                                          onTap: () =>
+                                              _toggleSelectedMessage(msg.id),
                                           child: ChatMessageSelectionBadge(
-                                            selected: _selectedMessageIds.contains(msg.id),
+                                            selected: _selectedMessageIds
+                                                .contains(msg.id),
                                           ),
                                         ),
                                       ),
@@ -5305,10 +5395,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                   msg.timestamp,
                                 ))
                               SizedBox(
-                                height: _isSameBubbleAuthor(
-                                      msg,
-                                      nextChronological,
-                                    )
+                                height:
+                                    _isSameBubbleAuthor(msg, nextChronological)
                                     ? 2
                                     : 7,
                               ),
@@ -5503,7 +5591,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _dbg(
       'Bubble',
       'id=${msg.id} type=$effectiveAttachmentType url=${msg.attachmentUrl} '
-      'mine=$isMine status=${msg.status.name} showTail=$showTail '
+          'mine=$isMine status=${msg.status.name} showTail=$showTail '
           'messages=${_messages.length}',
     );
     final senderName = _isGroupChat && !isMine
@@ -5553,10 +5641,12 @@ class _ChatScreenState extends State<ChatScreen> {
             ? 'Contact'
             : contactParts[1].trim(),
         contactPhone: contactParts[2].trim(),
-        contactUserId: contactParts.length >= 4 && contactParts[3].trim().isNotEmpty
+        contactUserId:
+            contactParts.length >= 4 && contactParts[3].trim().isNotEmpty
             ? contactParts[3].trim()
             : null,
-        contactAvatarUrl: contactParts.length >= 5 && contactParts[4].trim().isNotEmpty
+        contactAvatarUrl:
+            contactParts.length >= 5 && contactParts[4].trim().isNotEmpty
             ? contactParts[4].trim()
             : null,
         deliveryState: _mapDeliveryState(isMine ? msg.status : null),
@@ -5589,6 +5679,7 @@ class _ChatScreenState extends State<ChatScreen> {
       bubble = ImageMessageBubble(
         message: presentation,
         showTail: showTail,
+        onShowInChat: () => _openPinnedMessage(msg.id),
         actionConfig: MessageActionConfig(
           actions: <MessageAction>[
             if (!_isReadOnlySuggestedGroup) const MessageAction.reply(),
@@ -5903,8 +5994,7 @@ class _ChatScreenState extends State<ChatScreen> {
               uid: widget.receiverId.trim().isNotEmpty
                   ? widget.receiverId
                   : _receiverProfile?.uid ?? _receiverIdentity?.matrixUserId,
-              conversationId:
-                  _resolvedConversationId ?? widget.conversationId,
+              conversationId: _resolvedConversationId ?? widget.conversationId,
               savedNameHint: _resolvedHeaderName,
               contactStatus:
                   _receiverIsSavedContact ||
@@ -5932,7 +6022,6 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         }
       },
-
     );
   }
 

@@ -755,8 +755,9 @@ class _MessageActionOverlayState extends State<MessageActionOverlay>
 
     // true  = outgoing / sent / blue
     // false = incoming / received / dark
-    final bool isRightBubble = widget.config.alignMenuRight ??
-        (distanceToRight < distanceToLeft);
+    final bool isRightBubble =
+        distanceToRight <
+        distanceToLeft;
 
     // ========================================================================
     // MENU WIDTH
@@ -937,7 +938,7 @@ class _MessageActionOverlayState extends State<MessageActionOverlay>
             bubbleLeft:
                 bubbleLeft,
           )
-        : edge;
+        : bubbleLeft;
 
     return _MessageOverlayGeometry(
       bubbleLeft: bubbleLeft,
@@ -976,7 +977,7 @@ class _MessageActionOverlayState extends State<MessageActionOverlay>
     final double desiredLeft =
         alignRight
         ? bubbleRight - width
-        : edge;
+        : bubbleLeft;
 
     final double maximumLeft =
         math.max(

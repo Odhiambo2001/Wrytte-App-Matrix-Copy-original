@@ -17,10 +17,6 @@ import 'package:wrytte/ui/chat/models/message_action.dart';
 import 'package:wrytte/ui/chat/widgets/message_actions/message_action_target.dart';
 import 'package:wrytte/ui/chat/widgets/message_actions/message_swipe_action_target.dart';
 
-import 'package:wrytte/services/attachment_local_store.dart';
-import 'package:wrytte/services/outgoing_media_store.dart';
-import 'package:wrytte/services/matrix/matrix_config.dart';
-
 import 'package:wrytte/ui/chat/widgets/message_bubble_surface.dart';
 
 import 'package:wrytte/ui/chat/widgets/message_metadata.dart';
@@ -30,11 +26,11 @@ import 'package:wrytte/ui/core/models/expanding_surface_origin.dart';
 import 'package:wrytte/ui/core/themes/wrytte_theme.dart';
 
 import 'package:wrytte/ui/media/views/full_screen_image_view.dart';
+import 'package:wrytte/services/outgoing_media_store.dart';
+import 'package:wrytte/services/matrix/matrix_client.dart';
 
 class ImageMessageBubble extends StatefulWidget {
-
   const ImageMessageBubble({
-
     super.key,
 
     required this.message,
@@ -42,7 +38,7 @@ class ImageMessageBubble extends StatefulWidget {
     this.showTail = true,
 
     this.actionConfig,
-
+    this.onShowInChat,
   });
 
   final ChatMessagePresentation message;
@@ -50,21 +46,15 @@ class ImageMessageBubble extends StatefulWidget {
   final bool showTail;
 
   final MessageActionConfig? actionConfig;
+  final VoidCallback? onShowInChat;
 
   @override
-
   State<ImageMessageBubble> createState() => _ImageMessageBubbleState();
-
 }
 
 class _ImageMessageBubbleState extends State<ImageMessageBubble> {
-
-  static final Map<String, double> _ratioCache = <String, double>{};
-
   final GlobalKey _imageSurfaceKey = GlobalKey(
-
     debugLabel: 'chat-image-surface',
-
   );
 
   // ===========================================================================
@@ -110,7 +100,6 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   static const double _outgoingOverlayShift = 4.0;
 
   static const TextStyle _captionStyle = TextStyle(
-
     fontFamily: WrytteTypography.primaryFontFamily,
 
     color: WrytteColors.textPrimary,
@@ -120,7 +109,6 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     fontWeight: FontWeight.w400,
 
     height: 1.28,
-
   );
 
   // ===========================================================================
@@ -130,41 +118,10 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   double _aspectRatio = 4 / 3;
-  bool _aspectRatioLocked = false;
-
-  double? get _metadataAspectRatio {
-    final width = widget.message.mediaWidth;
-    final height = widget.message.mediaHeight;
-    if (width == null || height == null || width <= 0 || height <= 0) {
-      return null;
-    }
-    return width / height;
-  }
 
   ImageStream? _imageStream;
 
   ImageStreamListener? _imageListener;
-
-  // Keeps the optimistic local file visible while the server's protected
-  // mxc:// source is being authenticated and downloaded.
-  String? _handoffSource;
-  String? _preparedForSource;
-
-  @override
-  void initState() {
-    super.initState();
-    final source = _source;
-    final cachedRatio = _ratioCache[source];
-    if (cachedRatio != null) {
-      _aspectRatio = cachedRatio;
-      _aspectRatioLocked = true;
-    }
-    final cachedPath = AttachmentLocalStore.instance.peekComplete(source);
-    if (cachedPath != null) {
-      _authenticatedSource = cachedPath;
-      _preparedForSource = source;
-    }
-  }
 
   // ===========================================================================
 
@@ -174,49 +131,30 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   String get _source => widget.message.assetPath?.trim() ?? '';
 
-  String? _authenticatedSource;
-
-  bool get _isProtectedMatrixSource {
-    if (_source.startsWith('mxc://')) return true;
-    final uri = Uri.tryParse(_source);
-    final homeserver = Uri.tryParse(MatrixConfig.homeserver);
-    return uri != null &&
-        uri.hasScheme &&
-        homeserver != null &&
-        homeserver.hasScheme &&
-        uri.origin == homeserver.origin &&
-        uri.path.contains('/_matrix/client/') &&
-        uri.path.contains('/media/');
-  }
-
-  String get _effectiveSource {
+  String get _displaySource {
     if (_isMine) {
-      final staged = OutgoingMediaStore.instance.lookup(_source);
+      final staged =
+          OutgoingMediaStore.instance.lookup(_source) ??
+          OutgoingMediaStore.instance.lookup(widget.message.id);
       if (staged != null) return staged;
-      if (_source.isNotEmpty && ! _source.startsWith('mxc://')) {
-        final localFile = File(_source);
-        if (localFile.existsSync()) return _source;
+      if (_source.isNotEmpty && !_source.startsWith('mxc://')) {
+        final local = File(_source);
+        if (local.existsSync()) return _source;
       }
     }
-    return _isProtectedMatrixSource
-        ? (_authenticatedSource ?? _handoffSource ?? '')
-        : (_authenticatedSource ?? _source);
+    return _source;
   }
 
   String? get _caption {
-
     final value = widget.message.text?.trim() ?? '';
 
     if (value.isEmpty) {
-
       return null;
-
     }
 
     final normalized = value.toLowerCase();
 
     if (const <String>{
-
       'photo',
 
       'image',
@@ -224,15 +162,11 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
       'attachment',
 
       'photo message',
-
     }.contains(normalized)) {
-
       return null;
-
     }
 
     return value;
-
   }
 
   bool get _hasCaption => _caption != null;
@@ -240,7 +174,6 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   bool get _isMine => widget.message.isMine;
 
   Color get _captionBackgroundColor =>
-
       _isMine ? WrytteColors.primary : WrytteColors.surfaceRaised;
 
   // ===========================================================================
@@ -256,7 +189,6 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   Color get _outlineColor =>
-
       _isMine ? WrytteColors.primary : WrytteColors.surfaceRaised;
 
   // ===========================================================================
@@ -266,116 +198,36 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   @override
-
   void didChangeDependencies() {
-
     super.didChangeDependencies();
 
-    final metadataRatio = _metadataAspectRatio;
-    if (!_aspectRatioLocked && metadataRatio != null) {
-      _aspectRatio = metadataRatio;
-      _aspectRatioLocked = true;
-    }
-
     _resolveImageDimensions();
-    _prepareAuthenticatedSource();
-
   }
 
   @override
-
   void didUpdateWidget(covariant ImageMessageBubble oldWidget) {
-
     super.didUpdateWidget(oldWidget);
 
-    final oldSource = oldWidget.message.assetPath?.trim() ?? '';
-    final newSource = widget.message.assetPath?.trim() ?? '';
-    final sourceChanged = oldSource != newSource;
-    final metadataRatio = _metadataAspectRatio;
-
-    // A local optimistic image is reconciled with a server event using a new
-    // message id. That id change does not mean the image changed. Preserve the
-    // current geometry and adopt dimensions whenever metadata becomes
-    // available, including on a later stream update.
-    if (!_aspectRatioLocked && metadataRatio != null) {
-      _aspectRatio = metadataRatio;
-      _aspectRatioLocked = true;
-    } else if (sourceChanged && !_aspectRatioLocked) {
-      // Only a genuinely different image may reset the layout fallback.
+    if (oldWidget.message.assetPath != widget.message.assetPath) {
       _aspectRatio = 4 / 3;
-    }
 
-    if (sourceChanged) {
-      final previousSource = _effectiveSource;
       _detachImageListener();
-      _authenticatedSource = null;
-      _preparedForSource = null;
-      _handoffSource = previousSource.isNotEmpty ? previousSource : null;
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        if (_isProtectedMatrixSource) {
-          _prepareAuthenticatedSource();
-        } else {
-          _handoffSource = null;
-          _resolveImageDimensions();
+        if (!mounted) {
+          return;
         }
-      });
-    }
 
-  }
-
-  Future<void> _prepareAuthenticatedSource() async {
-    final source = _source;
-    if (source.isEmpty || !_isProtectedMatrixSource) return;
-    if (_isMine && OutgoingMediaStore.instance.lookup(source) != null) return;
-    if (_preparedForSource == source && _authenticatedSource != null) return;
-    final uri = Uri.tryParse(source);
-    if (uri == null || uri.host.isEmpty || uri.pathSegments.isEmpty) return;
-    final downloadUrl = source.startsWith('mxc://')
-        ? Uri.parse(MatrixConfig.homeserver).replace(
-            path: '/_matrix/client/v1/media/download/${Uri.encodeComponent(uri.host)}/${Uri.encodeComponent(uri.pathSegments.join('/'))}',
-          ).toString()
-        : source;
-    try {
-      final cached = await AttachmentLocalStore.instance.existingComplete(
-        source: source,
-        fileName: widget.message.fileName ?? 'image',
-      ) ??
-          await AttachmentLocalStore.instance.existingComplete(
-            source: downloadUrl,
-            fileName: widget.message.fileName ?? 'image',
-          );
-      final File localFile = cached ??
-          (await AttachmentLocalStore.instance.ensureComplete(
-        source: downloadUrl,
-        fileName: widget.message.fileName ?? 'image',
-      )).file;
-      if (!mounted || widget.message.assetPath?.trim() != source) return;
-      setState(() {
-        _authenticatedSource = localFile.path;
-        _preparedForSource = source;
-        _handoffSource = null;
+        _resolveImageDimensions();
       });
-      _resolveImageDimensions();
-    } catch (error, stackTrace) {
-      debugPrint(
-        '[CHATDBG][ImageMessageBubble.download] '
-        'source=$_source error=$error\n$stackTrace',
-      );
-      // Leave the protected source empty so a failed request cannot trigger
-      // another unauthenticated Matrix request from the image widget.
     }
   }
 
   @override
-
   void dispose() {
-
     _detachImageListener();
 
     super.dispose();
-
   }
 
   // ===========================================================================
@@ -385,13 +237,10 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   void _resolveImageDimensions() {
-
-    final provider = _imageProviderFor(_effectiveSource);
+    final provider = _imageProviderFor(_displaySource);
 
     if (provider == null) {
-
       return;
-
     }
 
     _detachImageListener();
@@ -399,83 +248,52 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     final stream = provider.resolve(createLocalImageConfiguration(context));
 
     final listener = ImageStreamListener((
-
       ImageInfo info,
 
       bool synchronousCall,
-
     ) {
-
       final double width = info.image.width.toDouble();
 
       final double height = info.image.height.toDouble();
 
       if (width <= 0 || height <= 0) {
-
         return;
-
       }
 
       final double nextRatio = width / height;
 
-      if (_source.isNotEmpty) _ratioCache[_source] = nextRatio;
-
-      // Matrix media metadata is the stable layout contract. Decoding the
-      // local file and then the authenticated remote file can briefly report
-      // different dimensions; never let that change the bubble geometry when
-      // metadata is already available.
-      if (_metadataAspectRatio != null || _aspectRatioLocked) return;
-
       if (!mounted) {
-
         return;
-
       }
 
       if ((_aspectRatio - nextRatio).abs() < 0.001) {
-
         return;
-
       }
 
       setState(() {
-
         _aspectRatio = nextRatio;
-        _aspectRatioLocked = true;
-
       });
-
-    }, onError: (Object error, StackTrace? stackTrace) {
-      debugPrint(
-        '[CHATDBG][ImageMessageBubble.load] '
-        'source=$_effectiveSource error=$error\n$stackTrace',
-      );
-    });
+    }, onError: (Object error, StackTrace? stackTrace) {});
 
     _imageStream = stream;
 
     _imageListener = listener;
 
     stream.addListener(listener);
-
   }
 
   void _detachImageListener() {
-
     final stream = _imageStream;
 
     final listener = _imageListener;
 
     if (stream != null && listener != null) {
-
       stream.removeListener(listener);
-
     }
 
     _imageStream = null;
 
     _imageListener = null;
-
   }
 
   // ===========================================================================
@@ -485,40 +303,36 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   ImageProvider? _imageProviderFor(String source) {
-
     if (source.isEmpty) {
-
       return null;
-
     }
 
     if (source.startsWith('assets/')) {
-
       return AssetImage(source);
-
     }
 
     final uri = Uri.tryParse(source);
 
     final bool isRemote =
-
         uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
 
     if (isRemote) {
-
-      return NetworkImage(source);
-
+      return NetworkImage(source, headers: _authHeaders(source));
     }
 
     final String filePath = uri?.scheme == 'file' ? uri!.toFilePath() : source;
 
     return FileImage(File(filePath));
+  }
 
+  Map<String, String>? _authHeaders(String source) {
+    if (!source.contains('/_matrix/client/v1/media/')) return null;
+    final token = MatrixClientService.instance.accessToken?.trim() ?? '';
+    return token.isEmpty ? null : {'Authorization': 'Bearer $token'};
   }
 
   Future<void> _openFullScreenImage() async {
-
-    final provider = _imageProviderFor(_effectiveSource);
+    final provider = _imageProviderFor(_displaySource);
 
     if (provider == null) return;
 
@@ -527,33 +341,24 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     final actionHandler = config?.onActionSelected;
 
     final origin = ExpandingSurfaceOrigin.fromKey(
-
       _imageSurfaceKey,
 
       borderRadius: BorderRadius.circular(_bubbleRadius),
-
     );
 
     final result = await showWrytteImageViewer(
-
       context,
 
       image: provider,
-
-      mediaSource: _source,
 
       origin: origin,
 
       imageAspectRatio: _aspectRatio,
 
       title: widget.message.isMine
-
           ? 'You'
-
           : (widget.message.senderName?.trim().isNotEmpty == true
-
                 ? widget.message.senderName!.trim()
-
                 : 'Wrytte Team'),
 
       subtitle: widget.message.timeLabel,
@@ -561,77 +366,68 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
       caption: widget.message.text,
 
       onShare: actionHandler == null
-
           ? null
-
           : () => unawaited(
-
               Future<void>.sync(
-
                 () => actionHandler(const MessageAction.forward()),
-
               ),
-
             ),
 
       onDownload: actionHandler == null
-
           ? null
-
           : () => unawaited(
-
               Future<void>.sync(
-
                 () => actionHandler(const MessageAction.save()),
-
               ),
-
             ),
 
       onEdit: actionHandler == null || !widget.message.isMine
-
           ? null
-
           : () => unawaited(
-
               Future<void>.sync(
-
                 () => actionHandler(const MessageAction.editMedia()),
-
               ),
-
             ),
 
       onReply: actionHandler == null
-
           ? null
-
           : () {
-
               Navigator.of(context, rootNavigator: true).maybePop();
 
               unawaited(
-
                 Future<void>.sync(
-
                   () => actionHandler(const MessageAction.reply()),
-
                 ),
-
               );
-
             },
 
-      onShowInChat: () => Navigator.of(context, rootNavigator: true).maybePop(),
+      onShowInChat: () {
+        Navigator.of(context, rootNavigator: true).maybePop();
+        widget.onShowInChat?.call();
+      },
 
       allowDelete: actionHandler != null,
-
+      canDeleteForEveryone: widget.message.isMine,
     );
 
-    if (!mounted || result != FullScreenImageResult.deleteRequested) return;
-
-    await actionHandler?.call(const MessageAction.delete());
-
+    if (!mounted || actionHandler == null) return;
+    if (result == FullScreenImageResult.deleteForEveryoneRequested) {
+      await actionHandler(
+        const MessageAction(
+          type: MessageActionType.delete,
+          label: 'Delete for everyone',
+          isDestructive: true,
+        ),
+      );
+    } else if (result == FullScreenImageResult.deleteForMeRequested) {
+      await actionHandler(
+        const MessageAction(
+          type: MessageActionType.delete,
+          label: 'Delete for me',
+          isDestructive: true,
+        ),
+      );
+    }
   }
 
   // ===========================================================================
@@ -641,52 +437,31 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   @override
-
   Widget build(BuildContext context) {
-
-    debugPrint(
-      '[ImageBubble:new] id=${widget.message.id} '
-      'source="${widget.message.assetPath}" '
-      'effective="$_effectiveSource" '
-      'ratio=$_aspectRatio',
-    );
-
     final config = widget.actionConfig;
 
     return LayoutBuilder(
-
       builder: (context, constraints) {
-
         final Size screenSize = MediaQuery.sizeOf(context);
 
         final double tailExtent = widget.showTail
-
             ? MessageBubbleSurface.tailExtent
-
             : 0.0;
 
         final double availableBodyWidth = constraints.hasBoundedWidth
-
             ? math.max(0.0, constraints.maxWidth - tailExtent).toDouble()
-
             : screenSize.width;
 
         final double safeAspect = _aspectRatio
-
             .clamp(_minimumAspectRatio, _maximumAspectRatio)
-
             .toDouble();
 
         final double maxHeight = math
-
             .min(
-
               screenSize.height * _maximumMediaHeightFactor,
 
               _maximumMediaHeight,
-
             )
-
             .toDouble();
 
         // ---------------------------------------------------------------------
@@ -702,29 +477,19 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         // ---------------------------------------------------------------------
 
         final double preferredImageMaxWidth = safeAspect >= 1.0
-
             ? math
-
                   .min(
-
                     screenSize.width - _landscapeScreenInset,
 
                     _maximumBubbleWidth,
-
                   )
-
                   .toDouble()
-
             : math
-
                   .min(screenSize.width * _portraitWidthFactor, 340.0)
-
                   .toDouble();
 
         double imageWidth = math
-
             .min(availableBodyWidth, preferredImageMaxWidth)
-
             .toDouble();
 
         double imageHeight = imageWidth / safeAspect;
@@ -736,11 +501,9 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         // ---------------------------------------------------------------------
 
         if (imageHeight > maxHeight) {
-
           imageHeight = maxHeight;
 
           imageWidth = imageHeight * safeAspect;
-
         }
 
         // ---------------------------------------------------------------------
@@ -750,15 +513,11 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         // ---------------------------------------------------------------------
 
         if (imageWidth < _minimumImageWidth) {
-
           imageWidth = math
-
               .min(_minimumImageWidth, availableBodyWidth)
-
               .toDouble();
 
           imageHeight = math.min(maxHeight, imageWidth / safeAspect).toDouble();
-
         }
 
         // ---------------------------------------------------------------------
@@ -768,29 +527,21 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         // ---------------------------------------------------------------------
 
         final double maximumCaptionBubbleWidth = math
-
             .min(
-
               availableBodyWidth,
 
               math.min(
-
                 _maximumBubbleWidth,
 
                 screenSize.width * _captionWidthFactor,
-
               ),
-
             )
-
             .toDouble();
 
         final double metadataWidth = _measureMediaMetadataWidth(context);
 
         final double captionDrivenWidth = _hasCaption
-
             ? _measureCaptionBubbleWidth(
-
                 context,
 
                 _caption!,
@@ -798,9 +549,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
                 metadataWidth,
 
                 maximumCaptionBubbleWidth,
-
               )
-
             : 0.0;
 
         // Caption is allowed to widen the bubble.
@@ -812,9 +561,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         // This does NOT stretch the actual image.
 
         final double bubbleBodyWidth = _hasCaption
-
             ? math.max(imageWidth, captionDrivenWidth).toDouble()
-
             : imageWidth;
 
         final double bubbleSurfaceWidth = bubbleBodyWidth + tailExtent;
@@ -826,11 +573,9 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         // ---------------------------------------------------------------------
 
         final Widget bubble = SizedBox(
-
           width: bubbleSurfaceWidth,
 
           child: _MediaBubbleFrame(
-
             isMine: _isMine,
 
             showTail: widget.showTail,
@@ -838,37 +583,30 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
             radius: _bubbleRadius,
 
             // 1.8px and same color as the bubble.
-
             outlineColor: _outlineColor,
 
             outlineWidth: _outlineWidth,
 
             child: DecoratedBox(
-
               decoration: BoxDecoration(color: _captionBackgroundColor),
 
               child: Column(
-
                 mainAxisSize: MainAxisSize.min,
 
                 crossAxisAlignment: CrossAxisAlignment.stretch,
 
                 children: [
-
                   // ===========================================================
 
                   // Image
 
                   // ===========================================================
-
                   _buildImageArea(
-
                     bodyWidth: bubbleBodyWidth,
 
                     actualImageWidth: imageWidth,
 
                     imageHeight: imageHeight,
-
                   ),
 
                   // ===========================================================
@@ -876,11 +614,8 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
                   // Caption
 
                   // ===========================================================
-
                   if (_hasCaption)
-
                     _ImageTextCaption(
-
                       text: _caption!,
 
                       message: widget.message,
@@ -890,17 +625,11 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
                       showTail: widget.showTail,
 
                       tailExtent: tailExtent,
-
                     ),
-
                 ],
-
               ),
-
             ),
-
           ),
-
         );
 
         // ---------------------------------------------------------------------
@@ -910,43 +639,30 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         // ---------------------------------------------------------------------
 
         final EdgeInsetsGeometry groupedInset = widget.showTail
-
             ? EdgeInsets.zero
-
             : EdgeInsetsDirectional.only(
-
                 start: _isMine ? 0.0 : MessageBubbleSurface.tailExtent,
 
                 end: _isMine ? MessageBubbleSurface.tailExtent : 0.0,
-
               );
 
         final Widget content = Padding(
-
           padding: groupedInset,
 
           child: Padding(
-
             padding: const EdgeInsets.symmetric(vertical: 1.0),
 
             child: bubble,
-
           ),
-
         );
 
         return Align(
-
           alignment: _isMine
-
               ? AlignmentDirectional.centerEnd
-
               : AlignmentDirectional.centerStart,
 
           child: config == null || !config.hasContent
-
               ? content
-
               : MessageActionTarget(
                   config: config,
                   child: MessageSwipeActionTarget(
@@ -954,13 +670,9 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
                     child: content,
                   ),
                 ),
-
         );
-
       },
-
     );
-
   }
 
   // ===========================================================================
@@ -970,15 +682,12 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   Widget _buildImageArea({
-
     required double bodyWidth,
 
     required double actualImageWidth,
 
     required double imageHeight,
-
   }) {
-
     // If caption text forces the overall bubble wider than the image,
 
     // keep the real image at its proper aspect-ratio width and blur the
@@ -988,7 +697,6 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     final bool needsBlurFill = (bodyWidth - actualImageWidth).abs() > 0.5;
 
     return GestureDetector(
-
       key: _imageSurfaceKey,
 
       behavior: HitTestBehavior.opaque,
@@ -996,44 +704,31 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
       onTap: () => unawaited(_openFullScreenImage()),
 
       child: SizedBox(
-
         width: bodyWidth,
 
         height: imageHeight,
 
-        child: ColoredBox(
-          color: const Color(0xFF1B1E23),
-          child: Stack(
-            fit: StackFit.expand,
+        child: Stack(
+          fit: StackFit.expand,
 
-            children: [
-
+          children: [
             // ===============================================================
 
             // Background
 
             // ===============================================================
-
             if (needsBlurFill) ...[
-
               _buildBlurredBackgroundImage(),
 
               // Slight darkening prevents the side blur from competing
 
               // with the actual foreground photo.
-
               DecoratedBox(
-
                 decoration: BoxDecoration(
-
                   color: Colors.black.withValues(alpha: 0.08),
-
                 ),
-
               ),
-
             ] else
-
               _buildBaseImage(),
 
             // ===============================================================
@@ -1041,23 +736,17 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
             // Correct-aspect foreground image
 
             // ===============================================================
-
             if (needsBlurFill)
-
               Align(
-
                 alignment: Alignment.center,
 
                 child: SizedBox(
-
                   width: actualImageWidth,
 
                   height: imageHeight,
 
                   child: _buildForegroundImage(),
-
                 ),
-
               ),
 
             // ===============================================================
@@ -1065,50 +754,32 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
             // Metadata overlay
 
             // ===============================================================
-
             if (!_hasCaption)
-
               PositionedDirectional(
-
                 end: _isMine && widget.showTail
-
                     ? MessageBubbleSurface.tailExtent + _overlayBadgeInset
-
                     : _overlayBadgeInset,
 
                 bottom: _overlayBadgeBottomInset,
 
                 child: Transform.translate(
-
                   offset: Offset(_isMine ? _outgoingOverlayShift : 0, 0),
 
                   child: _MediaOverlayBadge(
-
                     compensateStatusOffset: widget.message.isMine,
 
                     child: MessageMetadata(
-
                       message: widget.message,
 
                       onMedia: true,
-
                     ),
-
                   ),
-
                 ),
-
               ),
-
-            ],
-          ),
-
+          ],
         ),
-
       ),
-
     );
-
   }
 
   // ===========================================================================
@@ -1118,23 +789,16 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   Widget _buildBaseImage() {
-
-    if (_effectiveSource.isEmpty) {
-
-      return _loadingImage();
-
+    if (_displaySource.isEmpty) {
+      return _errorImage();
     }
 
     return _buildImageWithFit(BoxFit.cover);
-
   }
 
   Widget _buildForegroundImage() {
-
-    if (_effectiveSource.isEmpty) {
-
-      return _loadingImage();
-
+    if (_displaySource.isEmpty) {
+      return _errorImage();
     }
 
     // The SizedBox containing this widget already uses the image's
@@ -1142,43 +806,31 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     // calculated aspect ratio, so cover does not distort it.
 
     return _buildImageWithFit(BoxFit.cover);
-
   }
 
   Widget _buildBlurredBackgroundImage() {
-
     return ImageFiltered(
-
       imageFilter: ui.ImageFilter.blur(
-
         sigmaX: 14.0,
 
         sigmaY: 14.0,
 
         tileMode: TileMode.clamp,
-
       ),
 
       child: Transform.scale(
-
         scale: 1.08,
 
         child: _buildImageWithFit(BoxFit.cover),
-
       ),
-
     );
-
   }
 
   Widget _buildImageWithFit(BoxFit fit) {
-
-    final source = _effectiveSource;
+    final source = _displaySource;
 
     if (source.isEmpty) {
-
       return _errorImage();
-
     }
 
     // -------------------------------------------------------------------------
@@ -1188,14 +840,10 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     // -------------------------------------------------------------------------
 
     if (source.startsWith('assets/')) {
-
       return Image.asset(
-
         source,
 
         fit: fit,
-
-        frameBuilder: _fadeInFrame,
 
         alignment: Alignment.center,
 
@@ -1204,15 +852,12 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         filterQuality: FilterQuality.medium,
 
         errorBuilder: (context, error, stackTrace) => _errorImage(),
-
       );
-
     }
 
     final uri = Uri.tryParse(source);
 
     final bool isRemote =
-
         uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
 
     // -------------------------------------------------------------------------
@@ -1222,14 +867,12 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     // -------------------------------------------------------------------------
 
     if (isRemote) {
-
       return Image.network(
-
         source,
 
-        fit: fit,
+        headers: _authHeaders(source),
 
-        frameBuilder: _fadeInFrame,
+        fit: fit,
 
         alignment: Alignment.center,
 
@@ -1238,43 +881,29 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
         filterQuality: FilterQuality.medium,
 
         loadingBuilder: (context, child, progress) {
-
           if (progress == null) {
-
             return child;
-
           }
 
           return const ColoredBox(
-
             color: Color(0xFF1B1E23),
 
             child: Center(
-
               child: SizedBox.square(
-
                 dimension: 24.0,
 
                 child: CircularProgressIndicator(
-
                   strokeWidth: 2.0,
 
                   color: WrytteColors.textSecondary,
-
                 ),
-
               ),
-
             ),
-
           );
-
         },
 
         errorBuilder: (context, error, stackTrace) => _errorImage(),
-
       );
-
     }
 
     // -------------------------------------------------------------------------
@@ -1286,12 +915,9 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     final String filePath = uri?.scheme == 'file' ? uri!.toFilePath() : source;
 
     return Image.file(
-
       File(filePath),
 
       fit: fit,
-
-      frameBuilder: _fadeInFrame,
 
       alignment: Alignment.center,
 
@@ -1300,22 +926,6 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
       filterQuality: FilterQuality.medium,
 
       errorBuilder: (context, error, stackTrace) => _errorImage(),
-
-    );
-
-  }
-
-  Widget _fadeInFrame(
-    BuildContext context,
-    Widget child,
-    int? frame,
-    bool wasSynchronouslyLoaded,
-  ) {
-    if (wasSynchronouslyLoaded) return child;
-    return AnimatedOpacity(
-      opacity: frame == null ? 0 : 1,
-      duration: const Duration(milliseconds: 150),
-      child: child,
     );
   }
 
@@ -1326,39 +936,16 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   Widget _errorImage() {
-
     return const ColoredBox(
-
       color: Color(0xFF1B1E23),
 
       child: Center(
-
         child: Icon(
-
           Icons.broken_image_outlined,
 
           color: WrytteColors.textMuted,
 
           size: 38.0,
-
-        ),
-
-      ),
-
-    );
-
-  }
-
-  Widget _loadingImage() {
-    return const ColoredBox(
-      color: Color(0xFF1B1E23),
-      child: Center(
-        child: SizedBox.square(
-          dimension: 24.0,
-          child: CircularProgressIndicator(
-            strokeWidth: 2.0,
-            color: WrytteColors.textSecondary,
-          ),
         ),
       ),
     );
@@ -1371,7 +958,6 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   // ===========================================================================
 
   double _measureCaptionBubbleWidth(
-
     BuildContext context,
 
     String caption,
@@ -1379,19 +965,14 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     double metadataWidth,
 
     double maxWidth,
-
   ) {
-
     final maximumContentWidth = math.max(
-
       0.0,
 
       maxWidth - (_captionHorizontalPadding * 2),
-
     );
 
     final layout = _MediaTextLayoutResolver.resolve(
-
       context: context,
 
       text: caption,
@@ -1405,19 +986,14 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
       preferredMetadataGap: _captionMetadataGap,
 
       minimumMetadataGap: _captionMinimumMetadataGap,
-
     );
 
     return (layout.width + (_captionHorizontalPadding * 2))
-
         .clamp(0.0, maxWidth)
-
         .toDouble();
-
   }
 
   double _measureMediaMetadataWidth(BuildContext context) {
-
     // Measure with the same canonical widget that paints the metadata.
 
     // This keeps image/caption width calculations synchronized with:
@@ -1431,9 +1007,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
     //   ticks     = 17px
 
     return MessageMetadata.measure(context, widget.message).width;
-
   }
-
 }
 
 // =============================================================================
@@ -1443,9 +1017,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 // =============================================================================
 
 class _ImageTextCaption extends StatelessWidget {
-
   const _ImageTextCaption({
-
     required this.text,
 
     required this.message,
@@ -1455,7 +1027,6 @@ class _ImageTextCaption extends StatelessWidget {
     required this.showTail,
 
     required this.tailExtent,
-
   });
 
   final String text;
@@ -1479,33 +1050,24 @@ class _ImageTextCaption extends StatelessWidget {
   static const double _minimumMetadataGap = 6;
 
   @override
-
   Widget build(BuildContext context) {
-
     final startPadding =
-
         _horizontalPadding + (!isMine && showTail ? tailExtent : 0);
 
     final endPadding =
-
         _horizontalPadding + (isMine && showTail ? tailExtent : 0);
 
     return LayoutBuilder(
-
       builder: (context, constraints) {
-
         final maximumContentWidth = math.max(
-
           0.0,
 
           constraints.maxWidth - startPadding - endPadding,
-
         );
 
         final metadataWidth = MessageMetadata.measure(context, message).width;
 
         final layout = _MediaTextLayoutResolver.resolve(
-
           context: context,
 
           text: text,
@@ -1519,13 +1081,10 @@ class _ImageTextCaption extends StatelessWidget {
           preferredMetadataGap: _preferredMetadataGap,
 
           minimumMetadataGap: _minimumMetadataGap,
-
         );
 
         return Padding(
-
           padding: EdgeInsetsDirectional.fromSTEB(
-
             startPadding,
 
             _topPadding,
@@ -1533,11 +1092,9 @@ class _ImageTextCaption extends StatelessWidget {
             endPadding,
 
             _bottomPadding,
-
           ),
 
           child: _MediaMeasuredTextBody(
-
             text: text,
 
             message: message,
@@ -1545,23 +1102,15 @@ class _ImageTextCaption extends StatelessWidget {
             style: _ImageMessageBubbleState._captionStyle,
 
             layout: layout,
-
           ),
-
         );
-
       },
-
     );
-
   }
-
 }
 
 class _MediaMeasuredTextBody extends StatelessWidget {
-
   const _MediaMeasuredTextBody({
-
     required this.text,
 
     required this.message,
@@ -1569,7 +1118,6 @@ class _MediaMeasuredTextBody extends StatelessWidget {
     required this.style,
 
     required this.layout,
-
   });
 
   final String text;
@@ -1581,9 +1129,7 @@ class _MediaMeasuredTextBody extends StatelessWidget {
   final _MediaTextLayout layout;
 
   @override
-
   Widget build(BuildContext context) {
-
     final direction = Directionality.of(context);
 
     final scaler = MediaQuery.textScalerOf(context);
@@ -1593,17 +1139,13 @@ class _MediaMeasuredTextBody extends StatelessWidget {
     final bodySpan = TextSpan(text: text, style: style);
 
     if (!layout.metadataIsInline) {
-
       return Column(
-
         mainAxisSize: MainAxisSize.min,
 
         crossAxisAlignment: CrossAxisAlignment.stretch,
 
         children: [
-
           Text.rich(
-
             bodySpan,
 
             textDirection: direction,
@@ -1613,37 +1155,26 @@ class _MediaMeasuredTextBody extends StatelessWidget {
             locale: locale,
 
             textAlign: TextAlign.start,
-
           ),
 
           const SizedBox(height: 3),
 
           Align(
-
             alignment: Alignment.centerRight,
 
             child: _rightAlignedMetadata(),
-
           ),
-
         ],
-
       );
-
     }
 
     if (layout.bodyIsSingleLine) {
-
       return Row(
-
         crossAxisAlignment: CrossAxisAlignment.end,
 
         children: [
-
           Expanded(
-
             child: Text.rich(
-
               bodySpan,
 
               maxLines: 1,
@@ -1659,49 +1190,35 @@ class _MediaMeasuredTextBody extends StatelessWidget {
               locale: locale,
 
               textAlign: TextAlign.start,
-
             ),
-
           ),
 
           SizedBox(width: layout.metadataGap),
 
           _rightAlignedMetadata(),
-
         ],
-
       );
-
     }
 
     return Stack(
-
       fit: StackFit.passthrough,
 
       clipBehavior: Clip.none,
 
       children: [
-
         Text.rich(
-
           TextSpan(
-
             style: style,
 
             children: [
-
               TextSpan(text: text),
 
               WidgetSpan(
-
                 alignment: PlaceholderAlignment.bottom,
 
                 child: SizedBox(width: layout.metadataReservation, height: 17),
-
               ),
-
             ],
-
           ),
 
           textDirection: direction,
@@ -1711,35 +1228,24 @@ class _MediaMeasuredTextBody extends StatelessWidget {
           locale: locale,
 
           textAlign: TextAlign.start,
-
         ),
 
         Positioned(right: 0, bottom: 0, child: _rightAlignedMetadata()),
-
       ],
-
     );
-
   }
 
   Widget _rightAlignedMetadata() {
-
     return Transform.translate(
-
       offset: Offset(message.isMine ? 5 : 0, 0),
 
       child: MessageMetadata(message: message),
-
     );
-
   }
-
 }
 
 class _MediaTextLayout {
-
   const _MediaTextLayout({
-
     required this.width,
 
     required this.metadataIsInline,
@@ -1749,7 +1255,6 @@ class _MediaTextLayout {
     required this.metadataGap,
 
     required this.bodyIsSingleLine,
-
   });
 
   final double width;
@@ -1761,15 +1266,12 @@ class _MediaTextLayout {
   final double metadataGap;
 
   final bool bodyIsSingleLine;
-
 }
 
 class _MediaTextLayoutResolver {
-
   static const double _tolerance = .05;
 
   static _MediaTextLayout resolve({
-
     required BuildContext context,
 
     required String text,
@@ -1783,9 +1285,7 @@ class _MediaTextLayoutResolver {
     required double preferredMetadataGap,
 
     required double minimumMetadataGap,
-
   }) {
-
     final direction = Directionality.of(context);
 
     final scaler = MediaQuery.textScalerOf(context);
@@ -1793,9 +1293,7 @@ class _MediaTextLayoutResolver {
     final locale = Localizations.maybeLocaleOf(context);
 
     if (maximumWidth <= 0) {
-
       return const _MediaTextLayout(
-
         width: 0,
 
         metadataIsInline: false,
@@ -1805,13 +1303,10 @@ class _MediaTextLayoutResolver {
         metadataGap: 0,
 
         bodyIsSingleLine: false,
-
       );
-
     }
 
     final painter = TextPainter(
-
       text: TextSpan(text: text, style: style),
 
       textDirection: direction,
@@ -1821,17 +1316,14 @@ class _MediaTextLayoutResolver {
       locale: locale,
 
       textWidthBasis: TextWidthBasis.longestLine,
-
     )..layout(maxWidth: maximumWidth);
 
     final lines = painter.computeLineMetrics();
 
     final widestLine = lines.fold<double>(
-
       0,
 
       (widest, line) => math.max(widest, line.width),
-
     );
 
     final finalLine = lines.isEmpty ? 0.0 : lines.last.width;
@@ -1845,35 +1337,25 @@ class _MediaTextLayoutResolver {
     var gap = preferredMetadataGap;
 
     if (!hasForcedTrailingLine && lines.isNotEmpty) {
-
       inline = finalLine + gap + metadataWidth <= maximumWidth + _tolerance;
 
       if (!inline &&
-
           finalLine + minimumMetadataGap + metadataWidth <=
-
               maximumWidth + _tolerance) {
-
         gap = minimumMetadataGap;
 
         inline = true;
-
       }
-
     }
 
     final inlineWidthSlack = lineCount == 1 ? 2.0 : 0.0;
 
     var desiredWidth = inline
-
         ? math.max(
-
             widestLine,
 
             finalLine + gap + metadataWidth + inlineWidthSlack,
-
           )
-
         : math.max(widestLine, metadataWidth);
 
     desiredWidth = desiredWidth.clamp(0.0, maximumWidth).toDouble();
@@ -1883,29 +1365,22 @@ class _MediaTextLayoutResolver {
     final narrowedLines = painter.computeLineMetrics();
 
     final narrowedFinal = narrowedLines.isEmpty
-
         ? 0.0
-
         : narrowedLines.last.width;
 
     final preservesLayout = narrowedLines.length == lineCount;
 
     final inlineStillFits =
-
         !inline ||
-
         narrowedFinal + gap + metadataWidth <= desiredWidth + _tolerance;
 
     if (!preservesLayout || !inlineStillFits) {
-
       desiredWidth = maximumWidth;
-
     }
 
     painter.dispose();
 
     return _MediaTextLayout(
-
       width: desiredWidth,
 
       metadataIsInline: inline,
@@ -1915,11 +1390,8 @@ class _MediaTextLayoutResolver {
       metadataGap: inline ? gap : 0,
 
       bodyIsSingleLine: lineCount == 1,
-
     );
-
   }
-
 }
 
 // =============================================================================
@@ -1929,22 +1401,19 @@ class _MediaTextLayoutResolver {
 // =============================================================================
 
 class _MediaOverlayBadge extends StatelessWidget {
-
   const _MediaOverlayBadge({
-
     required this.child,
 
     this.compensateStatusOffset = false,
-
   });
 
   final Widget child;
 
   /// The shared delivery checkmark paints slightly lower than its layout box.
 
-/// This optical correction changes only the child's position; it does not
+  /// This optical correction changes only the child's position; it does not
 
-/// change the metadata size or the overlay's geometry.
+  /// change the metadata size or the overlay's geometry.
 
   final bool compensateStatusOffset;
 
@@ -1953,51 +1422,34 @@ class _MediaOverlayBadge extends StatelessWidget {
   static const double _horizontalPadding = 6;
 
   @override
-
   Widget build(BuildContext context) {
-
     return SizedBox(
-
       height: _height,
 
       child: DecoratedBox(
-
         decoration: BoxDecoration(
-
           // Keep the original media-overlay look: simple translucent black,
 
           // no outline and no border.
-
           color: Colors.black.withValues(alpha: 0.44),
 
           borderRadius: BorderRadius.circular(20),
-
         ),
 
         child: Padding(
-
           padding: const EdgeInsets.symmetric(horizontal: _horizontalPadding),
 
           child: Center(
-
             child: Transform.translate(
-
               offset: Offset(0, compensateStatusOffset ? -1 : 0),
 
               child: child,
-
             ),
-
           ),
-
         ),
-
       ),
-
     );
-
   }
-
 }
 
 // =============================================================================
@@ -2005,9 +1457,7 @@ class _MediaOverlayBadge extends StatelessWidget {
 // Media metadata
 
 class _MediaBubbleFrame extends StatelessWidget {
-
   const _MediaBubbleFrame({
-
     required this.isMine,
 
     required this.showTail,
@@ -2019,7 +1469,6 @@ class _MediaBubbleFrame extends StatelessWidget {
     required this.outlineWidth,
 
     required this.child,
-
   });
 
   final bool isMine;
@@ -2035,13 +1484,9 @@ class _MediaBubbleFrame extends StatelessWidget {
   final Widget child;
 
   @override
-
   Widget build(BuildContext context) {
-
     return CustomPaint(
-
       foregroundPainter: _MediaBubbleOutlinePainter(
-
         isMine: isMine,
 
         showTail: showTail,
@@ -2051,31 +1496,23 @@ class _MediaBubbleFrame extends StatelessWidget {
         color: outlineColor,
 
         strokeWidth: outlineWidth,
-
       ),
 
       child: ClipPath(
-
         clipBehavior: Clip.antiAliasWithSaveLayer,
 
         clipper: _MediaBubbleClipper(
-
           isMine: isMine,
 
           showTail: showTail,
 
           radius: radius,
-
         ),
 
         child: child,
-
       ),
-
     );
-
   }
-
 }
 
 // =============================================================================
@@ -2085,15 +1522,12 @@ class _MediaBubbleFrame extends StatelessWidget {
 // =============================================================================
 
 class _MediaBubbleClipper extends CustomClipper<Path> {
-
   const _MediaBubbleClipper({
-
     required this.isMine,
 
     required this.showTail,
 
     required this.radius,
-
   });
 
   final bool isMine;
@@ -2103,11 +1537,8 @@ class _MediaBubbleClipper extends CustomClipper<Path> {
   final double radius;
 
   @override
-
   Path getClip(Size size) {
-
     return _MediaBubblePath.create(
-
       size: size,
 
       tailOnRight: isMine,
@@ -2117,23 +1548,15 @@ class _MediaBubbleClipper extends CustomClipper<Path> {
       strokeInset: 0.0,
 
       radius: radius,
-
     );
-
   }
 
   @override
-
   bool shouldReclip(covariant _MediaBubbleClipper oldClipper) {
-
     return oldClipper.isMine != isMine ||
-
         oldClipper.showTail != showTail ||
-
         oldClipper.radius != radius;
-
   }
-
 }
 
 // =============================================================================
@@ -2143,9 +1566,7 @@ class _MediaBubbleClipper extends CustomClipper<Path> {
 // =============================================================================
 
 class _MediaBubbleOutlinePainter extends CustomPainter {
-
   const _MediaBubbleOutlinePainter({
-
     required this.isMine,
 
     required this.showTail,
@@ -2155,7 +1576,6 @@ class _MediaBubbleOutlinePainter extends CustomPainter {
     required this.color,
 
     required this.strokeWidth,
-
   });
 
   final bool isMine;
@@ -2169,17 +1589,12 @@ class _MediaBubbleOutlinePainter extends CustomPainter {
   final double strokeWidth;
 
   @override
-
   void paint(Canvas canvas, Size size) {
-
     if (size.isEmpty || strokeWidth <= 0) {
-
       return;
-
     }
 
     final Path path = _MediaBubblePath.create(
-
       size: size,
 
       tailOnRight: isMine,
@@ -2189,51 +1604,32 @@ class _MediaBubbleOutlinePainter extends CustomPainter {
       // Keep the 1.8px stroke neatly centred inside
 
       // the available media surface.
-
       strokeInset: strokeWidth / 2,
 
       radius: radius,
-
     );
 
     canvas.drawPath(
-
       path,
 
       Paint()
-
         ..isAntiAlias = true
-
         ..style = PaintingStyle.stroke
-
         ..strokeWidth = strokeWidth
-
         ..strokeCap = StrokeCap.round
-
         ..strokeJoin = StrokeJoin.round
-
         ..color = color,
-
     );
-
   }
 
   @override
-
   bool shouldRepaint(covariant _MediaBubbleOutlinePainter oldDelegate) {
-
     return oldDelegate.isMine != isMine ||
-
         oldDelegate.showTail != showTail ||
-
         oldDelegate.radius != radius ||
-
         oldDelegate.color != color ||
-
         oldDelegate.strokeWidth != strokeWidth;
-
   }
-
 }
 
 // =============================================================================
@@ -2243,7 +1639,6 @@ class _MediaBubbleOutlinePainter extends CustomPainter {
 // =============================================================================
 
 class _MediaBubblePath {
-
   static const double _templateDiameter = 33.0;
 
   static const double _bottomEllipseLeftInset = 10.5;
@@ -2263,7 +1658,6 @@ class _MediaBubblePath {
   static const double _bridgeBottomInset = 8.0;
 
   static Path create({
-
     required Size size,
 
     required bool tailOnRight,
@@ -2273,13 +1667,9 @@ class _MediaBubblePath {
     required double strokeInset,
 
     required double radius,
-
   }) {
-
     if (size.isEmpty) {
-
       return Path();
-
     }
 
     // =========================================================================
@@ -2289,11 +1679,8 @@ class _MediaBubblePath {
     // =========================================================================
 
     if (!showTail) {
-
       return _roundedBody(
-
         Rect.fromLTRB(
-
           strokeInset,
 
           strokeInset,
@@ -2301,13 +1688,10 @@ class _MediaBubblePath {
           size.width - strokeInset,
 
           size.height - strokeInset,
-
         ),
 
         radius,
-
       );
-
     }
 
     // =========================================================================
@@ -2317,27 +1701,21 @@ class _MediaBubblePath {
     // =========================================================================
 
     final Path outgoingPath = _createRightTailBubble(
-
       size: size,
 
       strokeInset: strokeInset,
 
       radius: radius,
-
     );
 
     if (tailOnRight) {
-
       return outgoingPath;
-
     }
 
     // Mirror the exact same path for incoming messages.
 
     return outgoingPath.transform(
-
       Float64List.fromList(<double>[
-
         -1,
 
         0,
@@ -2369,11 +1747,8 @@ class _MediaBubblePath {
         0,
 
         1,
-
       ]),
-
     );
-
   }
 
   // ===========================================================================
@@ -2383,37 +1758,29 @@ class _MediaBubblePath {
   // ===========================================================================
 
   static Path _createRightTailBubble({
-
     required Size size,
 
     required double strokeInset,
 
     required double radius,
-
   }) {
-
     final double availableWidth = math.max(0.0, size.width - strokeInset * 2);
 
     final double availableHeight = math.max(0.0, size.height - strokeInset * 2);
 
     if (availableWidth <= 0 || availableHeight <= 0) {
-
       return Path();
-
     }
 
     final double tailScale = math.min(1.0, availableHeight / _templateDiameter);
 
     final double reservedTail = math.min(
-
       MessageBubbleSurface.tailExtent,
 
       math.max(0.0, availableWidth - 1.0),
-
     );
 
     final Rect bodyRect = Rect.fromLTRB(
-
       strokeInset,
 
       strokeInset,
@@ -2421,13 +1788,10 @@ class _MediaBubblePath {
       size.width - strokeInset - reservedTail,
 
       size.height - strokeInset,
-
     );
 
     if (bodyRect.width <= 0 || bodyRect.height <= 0) {
-
       return Path();
-
     }
 
     final Path bodyPath = _roundedBody(bodyRect, radius);
@@ -2443,7 +1807,6 @@ class _MediaBubblePath {
     // =========================================================================
 
     final Rect bottomEllipse = Rect.fromLTWH(
-
       bodyRight - (_bottomEllipseLeftInset * tailScale),
 
       bottom - (_bottomEllipseHeight * tailScale),
@@ -2451,15 +1814,11 @@ class _MediaBubblePath {
       _bottomEllipseWidth * tailScale,
 
       _bottomEllipseHeight * tailScale,
-
     );
 
     final Path lowerLobe = Path()
-
       ..moveTo(bottomEllipse.left, bottomEllipse.center.dy)
-
       ..quadraticBezierTo(
-
         bottomEllipse.left,
 
         bottomEllipse.bottom,
@@ -2467,11 +1826,8 @@ class _MediaBubblePath {
         bottomEllipse.center.dx,
 
         bottomEllipse.bottom,
-
       )
-
       ..quadraticBezierTo(
-
         bottomEllipse.right,
 
         bottomEllipse.bottom,
@@ -2479,9 +1835,7 @@ class _MediaBubblePath {
         bottomEllipse.right,
 
         bottomEllipse.center.dy,
-
       )
-
       ..close();
 
     // =========================================================================
@@ -2491,11 +1845,8 @@ class _MediaBubblePath {
     // =========================================================================
 
     final Path bridge = Path()
-
       ..addRect(
-
         Rect.fromLTRB(
-
           bodyRight - (_bridgeWidth * tailScale),
 
           bottom - (_bridgeTopInset * tailScale),
@@ -2503,9 +1854,7 @@ class _MediaBubblePath {
           bodyRight,
 
           bottom - (_bridgeBottomInset * tailScale),
-
         ),
-
       );
 
     Path combined = Path.combine(PathOperation.union, bodyPath, lowerLobe);
@@ -2519,11 +1868,8 @@ class _MediaBubblePath {
     // =========================================================================
 
     final Path innerCutout = Path()
-
       ..addOval(
-
         Rect.fromLTWH(
-
           bodyRight,
 
           bottom - (19.0 * tailScale),
@@ -2531,13 +1877,10 @@ class _MediaBubblePath {
           _innerEllipseWidth * tailScale,
 
           _innerEllipseHeight * tailScale,
-
         ),
-
       );
 
     return Path.combine(PathOperation.difference, combined, innerCutout);
-
   }
 
   // ===========================================================================
@@ -2547,21 +1890,14 @@ class _MediaBubblePath {
   // ===========================================================================
 
   static Path _roundedBody(Rect rect, double requestedRadius) {
-
     if (rect.width <= 0 || rect.height <= 0) {
-
       return Path();
-
     }
 
     final Radius resolvedRadius = Radius.circular(
-
       math.min(requestedRadius, math.min(rect.width / 2, rect.height / 2)),
-
     );
 
     return Path()..addRRect(RRect.fromRectAndRadius(rect, resolvedRadius));
-
   }
-
 }

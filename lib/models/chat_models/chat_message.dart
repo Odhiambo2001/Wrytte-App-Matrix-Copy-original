@@ -104,11 +104,9 @@ class ChatMessage {
       senderId: json["senderId"]?.toString() ?? "",
       receiverId: json["receiverId"]?.toString() ?? "",
       content: json["content"]?.toString() ?? "",
-      timestamp:
-          json["timestamp"] != null
-              ? DateTime.tryParse(json["timestamp"].toString()) ??
-                  DateTime.now()
-              : DateTime.now(),
+      timestamp: json["timestamp"] != null
+          ? DateTime.tryParse(json["timestamp"].toString()) ?? DateTime.now()
+          : DateTime.now(),
       status: _statusFromString(json["status"]?.toString()),
       attachmentUrl: json["attachmentUrl"]?.toString(),
       attachmentType: json["attachmentType"]?.toString(),
@@ -116,9 +114,9 @@ class ChatMessage {
       mediaHeight: int.tryParse(json["mediaHeight"]?.toString() ?? ''),
       voiceDuration:
           json["voiceDuration"] !=
-                  null // ← NEW
-              ? int.tryParse(json["voiceDuration"].toString())
-              : null,
+              null // ← NEW
+          ? int.tryParse(json["voiceDuration"].toString())
+          : null,
       replyToMessageId: json["replyToMessageId"]?.toString(),
       replyToSenderId: json["replyToSenderId"]?.toString(),
       replyPreview: json["replyPreview"]?.toString(),
@@ -136,11 +134,12 @@ class ChatMessage {
   factory ChatMessage.fromMatrix(mx.Event event) {
     final content = event.content;
     final msgType = content['msgtype']?.toString() ?? event.messageType;
-    final attachmentType =
-        content['wrytte.sent_as_file'] == true
-            ? 'file'
-            : _attachmentTypeFromMatrix(msgType);
+    final attachmentType = content['wrytte.sent_as_file'] == true
+        ? 'file'
+        : _attachmentTypeFromMatrix(msgType);
     final info = content['info'];
+    final matrixBody = _stripReplyFallback(_matrixEventBody(event));
+    final matrixFilename = content['filename']?.toString().trim() ?? '';
     int? duration;
     int? mediaWidth;
     int? mediaHeight;
@@ -157,12 +156,15 @@ class ChatMessage {
       conversationId: event.room.id,
       senderId: event.senderId,
       receiverId: event.room.directChatMatrixID ?? '',
-      content:
-          event.redacted
-              ? _redactedMessageText(event)
-              : attachmentType == 'voice'
-              ? 'Voice message'
-              : _stripReplyFallback(_matrixEventBody(event)),
+      content: event.redacted
+          ? _redactedMessageText(event)
+          : attachmentType == 'voice'
+          ? 'Voice message'
+          : attachmentType == 'image' &&
+                matrixFilename.isNotEmpty &&
+                matrixBody == matrixFilename
+          ? 'Photo'
+          : matrixBody,
       timestamp: event.originServerTs,
       status: _statusFromMatrix(event.status),
       attachmentUrl: _attachmentUrlFromMatrix(event),
@@ -349,12 +351,11 @@ String? _replyPreviewFromFallback(String body) {
   final candidate = body.startsWith('* > ') ? body.substring(2) : body;
   if (!candidate.startsWith('> ')) return null;
   final firstBlock = candidate.split(RegExp(r'\r?\n\r?\n')).first;
-  final lines =
-      firstBlock
-          .split('\n')
-          .map((line) => line.replaceFirst(RegExp(r'^> ?'), '').trim())
-          .where((line) => line.isNotEmpty)
-          .toList();
+  final lines = firstBlock
+      .split('\n')
+      .map((line) => line.replaceFirst(RegExp(r'^> ?'), '').trim())
+      .where((line) => line.isNotEmpty)
+      .toList();
   if (lines.isEmpty) return null;
   final text = lines.join(' ').replaceFirst(RegExp(r'^<[^>]+>\s*'), '');
   if (text.trim().isEmpty) return null;

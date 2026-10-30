@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:wrytte/services/attachment_local_store.dart';
-import 'package:wrytte/services/matrix/matrix_config.dart';
 import 'package:wrytte/ui/core/models/expanding_surface_origin.dart';
 import 'package:wrytte/ui/core/routing/expanding_surface_route.dart';
 import 'package:wrytte/ui/core/themes/wrytte_theme.dart';
@@ -10,12 +8,16 @@ import 'package:wrytte/ui/core/widgets/wrytte_glass_surface.dart';
 import 'package:wrytte/ui/core/widgets/wrytte_svg_icon.dart';
 import 'package:wrytte/ui/media/widgets/media_circle_button.dart';
 
-enum FullScreenImageResult { closed, deleteRequested }
+enum FullScreenImageResult {
+  closed,
+  deleteRequested,
+  deleteForEveryoneRequested,
+  deleteForMeRequested,
+}
 
 Future<FullScreenImageResult?> showWrytteImageViewer(
   BuildContext context, {
   required ImageProvider image,
-  String? mediaSource,
   ExpandingSurfaceOrigin? origin,
   double? imageAspectRatio,
   String? title,
@@ -27,49 +29,16 @@ Future<FullScreenImageResult?> showWrytteImageViewer(
   VoidCallback? onReply,
   VoidCallback? onShowInChat,
   bool allowDelete = false,
+  bool canDeleteForEveryone = false,
   bool showHeaderLabel = true,
   bool enableVerticalDragDismiss = false,
-}) async {
-  var resolvedImage = image;
-  final source = mediaSource?.trim() ?? '';
-  if (source.startsWith('mxc://') || _isMatrixMediaUrl(source)) {
-    final uri = Uri.tryParse(source);
-    if (uri != null && uri.host.isNotEmpty) {
-      final downloadUrl = source.startsWith('mxc://')
-          ? Uri.parse(MatrixConfig.homeserver).replace(
-              path: '/_matrix/client/v1/media/download/${Uri.encodeComponent(uri.host)}/${Uri.encodeComponent(uri.pathSegments.join('/'))}',
-            ).toString()
-          : source;
-      try {
-        final cached = await AttachmentLocalStore.instance.existingComplete(
-          source: source,
-          fileName: 'image',
-        ) ??
-            await AttachmentLocalStore.instance.existingComplete(
-              source: downloadUrl,
-              fileName: 'image',
-            );
-        if (cached != null) {
-          resolvedImage = FileImage(cached);
-        } else {
-          final copy = await AttachmentLocalStore.instance.ensureComplete(
-            source: downloadUrl,
-            fileName: 'image',
-          );
-          resolvedImage = FileImage(copy.file);
-        }
-      } catch (_) {
-        // Keep the supplied provider as the viewer fallback.
-      }
-    }
-  }
-  return Navigator.of(context, rootNavigator: true).push<FullScreenImageResult>(
-    ExpandingSurfaceRoute<FullScreenImageResult>(
+}) => Navigator.of(context, rootNavigator: true).push<FullScreenImageResult>(
+  ExpandingSurfaceRoute<FullScreenImageResult>(
     origin: origin,
     animationsDisabled: MediaQuery.disableAnimationsOf(context),
     keepUnderlyingVisible: enableVerticalDragDismiss,
     builder: (context, animation) => FullScreenImageView(
-      image: resolvedImage,
+      image: image,
       imageAspectRatio: imageAspectRatio,
       routeAnimation: animation,
       title: title,
@@ -81,22 +50,12 @@ Future<FullScreenImageResult?> showWrytteImageViewer(
       onReply: onReply,
       onShowInChat: onShowInChat,
       allowDelete: allowDelete,
+      canDeleteForEveryone: canDeleteForEveryone,
       showHeaderLabel: showHeaderLabel,
       enableVerticalDragDismiss: enableVerticalDragDismiss,
     ),
-    ),
-  );
-}
-
-bool _isMatrixMediaUrl(String source) {
-  final uri = Uri.tryParse(source);
-  final homeserver = Uri.tryParse(MatrixConfig.homeserver);
-  return uri != null &&
-      homeserver != null &&
-      uri.origin == homeserver.origin &&
-      uri.path.contains('/_matrix/client/') &&
-      uri.path.contains('/media/');
-}
+  ),
+);
 
 class FullScreenImageView extends StatefulWidget {
   const FullScreenImageView({
@@ -113,6 +72,7 @@ class FullScreenImageView extends StatefulWidget {
     this.onReply,
     this.onShowInChat,
     this.allowDelete = false,
+    this.canDeleteForEveryone = false,
     this.showHeaderLabel = true,
     this.enableVerticalDragDismiss = false,
   });
@@ -129,6 +89,7 @@ class FullScreenImageView extends StatefulWidget {
   final VoidCallback? onReply;
   final VoidCallback? onShowInChat;
   final bool allowDelete;
+  final bool canDeleteForEveryone;
   final bool showHeaderLabel;
   final bool enableVerticalDragDismiss;
 
@@ -269,6 +230,25 @@ class _FullScreenImageViewState extends State<FullScreenImageView> {
                       child: _media(progress),
                     ),
                   ),
+                  if (_deleteVisible)
+                    PositionedDirectional(
+                      top: 92,
+                      start: 54,
+                      child: SizedBox(
+                        width: 224,
+                        child: _DeleteConfirmation(
+                          canDeleteForEveryone: widget.canDeleteForEveryone,
+                          onDeleteForEveryone: () => Navigator.of(context).pop(
+                            FullScreenImageResult.deleteForEveryoneRequested,
+                          ),
+                          onDeleteForMe: () => Navigator.of(
+                            context,
+                          ).pop(FullScreenImageResult.deleteForMeRequested),
+                          onCancel: () =>
+                              setState(() => _deleteVisible = false),
+                        ),
+                      ),
+                    ),
                   Opacity(
                     opacity: controlsOpacity,
                     child: IgnorePointer(
@@ -481,37 +461,6 @@ class _FullScreenImageViewState extends State<FullScreenImageView> {
                 ),
                 const SizedBox(height: 8),
               ],
-              if (widget.allowDelete)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TweenAnimationBuilder<double>(
-                    key: const ValueKey(
-                      'full-screen-image-delete-confirmation-animation',
-                    ),
-                    tween: Tween<double>(end: _deleteVisible ? 1 : 0),
-                    duration: const Duration(milliseconds: 190),
-                    curve: _deleteVisible
-                        ? Curves.easeOutCubic
-                        : Curves.easeInCubic,
-                    builder: (context, progress, _) => IgnorePointer(
-                      ignoring: progress < .98,
-                      child: Opacity(
-                        opacity: progress,
-                        child: SizedBox(
-                          width: 220 * progress,
-                          height: 60 * progress,
-                          child: _DeleteConfirmation(
-                            onDelete: () => Navigator.of(
-                              context,
-                            ).pop(FullScreenImageResult.deleteRequested),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              if (widget.allowDelete)
-                SizedBox(height: 8 * (_deleteVisible ? 1 : 0)),
               Row(
                 children: [
                   if (widget.onShare != null)
@@ -687,28 +636,70 @@ class _MoreItem extends StatelessWidget {
 }
 
 class _DeleteConfirmation extends StatelessWidget {
-  const _DeleteConfirmation({required this.onDelete});
-  final VoidCallback onDelete;
+  const _DeleteConfirmation({
+    required this.canDeleteForEveryone,
+    required this.onDeleteForEveryone,
+    required this.onDeleteForMe,
+    required this.onCancel,
+  });
+
+  final bool canDeleteForEveryone;
+  final VoidCallback onDeleteForEveryone;
+  final VoidCallback onDeleteForMe;
+  final VoidCallback onCancel;
+
   @override
   Widget build(BuildContext context) => WrytteGlassSurface(
-    borderRadius: BorderRadius.circular(30),
+    borderRadius: BorderRadius.circular(34),
     blur: 10,
     child: Material(
       color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(30),
-        onTap: onDelete,
-        child: const Align(
-          alignment: Alignment.centerLeft,
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: 18),
-            child: Text(
-              'Delete',
-              style: TextStyle(
-                color: WrytteColors.destructive,
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (canDeleteForEveryone)
+              _DeleteChoice(
+                label: 'Delete for everyone',
+                onTap: onDeleteForEveryone,
               ),
+            _DeleteChoice(label: 'Delete for me', onTap: onDeleteForMe),
+            _DeleteChoice(label: 'Cancel', destructive: false, onTap: onCancel),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _DeleteChoice extends StatelessWidget {
+  const _DeleteChoice({
+    required this.label,
+    required this.onTap,
+    this.destructive = true,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final bool destructive;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 54,
+    width: double.infinity,
+    child: InkWell(
+      onTap: onTap,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: destructive ? WrytteColors.destructive : Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),
