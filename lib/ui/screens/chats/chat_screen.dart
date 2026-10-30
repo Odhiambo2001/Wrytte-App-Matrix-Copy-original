@@ -4544,27 +4544,6 @@ class _ChatScreenState extends State<ChatScreen> {
               // ── debug overlay ─────────────────────────────────────────────
               if (_showDebug) _buildDebugOverlay(appBarH),
 
-              // ── debug toggle button ───────────────────────────────────────
-              Positioned(
-                bottom: 120 + keyboardInset,
-                right: 12,
-                child: GestureDetector(
-                  onTap: () => setState(() => _showDebug = !_showDebug),
-                  child: Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: _showDebug
-                          ? Colors.orangeAccent
-                          : Colors.grey.withValues(alpha: 0.6),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Center(
-                      child: Text('🐛', style: TextStyle(fontSize: 18)),
-                    ),
-                  ),
-                ),
-              ),
             ],
           ),
         ),
