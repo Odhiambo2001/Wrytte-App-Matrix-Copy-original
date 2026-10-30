@@ -138,7 +138,7 @@ class ChatMediaTextEmojiPanel
                   textEditingController:
                       editor.textCtrl,
 
-                  config: Config(
+                    config: Config(
                     // The parent Expanded owns the actual final size.
                     //
                     // Give the picker the remaining intended height so its
@@ -233,9 +233,9 @@ class ChatMediaTextEmojiPanel
                         fontSize: 15,
                       ),
                     ),
-                  ),
                 ),
               ),
+            ),
             ),
           ],
         ),

@@ -146,7 +146,9 @@ PaintEditorConfigs buildChatMediaPaintEditorConfigs({
 
                 end: 0,
 
-                bottom: 0,
+                // Position the control group itself so its hit regions match
+                // the visible X and checkmark buttons.
+                bottom: 80,
 
                 child: ChatMediaPaintBottomBar(
                   editor: editor,

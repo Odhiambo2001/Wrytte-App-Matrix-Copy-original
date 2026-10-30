@@ -29,7 +29,7 @@ class ChatMediaPaintBottomBar extends StatefulWidget {
 class _ChatMediaPaintBottomBarState extends State<ChatMediaPaintBottomBar> {
   static const double _toolBarWidth = 222;
 
-  static const double _roundButtonSize = 52;
+  static const double _roundButtonSize = 40;
 
   bool _closing = false;
   bool _discardDialogOpen = false;
@@ -99,49 +99,63 @@ class _ChatMediaPaintBottomBarState extends State<ChatMediaPaintBottomBar> {
   }
 
   Future<void> _cancel() async {
+    debugPrint(
+      '[PAINTDBG][X] entered closing=$_closing '
+      'dialogOpen=$_discardDialogOpen canUndo=${widget.editor.canUndo}',
+    );
+
     if (_closing || _discardDialogOpen) {
+      debugPrint('[PAINTDBG][X] ignored because the editor is already closing');
       return;
     }
 
-    unawaited(HapticFeedback.selectionClick());
-
     if (!_hasChanges) {
+      debugPrint('[PAINTDBG][X] no changes; closing sub-editor');
       _closing = true;
-
-      widget.onDiscarded();
+      Navigator.of(widget.editor.context).pop();
       return;
     }
 
     _discardDialogOpen = true;
-
+    debugPrint('[PAINTDBG][X] showing discard dialog');
     final discard = await _showDiscardDialog(context);
-
     _discardDialogOpen = false;
+    debugPrint('[PAINTDBG][X] discard dialog result=$discard mounted=$mounted');
 
     if (!discard || !mounted) {
       return;
     }
 
-    unawaited(HapticFeedback.lightImpact());
-
-    // Restore this tool's local history before the main editor removes the
-    // nested route, so discarded strokes never leak into the parent editor.
     _reset();
     _closing = true;
-    widget.onDiscarded();
+    debugPrint('[PAINTDBG][X] discarded changes; closing sub-editor');
+    Navigator.of(widget.editor.context).pop();
   }
 
   void _apply() {
+    debugPrint(
+      '[PAINTDBG][CHECK] entered closing=$_closing '
+      'canUndo=${widget.editor.canUndo}',
+    );
+
     if (_closing) {
+      debugPrint('[PAINTDBG][CHECK] ignored because the editor is already closing');
       return;
     }
 
     _closing = true;
+    debugPrint('[PAINTDBG][CHECK] calling PaintEditorState.done()');
 
-    unawaited(HapticFeedback.lightImpact());
+    // PaintEditor.done() has no result to commit when this session has no
+    // paint history. Close the parent sub-editor explicitly in that case.
+    if (!widget.editor.canUndo) {
+      debugPrint(
+        '[PAINTDBG][CHECK] no paint history; closing parent sub-editor',
+      );
+      Navigator.of(widget.editor.context).pop();
+      return;
+    }
 
-    // PaintEditor.done() commits the package-owned paint session and returns
-    // its painted layers to the main editor.
     widget.editor.done();
   }
 
@@ -222,6 +236,7 @@ class _ChatMediaPaintBottomBarState extends State<ChatMediaPaintBottomBar> {
                         onTap: _closing
                             ? null
                             : () {
+                                debugPrint('[PAINTDBG][X] tap received');
                                 unawaited(_cancel());
                               },
 
@@ -303,20 +318,17 @@ class _ChatMediaPaintBottomBarState extends State<ChatMediaPaintBottomBar> {
 
                         backgroundColor: WrytteColors.primary,
 
-                        onTap: _closing ? null : _apply,
+                        onTap: _closing
+                            ? null
+                            : () {
+                                debugPrint('[PAINTDBG][CHECK] tap received');
+                                _apply();
+                              },
 
-                        child: AnimatedOpacity(
-                          opacity: _closing ? .62 : 1,
-
-                          duration: const Duration(milliseconds: 120),
-
-                          child: const WrytteSvgIcon(
-                            asset: 'assets/svg/Checkmark edit.svg',
-
-                            size: 27,
-
-                            color: Colors.white,
-                          ),
+                        child: const WrytteSvgIcon(
+                          asset: 'assets/svg/Checkmark edit.svg',
+                          size: 27,
+                          color: Colors.white,
                         ),
                       ),
                     ],

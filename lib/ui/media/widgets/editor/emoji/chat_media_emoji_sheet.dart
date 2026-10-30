@@ -670,20 +670,19 @@ class _ChatMediaEmojiSheetState
                     // ======================================================
 
                     Expanded(
-                      child:
-                          EmojiEditor(
-                        key:
-                            _emojiEditorKey,
+                        child: EmojiEditor(
+                          key:
+                              _emojiEditorKey,
 
-                        configs:
-                            widget
-                                .editor
-                                .configs,
+                          configs:
+                              widget
+                                  .editor
+                                  .configs,
 
-                        callbacks:
-                            widget
-                                .editor
-                                .callbacks,
+                          callbacks:
+                              widget
+                                  .editor
+                                  .callbacks,
                       ),
                     ),
 

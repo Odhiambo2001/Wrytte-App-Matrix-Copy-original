@@ -120,7 +120,9 @@ class ChatMediaEditorView extends StatefulWidget {
 }
 
 class _ChatMediaEditorViewState extends State<ChatMediaEditorView> {
-  static const double _bottomNavigationBreathingRoom = 10;
+  // Keep the editor toolbar slightly lifted from the bottom edge for a more
+  // comfortable reach and to match the edit-screen composition.
+  static const double _bottomNavigationBreathingRoom = 80;
   static const double _horizontalChromeInset = 9;
 
   // ==========================================================================
@@ -295,6 +297,35 @@ class _ChatMediaEditorViewState extends State<ChatMediaEditorView> {
       ),
 
       widgets: MainEditorWidgets(
+        // The package default uses the root navigator for this dialog. Our
+        // editor supplies localizations below that navigator, so open the
+        // warning on the editor's nearest navigator instead.
+        closeWarningDialog: (editor) async {
+          return await showDialog<bool>(
+                context: editor.context,
+                useRootNavigator: false,
+                builder: (dialogContext) {
+                  return AlertDialog(
+                    title: const Text('Close editor?'),
+                    content: const Text(
+                      'Your changes will not be saved.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(true),
+                        child: const Text('Discard'),
+                      ),
+                    ],
+                  );
+                },
+              ) ??
+              false;
+        },
+
         // ---------------------------------------------------------------------
         // REMOVE PACKAGE MAIN CHROME
         // ---------------------------------------------------------------------
@@ -535,6 +566,7 @@ class _ChatMediaEditorViewState extends State<ChatMediaEditorView> {
   }
 
   void _closeActiveSubEditor() {
+    debugPrint('[PAINTDBG][PARENT] closeActiveSubEditor called');
     // Use Pro Image Editor's main-state API. Calling `close()` only on a
     // nested editor can fire its callback without removing the nested route on
     // recent package versions, leaving the user on the discarded tool screen.
@@ -807,16 +839,7 @@ class _ChatMediaEditorViewState extends State<ChatMediaEditorView> {
 
   @override
   Widget build(BuildContext context) {
-    // material_ui localization delegates now belong at MaterialApp.router in
-    // app.dart. Do NOT put a Localizations.override here.
-
-    return Localizations(
-      locale: Localizations.localeOf(context),
-      delegates: [
-        ...GlobalMaterialLocalizations.delegates,
-        ...material_ui.GlobalMaterialLocalizations.delegates,
-      ],
-      child: PopScope(
+    return PopScope(
         // Prevent Android/system Back from killing the route while the final
         // generated image is being converted/written.
         canPop: !_exporting,
@@ -833,7 +856,6 @@ class _ChatMediaEditorViewState extends State<ChatMediaEditorView> {
             ChatMediaEditorLoadState.loading => _buildOpeningPreview(),
           },
         ),
-      ),
     );
   }
 
@@ -843,6 +865,13 @@ class _ChatMediaEditorViewState extends State<ChatMediaEditorView> {
 
   Widget _buildEditor() {
     final sourcePath = _model.sourcePath!;
+
+    debugPrint(
+      '[LOCDBG][ChatMediaEditorView] '
+      'flutterMaterialLocalizations='
+      '${Localizations.of<MaterialLocalizations>(context, MaterialLocalizations) != null} '
+      'locale=${Localizations.maybeLocaleOf(context)}',
+    );
 
     // This is the sole full-resolution media surface once loading completes.
     //

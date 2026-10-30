@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:material_ui/material_ui.dart' as material_ui;
 import 'package:wrytte/ui/screens/source_chat_preview_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -184,6 +186,27 @@ class WrytteApp extends StatelessWidget {
       title: 'Wrytte',
       debugShowCheckedModeBanner: false,
       theme: WrytteTheme.lightTheme,
+      localizationsDelegates: [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        ...material_ui.GlobalMaterialLocalizations.delegates,
+      ],
+      supportedLocales: const [
+        Locale('en'),
+      ],
+      builder: (context, child) {
+        debugPrint(
+          '[LOCDBG][MaterialApp.builder] '
+          'locale=en child=${child?.runtimeType} '
+          'before=${Localizations.of<MaterialLocalizations>(context, MaterialLocalizations) != null}',
+        );
+        debugPrint(
+          '[LOCDBG][MaterialApp.builder] '
+          'after=${Localizations.of<MaterialLocalizations>(context, MaterialLocalizations) != null}',
+        );
+        return child ?? const SizedBox.shrink();
+      },
       home: StartupScreen(
         nextScreen: (_) => const ThemeWrapper(child: AuthWrapper()),
         onAnimationCompleted: _startDeferredWarmups,

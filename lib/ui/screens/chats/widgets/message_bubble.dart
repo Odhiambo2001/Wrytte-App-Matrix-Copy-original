@@ -95,6 +95,12 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    debugPrint(
+      '[CHATDBG][BubbleBuild] contentHash=${content.hashCode} '
+          'mine=$isMine status=${status?.name ?? 'null'} time="$time" '
+          'animateOnMount=$animateOnMount attachment=$attachmentType '
+          'size=${MediaQuery.sizeOf(context)}',
+    );
     final Color bubbleColor = isMine ? _blue : _incoming;
     final Widget timeWidget = _buildTimeRow();
     final bubble = Container(
@@ -233,6 +239,13 @@ class MessageBubble extends StatelessWidget {
       duration: const Duration(milliseconds: 260),
       curve: Curves.easeOutCubic,
       builder: (context, value, child) {
+        if (value > .98 || value < .02) {
+          debugPrint(
+            '[CHATDBG][BubbleAnimation] contentHash=${content.hashCode} '
+                'status=${status?.name ?? 'null'} value=${value.toStringAsFixed(2)} '
+                'offset=${(beginOffset * value).toStringAsFixed(1)}',
+          );
+        }
         return Opacity(
           opacity: 1 - (value * 0.08),
           child: Transform.translate(

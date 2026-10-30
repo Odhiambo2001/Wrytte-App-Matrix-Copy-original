@@ -1712,6 +1712,14 @@ class _ChatScreenState extends State<ChatScreen> {
       if (_lastRoomStreamFingerprint == fingerprint) return;
       _lastRoomStreamFingerprint = fingerprint;
       apkLog('ChatScreen.roomStream', 'room="$convId" msgs=${messages.length}');
+      final outgoingStates = messages
+          .where((m) => _isMine(m))
+          .map((m) => '${m.id}:${m.status.name}')
+          .join(',');
+      _dbg(
+        'RoomStreamState',
+        'room="$convId" outgoing=[$outgoingStates] total=${messages.length}',
+      );
       if (messages.isEmpty) {
         if (_messages.isNotEmpty) {
           apkLog(
@@ -2397,6 +2405,12 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     setState(() => _messages.add(optimistic));
+    _dbg(
+      'SendState',
+      'OPTIMISTIC_INSERT id=${optimistic.id} status=${optimistic.status.name} '
+          'timestamp=${optimistic.timestamp.toIso8601String()} '
+          'messages=${_messages.length}',
+    );
     _optimisticIdByContent['${normalisedReceiverId}_$text'] = optimistic.id;
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
 
@@ -2428,10 +2442,22 @@ class _ChatScreenState extends State<ChatScreen> {
       apkLog('ChatScreen._send', 'calling chat.sendMessage…');
       final sent = await _chat.sendMessage(outbound);
       apkLog('ChatScreen._send', ' sent  id=${sent.id}  status=${sent.status}');
+      _dbg(
+        'SendState',
+        'CANONICAL_RECEIVED optimisticId=${optimistic.id} '
+            'canonicalId=${sent.id} oldStatus=${optimistic.status.name} '
+            'newStatus=${sent.status.name} '
+            'timestamp=${sent.timestamp.toIso8601String()}',
+      );
 
       await _saveCanonicalSentMessage(sent);
       if (mounted) {
         setState(() => _replaceOptimisticMessage(optimistic.id, sent));
+        _dbg(
+          'SendState',
+          'OPTIMISTIC_REPLACED id=${sent.id} status=${sent.status.name} '
+              'messages=${_messages.length}',
+        );
       }
     } catch (e) {
       apkLog('ChatScreen._send', ' SEND FAILED: $e');
@@ -5418,7 +5444,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _dbg(
       'Bubble',
       'id=${msg.id} type=$effectiveAttachmentType url=${msg.attachmentUrl} '
-      'mine=$isMine status=${msg.status.name}',
+      'mine=$isMine status=${msg.status.name} showTail=$showTail '
+          'messages=${_messages.length}',
     );
     final senderName = _isGroupChat && !isMine
         ? _groupSenderName(msg.senderId)
@@ -5593,7 +5620,10 @@ class _ChatScreenState extends State<ChatScreen> {
         isEdited: msg.isEdited,
         replyPreview: _replyPreviewDisplayText(msg.replyPreview),
         replySender: _replySenderDisplayName(msg),
-        animateOnMount: true,
+        // This bubble can be rebuilt when the optimistic local message is
+        // replaced by the canonical Matrix event. Do not replay the entrance
+        // animation during that pending -> sent transition.
+        animateOnMount: false,
         maxWidth: _isGroupChat && !isMine
             ? MediaQuery.sizeOf(context).width - 94
             : null,
