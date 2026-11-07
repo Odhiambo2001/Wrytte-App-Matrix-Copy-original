@@ -446,8 +446,11 @@ class _UserAvatarState extends State<UserAvatar> {
 
   String _providerCacheKey(String rawUrl) {
     final url = _resolveImageUrl(rawUrl);
-    final identity = widget.cacheIdentity?.trim() ?? '';
-    return identity.isEmpty ? url : '$identity|$url';
+    // The avatar URL is the canonical image identity across home, chat, and
+    // profile surfaces. Surface-specific cacheIdentity values are retained
+    // for diagnostics only; including them here would create three separate
+    // resolved providers for the same avatar and allow visible timing drift.
+    return url;
   }
 
   static String _resolveImageUrl(String? raw) {
